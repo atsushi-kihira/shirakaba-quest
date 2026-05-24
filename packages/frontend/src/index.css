@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+/* ===================================================
+   白樺クエスト — グローバルスタイル
+   =================================================== */
+
+/* Google Fonts: Klee One + Zen Maru Gothic */
+@import url("https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Zen+Maru+Gothic:wght@400;500;700&display=swap");
+
+/* デザイントークン */
+@theme {
+  --color-paper-50: #fffbf0;
+  --color-paper-100: #faf5e8;
+  --color-paper-200: #f4e3bd;
+  --color-paper-300: #d9c9b0;
+  --color-paper-400: #c9b493;
+
+  --color-ink-900: #1a1410;
+  --color-ink-800: #3a2e26;
+  --color-ink-700: #4a3e36;
+  --color-ink-600: #6b5949;
+  --color-ink-500: #9b8b7a;
+  --color-ink-400: #b5a797;
+
+  --color-brand: #b5384b;
+  --color-brand-dk: #8b2937;
+  --color-accent: #d4a03b;
+  --color-accent-dk: #a87a22;
+  --color-success: #5a8c5c;
+  --color-success-dk: #3f6b41;
+
+  --font-klee: "Klee One", cursive;
+  --font-zen: "Zen Maru Gothic", sans-serif;
+}
+
+/* ベース */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-zen);
+  background-color: var(--color-paper-100);
+  color: var(--color-ink-800);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-klee);
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+/* 紙質感カード */
+.card-paper {
+  background: linear-gradient(135deg, var(--color-paper-50) 0%, var(--color-paper-200) 100%);
+  border: 1px solid var(--color-paper-300);
+  box-shadow:
+    0 1px 3px rgba(58, 46, 38, 0.08),
+    0 4px 12px rgba(58, 46, 38, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* タブバー（モバイル） */
+.tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--color-paper-50);
+  border-top: 1px solid var(--color-paper-300);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  z-index: 50;
+  padding-bottom: env(safe-area-inset-bottom);
+  height: calc(64px + env(safe-area-inset-bottom));
+}

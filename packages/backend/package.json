@@ -1,0 +1,24 @@
+{
+  "name": "@shirakaba/backend",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply shirakaba-quest --local",
+    "db:migrate:remote": "wrangler d1 migrations apply shirakaba-quest --remote",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "hono": "^4.7.11",
+    "drizzle-orm": "^0.44.1",
+    "@shirakaba/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250508.0",
+    "wrangler": "^4.15.2",
+    "drizzle-kit": "^0.31.1",
+    "typescript": "^5.8.3"
+  }
+}

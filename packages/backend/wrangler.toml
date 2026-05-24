@@ -1,0 +1,27 @@
+name = "shirakaba-quest-api"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "shirakaba-quest"
+database_id = "placeholder-set-after-wrangler-d1-create"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "placeholder-set-after-wrangler-kv-create"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "shirakaba-assets"
+
+[vars]
+ENVIRONMENT = "development"
+CORS_ORIGIN = "http://localhost:5173"
+
+# Secrets（本番は wrangler secret put で設定、コードに書かない）
+# SENDGRID_API_KEY
+# ANTHROPIC_API_KEY
+# GOOGLE_VISION_API_KEY
+# SESSION_SECRET  ← セッショントークン用のランダム文字列
