@@ -11,6 +11,8 @@ import { MemberDetailScreen } from "@/screens/members/member-detail-screen";
 import { QuestsScreen } from "@/screens/quests/quests-screen";
 import { RankingScreen } from "@/screens/ranking/ranking-screen";
 import { MypageScreen } from "@/screens/mypage/mypage-screen";
+import { OneOnOneScreen } from "@/screens/oneonone/oneonone-screen";
+import { ReceiveCardScreen } from "@/screens/cards/receive-card-screen";
 import { AdminLayout } from "@/screens/admin/admin-layout";
 import { AdminDashboardScreen } from "@/screens/admin/admin-dashboard-screen";
 import { AdminMembersScreen } from "@/screens/admin/admin-members-screen";
@@ -19,7 +21,6 @@ import { AdminPointsScreen } from "@/screens/admin/admin-points-screen";
 import { AdminSettingsScreen } from "@/screens/admin/admin-settings-screen";
 import { useMe } from "@/hooks/use-me";
 
-// ログイン済み時にユーザー情報をロードするラッパー
 function AppWithMe({ children }: { children: React.ReactNode }) {
   useMe();
   return <>{children}</>;
@@ -35,6 +36,9 @@ export default function App() {
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/register" element={<RegisterScreen />} />
 
+            {/* リアルカード受け取り（ログイン必要だが AppLayout 外） */}
+            <Route path="/receive-card/:memberId" element={<ReceiveCardScreen />} />
+
             {/* メンバー向け（要認証） */}
             <Route element={<AuthGuard />}>
               <Route element={<AppLayout />}>
@@ -44,6 +48,7 @@ export default function App() {
                 <Route path="quests" element={<QuestsScreen />} />
                 <Route path="ranking" element={<RankingScreen />} />
                 <Route path="me" element={<MypageScreen />} />
+                <Route path="oneonone" element={<OneOnOneScreen />} />
               </Route>
             </Route>
 
@@ -58,7 +63,6 @@ export default function App() {
               </Route>
             </Route>
 
-            {/* その他 */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AppWithMe>

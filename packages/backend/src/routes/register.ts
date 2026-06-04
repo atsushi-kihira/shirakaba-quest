@@ -1,18 +1,17 @@
 // =============================================================
 // メンバー登録ルート
-// POST /api/register/scan-card  — カード画像OCR
+// POST /api/register/scan-card  — カード画像OCR + Claude 構造化
 // POST /api/register/submit     — 仮登録申請
 // =============================================================
 import { Hono } from "hono";
 import { createDb, schema } from "../db/index.ts";
 import { newId } from "../services/auth.ts";
-import { extractTextFromImage, parseCardText } from "../services/ocr.ts";
+import { scanCard } from "../services/ocr.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const registerRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // ---- POST /api/register/scan-card ----
-// カード画像（base64）を受け取りOCRしてパース結果を返す
 registerRoutes.post("/scan-card", async (c) => {
   const body = await c.req.json<{
     imageBase64: string;
@@ -23,19 +22,30 @@ registerRoutes.post("/scan-card", async (c) => {
     return c.json({ error: { code: "bad_request", message: "画像データが必要です" } }, 400);
   }
 
-  const rawText = await extractTextFromImage({
-    imageBase64: body.imageBase64,
-    apiKey: c.env.GOOGLE_VISION_API_KEY ?? "",
-    isDev: c.env.ENVIRONMENT === "development",
-  });
+  const isDev = c.env.ENVIRONMENT === "development";
 
-  const parsed = parseCardText(rawText, body.side ?? "front");
+  try {
+    const result = await scanCard({
+      imageBase64: body.imageBase64,
+      side: body.side ?? "front",
+      visionApiKey: c.env.GOOGLE_VISION_API_KEY ?? "",
+      anthropicApiKey: c.env.ANTHROPIC_API_KEY ?? "",
+      isDev,
+    });
 
-  return c.json({ data: parsed });
+    return c.json({ data: result });
+  } catch (err) {
+    console.error("[scan-card error]", err);
+    return c.json({
+      error: {
+        code: "ocr_failed",
+        message: "カードの読み取りに失敗しました。もう一度撮影してみてください。",
+      },
+    }, 500);
+  }
 });
 
 // ---- POST /api/register/submit ----
-// 新規メンバー仮登録（管理者承認待ち）
 registerRoutes.post("/submit", async (c) => {
   const db = createDb(c.env.DB);
   const now = Math.floor(Date.now() / 1000);
@@ -62,7 +72,9 @@ registerRoutes.post("/submit", async (c) => {
   }>();
 
   if (!body.email || !body.name) {
-    return c.json({ error: { code: "bad_request", message: "メールアドレスと名前は必須です" } }, 400);
+    return c.json({
+      error: { code: "bad_request", message: "メールアドレスと名前は必須です" },
+    }, 400);
   }
 
   // メールアドレス重複チェック
@@ -101,5 +113,10 @@ registerRoutes.post("/submit", async (c) => {
     updatedAt: now,
   });
 
-  return c.json({ data: { id, message: "登録申請を受け付けました。管理者の承認をお待ちください。" } }, 201);
+  return c.json({
+    data: {
+      id,
+      message: "登録申請を受け付けました。管理者の承認をお待ちください。",
+    },
+  }, 201);
 });

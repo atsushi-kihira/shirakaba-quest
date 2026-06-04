@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
+import { newId } from "../services/auth.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -189,6 +190,129 @@ memberRoutes.patch("/me", async (c) => {
     .where(eq(schema.members.id, userId));
 
   return c.json({ ok: true });
+});
+
+// ---- POST /api/members/:id/real-card ----
+// 相手のリアルカード（物理名刺）を受け取ったことを記録する
+memberRoutes.post("/:id/real-card", async (c) => {
+  const db = createDb(c.env.DB);
+  const myId = c.get("userId");
+  const userType = c.get("userType");
+  const targetId = c.req.param("id");
+
+  if (userType !== "member") {
+    return c.json({ error: { code: "forbidden", message: "メンバーのみ利用可能です" } }, 403);
+  }
+
+  if (myId === targetId) {
+    return c.json({ error: { code: "self_request", message: "自分自身のカードは記録できません" } }, 400);
+  }
+
+  // 相手が存在するか確認
+  const target = await db
+    .select({ id: schema.members.id, name: schema.members.name })
+    .from(schema.members)
+    .where(and(eq(schema.members.id, targetId), eq(schema.members.status, "active")))
+    .get();
+
+  if (!target) {
+    return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  // Connection 取得（なければ作成）
+  let conn = await db
+    .select()
+    .from(schema.connections)
+    .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)))
+    .get();
+
+  if (!conn) {
+    const newConnId = newId();
+    await db.insert(schema.connections).values({
+      id: newConnId,
+      fromMemberId: myId,
+      toMemberId: targetId,
+      status: "none",
+    });
+    conn = await db
+      .select()
+      .from(schema.connections)
+      .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)))
+      .get();
+  }
+
+  if (!conn) {
+    return c.json({ error: { code: "internal_error", message: "接続記録の作成に失敗しました" } }, 500);
+  }
+
+  // すでに real カード取得済み
+  if (conn.status === "real") {
+    return c.json({ data: { alreadyRecorded: true, message: "すでにリアルカードを受け取り済みです" } });
+  }
+
+  // Connection を real に更新
+  await db
+    .update(schema.connections)
+    .set({ status: "real", realCardReceivedAt: now })
+    .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)));
+
+  // +1pt 付与
+  await db.insert(schema.pointTransactions).values({
+    id: newId(),
+    memberId: myId,
+    delta: 1,
+    reason: "real_card_exchanged",
+    relatedId: targetId,
+    createdAt: now,
+  });
+
+  console.log(`[REAL CARD] ${myId} received real card from ${targetId}`);
+  return c.json({ data: { alreadyRecorded: false, message: `${target.name}さんのリアルカードを受け取りました！ +1pt` } });
+});
+
+// ---- GET /api/members/:id/connection-status ----
+// 自分と特定メンバーの接続状態を返す（QR受け取り確認ページ用）
+memberRoutes.get("/:id/connection-status", async (c) => {
+  const db = createDb(c.env.DB);
+  const myId = c.get("userId");
+  const targetId = c.req.param("id");
+
+  if (myId === targetId) {
+    return c.json({ data: { status: "self" } });
+  }
+
+  // 相手の基本情報
+  const target = await db
+    .select({
+      id: schema.members.id,
+      name: schema.members.name,
+      emoji: schema.members.emoji,
+      bgColor: schema.members.bgColor,
+      category: schema.members.category,
+      businessDescription: schema.members.businessDescription,
+    })
+    .from(schema.members)
+    .where(and(eq(schema.members.id, targetId), eq(schema.members.status, "active")))
+    .get();
+
+  if (!target) {
+    return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+  }
+
+  const conn = await db
+    .select()
+    .from(schema.connections)
+    .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)))
+    .get();
+
+  return c.json({
+    data: {
+      member: target,
+      status: (conn?.status ?? "none") as "none" | "digital" | "real",
+    },
+  });
 });
 
 // ---- ユーティリティ ----
