@@ -4,15 +4,16 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2 } from "lucide-react";
+import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, QrCode } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
 
-type MemberResponse = { data: PublicMember };
-type OnoResponse   = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
+type MemberResponse  = { data: PublicMember };
+type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
 type OnoListResponse = { data: Array<{ id: string; status: string; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null }> };
+type RealCardResponse = { data: { alreadyRecorded: boolean; message: string } };
 
 const STATUS_LABEL: Record<string, { label: string; emoji: string; className: string }> = {
   none:    { label: "未交流",   emoji: "🤝", className: "bg-stone-200 text-stone-600 ring-stone-300" },
@@ -64,6 +65,17 @@ export function MemberDetailScreen() {
       qc.invalidateQueries({ queryKey: ["member", id] });
       qc.invalidateQueries({ queryKey: ["members"] });
     },
+  });
+
+  // リアルカード受け取り
+  const realCardMutation = useMutation({
+    mutationFn: () => api.post<RealCardResponse>(`/members/${id}/real-card`),
+    onSuccess: (res) => {
+      showToast(res.data.message, true);
+      qc.invalidateQueries({ queryKey: ["member", id] });
+      qc.invalidateQueries({ queryKey: ["ranking", "me"] });
+    },
+    onError: (e: Error) => showToast(e.message, false),
   });
 
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
@@ -240,6 +252,28 @@ export function MemberDetailScreen() {
             <div className="rounded-xl p-3 text-sm flex items-center gap-2"
               style={{ background: "var(--color-paper-200)", color: "var(--color-success)" }}>
               <CheckCircle2 size={16} /> 1to1済みです 🎉
+            </div>
+          )}
+
+          {/* リアルカード受け取りボタン */}
+          {(connStatus === "digital") && (
+            <button
+              onClick={() => realCardMutation.mutate()}
+              disabled={realCardMutation.isPending}
+              className="mt-3 w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition disabled:opacity-50"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+            >
+              {realCardMutation.isPending
+                ? <Loader2 size={16} className="animate-spin" />
+                : <QrCode size={16} />
+              }
+              🃏 リアルカードを受け取った (+1pt)
+            </button>
+          )}
+          {connStatus === "real" && (
+            <div className="mt-3 rounded-xl p-3 text-sm flex items-center gap-2"
+              style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
+              <CheckCircle2 size={16} /> リアルカード取得済み ✨
             </div>
           )}
         </div>

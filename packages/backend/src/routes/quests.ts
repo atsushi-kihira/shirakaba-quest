@@ -6,7 +6,7 @@
 // GET  /api/quests/:id/my-attempts → 自分の挑戦履歴
 // =============================================================
 import { Hono } from "hono";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -18,6 +18,7 @@ questRoutes.use("*", authMiddleware);
 // ---- GET /api/quests ----
 questRoutes.get("/", async (c) => {
   const db = createDb(c.env.DB);
+  const memberId = c.get("userId");
 
   const quests = await db
     .select({
@@ -41,7 +42,20 @@ questRoutes.get("/", async (c) => {
     .where(eq(schema.quests.status, "published"))
     .all();
 
-  return c.json({ data: quests });
+  // 自分の正解済みクエストIDを取得
+  const solvedAttempts = await db
+    .select({ questId: schema.questAttempts.questId })
+    .from(schema.questAttempts)
+    .where(and(
+      eq(schema.questAttempts.memberId, memberId),
+      eq(schema.questAttempts.isCorrect, 1),
+    ))
+    .all();
+  const solvedSet = new Set(solvedAttempts.map((a) => a.questId));
+
+  return c.json({
+    data: quests.map((q) => ({ ...q, isSolved: solvedSet.has(q.id) })),
+  });
 });
 
 // ---- GET /api/quests/:id ----

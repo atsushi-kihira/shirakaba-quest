@@ -20,8 +20,15 @@ bucket_name = "shirakaba-assets"
 ENVIRONMENT = "development"
 CORS_ORIGIN = "http://localhost:5173"
 
-# Secrets（本番は wrangler secret put で設定、コードに書かない）
-# SENDGRID_API_KEY
-# ANTHROPIC_API_KEY
-# GOOGLE_VISION_API_KEY
-# SESSION_SECRET  ← セッショントークン用のランダム文字列
+# ---- 本番環境 ----
+# wrangler deploy --env production で使用
+[env.production.vars]
+ENVIRONMENT = "production"
+CORS_ORIGIN = "https://shirakaba-quest.pages.dev"
+# 独自ドメイン使用時: CORS_ORIGIN = "https://your-domain.com"
+
+# Secrets は wrangler secret put で設定（コードに書かない）:
+#   wrangler secret put SENDGRID_API_KEY
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put GOOGLE_VISION_API_KEY
+#   wrangler secret put SESSION_SECRET  ← openssl rand -hex 32 で生成
