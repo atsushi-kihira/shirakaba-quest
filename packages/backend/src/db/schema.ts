@@ -113,6 +113,17 @@ export const pointTransactions = sqliteTable("point_transactions", {
   createdAt: integer("created_at").notNull(),
 });
 
+// USP（Unique Selling Proposition）マスター — 管理者が定義する能力リスト
+export const usps = sqliteTable("usps", {
+  id:          text("id").primaryKey(),
+  name:        text("name").notNull().unique(),   // 例: "リスク判断力"
+  emoji:       text("emoji").notNull().default("⭐"),
+  description: text("description"),               // 任意の補足説明
+  sortOrder:   integer("sort_order").notNull().default(0),
+  createdAt:   integer("created_at").notNull(),
+  updatedAt:   integer("updated_at").notNull(),
+});
+
 export const cardDesigns = sqliteTable("card_designs", {
   id:                   text("id").primaryKey().default("default"),
   frontFeatureLabel:    text("front_feature_label").notNull().default("USP・SKILLs"),
@@ -122,6 +133,10 @@ export const cardDesigns = sqliteTable("card_designs", {
   appTitle:             text("app_title").notNull().default("白樺クエスト"),
   appLogo:              text("app_logo").notNull().default("🃏"),
   appPointName:         text("app_point_name").notNull().default("pt"),
+  // 用語カスタマイズ
+  termQuest:            text("term_quest").notNull().default("お題"),
+  termUsp:              text("term_usp").notNull().default("USP"),
+  termOneOnOne:         text("term_one_on_one").notNull().default("1to1"),
   updatedAt:            integer("updated_at").notNull(),
   updatedBy:            text("updated_by").notNull(),
 });

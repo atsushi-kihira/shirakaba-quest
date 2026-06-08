@@ -37,6 +37,31 @@ app.route("/api/members", memberRoutes);
 app.route("/api/ranking", rankingRoutes);
 app.route("/api/oneonone", oneOnOneRoutes);
 app.route("/api/quests", questRoutes);
+
+// ---- 公開アプリ設定（認証不要・全ユーザー対象） ----
+app.get("/api/settings", async (c) => {
+  const { createDb, schema } = await import("./db/index.ts");
+  const db = createDb(c.env.DB);
+  const design = await db.select().from(schema.cardDesigns).get();
+  return c.json({
+    data: {
+      appTitle:     design?.appTitle     ?? "白樺クエスト",
+      appLogo:      design?.appLogo      ?? "🃏",
+      appPointName: design?.appPointName ?? "pt",
+      termQuest:    design?.termQuest    ?? "お題",
+      termUsp:      design?.termUsp      ?? "USP",
+      termOneOnOne: design?.termOneOnOne ?? "1to1",
+    },
+  });
+});
+
+// ---- 公開 USP 一覧（メンバー登録・プロフィール編集で使用、認証不要） ----
+app.get("/api/usps", async (c) => {
+  const { createDb, schema } = await import("./db/index.ts");
+  const db = createDb(c.env.DB);
+  const usps = await db.select().from(schema.usps).orderBy(schema.usps.sortOrder).all();
+  return c.json({ data: usps });
+});
 // 管理者ルートは index.ts 側でミドルウェアを適用
 app.use("/api/admin/*", authMiddleware, adminMiddleware);
 app.route("/api/admin", adminRoutes);

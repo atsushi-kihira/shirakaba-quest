@@ -1,18 +1,28 @@
 // =============================================================
 // 管理画面レイアウト
 // =============================================================
+import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star } from "lucide-react";
 
 const ADMIN_NAV = [
   { to: "/admin",          icon: LayoutDashboard, label: "ダッシュボード", end: true },
   { to: "/admin/members",  icon: Users,           label: "メンバー管理",   end: false },
+  { to: "/admin/usps",     icon: Star,            label: "USP管理",        end: false },
   { to: "/admin/quests",   icon: ScrollText,      label: "お題管理",       end: false },
   { to: "/admin/points",   icon: RotateCcw,       label: "ポイントリセット", end: false },
   { to: "/admin/settings", icon: Settings,        label: "アプリ設定",     end: false },
 ] as const;
 
 export function AdminLayout() {
+  useEffect(() => {
+    document.title = "チームエンゲージメント管理ダッシュボード";
+    return () => {
+      // 管理画面から離れたら戻す（AppLayout 側で上書きされるので念のため）
+      document.title = "白樺クエスト";
+    };
+  }, []);
+
   return (
     <div className="flex min-h-dvh" style={{ background: "var(--color-paper-100)" }}>
       {/* PC: 左サイドバー */}

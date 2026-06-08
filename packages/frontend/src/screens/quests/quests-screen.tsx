@@ -3,9 +3,10 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, X, CheckCircle2, Star, Trophy } from "lucide-react";
+import { Loader2, X, CheckCircle2, Trophy, Star } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
 import type { PublicMember, Skill } from "@shared/types";
 
 type Quest = {
@@ -18,6 +19,9 @@ type MembersResponse = { data: PublicMember[] };
 type AttemptResult   = { data: { isCorrect: boolean; reward: number; message: string; isFirstCorrect: boolean } };
 
 export function QuestsScreen() {
+  const settings = useSettings();
+  const termUsp = settings.termUsp;
+
   const { data, isLoading } = useQuery({
     queryKey: ["quests"],
     queryFn: () => api.get<QuestsResponse>("/quests"),
@@ -80,7 +84,7 @@ export function QuestsScreen() {
       {!isLoading && (
         <div className="space-y-4">
           {filtered.map((quest) => (
-            <QuestCard key={quest.id} quest={quest} onChallenge={() => setSelectedQuest(quest)} />
+            <QuestCard key={quest.id} quest={quest} termUsp={termUsp} onChallenge={() => setSelectedQuest(quest)} />
           ))}
           {filtered.length === 0 && (
             <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
@@ -92,14 +96,14 @@ export function QuestsScreen() {
       )}
 
       {selectedQuest && (
-        <ChallengeModal quest={selectedQuest} onClose={() => setSelectedQuest(null)} />
+        <ChallengeModal quest={selectedQuest} termUsp={termUsp} onClose={() => setSelectedQuest(null)} />
       )}
     </div>
   );
 }
 
 // ---- クエストカード ----
-function QuestCard({ quest, onChallenge }: { quest: Quest; onChallenge: () => void }) {
+function QuestCard({ quest, termUsp, onChallenge }: { quest: Quest; termUsp: string; onChallenge: () => void }) {
   const isHard = quest.level === "hard";
   return (
     <div className="card-paper rounded-3xl p-5"
@@ -130,7 +134,7 @@ function QuestCard({ quest, onChallenge }: { quest: Quest; onChallenge: () => vo
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3 text-xs" style={{ color: "var(--color-ink-500)" }}>
-          <span>🧩 スキル {quest.skillCount}個</span>
+          <span>🧩 {termUsp} {quest.skillCount}個</span>
           <span className="font-bold" style={{ color: "var(--color-accent)" }}>+{quest.reward}pt</span>
           {quest.deadline && (
             <span>📅 {new Date(quest.deadline * 1000).toLocaleDateString("ja-JP")}</span>
@@ -147,7 +151,7 @@ function QuestCard({ quest, onChallenge }: { quest: Quest; onChallenge: () => vo
 }
 
 // ---- 挑戦モーダル ----
-function ChallengeModal({ quest, onClose }: { quest: Quest; onClose: () => void }) {
+function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: string; onClose: () => void }) {
   const me = useAuthStore((s) => s.user);
   const qc = useQueryClient();
 
@@ -259,7 +263,7 @@ function ChallengeModal({ quest, onClose }: { quest: Quest; onClose: () => void 
               )}
 
               <p className="text-sm font-medium mb-3" style={{ color: "var(--color-ink-700)" }}>
-                🧩 スキルを <span className="font-bold" style={{ color: "var(--color-brand)" }}>{quest.skillCount}個</span> 選ぼう
+                🧩 {termUsp}を <span className="font-bold" style={{ color: "var(--color-brand)" }}>{quest.skillCount}個</span> 選ぼう
                 <span className="ml-2 text-xs" style={{ color: "var(--color-ink-400)" }}>({selected.size}/{quest.skillCount})</span>
               </p>
 
@@ -269,8 +273,8 @@ function ChallengeModal({ quest, onClose }: { quest: Quest; onClose: () => void 
                 </div>
               ) : availableSkills.length === 0 ? (
                 <div className="text-center py-6" style={{ color: "var(--color-ink-400)" }}>
-                  <p className="text-sm">使えるスキルがありません</p>
-                  <p className="text-xs mt-1">1to1を完了するとスキルが増えます</p>
+                  <p className="text-sm">使える{termUsp}がありません</p>
+                  <p className="text-xs mt-1">1to1を完了すると{termUsp}が増えます</p>
                 </div>
               ) : (
                 <div className="space-y-1.5 max-h-72 overflow-y-auto -mx-1 px-1">

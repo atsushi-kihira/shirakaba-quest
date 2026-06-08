@@ -4,10 +4,11 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, Clock, CheckCircle, Loader2, Users } from "lucide-react";
+import { Check, X, Clock, CheckCircle, Loader2, Users, Camera } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { ImportCardModal } from "./import-card-modal";
 
 type Session = {
   id: string;
@@ -34,6 +35,7 @@ export function OneOnOneScreen() {
   const qc = useQueryClient();
   const { user } = useAuthStore();
   const [tab, setTab] = useState<"pending" | "active" | "done">("pending");
+  const [showImport, setShowImport] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["oneonone"],
@@ -85,9 +87,20 @@ export function OneOnOneScreen() {
 
   return (
     <div className="px-4 py-6 max-w-xl mx-auto pb-24">
-      <h1 className="text-2xl font-semibold mb-4" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-        🤝 1to1
-      </h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          🤝 1to1
+        </h1>
+        {/* カード画像から登録ボタン */}
+        <button
+          onClick={() => setShowImport(true)}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium transition hover:opacity-80 active:opacity-70"
+          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)", border: "1.5px solid var(--color-paper-300)" }}
+        >
+          <Camera size={14} />
+          カード画像から登録
+        </button>
+      </div>
 
       {/* タブ */}
       <div className="flex gap-2 mb-5">
@@ -259,6 +272,11 @@ export function OneOnOneScreen() {
             </div>
           )}
         </>
+      )}
+
+      {/* カード画像インポートモーダル */}
+      {showImport && (
+        <ImportCardModal onClose={() => setShowImport(false)} />
       )}
     </div>
   );

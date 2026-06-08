@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { sum } from "drizzle-orm";
 import { adminMemberRoutes } from "./members.ts";
 import { adminQuestRoutes } from "./quests.ts";
+import { adminUspRoutes } from "./usps.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -13,6 +14,7 @@ export const adminRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 adminRoutes.route("/members", adminMemberRoutes);
 adminRoutes.route("/quests", adminQuestRoutes);
+adminRoutes.route("/usps", adminUspRoutes);
 
 // ---- POST /api/admin/points/reset ----
 adminRoutes.post("/points/reset", async (c) => {
@@ -71,7 +73,10 @@ adminRoutes.patch("/app-settings", async (c) => {
   const db = createDb(c.env.DB);
   const adminId = c.get("userId");
   const now = Math.floor(Date.now() / 1000);
-  const body = await c.req.json<Partial<{ appTitle: string; appLogo: string; appPointName: string }>>();
+  const body = await c.req.json<Partial<{
+    appTitle: string; appLogo: string; appPointName: string;
+    termQuest: string; termUsp: string; termOneOnOne: string;
+  }>>();
 
   const { eq } = await import("drizzle-orm");
 
@@ -79,6 +84,9 @@ adminRoutes.patch("/app-settings", async (c) => {
     ...(body.appTitle     !== undefined && { appTitle: body.appTitle }),
     ...(body.appLogo      !== undefined && { appLogo: body.appLogo }),
     ...(body.appPointName !== undefined && { appPointName: body.appPointName }),
+    ...(body.termQuest    !== undefined && { termQuest: body.termQuest }),
+    ...(body.termUsp      !== undefined && { termUsp: body.termUsp }),
+    ...(body.termOneOnOne !== undefined && { termOneOnOne: body.termOneOnOne }),
     updatedAt: now,
     updatedBy: adminId,
   }).where(eq(schema.cardDesigns.id, "default"));

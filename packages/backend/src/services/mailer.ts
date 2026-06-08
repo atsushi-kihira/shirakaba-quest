@@ -8,6 +8,7 @@ type SendMailOptions = {
   text: string;
   html: string;
   apiKey: string;
+  fromEmail?: string;
 };
 
 export async function sendMail(opts: SendMailOptions): Promise<void> {
@@ -19,7 +20,7 @@ export async function sendMail(opts: SendMailOptions): Promise<void> {
     },
     body: JSON.stringify({
       personalizations: [{ to: [{ email: opts.to }] }],
-      from: { email: "noreply@shirakaba-quest.app", name: "白樺クエスト" },
+      from: { email: opts.fromEmail ?? "a.kihira@bizolve.jp", name: "白樺クエスト" },
       subject: opts.subject,
       content: [
         { type: "text/plain", value: opts.text },
@@ -40,6 +41,7 @@ export async function sendOtpMail(opts: {
   code: string;
   apiKey: string;
   isDev: boolean;
+  fromEmail?: string;
 }): Promise<void> {
   if (opts.isDev) {
     // 開発環境ではコンソールに出力するだけ（実際には送信しない）
@@ -50,6 +52,7 @@ export async function sendOtpMail(opts: {
   await sendMail({
     to: opts.to,
     apiKey: opts.apiKey,
+    fromEmail: opts.fromEmail,
     subject: `【白樺クエスト】ログインコード: ${opts.code}`,
     text: [
       "白樺クエストにログインするための確認コードをお送りします。",

@@ -24,7 +24,10 @@ export const authRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // ---- POST /api/auth/request-otp ----
 authRoutes.post("/request-otp", async (c) => {
-  const { email } = await c.req.json<{ email: string }>();
+  const { email, context } = await c.req.json<{
+    email: string;
+    context?: "admin" | "member";  // 管理者ログイン時は "admin" を渡す
+  }>();
 
   if (!email || !email.includes("@")) {
     return c.json(
@@ -34,9 +37,7 @@ authRoutes.post("/request-otp", async (c) => {
   }
 
   const db = createDb(c.env.DB);
-
-  // ユーザー存在確認（セキュリティのため結果は200で統一）
-  const found = await findUserByEmail(db, email.toLowerCase());
+  const found = await findUserByEmail(db, email.toLowerCase(), context ?? "member");
 
   if (found) {
     // メンバーの場合はアクティブか確認
@@ -48,9 +49,19 @@ authRoutes.post("/request-otp", async (c) => {
         .get();
 
       if (member?.status === "pending") {
-        // pending の場合は操作させない（ただし同じ200を返す）
         console.log(`[OTP] Blocked: ${email} is pending`);
-        return c.json({ ok: true }); // ユーザー列挙防止
+        return c.json({
+          ok: false,
+          status: "pending",
+          message: "アカウントは管理者の承認待ちです。承認されるとログインできるようになります。",
+        });
+      }
+      if (member?.status === "suspended") {
+        return c.json({
+          ok: false,
+          status: "suspended",
+          message: "このアカウントは現在停止されています。管理者にお問い合わせください。",
+        });
       }
     }
 
@@ -61,6 +72,7 @@ authRoutes.post("/request-otp", async (c) => {
       code,
       apiKey: c.env.SENDGRID_API_KEY,
       isDev: c.env.ENVIRONMENT === "development",
+      fromEmail: c.env.SENDGRID_FROM_EMAIL,
     });
   }
 
@@ -70,7 +82,11 @@ authRoutes.post("/request-otp", async (c) => {
 
 // ---- POST /api/auth/verify-otp ----
 authRoutes.post("/verify-otp", async (c) => {
-  const { email, code } = await c.req.json<{ email: string; code: string }>();
+  const { email, code, context } = await c.req.json<{
+    email: string;
+    code: string;
+    context?: "admin" | "member";
+  }>();
 
   if (!email || !code) {
     return c.json(
@@ -93,7 +109,7 @@ authRoutes.post("/verify-otp", async (c) => {
   }
 
   const db = createDb(c.env.DB);
-  const found = await findUserByEmail(db, email.toLowerCase());
+  const found = await findUserByEmail(db, email.toLowerCase(), context ?? "member");
 
   if (!found) {
     return c.json(

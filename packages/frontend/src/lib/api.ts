@@ -2,7 +2,11 @@
 // API クライアント — fetch ラッパー
 // =============================================================
 
-const BASE_URL = "/api";
+// 開発環境: Vite のプロキシ経由（/api → localhost:8787）
+// 本番環境: Cloudflare Workers の直接 URL
+const BASE_URL = import.meta.env.DEV
+  ? "/api"
+  : "https://shirakaba-quest-api.a-kihira.workers.dev/api";
 
 function getToken(): string | null {
   return localStorage.getItem("auth_token");
@@ -71,6 +75,9 @@ export const api = {
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PATCH", body }),
 
-  delete: <T>(path: string) =>
-    request<T>(path, { method: "DELETE" }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PUT", body }),
+
+  delete: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "DELETE", body }),
 };

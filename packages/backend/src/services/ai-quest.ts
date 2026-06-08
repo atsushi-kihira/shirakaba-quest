@@ -2,13 +2,6 @@
 // お題 AI 自動生成サービス — Anthropic Claude API
 // =============================================================
 
-type Member = {
-  name: string;
-  category: string;
-  businessDescription: string;
-  skills: Array<{ name: string; emoji: string }>;
-};
-
 export type AiQuestDraft = {
   title: string;
   story: string;
@@ -19,28 +12,34 @@ export type AiQuestDraft = {
   reward: number;
 };
 
-const SYSTEM_PROMPT = `あなたはBNI白樺チャプターの運営チームのアシスタントです。
-チャプターメンバーが解決すべき「お題（クエスト）」を提案してください。
+type UspItem = { name: string; emoji: string };
+
+const QUEST_SYSTEM_PROMPT = `あなたはBNI白樺チャプターの運営チームのアシスタントです。
+チャプターメンバーが解決すべき「お題（クエスト）」を1件提案してください。
 
 ルール:
-- メンバーの業種・スキル範囲内で解決可能な、具体的なビジネス課題にしてください
+- 提供されるUSPリストの中から、解決に必要なものを2〜4個選んでanswerSkillsに設定すること
+- answerSkillsには必ずUSPリストに含まれている名前だけを使うこと（リスト外の名前は禁止）
 - ストーリーは2〜3文で、依頼人の困りごとが伝わるように書いてください
-- 必要スキル数は3〜4個にしてください
-- answerSkillsには、提示されたメンバーが実際に持っているスキル名のみを使ってください
 - 出力はJSONのみ（余分な説明不要）`;
 
-function buildPrompt(members: Member[], userPrompt?: string): string {
-  const memberList = members
-    .map(
-      (m) =>
-        `- ${m.name}（${m.category}）: ${m.businessDescription} ／ スキル: ${m.skills.map((s) => `${s.emoji}${s.name}`).join("、")}`
-    )
+const SKILLS_SYSTEM_PROMPT = `あなたはBNI白樺チャプターの運営チームのアシスタントです。
+既存のお題（クエスト）に対して、解決に必要なUSP（スキル）を選んでください。
+
+ルール:
+- 提供されるUSPリストの中から、このお題の解決に最も適したものを2〜4個選ぶこと
+- USPリスト外の名前は絶対に使わないこと
+- 出力はJSONのみ（余分な説明不要）`;
+
+function buildQuestPrompt(usps: UspItem[], userPrompt?: string): string {
+  const uspList = usps
+    .map((u) => `- ${u.emoji}${u.name}`)
     .join("\n");
 
-  return `${SYSTEM_PROMPT}
+  return `${QUEST_SYSTEM_PROMPT}
 
-# 現在のメンバー一覧
-${memberList}
+# 利用可能なUSP一覧（この中からanswerSkillsを選ぶこと）
+${uspList}
 
 # 出力形式（JSON のみ、コードブロック不要）
 {
@@ -49,26 +48,94 @@ ${memberList}
   "emoji": "絵文字1文字",
   "level": "normal",
   "skillCount": 3,
-  "answerSkills": ["スキル名1", "スキル名2", "スキル名3"],
+  "answerSkills": ["USP名1", "USP名2", "USP名3"],
   "reward": 5
 }${userPrompt ? `\n\n# 追加の指示\n${userPrompt}` : ""}`;
 }
 
+function buildSkillsPrompt(usps: UspItem[], questTitle: string, questStory: string): string {
+  const uspList = usps
+    .map((u) => `- ${u.emoji}${u.name}`)
+    .join("\n");
+
+  return `${SKILLS_SYSTEM_PROMPT}
+
+# お題タイトル
+${questTitle}
+
+# お題ストーリー
+${questStory}
+
+# 利用可能なUSP一覧（この中からのみ選ぶこと）
+${uspList}
+
+# 出力形式（JSON のみ）
+{
+  "answerSkills": ["USP名1", "USP名2", "USP名3"],
+  "skillCount": 3
+}`;
+}
+
 /** Claude API でお題を生成する */
 export async function generateQuestWithAi(opts: {
-  members: Member[];
+  usps: UspItem[];
   userPrompt?: string;
   apiKey: string;
   isDev: boolean;
 }): Promise<AiQuestDraft> {
-  const { members, userPrompt, apiKey, isDev } = opts;
+  const { usps, userPrompt, apiKey, isDev } = opts;
 
   if (isDev || !apiKey || apiKey === "dev-not-set") {
-    // 開発環境ではモックデータを返す
-    await new Promise((r) => setTimeout(r, 800)); // 疑似ディレイ
-    return mockQuestDraft(members);
+    await new Promise((r) => setTimeout(r, 800));
+    return mockQuestDraft(usps);
   }
 
+  const content = await callClaude(apiKey, buildQuestPrompt(usps, userPrompt));
+
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("AI応答からJSONを抽出できませんでした");
+
+  const draft = JSON.parse(jsonMatch[0]) as AiQuestDraft;
+
+  // USPリスト外の名前が混入していたら除去
+  const uspNames = new Set(usps.map((u) => u.name));
+  draft.answerSkills = draft.answerSkills.filter((s) => uspNames.has(s));
+  draft.skillCount = draft.answerSkills.length;
+
+  return draft;
+}
+
+/** 既存お題の正解USPのみをAIで再生成する */
+export async function regenerateAnswerSkillsWithAi(opts: {
+  usps: UspItem[];
+  questTitle: string;
+  questStory: string;
+  apiKey: string;
+  isDev: boolean;
+}): Promise<{ answerSkills: string[]; skillCount: number }> {
+  const { usps, questTitle, questStory, apiKey, isDev } = opts;
+
+  if (isDev || !apiKey || apiKey === "dev-not-set") {
+    await new Promise((r) => setTimeout(r, 500));
+    const shuffled = [...usps].sort(() => Math.random() - 0.5).slice(0, 3);
+    return { answerSkills: shuffled.map((u) => u.name), skillCount: 3 };
+  }
+
+  const content = await callClaude(apiKey, buildSkillsPrompt(usps, questTitle, questStory));
+
+  const jsonMatch = content.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("AI応答からJSONを抽出できませんでした");
+
+  const result = JSON.parse(jsonMatch[0]) as { answerSkills: string[]; skillCount: number };
+
+  const uspNames = new Set(usps.map((u) => u.name));
+  result.answerSkills = result.answerSkills.filter((s) => uspNames.has(s));
+  result.skillCount = result.answerSkills.length;
+
+  return result;
+}
+
+async function callClaude(apiKey: string, prompt: string): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -79,12 +146,7 @@ export async function generateQuestWithAi(opts: {
     body: JSON.stringify({
       model: "claude-opus-4-5",
       max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: buildPrompt(members, userPrompt),
-        },
-      ],
+      messages: [{ role: "user", content: prompt }],
     }),
   });
 
@@ -93,31 +155,14 @@ export async function generateQuestWithAi(opts: {
     throw new Error(`Claude API error ${res.status}: ${body}`);
   }
 
-  const data = await res.json() as {
-    content: Array<{ type: string; text: string }>;
-  };
-
-  const text = data.content.find((c) => c.type === "text")?.text ?? "";
-
-  // JSON 部分を抽出（前後の余計な文字を除去）
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error("AI応答からJSONを抽出できませんでした");
-  }
-
-  try {
-    return JSON.parse(jsonMatch[0]) as AiQuestDraft;
-  } catch {
-    throw new Error("AI応答のJSON解析に失敗しました");
-  }
+  const data = await res.json() as { content: Array<{ type: string; text: string }> };
+  return data.content.find((c) => c.type === "text")?.text ?? "";
 }
 
 /** 開発環境用モックお題 */
-function mockQuestDraft(members: Member[]): AiQuestDraft {
-  // メンバーからランダムにスキルを3つ選ぶ
-  const allSkills = members.flatMap((m) => m.skills.map((s) => s.name));
-  const shuffled = allSkills.sort(() => Math.random() - 0.5);
-  const picked = shuffled.slice(0, 3);
+function mockQuestDraft(usps: UspItem[]): AiQuestDraft {
+  const shuffled = [...usps].sort(() => Math.random() - 0.5);
+  const picked = shuffled.slice(0, 3).map((u) => u.name);
 
   return {
     title: "新規事業立ち上げ支援プロジェクト",

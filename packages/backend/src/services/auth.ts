@@ -94,30 +94,32 @@ export async function verifyAndConsumeOtp(opts: {
 // ユーザー検索
 // -------------------------------------------------------
 
-export async function findUserByEmail(db: Db, email: string) {
-  // 管理者を先に検索（管理者はメンバーテーブルにも存在することがある）
-  const admin = await db
-    .select()
-    .from(schema.admins)
-    .where(eq(schema.admins.email, email))
-    .get();
-
-  if (admin) {
-    return { id: admin.id, userType: "admin" as const, user: admin };
+export async function findUserByEmail(
+  db: Db,
+  email: string,
+  context: "admin" | "member" = "member",
+) {
+  if (context === "admin") {
+    // 管理者ログイン: admins テーブルのみ検索
+    const admin = await db
+      .select()
+      .from(schema.admins)
+      .where(eq(schema.admins.email, email))
+      .get();
+    return admin
+      ? { id: admin.id, userType: "admin" as const, user: admin }
+      : null;
+  } else {
+    // 一般ログイン: members テーブルのみ検索
+    const member = await db
+      .select()
+      .from(schema.members)
+      .where(eq(schema.members.email, email))
+      .get();
+    return member
+      ? { id: member.id, userType: "member" as const, user: member }
+      : null;
   }
-
-  // メンバーとして検索
-  const member = await db
-    .select()
-    .from(schema.members)
-    .where(eq(schema.members.email, email))
-    .get();
-
-  if (member) {
-    return { id: member.id, userType: "member" as const, user: member };
-  }
-
-  return null;
 }
 
 // -------------------------------------------------------

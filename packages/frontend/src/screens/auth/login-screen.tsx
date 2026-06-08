@@ -2,7 +2,7 @@
 // ログイン画面 — パスワードレス OTP
 // =============================================================
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Mail, Sparkles, ArrowLeft, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
@@ -18,12 +18,18 @@ type VerifyResponse = {
 
 export function LoginScreen() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
+
+  // /admin からのリダイレクト時は管理者ログインモード
+  const redirectTo = searchParams.get("redirect") ?? null;
+  const isAdminMode = redirectTo === "/admin";
 
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [isPending, setIsPending] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   // ---- Step1: メールアドレス送信 ----
@@ -32,7 +38,16 @@ export function LoginScreen() {
     setError(null);
     setIsLoading(true);
     try {
-      await api.post("/auth/request-otp", { email });
+      const res = await api.post<{ ok: boolean; status?: string; message?: string }>(
+        "/auth/request-otp",
+        { email, context: isAdminMode ? "admin" : "member" }
+      );
+      // 承認待ち・停止中の場合はメッセージを表示してOTPステップには進まない
+      if (!res.ok && res.message) {
+        setIsPending(res.status === "pending");
+        setError(res.message);
+        return;
+      }
       setStep("otp");
     } catch (err) {
       if (err instanceof ApiError) {
@@ -54,6 +69,7 @@ export function LoginScreen() {
       const res = await api.post<VerifyResponse>("/auth/verify-otp", {
         email,
         code: otp,
+        context: isAdminMode ? "admin" : "member",
       });
       setAuth(res.token, {
         id: res.user.id,
@@ -63,7 +79,8 @@ export function LoginScreen() {
         emoji: res.user.emoji,
         bgColor: res.user.bgColor,
       });
-      navigate(res.userType === "admin" ? "/admin" : "/");
+      // redirect パラメータがあればそこへ、なければ種別に応じてデフォルト遷移
+      navigate(redirectTo ?? (res.userType === "admin" ? "/admin" : "/"));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError("コードが正しくないか、有効期限が切れています。もう一度お試しください。");
@@ -84,9 +101,37 @@ export function LoginScreen() {
           白樺クエスト
         </h1>
         <p className="mt-1 text-sm" style={{ color: "var(--color-ink-500)" }}>
-          仲間と一緒に、1to1でつながろう
+          {isAdminMode ? "管理者ダッシュボード" : "仲間と一緒に、1to1でつながろう"}
         </p>
       </div>
+
+      {/* 管理者ログインバナー */}
+      {isAdminMode && (
+        <div className="w-full max-w-sm mb-4 rounded-2xl px-4 py-3 flex items-center gap-2"
+          style={{ background: "var(--color-paper-200)" }}>
+          <span className="text-lg">⚙️</span>
+          <p className="text-sm" style={{ color: "var(--color-ink-600)" }}>
+            管理者メールアドレスでログインしてください
+          </p>
+        </div>
+      )}
+
+      {/* 承認待ちバナー */}
+      {isPending && error && (
+        <div className="w-full max-w-sm mb-4 rounded-3xl p-5 text-center"
+          style={{ background: "var(--color-paper-200)" }}>
+          <div className="text-4xl mb-2">⏳</div>
+          <p className="font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
+            承認待ちです
+          </p>
+          <p className="text-sm" style={{ color: "var(--color-ink-600)" }}>
+            {error}
+          </p>
+          <p className="text-xs mt-2" style={{ color: "var(--color-ink-400)" }}>
+            承認されると登録したメールアドレスに通知が届きます
+          </p>
+        </div>
+      )}
 
       {/* カード */}
       <div className="card-paper w-full max-w-sm rounded-3xl p-8">
@@ -96,7 +141,7 @@ export function LoginScreen() {
             onChange={setEmail}
             onSubmit={handleEmailSubmit}
             isLoading={isLoading}
-            error={error}
+            error={isPending ? null : error}
           />
         ) : (
           <OtpStep

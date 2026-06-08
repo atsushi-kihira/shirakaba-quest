@@ -13,6 +13,7 @@ export type Env = {
 
   // Secrets（wrangler secret put で登録）
   SENDGRID_API_KEY: string;
+  SENDGRID_FROM_EMAIL: string;  // 送信元メールアドレス（SendGridで認証済みのもの）
   ANTHROPIC_API_KEY: string;
   GOOGLE_VISION_API_KEY: string;
   SESSION_SECRET: string;

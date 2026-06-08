@@ -2,6 +2,7 @@
 // レイアウト — タブバー（モバイル）+ サイドバー（PC）
 // 1to1 通知バッジ付き
 // =============================================================
+import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Home, Users, ScrollText, Trophy, User } from "lucide-react";
@@ -9,6 +10,20 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 
 type OnoSession = { status: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null };
+type AppSettings = { appTitle: string; appLogo: string };
+
+/** アプリ設定からタイトルを取得して <title> に反映するフック */
+function useAppTitle() {
+  const { data } = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: () => api.get<{ data: AppSettings }>("/admin/app-settings"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const appTitle = data?.data?.appTitle ?? "白樺クエスト";
+  useEffect(() => {
+    document.title = appTitle;
+  }, [appTitle]);
+}
 
 function usePendingCount() {
   const user = useAuthStore((s) => s.user);
@@ -40,6 +55,7 @@ const NAV_ITEMS = [
 ] as const;
 
 export function AppLayout() {
+  useAppTitle();
   const pendingCount = usePendingCount();
 
   return (
@@ -75,7 +91,7 @@ export function AppLayout() {
       </nav>
 
       {/* メインコンテンツ */}
-      <main className="flex-1 pb-20 lg:pb-0 max-w-4xl mx-auto w-full px-0 lg:px-6 lg:py-6">
+      <main className="flex-1 main-with-tabbar max-w-4xl mx-auto w-full px-0 lg:px-6 lg:py-6">
         <Outlet />
       </main>
 

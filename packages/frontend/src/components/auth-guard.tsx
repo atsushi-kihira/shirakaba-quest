@@ -10,7 +10,9 @@ export function AuthGuard() {
 
 export function AdminGuard() {
   const { token, user } = useAuthStore();
-  if (!token) return <Navigate to="/login" replace />;
+  // 未ログイン → 管理者ログイン画面へ（redirect パラメータ付き）
+  if (!token) return <Navigate to="/login?redirect=/admin" replace />;
+  // 管理者以外がアクセス → 一般ホームへ
   if (user && user.userType !== "admin") return <Navigate to="/" replace />;
   return <Outlet />;
 }

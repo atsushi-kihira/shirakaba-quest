@@ -12,9 +12,8 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
-import { generateQuestWithAi } from "../../services/ai-quest.ts";
+import { generateQuestWithAi, regenerateAnswerSkillsWithAi } from "../../services/ai-quest.ts";
 import type { Env, Variables } from "../../types.ts";
-import type { Skill } from "@shared/types";
 
 export const adminQuestRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -84,27 +83,22 @@ adminQuestRoutes.post("/ai-generate", async (c) => {
   const db = createDb(c.env.DB);
   const { userPrompt } = await c.req.json<{ userPrompt?: string }>().catch(() => ({ userPrompt: undefined }));
 
-  // アクティブメンバーとそのスキルを取得
-  const members = await db
-    .select({
-      name: schema.members.name,
-      category: schema.members.category,
-      businessDescription: schema.members.businessDescription,
-      skills: schema.members.skills,
-    })
-    .from(schema.members)
-    .where(eq(schema.members.status, "active"))
+  // USP マスターリストを取得
+  const usps = await db
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .from(schema.usps)
+    .orderBy(schema.usps.sortOrder)
     .all();
 
-  const memberData = members.map((m) => ({
-    name: m.name,
-    category: m.category,
-    businessDescription: m.businessDescription,
-    skills: parseJson<Skill[]>(m.skills, []).map((s) => ({ name: s.name, emoji: s.emoji })),
-  }));
+  if (usps.length === 0) {
+    return c.json(
+      { error: { code: "no_usps", message: "USPが登録されていません。先にUSP管理画面でUSPを登録してください。" } },
+      422
+    );
+  }
 
   const draft = await generateQuestWithAi({
-    members: memberData,
+    usps,
     userPrompt,
     apiKey: c.env.ANTHROPIC_API_KEY,
     isDev: c.env.ENVIRONMENT === "development",
@@ -113,7 +107,7 @@ adminQuestRoutes.post("/ai-generate", async (c) => {
   return c.json({ data: draft });
 });
 
-// ---- POST /api/admin/quests/:id/regenerate ----
+// ---- POST /api/admin/quests/:id/regenerate ---- お題全体を再生成
 adminQuestRoutes.post("/:id/regenerate", async (c) => {
   const db = createDb(c.env.DB);
   const questId = c.req.param("id");
@@ -122,40 +116,126 @@ adminQuestRoutes.post("/:id/regenerate", async (c) => {
   const quest = await db.select().from(schema.quests).where(eq(schema.quests.id, questId)).get();
   if (!quest) return c.json({ error: { code: "not_found", message: "お題が見つかりません" } }, 404);
 
-  const members = await db
-    .select({ name: schema.members.name, category: schema.members.category, businessDescription: schema.members.businessDescription, skills: schema.members.skills })
-    .from(schema.members).where(eq(schema.members.status, "active")).all();
+  const usps = await db
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .from(schema.usps)
+    .orderBy(schema.usps.sortOrder)
+    .all();
 
-  const memberData = members.map((m) => ({
-    name: m.name, category: m.category, businessDescription: m.businessDescription,
-    skills: parseJson<Skill[]>(m.skills, []).map((s) => ({ name: s.name, emoji: s.emoji })),
-  }));
+  if (usps.length === 0) {
+    return c.json(
+      { error: { code: "no_usps", message: "USPが登録されていません。先にUSP管理画面でUSPを登録してください。" } },
+      422
+    );
+  }
 
   const draft = await generateQuestWithAi({
-    members: memberData, userPrompt,
+    usps, userPrompt,
     apiKey: c.env.ANTHROPIC_API_KEY,
     isDev: c.env.ENVIRONMENT === "development",
   });
 
-  // プロンプト履歴を保存
   const history = parseJson<Array<{ prompt: string; generatedAt: number }>>(quest.aiPromptHistory, []);
   history.push({ prompt: userPrompt ?? "(なし)", generatedAt: Math.floor(Date.now() / 1000) });
 
   const now = Math.floor(Date.now() / 1000);
   await db.update(schema.quests)
     .set({
-      title: draft.title,
-      story: draft.story,
-      emoji: draft.emoji,
-      skillCount: draft.skillCount,
-      answerSkills: JSON.stringify(draft.answerSkills),
-      reward: draft.reward,
-      aiPromptHistory: JSON.stringify(history),
-      updatedAt: now,
+      title: draft.title, story: draft.story, emoji: draft.emoji,
+      skillCount: draft.skillCount, answerSkills: JSON.stringify(draft.answerSkills),
+      reward: draft.reward, aiPromptHistory: JSON.stringify(history), updatedAt: now,
     })
     .where(eq(schema.quests.id, questId));
 
   return c.json({ data: draft });
+});
+
+// ---- POST /api/admin/quests/regenerate-skills-preview ---- 保存前ドラフト用: タイトル・ストーリーから正解USPをAI提案
+adminQuestRoutes.post("/regenerate-skills-preview", async (c) => {
+  const db = createDb(c.env.DB);
+  const { title, story } = await c.req.json<{ title: string; story: string }>().catch(() => ({ title: "", story: "" }));
+
+  if (!title || !story) {
+    return c.json({ error: { code: "bad_request", message: "タイトルとストーリーを入力してください" } }, 400);
+  }
+
+  const usps = await db
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .from(schema.usps)
+    .orderBy(schema.usps.sortOrder)
+    .all();
+
+  if (usps.length === 0) {
+    return c.json({ error: { code: "no_usps", message: "USPが登録されていません。" } }, 422);
+  }
+
+  const result = await regenerateAnswerSkillsWithAi({
+    usps, questTitle: title, questStory: story,
+    apiKey: c.env.ANTHROPIC_API_KEY,
+    isDev: c.env.ENVIRONMENT === "development",
+  });
+
+  return c.json({ data: result });
+});
+
+// ---- DELETE /api/admin/quests (bulk) ---- 複数お題をまとめて削除
+adminQuestRoutes.delete("/", async (c) => {
+  const db = createDb(c.env.DB);
+  const { ids } = await c.req.json<{ ids: string[] }>().catch(() => ({ ids: [] as string[] }));
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return c.json({ error: { code: "bad_request", message: "削除するお題IDを指定してください" } }, 400);
+  }
+
+  const { inArray } = await import("drizzle-orm");
+  const now = Math.floor(Date.now() / 1000);
+
+  await db.update(schema.quests)
+    .set({ status: "deleted", updatedAt: now })
+    .where(inArray(schema.quests.id, ids));
+
+  return c.json({ ok: true, deleted: ids.length });
+});
+
+// ---- POST /api/admin/quests/:id/regenerate-skills ---- 正解USPのみをAIで再生成
+adminQuestRoutes.post("/:id/regenerate-skills", async (c) => {
+  const db = createDb(c.env.DB);
+  const questId = c.req.param("id");
+
+  const quest = await db.select().from(schema.quests).where(eq(schema.quests.id, questId)).get();
+  if (!quest) return c.json({ error: { code: "not_found", message: "お題が見つかりません" } }, 404);
+
+  const usps = await db
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .from(schema.usps)
+    .orderBy(schema.usps.sortOrder)
+    .all();
+
+  if (usps.length === 0) {
+    return c.json(
+      { error: { code: "no_usps", message: "USPが登録されていません。" } },
+      422
+    );
+  }
+
+  const result = await regenerateAnswerSkillsWithAi({
+    usps,
+    questTitle: quest.title,
+    questStory: quest.story,
+    apiKey: c.env.ANTHROPIC_API_KEY,
+    isDev: c.env.ENVIRONMENT === "development",
+  });
+
+  const now = Math.floor(Date.now() / 1000);
+  await db.update(schema.quests)
+    .set({
+      answerSkills: JSON.stringify(result.answerSkills),
+      skillCount: result.skillCount,
+      updatedAt: now,
+    })
+    .where(eq(schema.quests.id, questId));
+
+  return c.json({ data: result });
 });
 
 // ---- PATCH /api/admin/quests/:id ----

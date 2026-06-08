@@ -127,7 +127,7 @@ export function MemberDetailScreen() {
     : !!activeSession?.responderCompletedAt;
 
   return (
-    <div className="px-4 py-6 max-w-xl mx-auto">
+    <div className="px-4 py-6 pb-24 max-w-xl mx-auto">
       {/* 戻るボタン */}
       <button
         onClick={() => navigate(-1)}

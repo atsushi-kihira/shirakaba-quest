@@ -33,7 +33,7 @@ export function MembersScreen() {
   );
 
   return (
-    <div className="px-4 py-6">
+    <div className="px-4 py-6 pb-24">
       {/* ヘッダー */}
       <div className="mb-5">
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>

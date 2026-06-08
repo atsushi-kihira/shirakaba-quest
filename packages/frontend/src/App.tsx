@@ -19,6 +19,7 @@ import { AdminMembersScreen } from "@/screens/admin/admin-members-screen";
 import { AdminQuestsScreen } from "@/screens/admin/admin-quests-screen";
 import { AdminPointsScreen } from "@/screens/admin/admin-points-screen";
 import { AdminSettingsScreen } from "@/screens/admin/admin-settings-screen";
+import { AdminUspsScreen } from "@/screens/admin/admin-usps-screen";
 import { useMe } from "@/hooks/use-me";
 
 function AppWithMe({ children }: { children: React.ReactNode }) {
@@ -57,6 +58,7 @@ export default function App() {
               <Route element={<AdminLayout />}>
                 <Route index element={<AdminDashboardScreen />} />
                 <Route path="members" element={<AdminMembersScreen />} />
+                <Route path="usps" element={<AdminUspsScreen />} />
                 <Route path="quests" element={<AdminQuestsScreen />} />
                 <Route path="points" element={<AdminPointsScreen />} />
                 <Route path="settings" element={<AdminSettingsScreen />} />

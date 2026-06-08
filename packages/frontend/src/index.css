@@ -69,6 +69,16 @@ p {
     inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
+/* メインコンテンツ: モバイルはタブバー分の下余白を確保（safe-area対応） */
+.main-with-tabbar {
+  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 16px);
+}
+@media (min-width: 1024px) {
+  .main-with-tabbar {
+    padding-bottom: 0;
+  }
+}
+
 /* タブバー（モバイル） */
 .tab-bar {
   position: fixed;

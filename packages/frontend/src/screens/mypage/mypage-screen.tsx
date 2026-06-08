@@ -77,9 +77,9 @@ export function MypageScreen() {
   }
 
   return (
-    <div className="px-4 py-6 max-w-xl mx-auto pb-24">
+    <div className="px-4 py-6 max-w-xl lg:max-w-3xl mx-auto">
       {/* ヘッダー */}
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-5 flex items-center justify-between">
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
           👤 マイページ
         </h1>
@@ -100,53 +100,55 @@ export function MypageScreen() {
         </div>
       </div>
 
-      {/* プロフィールカード */}
-      <div className="card-paper rounded-3xl p-5 mb-4">
-        <div className="flex items-center gap-4 mb-4">
-          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-4xl shrink-0 ${member?.bgColor ?? user?.bgColor ?? "bg-amber-100"}`}>
-            {member?.emoji ?? user?.emoji ?? "🙂"}
+      {/* PC: 2カラムレイアウト / モバイル: 1カラム */}
+      <div className="lg:grid lg:grid-cols-[1fr_1.2fr] lg:gap-6 lg:items-start">
+        {/* 左カラム: プロフィール + ポイント */}
+        <div className="space-y-4 mb-4 lg:mb-0">
+          {/* プロフィールカード */}
+          <div className="card-paper rounded-3xl p-5">
+            <div className="flex items-center gap-4 mb-4">
+              <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-4xl shrink-0 ${member?.bgColor ?? user?.bgColor ?? "bg-amber-100"}`}>
+                {member?.emoji ?? user?.emoji ?? "🙂"}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className="text-xl font-semibold truncate" style={{ fontFamily: "var(--font-klee)" }}>
+                  {member?.name ?? user?.name}
+                </h2>
+                {member?.furigana && <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>{member.furigana}</p>}
+                {member?.category && <p className="text-sm font-medium mt-0.5" style={{ color: "var(--color-ink-600)" }}>{member.category}</p>}
+              </div>
+              {!isAdmin && (
+                <button onClick={() => setShowEdit(true)} className="p-2 rounded-xl active:opacity-70 hover:opacity-80 transition"
+                  style={{ background: "var(--color-paper-200)" }}>
+                  <Pencil size={16} style={{ color: "var(--color-ink-500)" }} />
+                </button>
+              )}
+            </div>
+
+            {member?.businessDescription && (
+              <p className="text-sm leading-relaxed mb-4" style={{ color: "var(--color-ink-700)" }}>
+                {member.businessDescription}
+              </p>
+            )}
+
+            {/* QRコードボタン */}
+            {memberId && !isAdmin && (
+              <button onClick={() => setShowQr(true)}
+                className="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-medium text-sm active:opacity-80 hover:opacity-80 transition"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                <QrCode size={18} />
+                自分のQRコードを表示
+              </button>
+            )}
           </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-xl font-semibold truncate" style={{ fontFamily: "var(--font-klee)" }}>
-              {member?.name ?? user?.name}
-            </h2>
-            {member?.furigana && <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>{member.furigana}</p>}
-            {member?.category && <p className="text-sm font-medium mt-0.5" style={{ color: "var(--color-ink-600)" }}>{member.category}</p>}
-          </div>
-          {!isAdmin && (
-            <button onClick={() => setShowEdit(true)} className="p-2 rounded-xl active:opacity-70"
-              style={{ background: "var(--color-paper-200)" }}>
-              <Pencil size={16} style={{ color: "var(--color-ink-500)" }} />
-            </button>
-          )}
-        </div>
 
-        {member?.businessDescription && (
-          <p className="text-sm leading-relaxed mb-4" style={{ color: "var(--color-ink-700)" }}>
-            {member.businessDescription}
-          </p>
-        )}
-
-        {/* QRコードボタン */}
-        {memberId && !isAdmin && (
-          <button onClick={() => setShowQr(true)}
-            className="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-medium text-sm active:opacity-80 transition"
-            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-            <QrCode size={18} />
-            自分のQRコードを表示
-          </button>
-        )}
-      </div>
-
-      {!isAdmin && (
-        <>
           {/* ポイント */}
-          {rank && (
-            <div className="card-paper rounded-3xl p-5 mb-4">
+          {!isAdmin && rank && (
+            <div className="card-paper rounded-3xl p-5">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>⭐ ポイント</h2>
                 <button onClick={() => setTab("history")}
-                  className="text-xs" style={{ color: "var(--color-brand)" }}>
+                  className="text-xs hover:underline" style={{ color: "var(--color-brand)" }}>
                   履歴を見る →
                 </button>
               </div>
@@ -161,26 +163,42 @@ export function MypageScreen() {
             </div>
           )}
 
-          {/* タブ */}
-          <div className="flex gap-2 mb-4">
-            {(["profile", "history"] as const).map((t) => (
-              <button key={t} onClick={() => setTab(t)}
-                className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
-                style={{
-                  background: tab === t ? "var(--color-brand)" : "var(--color-paper-200)",
-                  color: tab === t ? "white" : "var(--color-ink-600)",
-                }}>
-                {{ profile: "スキル・情報", history: "ポイント履歴" }[t]}
-              </button>
-            ))}
-          </div>
+          {/* 1to1リンク（PCでも左カラムに表示） */}
+          {!isAdmin && (
+            <Link to="/oneonone"
+              className="card-paper rounded-3xl p-4 flex items-center gap-3 active:opacity-80 hover:opacity-90 transition block">
+              <span className="text-2xl">🤝</span>
+              <div className="flex-1">
+                <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>1to1 の記録</div>
+                <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>申込・承諾・完了の確認</div>
+              </div>
+              <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
+            </Link>
+          )}
+        </div>
 
-          {/* スキルタブ */}
-          {tab === "profile" && (
-            <div className="space-y-3">
-              {member?.skills && member.skills.length > 0 ? (
-                <div className="card-paper rounded-3xl p-5">
-                  <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>✨ 私のスキル</h2>
+        {/* 右カラム: スキル / ポイント履歴タブ */}
+        {!isAdmin && (
+          <div>
+            {/* タブ */}
+            <div className="flex gap-2 mb-4">
+              {(["profile", "history"] as const).map((t) => (
+                <button key={t} onClick={() => setTab(t)}
+                  className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
+                  style={{
+                    background: tab === t ? "var(--color-brand)" : "var(--color-paper-200)",
+                    color: tab === t ? "white" : "var(--color-ink-600)",
+                  }}>
+                  {{ profile: "✨ スキル", history: "📊 履歴" }[t]}
+                </button>
+              ))}
+            </div>
+
+            {/* スキルタブ */}
+            {tab === "profile" && (
+              <div className="card-paper rounded-3xl p-5">
+                <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>✨ 私のUSP・スキル</h2>
+                {member?.skills && member.skills.length > 0 ? (
                   <div className="space-y-3">
                     {member.skills.map((skill: Skill) => (
                       <div key={skill.name} className="flex items-start gap-3">
@@ -194,68 +212,58 @@ export function MypageScreen() {
                       </div>
                     ))}
                   </div>
-                </div>
-              ) : (
-                <div className="card-paper rounded-3xl p-5 text-center">
-                  <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>スキルが登録されていません</p>
-                  <button onClick={() => setShowEdit(true)}
-                    className="mt-3 text-sm px-4 py-2 rounded-2xl"
-                    style={{ background: "var(--color-brand)", color: "white" }}>
-                    スキルを追加する
-                  </button>
-                </div>
-              )}
+                ) : (
+                  <div className="text-center py-4">
+                    <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>スキルが登録されていません</p>
+                    <button onClick={() => setShowEdit(true)}
+                      className="mt-3 text-sm px-4 py-2 rounded-2xl hover:opacity-80 transition"
+                      style={{ background: "var(--color-brand)", color: "white" }}>
+                      スキルを追加する
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
-              <Link to="/oneonone"
-                className="card-paper rounded-3xl p-4 flex items-center gap-3 active:opacity-80">
-                <span className="text-2xl">🤝</span>
-                <div className="flex-1">
-                  <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>1to1 の記録</div>
-                  <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>申込・承諾・完了の確認</div>
-                </div>
-                <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
-              </Link>
-            </div>
-          )}
-
-          {/* ポイント履歴タブ */}
-          {tab === "history" && (
-            <div className="card-paper rounded-3xl p-5">
-              <h2 className="text-base font-semibold mb-4" style={{ fontFamily: "var(--font-klee)" }}>📊 ポイント履歴</h2>
-              {!historyData ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 size={24} className="animate-spin" style={{ color: "var(--color-brand)" }} />
-                </div>
-              ) : historyData.data.length === 0 ? (
-                <p className="text-sm text-center py-6" style={{ color: "var(--color-ink-400)" }}>
-                  まだポイント履歴がありません
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {historyData.data.map((item) => (
-                    <div key={item.id} className="flex items-center gap-3 py-2 border-b last:border-0"
-                      style={{ borderColor: "var(--color-paper-200)" }}>
-                      <div className="flex-1">
-                        <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{item.label}</p>
-                        {item.detail && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>{item.detail}</p>}
-                        <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-                          {new Date(item.createdAt * 1000).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-                        </p>
+            {/* ポイント履歴タブ */}
+            {tab === "history" && (
+              <div className="card-paper rounded-3xl p-5">
+                <h2 className="text-base font-semibold mb-4" style={{ fontFamily: "var(--font-klee)" }}>📊 ポイント履歴</h2>
+                {!historyData ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 size={24} className="animate-spin" style={{ color: "var(--color-brand)" }} />
+                  </div>
+                ) : historyData.data.length === 0 ? (
+                  <p className="text-sm text-center py-6" style={{ color: "var(--color-ink-400)" }}>
+                    まだポイント履歴がありません
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {historyData.data.map((item) => (
+                      <div key={item.id} className="flex items-center gap-3 py-2 border-b last:border-0"
+                        style={{ borderColor: "var(--color-paper-200)" }}>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{item.label}</p>
+                          {item.detail && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>{item.detail}</p>}
+                          <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+                            {new Date(item.createdAt * 1000).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          </p>
+                        </div>
+                        <div className="text-base font-bold shrink-0"
+                          style={{ color: item.delta > 0 ? "var(--color-success)" : "var(--color-brand)" }}>
+                          {item.delta > 0 ? "+" : ""}{item.delta}pt
+                        </div>
                       </div>
-                      <div className="text-base font-bold shrink-0"
-                        style={{ color: item.delta > 0 ? "var(--color-success)" : "var(--color-brand)" }}>
-                        {item.delta > 0 ? "+" : ""}{item.delta}pt
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
-      {/* QRモーダル */}
+      {/* QRモーダル（PC ではセンタリング） */}
       {showQr && memberId && (
         <QrModal memberId={memberId} memberName={member?.name ?? user?.name ?? ""} onClose={() => setShowQr(false)} />
       )}
@@ -290,8 +298,8 @@ function QrModal({ memberId, memberName, onClose }: { memberId: string; memberNa
   }, [memberId]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: "rgba(0,0,0,0.5)" }} onClick={onClose}>
-      <div className="card-paper w-full max-w-sm rounded-t-3xl p-6 pb-10" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }} onClick={onClose}>
+      <div className="card-paper w-full max-w-sm rounded-t-3xl sm:rounded-3xl p-6 pb-10 sm:pb-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <div>
             <h3 className="font-semibold text-lg" style={{ fontFamily: "var(--font-klee)" }}>🃏 マイカード QR</h3>

@@ -6,10 +6,11 @@
 // Step 4: 完了
 // =============================================================
 import { useState, useRef, useCallback } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import type { Usp } from "@shared/types";
 
 // ---- 型定義 ----
 type SkillOcr = {
@@ -182,6 +183,7 @@ export function RegisterScreen() {
             <Step2Skills
               skills={skills}
               onUpdate={updateSkill}
+              onSkillsChange={setSkills}
               onNext={() => setStep(3)}
             />
           )}
@@ -203,7 +205,6 @@ export function RegisterScreen() {
         ref={fileRef}
         type="file"
         accept="image/*"
-        capture="environment"
         className="sr-only"
         onChange={handleFileChange}
         aria-hidden
@@ -366,42 +367,116 @@ function Step1Scan({
 }
 
 // ================================================================
-// Step 2: スキル確認・入力
+// Step 2: USP 選択 + スキル詳細入力
 // ================================================================
 function Step2Skills({
-  skills, onUpdate, onNext,
+  skills, onUpdate, onSkillsChange, onNext,
 }: {
   skills: SkillForm[];
   onUpdate: (idx: number, field: keyof SkillForm, value: string) => void;
+  onSkillsChange: (skills: SkillForm[]) => void;
   onNext: () => void;
 }) {
-  const canProceed = skills.some((s) => s.name.trim());
+  // 定義済み USP 一覧を取得
+  const { data: uspsData } = useQuery({
+    queryKey: ["usps"],
+    queryFn: () => api.get<{ data: Usp[] }>("/usps"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const usps = uspsData?.data ?? [];
+
+  const selectedNames = skills.map((s) => s.name).filter(Boolean);
+  const canProceed = selectedNames.length > 0;
+
+  function toggleUsp(usp: Usp) {
+    if (selectedNames.includes(usp.name)) {
+      // 選択解除
+      onSkillsChange(skills.filter((s) => s.name !== usp.name));
+    } else {
+      // 選択追加
+      const existing = skills.find((s) => s.name === usp.name);
+      if (!existing) {
+        onSkillsChange([...skills.filter((s) => s.name), {
+          name: usp.name,
+          emoji: usp.emoji,
+          issue: "",
+          connector: "に対して、",
+          solution: "",
+        }]);
+      }
+    }
+  }
 
   return (
     <div>
-      <h2
-        className="text-xl font-semibold mb-1"
-        style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}
-      >
-        スキルを入力
+      <h2 className="text-xl font-semibold mb-1"
+        style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+        あなたのUSP（強み）を選んでください
       </h2>
       <p className="text-sm mb-1" style={{ color: "var(--color-ink-500)" }}>
-        カードに記載のスキルを確認・入力してください。
+        カードに表示するUSP（独自の強み）を選択してください。
       </p>
-      <p className="text-xs mb-5" style={{ color: "var(--color-ink-400)" }}>
-        ※ 1つ以上入力すれば次に進めます
+      <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
+        ※ 1つ以上選択すれば次に進めます
       </p>
 
-      <div className="space-y-4">
-        {skills.map((skill, idx) => (
-          <SkillCard
-            key={idx}
-            index={idx}
-            skill={skill}
-            onUpdate={(field, value) => onUpdate(idx, field, value)}
-          />
-        ))}
-      </div>
+      {/* USP チップ選択 */}
+      {usps.length > 0 ? (
+        <div className="mb-5">
+          <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>
+            USPを選ぶ（複数選択可）
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {usps.map((usp) => {
+              const isSelected = selectedNames.includes(usp.name);
+              return (
+                <button
+                  key={usp.id}
+                  type="button"
+                  onClick={() => toggleUsp(usp)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium transition active:opacity-70"
+                  style={{
+                    background: isSelected ? "var(--color-brand)" : "var(--color-paper-200)",
+                    color: isSelected ? "white" : "var(--color-ink-700)",
+                    border: isSelected ? "none" : "1.5px solid var(--color-paper-300)",
+                  }}
+                  title={usp.description ?? usp.name}
+                >
+                  <span>{usp.emoji}</span>
+                  <span>{usp.name}</span>
+                  {isSelected && <Check size={13} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="mb-4 p-3 rounded-2xl text-sm"
+          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+          読み込み中...
+        </div>
+      )}
+
+      {/* 選択済み USP の詳細入力 */}
+      {skills.filter((s) => s.name).length > 0 && (
+        <div>
+          <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>
+            選択したUSPの説明を入力（任意）
+          </p>
+          <div className="space-y-3">
+            {skills.filter((s) => s.name).map((skill) => {
+              const idx = skills.indexOf(skill);
+              return (
+                <SkillCard
+                  key={skill.name}
+                  skill={skill}
+                  onUpdate={(field, value) => onUpdate(idx, field, value)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <button
         type="button"
@@ -417,70 +492,28 @@ function Step2Skills({
   );
 }
 
-// ---- スキルカード（1枠） ----
+// ---- スキルカード（詳細入力枠） ----
 function SkillCard({
-  index, skill, onUpdate,
+  skill, onUpdate,
 }: {
-  index: number;
   skill: SkillForm;
   onUpdate: (field: keyof SkillForm, value: string) => void;
 }) {
-  const hasContent = skill.name.trim();
-
   return (
-    <div
-      className="card-paper p-4 rounded-3xl"
-      style={{
-        borderLeft: `3px solid ${hasContent ? "var(--color-brand)" : "var(--color-paper-300)"}`,
-      }}
-    >
-      {/* ヘッダー */}
+    <div className="card-paper p-4 rounded-3xl"
+      style={{ borderLeft: "3px solid var(--color-brand)" }}>
+      {/* ヘッダー: USP名・絵文字 */}
       <div className="flex items-center gap-2 mb-3">
-        <span
-          className="text-xs font-bold px-2 py-0.5 rounded-full"
-          style={{ background: "var(--color-paper-300)", color: "var(--color-ink-500)" }}
-        >
-          スキル {index + 1}
+        <span className="text-2xl">{skill.emoji}</span>
+        <span className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>
+          {skill.name}
         </span>
-        {hasContent && <Check size={14} style={{ color: "var(--color-success)" }} />}
-      </div>
-
-      {/* 絵文字 + スキル名 */}
-      <div className="flex gap-2 mb-3">
-        <input
-          value={skill.emoji}
-          onChange={(e) => onUpdate("emoji", e.target.value)}
-          className="w-14 text-center rounded-xl border bg-transparent"
-          style={{
-            fontSize: "24px",
-            lineHeight: "1",
-            padding: "8px 4px",
-            borderColor: "var(--color-paper-300)",
-          }}
-          maxLength={2}
-        />
-        <input
-          value={skill.name}
-          onChange={(e) => onUpdate("name", e.target.value)}
-          placeholder="スキル名（例: 相続対策力）"
-          className="flex-1 rounded-xl border px-3"
-          style={{
-            fontSize: "16px",   // iOS zoom 防止
-            padding: "10px 12px",
-            borderColor: "var(--color-paper-300)",
-            background: "var(--color-paper-50)",
-            color: "var(--color-ink-800)",
-          }}
-        />
       </div>
 
       {/* 課題シーン */}
       <div className="mb-2">
-        <label
-          className="block text-xs mb-1"
-          style={{ color: "var(--color-ink-500)" }}
-        >
-          課題シーン
+        <label className="block text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>
+          どんな課題に役立つか（任意）
         </label>
         <input
           value={skill.issue}
@@ -499,11 +532,8 @@ function SkillCard({
 
       {/* 解決内容 */}
       <div>
-        <label
-          className="block text-xs mb-1"
-          style={{ color: "var(--color-ink-500)" }}
-        >
-          解決内容
+        <label className="block text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>
+          どう解決できるか（任意）
         </label>
         <input
           value={skill.solution}
@@ -521,11 +551,9 @@ function SkillCard({
       </div>
 
       {/* プレビュー */}
-      {hasContent && (
-        <div
-          className="mt-3 p-3 rounded-2xl text-sm"
-          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
-        >
+      {(skill.issue || skill.solution) && (
+        <div className="mt-3 p-3 rounded-2xl text-sm"
+          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
           <span className="mr-1">{skill.emoji}</span>
           <strong>{skill.name}</strong>
           {skill.issue && (
