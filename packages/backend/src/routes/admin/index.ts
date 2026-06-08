@@ -61,6 +61,46 @@ adminRoutes.post("/points/reset", async (c) => {
   return c.json({ ok: true, affectedMembers: inserts.length });
 });
 
+// ---- GET /api/admin/my-member ----
+// 管理者が自分のメールアドレスと一致するメンバーレコードを取得する
+adminRoutes.get("/my-member", async (c) => {
+  const db = createDb(c.env.DB);
+  const adminId = c.get("userId");
+  const { eq } = await import("drizzle-orm");
+
+  // 管理者レコードからメールを取得
+  const admin = await db.select({ email: schema.admins.email })
+    .from(schema.admins)
+    .where(eq(schema.admins.id, adminId))
+    .get();
+
+  if (!admin) return c.json({ data: null });
+
+  // 同じメールのメンバーレコードを検索
+  const member = await db.select()
+    .from(schema.members)
+    .where(eq(schema.members.email, admin.email))
+    .get();
+
+  if (!member) return c.json({ data: null });
+
+  return c.json({
+    data: {
+      id: member.id,
+      name: member.name,
+      furigana: member.furigana,
+      emoji: member.emoji,
+      bgColor: member.bgColor,
+      category: member.category,
+      businessDescription: member.businessDescription,
+      skills: JSON.parse(member.skills || "[]"),
+      company: member.company,
+      role: member.role,
+      status: member.status,
+    },
+  });
+});
+
 // ---- GET /api/admin/app-settings ----
 adminRoutes.get("/app-settings", async (c) => {
   const db = createDb(c.env.DB);

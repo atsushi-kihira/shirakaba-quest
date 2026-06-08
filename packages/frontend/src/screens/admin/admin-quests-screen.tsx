@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Sparkles, Pencil, Trash2, Send, RefreshCw, X, Wand2, Check, CheckSquare, Square } from "lucide-react";
 import { api } from "@/lib/api";
+import { useSettings } from "@/hooks/use-settings";
 import type { Usp } from "@shared/types";
 
 type AdminQuest = {
@@ -50,6 +51,7 @@ function useUsps() {
 
 export function AdminQuestsScreen() {
   const qc = useQueryClient();
+  const { termQuest } = useSettings();
   const [showCreate, setShowCreate] = useState(false);
   const [editQuest, setEditQuest] = useState<AdminQuest | null>(null);
   const [aiModal, setAiModal] = useState(false);
@@ -110,11 +112,11 @@ export function AdminQuestsScreen() {
   const isSelectMode = selectedIds.size > 0;
 
   return (
-    <div className="px-4 py-6 lg:px-0">
+    <div className="px-4 py-6 pb-10 lg:px-0 lg:pb-0">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-            📜 お題管理
+            📜 {termQuest}管理
           </h1>
           {usps.length === 0 && (
             <p className="text-xs mt-1" style={{ color: "var(--color-brand)" }}>
@@ -224,8 +226,8 @@ export function AdminQuestsScreen() {
           {quests.length === 0 && (
             <div className="text-center py-16" style={{ color: "var(--color-ink-400)" }}>
               <div className="text-4xl mb-3">📭</div>
-              <p>お題がまだありません</p>
-              <p className="text-sm mt-1">「AI生成」か「手動作成」でお題を作成しましょう</p>
+              <p>{termQuest}がまだありません</p>
+              <p className="text-sm mt-1">「AI生成」か「手動作成」で{termQuest}を作成しましょう</p>
             </div>
           )}
         </>
@@ -244,7 +246,7 @@ export function AdminQuestsScreen() {
 
       {showCreate && (
         <QuestFormModal
-          title="お題を手動作成"
+          title={`${termQuest}を手動作成`}
           usps={usps}
           onClose={() => setShowCreate(false)}
           onSaved={() => {
@@ -256,7 +258,7 @@ export function AdminQuestsScreen() {
 
       {editQuest && (
         <QuestFormModal
-          title="お題を編集"
+          title={`${termQuest}を編集`}
           usps={usps}
           initial={editQuest}
           questId={editQuest.id}
@@ -270,7 +272,7 @@ export function AdminQuestsScreen() {
 
       {deleteConfirm && (
         <ConfirmModal
-          message="このお題を削除しますか？"
+          message={`この${termQuest}を削除しますか？`}
           onCancel={() => setDeleteConfirm(null)}
           onConfirm={() => deleteMutation.mutate(deleteConfirm)}
           loading={deleteMutation.isPending}
@@ -279,7 +281,7 @@ export function AdminQuestsScreen() {
 
       {bulkDeleteConfirm && (
         <ConfirmModal
-          message={`選択した ${selectedIds.size} 件のお題を削除しますか？`}
+          message={`選択した ${selectedIds.size} 件の${termQuest}を削除しますか？`}
           onCancel={() => setBulkDeleteConfirm(false)}
           onConfirm={() => bulkDeleteMutation.mutate(Array.from(selectedIds))}
           loading={bulkDeleteMutation.isPending}
@@ -492,6 +494,7 @@ function AiGenerateModal({
   onCreated: () => void;
 }) {
   const qc = useQueryClient();
+  const { termQuest } = useSettings();
   const [prompt, setPrompt] = useState("");
   const [draft, setDraft] = useState<QuestDraft | null>(null);
   const [error, setError] = useState("");
@@ -531,7 +534,7 @@ function AiGenerateModal({
       <div className="card-paper w-full sm:max-w-lg max-h-[90dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold" style={{ fontFamily: "var(--font-klee)" }}>
-            ✨ AIでお題を生成
+            ✨ AIで{termQuest}を生成
           </h2>
           <button onClick={onClose} className="p-2 rounded-full hover:opacity-70"><X size={20} /></button>
         </div>
@@ -736,6 +739,7 @@ function QuestFormModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { termQuest } = useSettings();
   const [form, setForm] = useState({
     title:       initial?.title    ?? "",
     story:       initial?.story    ?? "",
@@ -810,7 +814,7 @@ function QuestFormModal({
               <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
                 className="w-full px-3 py-2 rounded-xl border text-sm"
                 style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
-                placeholder="お題のタイトル" />
+                placeholder={`${termQuest}のタイトル`} />
             </div>
           </div>
 

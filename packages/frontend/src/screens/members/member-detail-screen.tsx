@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, QrCode } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
 
@@ -19,6 +20,7 @@ const STATUS_LABEL: Record<string, { label: string; emoji: string; className: st
   none:    { label: "未交流",   emoji: "🤝", className: "bg-stone-200 text-stone-600 ring-stone-300" },
   digital: { label: "デジタル", emoji: "📱", className: "bg-amber-200 text-amber-900 ring-amber-300" },
   real:    { label: "リアル✕2", emoji: "🃏", className: "bg-rose-500 text-white ring-rose-300" },
+  self:    { label: "自分",     emoji: "👤", className: "bg-violet-100 text-violet-700 ring-violet-300" },
 };
 
 export function MemberDetailScreen() {
@@ -26,8 +28,11 @@ export function MemberDetailScreen() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const me = useAuthStore((s) => s.user);
+  const { termUsp } = useSettings();
 
-  const isSelf = me?.id === id;
+  // isSelf はバックエンドの connectionStatus: "self" を使って判定
+  // (管理者ログイン時も me.id が admin_id なので ID比較では不一致になるため)
+  const isSelfById = me?.id === id;
 
   const { data, isLoading } = useQuery({
     queryKey: ["member", id],
@@ -35,13 +40,16 @@ export function MemberDetailScreen() {
     enabled: !!id,
   });
 
+  const member = data?.data;
+  // バックエンドが connectionStatus: "self" を返すので、それを isSelf として使う
+  const isSelf = member ? member.connectionStatus === "self" : isSelfById;
+
   const { data: onoData } = useQuery({
     queryKey: ["oneonone"],
     queryFn: () => api.get<OnoListResponse>("/oneonone"),
     enabled: !isSelf,
   });
 
-  const member = data?.data;
   const sessions = onoData?.data ?? [];
 
   // この相手との最新セッション
@@ -118,7 +126,8 @@ export function MemberDetailScreen() {
 
   const connStatus = member.connectionStatus;
   const badge = STATUS_LABEL[connStatus] ?? STATUS_LABEL.none;
-  const isUnlocked = connStatus !== "none" || isSelf;
+  // "self" も含めて none 以外なら解放済み
+  const isUnlocked = connStatus !== "none";
 
   // 自分がこのセッションで完了押下済みか
   const myRole = activeSession?.myRole;
@@ -190,7 +199,7 @@ export function MemberDetailScreen() {
       {/* スキルカード */}
       <div className="card-paper rounded-3xl p-5 mb-4">
         <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>
-          ✨ スキル
+          ✨ {termUsp}
         </h2>
         <div className="space-y-3">
           {member.skills.map((skill: Skill) => (

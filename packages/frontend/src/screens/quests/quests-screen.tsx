@@ -5,7 +5,6 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X, CheckCircle2, Trophy, Star } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import type { PublicMember, Skill } from "@shared/types";
 
@@ -20,7 +19,8 @@ type AttemptResult   = { data: { isCorrect: boolean; reward: number; message: st
 
 export function QuestsScreen() {
   const settings = useSettings();
-  const termUsp = settings.termUsp;
+  const termUsp   = settings.termUsp;
+  const termQuest = settings.termQuest;
 
   const { data, isLoading } = useQuery({
     queryKey: ["quests"],
@@ -44,10 +44,10 @@ export function QuestsScreen() {
       {/* ヘッダー */}
       <div className="mb-4">
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-          📜 お題
+          📜 {termQuest}
         </h1>
         <p className="text-sm mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-          スキルを組み合わせて謎を解こう
+          {termUsp}を組み合わせて謎を解こう
         </p>
       </div>
 
@@ -84,12 +84,12 @@ export function QuestsScreen() {
       {!isLoading && (
         <div className="space-y-4">
           {filtered.map((quest) => (
-            <QuestCard key={quest.id} quest={quest} termUsp={termUsp} onChallenge={() => setSelectedQuest(quest)} />
+            <QuestCard key={quest.id} quest={quest} termUsp={termUsp} termQuest={termQuest} onChallenge={() => setSelectedQuest(quest)} />
           ))}
           {filtered.length === 0 && (
             <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
               <p className="text-4xl mb-2">📭</p>
-              <p>{filter === "solved" ? "まだクリアしたお題がありません" : "現在公開中のお題はありません"}</p>
+              <p>{filter === "solved" ? `まだクリアした${termQuest}がありません` : `現在公開中の${termQuest}はありません`}</p>
             </div>
           )}
         </div>
@@ -103,7 +103,7 @@ export function QuestsScreen() {
 }
 
 // ---- クエストカード ----
-function QuestCard({ quest, termUsp, onChallenge }: { quest: Quest; termUsp: string; onChallenge: () => void }) {
+function QuestCard({ quest, termUsp, termQuest, onChallenge }: { quest: Quest; termUsp: string; termQuest: string; onChallenge: () => void }) {
   const isHard = quest.level === "hard";
   return (
     <div className="card-paper rounded-3xl p-5"
@@ -143,7 +143,7 @@ function QuestCard({ quest, termUsp, onChallenge }: { quest: Quest; termUsp: str
         <button onClick={onChallenge}
           className="text-sm px-4 py-2 rounded-2xl font-medium transition active:opacity-80"
           style={{ background: quest.isSolved ? "var(--color-paper-300)" : "var(--color-brand)", color: quest.isSolved ? "var(--color-ink-600)" : "white" }}>
-          {quest.isSolved ? "再挑戦" : "挑戦する ⚔️"}
+          {quest.isSolved ? `${termQuest}に再挑戦` : "挑戦する ⚔️"}
         </button>
       </div>
     </div>
@@ -152,7 +152,6 @@ function QuestCard({ quest, termUsp, onChallenge }: { quest: Quest; termUsp: str
 
 // ---- 挑戦モーダル ----
 function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: string; onClose: () => void }) {
-  const me = useAuthStore((s) => s.user);
   const qc = useQueryClient();
 
   const { data: membersData, isLoading: membersLoading } = useQuery({
@@ -168,7 +167,8 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
   const members = membersData?.data ?? [];
 
   for (const member of members) {
-    const isSelf = member.id === me?.id;
+    // バックエンドが自分のレコードに "self" を返すので、IDの比較は不要
+    const isSelf = member.connectionStatus === "self";
     const unlocked = isSelf || member.connectionStatus === "digital" || member.connectionStatus === "real";
     if (unlocked) {
       for (const skill of member.skills) {
@@ -176,7 +176,7 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
           skill,
           memberName: isSelf ? "自分" : member.name,
           memberId: member.id,
-          connectionStatus: isSelf ? "self" : (member.connectionStatus ?? "none"),
+          connectionStatus: member.connectionStatus,
         });
       }
     }

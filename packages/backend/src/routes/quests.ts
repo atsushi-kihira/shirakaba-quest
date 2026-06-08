@@ -10,6 +10,7 @@ import { eq, and, inArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
+import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const questRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -18,7 +19,10 @@ questRoutes.use("*", authMiddleware);
 // ---- GET /api/quests ----
 questRoutes.get("/", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const rawUserId = c.get("userId");
+  const userType  = c.get("userType");
+  // 管理者の場合は対応するメンバーIDで isSolved を判定する
+  const memberId = (await resolveEffectiveMemberId(db, rawUserId, userType)) ?? rawUserId;
 
   const quests = await db
     .select({
@@ -95,8 +99,16 @@ questRoutes.get("/:id", async (c) => {
 // ---- POST /api/quests/:id/attempts ----
 questRoutes.post("/:id/attempts", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const rawUserId = c.get("userId");
+  const userType  = c.get("userType");
+  // 管理者も自分のメンバーIDで挑戦を記録する
+  const memberId = await resolveEffectiveMemberId(db, rawUserId, userType);
   const questId = c.req.param("id");
+
+  // 管理者がメンバーアカウントを持っていない場合は挑戦不可
+  if (!memberId) {
+    return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないため挑戦できません" } }, 403);
+  }
   const { selectedSkillNames } = await c.req.json<{ selectedSkillNames: string[] }>();
 
   if (!Array.isArray(selectedSkillNames) || selectedSkillNames.length === 0) {
@@ -192,7 +204,9 @@ questRoutes.post("/:id/attempts", async (c) => {
 // ---- GET /api/quests/:id/my-attempts ----
 questRoutes.get("/:id/my-attempts", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const rawUserId = c.get("userId");
+  const userType  = c.get("userType");
+  const memberId = (await resolveEffectiveMemberId(db, rawUserId, userType)) ?? rawUserId;
   const questId = c.req.param("id");
 
   const attempts = await db

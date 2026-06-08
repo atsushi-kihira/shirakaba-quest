@@ -10,6 +10,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
+import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -20,7 +21,11 @@ memberRoutes.use("*", authMiddleware);
 // ---- GET /api/members ----
 memberRoutes.get("/", async (c) => {
   const db = createDb(c.env.DB);
-  const viewerId = c.get("userId");
+  const rawUserId = c.get("userId");
+  const userType  = c.get("userType");
+
+  // 管理者の場合は対応するメンバーIDを取得（なければ rawUserId をフォールバックで使用）
+  const viewerId = (await resolveEffectiveMemberId(db, rawUserId, userType)) ?? rawUserId;
 
   // アクティブなメンバーを全件取得
   const allMembers = await db
@@ -39,9 +44,13 @@ memberRoutes.get("/", async (c) => {
   const connectionMap = new Map(myConnections.map((c) => [c.toMemberId, c]));
 
   const result = allMembers.map((member) => {
+    const isSelf = member.id === viewerId;
     const conn = connectionMap.get(member.id);
-    const connStatus = conn?.status ?? "none";
-    const isUnlocked = connStatus === "digital" || connStatus === "real" || member.id === viewerId;
+    // 自分自身のレコードには "self" を返すことで、フロントで確実に識別できるようにする
+    const connStatus: "none" | "digital" | "real" | "self" = isSelf
+      ? "self"
+      : ((conn?.status ?? "none") as "none" | "digital" | "real");
+    const isUnlocked = isSelf || connStatus === "digital" || connStatus === "real";
 
     return {
       id: member.id,
@@ -91,8 +100,10 @@ memberRoutes.get("/:id", async (c) => {
   }
 
   // 自分との Connection を確認
-  let connStatus: "none" | "digital" | "real" = "none";
-  if (viewerId !== targetId) {
+  let connStatus: "none" | "digital" | "real" | "self" = "none";
+  if (viewerId === targetId) {
+    connStatus = "self";
+  } else {
     const conn = await db
       .select({ status: schema.connections.status })
       .from(schema.connections)
@@ -103,10 +114,10 @@ memberRoutes.get("/:id", async (c) => {
         )
       )
       .get();
-    connStatus = (conn?.status as typeof connStatus) ?? "none";
+    connStatus = (conn?.status as "none" | "digital" | "real") ?? "none";
   }
 
-  const isUnlocked = connStatus !== "none" || viewerId === targetId;
+  const isUnlocked = connStatus !== "none";
 
   return c.json({
     data: {

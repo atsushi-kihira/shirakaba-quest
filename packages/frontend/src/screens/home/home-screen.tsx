@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
 
 type MyRankResponse  = { data: { points: number; rank: number } };
 type OnoSession = {
@@ -21,6 +22,7 @@ type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
+  const { termQuest, termUsp } = useSettings();
 
   const { data: rankData } = useQuery({
     queryKey: ["ranking", "me"],
@@ -120,7 +122,7 @@ export function HomeScreen() {
           </div>
         )}
         <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
-          1to1完了・リアルカード交換・お題クリアで増やそう！
+          1to1完了・リアルカード交換・{termQuest}クリアで増やそう！
         </p>
       </div>
 
@@ -200,7 +202,7 @@ export function HomeScreen() {
         <section>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
-              📜 挑戦できるお題
+              📜 挑戦できる{termQuest}
             </h2>
             <Link to="/quests" className="text-xs" style={{ color: "var(--color-brand)" }}>
               すべて見る →
@@ -213,7 +215,7 @@ export function HomeScreen() {
                 <span className="text-2xl">{q.emoji}</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{q.title}</p>
-                  <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>スキル{q.skillCount}個 · +{q.reward}pt</p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{termUsp}{q.skillCount}個 · +{q.reward}pt</p>
                 </div>
               </Link>
             ))}
@@ -228,7 +230,7 @@ export function HomeScreen() {
         </h2>
         <div className="grid grid-cols-1 gap-2">
           <QuickLink to="/members"  icon={<Users size={18} />}      label="なかまを探して1to1しよう" sub="+1pt"  color="var(--color-brand)" />
-          <QuickLink to="/quests"   icon={<ScrollText size={18} />} label="お題に挑戦しよう"          sub="+5pt〜" color="var(--color-success)" />
+          <QuickLink to="/quests"   icon={<ScrollText size={18} />} label={`${termQuest}に挑戦しよう`} sub="+5pt〜" color="var(--color-success)" />
           <QuickLink to="/ranking"  icon={<Trophy size={18} />}     label="ランキングをチェック"      sub=""       color="var(--color-accent)" />
           <QuickLink to="/me"       icon={<QrCode size={18} />}     label="自分のQRを表示してカードを渡す" sub="🃏"  color="var(--color-ink-500)" />
         </div>

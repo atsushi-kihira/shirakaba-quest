@@ -4,17 +4,20 @@
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star } from "lucide-react";
-
-const ADMIN_NAV = [
-  { to: "/admin",          icon: LayoutDashboard, label: "ダッシュボード", end: true },
-  { to: "/admin/members",  icon: Users,           label: "メンバー管理",   end: false },
-  { to: "/admin/usps",     icon: Star,            label: "USP管理",        end: false },
-  { to: "/admin/quests",   icon: ScrollText,      label: "お題管理",       end: false },
-  { to: "/admin/points",   icon: RotateCcw,       label: "ポイントリセット", end: false },
-  { to: "/admin/settings", icon: Settings,        label: "アプリ設定",     end: false },
-] as const;
+import { useSettings } from "@/hooks/use-settings";
 
 export function AdminLayout() {
+  const { termQuest } = useSettings();
+
+  const ADMIN_NAV = [
+    { to: "/admin",          icon: LayoutDashboard, label: "ダッシュボード",          end: true },
+    { to: "/admin/members",  icon: Users,           label: "メンバー管理",            end: false },
+    { to: "/admin/usps",     icon: Star,            label: "USP管理",                 end: false },
+    { to: "/admin/quests",   icon: ScrollText,      label: `${termQuest}管理`,        end: false },
+    { to: "/admin/points",   icon: RotateCcw,       label: "ポイントリセット",        end: false },
+    { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
+  ] as const;
+
   useEffect(() => {
     document.title = "チームエンゲージメント管理ダッシュボード";
     return () => {
@@ -61,7 +64,7 @@ export function AdminLayout() {
       </nav>
 
       {/* メインコンテンツ */}
-      <main className="flex-1 pb-20 lg:pb-0 max-w-4xl mx-auto w-full px-0 lg:px-8 lg:py-6">
+      <main className="flex-1 main-with-tabbar max-w-4xl mx-auto w-full px-0 lg:px-8 lg:py-6">
         <Outlet />
       </main>
 

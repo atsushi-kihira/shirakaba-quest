@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2, Trophy } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
 
 type RankingEntry = {
   rank: number;
@@ -18,6 +19,7 @@ const RANK_MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
 export function RankingScreen() {
   const me = useAuthStore((s) => s.user);
+  const { termQuest } = useSettings();
   const { data, isLoading } = useQuery({
     queryKey: ["ranking"],
     queryFn: () => api.get<RankingResponse>("/ranking"),
@@ -32,7 +34,7 @@ export function RankingScreen() {
           🏆 ランキング
         </h1>
         <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>
-          1to1・お題クリアでポイントを稼ごう
+          1to1・{termQuest}クリアでポイントを稼ごう
         </p>
       </div>
 

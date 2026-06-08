@@ -103,7 +103,7 @@ export type PublicMember = Omit<
 // Connection（メンバー間の関係）
 // -------------------------------------------------------
 
-export type ConnectionStatus = "none" | "digital" | "real";
+export type ConnectionStatus = "none" | "digital" | "real" | "self";
 
 export type Connection = {
   id: string;

@@ -69,7 +69,7 @@ export function AdminMembersScreen() {
   const pendingCount = members.filter((m) => m.status === "pending").length;
 
   return (
-    <div className="px-4 py-6 lg:px-0">
+    <div className="px-4 py-6 pb-10 lg:px-0 lg:pb-0">
       <h1 className="text-2xl font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
         👥 メンバー管理
       </h1>

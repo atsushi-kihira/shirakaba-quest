@@ -8,6 +8,7 @@ import { useNavigate, Link } from "react-router-dom";
 import QRCode from "qrcode";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
 import { queryClient as globalQc } from "@/lib/query-client";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
@@ -17,6 +18,7 @@ type MemberResponse  = { data: PublicMember };
 type MyRankResponse  = { data: { points: number; rank: number } };
 type HistoryItem     = { id: string; delta: number; reason: string; label: string; detail?: string; createdAt: number };
 type HistoryResponse = { data: HistoryItem[]; totalPoints: number };
+type AdminMemberResponse = { data: { id: string; name: string; furigana: string; emoji: string; bgColor: string; category: string; businessDescription: string; skills: Skill[]; company?: string; role?: string; status: string } | null };
 
 const AVATAR_BG = [
   { cls: "bg-rose-100" }, { cls: "bg-amber-100" }, { cls: "bg-emerald-100" },
@@ -28,6 +30,7 @@ export function MypageScreen() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user, clearAuth } = useAuthStore();
+  const { termUsp } = useSettings();
   const [tab, setTab] = useState<"profile" | "history">("profile");
   const [showQr, setShowQr] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -39,6 +42,13 @@ export function MypageScreen() {
 
   const memberId = meData?.data?.id ?? user?.id;
   const isAdmin = meData?.data?.userType === "admin";
+
+  // 管理者の場合: 同メールアドレスのメンバーレコードを検索
+  const { data: adminMemberData } = useQuery({
+    queryKey: ["admin-my-member"],
+    queryFn: () => api.get<AdminMemberResponse>("/admin/my-member"),
+    enabled: isAdmin,
+  });
 
   const { data: memberData, isLoading } = useQuery({
     queryKey: ["member", memberId],
@@ -58,6 +68,11 @@ export function MypageScreen() {
     enabled: tab === "history" && !isAdmin,
   });
 
+  // 管理者の場合はadminMemberData、それ以外はmemberData
+  const adminMember = adminMemberData?.data ?? null;
+  const hasMemberProfile = isAdmin ? adminMember !== null : !!memberData?.data;
+  const effectiveMemberId = isAdmin ? (adminMember?.id ?? null) : (memberId ?? null);
+
   async function handleLogout() {
     await api.post("/auth/logout").catch(() => {});
     clearAuth();
@@ -65,7 +80,7 @@ export function MypageScreen() {
     navigate("/login");
   }
 
-  const member = memberData?.data;
+  const member = isAdmin ? (adminMember as unknown as PublicMember | null) : (memberData?.data ?? null);
   const rank   = rankData?.data;
 
   if (isLoading) {
@@ -117,7 +132,7 @@ export function MypageScreen() {
                 {member?.furigana && <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>{member.furigana}</p>}
                 {member?.category && <p className="text-sm font-medium mt-0.5" style={{ color: "var(--color-ink-600)" }}>{member.category}</p>}
               </div>
-              {!isAdmin && (
+              {!isAdmin && hasMemberProfile && (
                 <button onClick={() => setShowEdit(true)} className="p-2 rounded-xl active:opacity-70 hover:opacity-80 transition"
                   style={{ background: "var(--color-paper-200)" }}>
                   <Pencil size={16} style={{ color: "var(--color-ink-500)" }} />
@@ -132,7 +147,7 @@ export function MypageScreen() {
             )}
 
             {/* QRコードボタン */}
-            {memberId && !isAdmin && (
+            {effectiveMemberId && hasMemberProfile && (
               <button onClick={() => setShowQr(true)}
                 className="w-full py-3 rounded-2xl flex items-center justify-center gap-2 font-medium text-sm active:opacity-80 hover:opacity-80 transition"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
@@ -178,26 +193,28 @@ export function MypageScreen() {
         </div>
 
         {/* 右カラム: スキル / ポイント履歴タブ */}
-        {!isAdmin && (
+        {hasMemberProfile && (
           <div>
-            {/* タブ */}
-            <div className="flex gap-2 mb-4">
-              {(["profile", "history"] as const).map((t) => (
-                <button key={t} onClick={() => setTab(t)}
-                  className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
-                  style={{
-                    background: tab === t ? "var(--color-brand)" : "var(--color-paper-200)",
-                    color: tab === t ? "white" : "var(--color-ink-600)",
-                  }}>
-                  {{ profile: "✨ スキル", history: "📊 履歴" }[t]}
-                </button>
-              ))}
-            </div>
+            {/* タブ（管理者の場合はタブ切替なし・スキルのみ直接表示） */}
+            {!isAdmin && (
+              <div className="flex gap-2 mb-4">
+                {(["profile", "history"] as const).map((t) => (
+                  <button key={t} onClick={() => setTab(t)}
+                    className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
+                    style={{
+                      background: tab === t ? "var(--color-brand)" : "var(--color-paper-200)",
+                      color: tab === t ? "white" : "var(--color-ink-600)",
+                    }}>
+                    {{ profile: `✨ ${termUsp}`, history: "📊 履歴" }[t]}
+                  </button>
+                ))}
+              </div>
+            )}
 
-            {/* スキルタブ */}
-            {tab === "profile" && (
+            {/* スキルタブ（管理者は常に表示、一般ユーザーはtab選択時） */}
+            {(tab === "profile" || isAdmin) && (
               <div className="card-paper rounded-3xl p-5">
-                <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>✨ 私のUSP・スキル</h2>
+                <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>✨ 私の{termUsp}</h2>
                 {member?.skills && member.skills.length > 0 ? (
                   <div className="space-y-3">
                     {member.skills.map((skill: Skill) => (
@@ -215,11 +232,13 @@ export function MypageScreen() {
                 ) : (
                   <div className="text-center py-4">
                     <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>スキルが登録されていません</p>
-                    <button onClick={() => setShowEdit(true)}
-                      className="mt-3 text-sm px-4 py-2 rounded-2xl hover:opacity-80 transition"
-                      style={{ background: "var(--color-brand)", color: "white" }}>
-                      スキルを追加する
-                    </button>
+                    {!isAdmin && (
+                      <button onClick={() => setShowEdit(true)}
+                        className="mt-3 text-sm px-4 py-2 rounded-2xl hover:opacity-80 transition"
+                        style={{ background: "var(--color-brand)", color: "white" }}>
+                        スキルを追加する
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -264,12 +283,12 @@ export function MypageScreen() {
       </div>
 
       {/* QRモーダル（PC ではセンタリング） */}
-      {showQr && memberId && (
-        <QrModal memberId={memberId} memberName={member?.name ?? user?.name ?? ""} onClose={() => setShowQr(false)} />
+      {showQr && effectiveMemberId && (
+        <QrModal memberId={effectiveMemberId} memberName={member?.name ?? user?.name ?? ""} onClose={() => setShowQr(false)} />
       )}
 
-      {/* 編集モーダル */}
-      {showEdit && member && memberId && (
+      {/* 編集モーダル（管理者セッションでは編集不可） */}
+      {showEdit && member && memberId && !isAdmin && (
         <EditModal
           member={member}
           memberId={memberId}

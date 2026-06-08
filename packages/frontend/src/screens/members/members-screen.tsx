@@ -14,6 +14,7 @@ const STATUS_LABEL: Record<string, { label: string; className: string }> = {
   none:    { label: "未交流",   className: "bg-stone-200 text-stone-600 ring-stone-300" },
   digital: { label: "デジタル", className: "bg-amber-200 text-amber-900 ring-amber-300" },
   real:    { label: "リアル✕2", className: "bg-rose-500 text-white ring-rose-300" },
+  self:    { label: "自分",     className: "bg-violet-100 text-violet-700 ring-violet-300" },
 };
 
 export function MembersScreen() {

@@ -90,7 +90,7 @@ p {
   display: flex;
   align-items: center;
   justify-content: space-around;
-  z-index: 50;
+  z-index: 40;
   padding-bottom: env(safe-area-inset-bottom);
   height: calc(64px + env(safe-area-inset-bottom));
 }

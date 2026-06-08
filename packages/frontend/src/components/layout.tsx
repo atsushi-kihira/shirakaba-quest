@@ -8,21 +8,16 @@ import { useQuery } from "@tanstack/react-query";
 import { Home, Users, ScrollText, Trophy, User } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
 
 type OnoSession = { status: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null };
-type AppSettings = { appTitle: string; appLogo: string };
 
-/** アプリ設定からタイトルを取得して <title> に反映するフック */
+/** アプリ設定からタイトルを取得して <title> に反映するフック（公開エンドポイント使用） */
 function useAppTitle() {
-  const { data } = useQuery({
-    queryKey: ["app-settings"],
-    queryFn: () => api.get<{ data: AppSettings }>("/admin/app-settings"),
-    staleTime: 5 * 60 * 1000,
-  });
-  const appTitle = data?.data?.appTitle ?? "白樺クエスト";
+  const settings = useSettings();
   useEffect(() => {
-    document.title = appTitle;
-  }, [appTitle]);
+    document.title = settings.appTitle;
+  }, [settings.appTitle]);
 }
 
 function usePendingCount() {
@@ -46,17 +41,18 @@ function usePendingCount() {
   }).length;
 }
 
-const NAV_ITEMS = [
-  { to: "/",        icon: Home,       label: "ホーム",  badge: false },
-  { to: "/members", icon: Users,      label: "なかま",  badge: false },
-  { to: "/quests",  icon: ScrollText, label: "お題",    badge: false },
-  { to: "/ranking", icon: Trophy,     label: "順位",    badge: false },
-  { to: "/me",      icon: User,       label: "マイ",    badge: false },
-] as const;
-
 export function AppLayout() {
   useAppTitle();
   const pendingCount = usePendingCount();
+  const settings = useSettings();
+
+  const NAV_ITEMS = [
+    { to: "/",        icon: Home,       label: "ホーム" },
+    { to: "/members", icon: Users,      label: "なかま" },
+    { to: "/quests",  icon: ScrollText, label: settings.termQuest },
+    { to: "/ranking", icon: Trophy,     label: "順位" },
+    { to: "/me",      icon: User,       label: "マイ" },
+  ] as const;
 
   return (
     <div className="flex min-h-dvh" style={{ background: "var(--color-paper-100)" }}>
