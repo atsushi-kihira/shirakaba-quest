@@ -62,7 +62,7 @@ export function AdminDashboardScreen() {
   ];
 
   return (
-    <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-10">
+    <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-24">
       <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
         ⚙️ 管理ダッシュボード
       </h1>

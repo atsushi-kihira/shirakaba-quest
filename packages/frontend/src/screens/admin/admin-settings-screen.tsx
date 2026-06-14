@@ -80,7 +80,7 @@ export function AdminSettingsScreen() {
   }
 
   return (
-    <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-10 max-w-lg">
+    <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-24 max-w-lg">
       <h1 className="text-2xl font-semibold mb-2" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
         ⚙️ アプリ設定
       </h1>

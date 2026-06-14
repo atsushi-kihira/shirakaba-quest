@@ -115,7 +115,7 @@ export function AdminUspsScreen() {
   }
 
   return (
-    <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-10">
+    <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-24">
       <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
