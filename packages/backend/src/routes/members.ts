@@ -11,6 +11,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
+import { saveCardImage, getCardImageDataUrl } from "../services/card-image.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -63,6 +64,7 @@ memberRoutes.get("/", async (c) => {
       businessDescription: member.businessDescription,
       skills: parseJson<Skill[]>(member.skills, []),
       connectionStatus: connStatus,
+      hasCardImage: isUnlocked ? !!member.cardImageKey : false,
       // 個人情報は1to1後のみ
       company:      isUnlocked ? member.company      : null,
       role:         isUnlocked ? member.role         : null,
@@ -131,6 +133,7 @@ memberRoutes.get("/:id", async (c) => {
       businessDescription: member.businessDescription,
       skills: parseJson<Skill[]>(member.skills, []),
       connectionStatus: connStatus,
+      hasCardImage: isUnlocked ? !!member.cardImageKey : false,
       company:      isUnlocked ? member.company      : null,
       role:         isUnlocked ? member.role         : null,
       phone:        isUnlocked ? member.phone        : null,
@@ -202,6 +205,74 @@ memberRoutes.patch("/me", async (c) => {
     .where(eq(schema.members.id, userId));
 
   return c.json({ ok: true });
+});
+
+// ---- POST /api/members/me/card-image ----
+// 自分のカード画像（表面）をR2に保存する
+memberRoutes.post("/me/card-image", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+  const userType = c.get("userType");
+
+  if (userType !== "member") {
+    return c.json({ error: { code: "forbidden", message: "メンバーのみ利用可能です" } }, 403);
+  }
+
+  const body = await c.req.json<{ imageBase64?: string }>();
+  if (!body.imageBase64) {
+    return c.json({ error: { code: "bad_request", message: "画像データが必要です" } }, 400);
+  }
+
+  const key = await saveCardImage(c.env.R2, userId, body.imageBase64);
+
+  await db
+    .update(schema.members)
+    .set({ cardImageKey: key, updatedAt: Math.floor(Date.now() / 1000) })
+    .where(eq(schema.members.id, userId));
+
+  return c.json({ ok: true });
+});
+
+// ---- GET /api/members/:id/card-image ----
+// カード画像（表面）をdata URLで返す（自分 or 1to1済みのみ）
+memberRoutes.get("/:id/card-image", async (c) => {
+  const db = createDb(c.env.DB);
+  const rawUserId = c.get("userId");
+  const userType = c.get("userType");
+  const targetId = c.req.param("id");
+
+  const viewerId = (await resolveEffectiveMemberId(db, rawUserId, userType)) ?? rawUserId;
+
+  let isUnlocked = viewerId === targetId;
+  if (!isUnlocked) {
+    const conn = await db
+      .select({ status: schema.connections.status })
+      .from(schema.connections)
+      .where(and(eq(schema.connections.fromMemberId, viewerId), eq(schema.connections.toMemberId, targetId)))
+      .get();
+    isUnlocked = conn?.status === "digital" || conn?.status === "real";
+  }
+
+  if (!isUnlocked) {
+    return c.json({ error: { code: "forbidden", message: "1to1完了後に閲覧できます" } }, 403);
+  }
+
+  const member = await db
+    .select({ cardImageKey: schema.members.cardImageKey })
+    .from(schema.members)
+    .where(eq(schema.members.id, targetId))
+    .get();
+
+  if (!member?.cardImageKey) {
+    return c.json({ error: { code: "not_found", message: "カード画像がありません" } }, 404);
+  }
+
+  const dataUrl = await getCardImageDataUrl(c.env.R2, member.cardImageKey);
+  if (!dataUrl) {
+    return c.json({ error: { code: "not_found", message: "カード画像がありません" } }, 404);
+  }
+
+  return c.json({ data: { imageDataUrl: dataUrl } });
 });
 
 // ---- POST /api/members/:id/real-card ----

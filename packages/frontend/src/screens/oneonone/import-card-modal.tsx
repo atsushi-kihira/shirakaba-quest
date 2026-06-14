@@ -40,7 +40,8 @@ type Props = {
 
 export function ImportCardModal({ onClose }: Props) {
   const qc = useQueryClient();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>("capture");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -191,7 +192,15 @@ export function ImportCardModal({ onClose }: Props) {
               )}
 
               <input
-                ref={fileRef}
+                ref={cameraRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+              <input
+                ref={galleryRef}
                 type="file"
                 accept="image/*"
                 className="hidden"
@@ -208,16 +217,20 @@ export function ImportCardModal({ onClose }: Props) {
               ) : (
                 <div className="flex flex-col gap-3">
                   <button
-                    onClick={() => fileRef.current?.click()}
+                    onClick={() => cameraRef.current?.click()}
                     className="w-full py-4 rounded-2xl font-semibold text-sm text-white flex items-center justify-center gap-2 active:opacity-80 transition"
                     style={{ background: "var(--color-brand)" }}
                   >
                     <Camera size={18} />
-                    {previewUrl ? "別の画像を選択" : "カードを撮影 / 画像を選択"}
+                    {previewUrl ? "別の画像を撮影" : "カードを撮影"}
                   </button>
-                  <p className="text-center text-xs" style={{ color: "var(--color-ink-400)" }}>
-                    ※ カメラロール内の写真も選択できます
-                  </p>
+                  <button
+                    onClick={() => galleryRef.current?.click()}
+                    className="w-full py-2.5 rounded-2xl text-xs flex items-center justify-center gap-1.5 active:opacity-70"
+                    style={{ color: "var(--color-ink-500)" }}
+                  >
+                    🖼️ カメラロールから選ぶ
+                  </button>
                 </div>
               )}
             </div>

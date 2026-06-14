@@ -5,6 +5,7 @@
 // PATCH  /api/admin/usps/:id
 // DELETE /api/admin/usps/:id
 // PUT    /api/admin/usps/reorder  — 並び順一括更新
+// POST   /api/admin/usps/import   — 一括インポート（同名は上書き、新規は追加）
 // =============================================================
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
@@ -114,6 +115,61 @@ adminUspRoutes.delete("/:id", async (c) => {
   const db = createDb(c.env.DB);
   await db.delete(schema.usps).where(eq(schema.usps.id, c.req.param("id")));
   return c.json({ ok: true });
+});
+
+// ---- POST /api/admin/usps/import ---- 一括インポート（同名は上書き、新規は追加）
+adminUspRoutes.post("/import", async (c) => {
+  const db = createDb(c.env.DB);
+  const now = Math.floor(Date.now() / 1000);
+
+  const body = await c.req.json<{
+    usps: Array<{
+      name: string;
+      emoji?: string;
+      description?: string;
+      sortOrder?: number;
+    }>;
+  }>();
+
+  if (!Array.isArray(body.usps) || body.usps.length === 0) {
+    return c.json({ error: { code: "invalid_input", message: "インポートするUSPがありません" } }, 400);
+  }
+
+  const existing = await db.select().from(schema.usps).all();
+  const existingByName = new Map(existing.map((u) => [u.name, u]));
+  let nextOrder = existing.reduce((max, u) => Math.max(max, u.sortOrder), 0) + 1;
+
+  let created = 0;
+  let updated = 0;
+
+  for (const item of body.usps) {
+    const name = item.name?.trim();
+    if (!name) continue;
+
+    const match = existingByName.get(name);
+    if (match) {
+      await db.update(schema.usps).set({
+        emoji: item.emoji ?? match.emoji,
+        description: item.description ?? match.description,
+        ...(item.sortOrder !== undefined && { sortOrder: item.sortOrder }),
+        updatedAt: now,
+      }).where(eq(schema.usps.id, match.id));
+      updated += 1;
+    } else {
+      await db.insert(schema.usps).values({
+        id: newId(),
+        name,
+        emoji: item.emoji ?? "⭐",
+        description: item.description ?? null,
+        sortOrder: item.sortOrder ?? nextOrder++,
+        createdAt: now,
+        updatedAt: now,
+      });
+      created += 1;
+    }
+  }
+
+  return c.json({ data: { created, updated } });
 });
 
 // ---- PUT /api/admin/usps/reorder ---- 並び順一括更新

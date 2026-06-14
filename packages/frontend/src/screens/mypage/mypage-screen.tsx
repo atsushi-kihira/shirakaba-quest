@@ -1,9 +1,9 @@
 // =============================================================
 // マイページ — プロフィール・QR・ポイント履歴・スキル・編集
 // =============================================================
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, LogOut, QrCode, X, ChevronRight, Pencil, Check, Plus, Trash2 } from "lucide-react";
+import { Loader2, LogOut, QrCode, X, ChevronRight, Pencil, Check, Plus, Trash2, Camera, RefreshCw } from "lucide-react";
 import { useNavigate, Link } from "react-router-dom";
 import QRCode from "qrcode";
 import { api } from "@/lib/api";
@@ -19,6 +19,7 @@ type MyRankResponse  = { data: { points: number; rank: number } };
 type HistoryItem     = { id: string; delta: number; reason: string; label: string; detail?: string; createdAt: number };
 type HistoryResponse = { data: HistoryItem[]; totalPoints: number };
 type AdminMemberResponse = { data: { id: string; name: string; furigana: string; emoji: string; bgColor: string; category: string; businessDescription: string; skills: Skill[]; company?: string; role?: string; status: string } | null };
+type CardImageResponse = { data: { imageDataUrl: string } };
 
 const AVATAR_BG = [
   { cls: "bg-rose-100" }, { cls: "bg-amber-100" }, { cls: "bg-emerald-100" },
@@ -72,6 +73,37 @@ export function MypageScreen() {
   const adminMember = adminMemberData?.data ?? null;
   const hasMemberProfile = isAdmin ? adminMember !== null : !!memberData?.data;
   const effectiveMemberId = isAdmin ? (adminMember?.id ?? null) : (memberId ?? null);
+
+  // ---- 自分のカード画像（表面） ----
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
+
+  const { data: cardImageData, isLoading: cardImageLoading } = useQuery({
+    queryKey: ["card-image", effectiveMemberId],
+    queryFn: () => api.get<CardImageResponse>(`/members/${effectiveMemberId}/card-image`),
+    enabled: !!effectiveMemberId && hasMemberProfile,
+    retry: false,
+  });
+
+  const cardImageMutation = useMutation({
+    mutationFn: (imageBase64: string) => api.post("/members/me/card-image", { imageBase64 }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["card-image", effectiveMemberId] });
+      qc.invalidateQueries({ queryKey: ["member", memberId] });
+    },
+  });
+
+  const handleCardImageChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      cardImageMutation.mutate(dataUrl.split(",")[1]);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }, [cardImageMutation]);
 
   async function handleLogout() {
     await api.post("/auth/logout").catch(() => {});
@@ -156,6 +188,70 @@ export function MypageScreen() {
               </button>
             )}
           </div>
+
+          {/* マイカード（撮影画像） */}
+          {hasMemberProfile && (
+            <div className="card-paper rounded-3xl p-5">
+              <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🃏 マイカード</h2>
+
+              {cardImageLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 size={24} className="animate-spin" style={{ color: "var(--color-brand)" }} />
+                </div>
+              ) : cardImageData?.data?.imageDataUrl ? (
+                <div>
+                  <div className="rounded-2xl overflow-hidden border" style={{ borderColor: "var(--color-paper-300)" }}>
+                    <img src={cardImageData.data.imageDataUrl} alt="マイカード" className="w-full object-contain max-h-72" />
+                  </div>
+                  {!isAdmin && (
+                    <button
+                      onClick={() => cameraRef.current?.click()}
+                      disabled={cardImageMutation.isPending}
+                      className="mt-3 w-full py-2.5 rounded-2xl text-sm flex items-center justify-center gap-2 active:opacity-70 disabled:opacity-50"
+                      style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+                    >
+                      {cardImageMutation.isPending
+                        ? <Loader2 size={14} className="animate-spin" />
+                        : <RefreshCw size={14} />}
+                      撮り直す
+                    </button>
+                  )}
+                </div>
+              ) : !isAdmin ? (
+                <button
+                  onClick={() => cameraRef.current?.click()}
+                  disabled={cardImageMutation.isPending}
+                  className="w-full rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 py-10 active:opacity-80 transition disabled:opacity-50"
+                  style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+                >
+                  {cardImageMutation.isPending ? (
+                    <Loader2 size={32} className="animate-spin" style={{ color: "var(--color-brand)" }} />
+                  ) : (
+                    <>
+                      <Camera size={32} style={{ color: "var(--color-paper-400)" }} />
+                      <p className="text-sm font-medium" style={{ color: "var(--color-ink-500)" }}>タップしてカードを撮影</p>
+                    </>
+                  )}
+                </button>
+              ) : (
+                <p className="text-sm" style={{ color: "var(--color-ink-400)" }}>カード画像はまだありません</p>
+              )}
+
+              {!isAdmin && (
+                <>
+                  <button
+                    onClick={() => galleryRef.current?.click()}
+                    className="mt-2 w-full py-2 rounded-2xl text-xs flex items-center justify-center gap-1.5 active:opacity-70"
+                    style={{ color: "var(--color-ink-500)" }}
+                  >
+                    🖼️ カメラロールから選ぶ
+                  </button>
+                  <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="sr-only" onChange={handleCardImageChange} aria-hidden />
+                  <input ref={galleryRef} type="file" accept="image/*" className="sr-only" onChange={handleCardImageChange} aria-hidden />
+                </>
+              )}
+            </div>
+          )}
 
           {/* ポイント */}
           {!isAdmin && rank && (

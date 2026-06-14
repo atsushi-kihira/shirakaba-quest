@@ -77,3 +77,43 @@ export async function sendOtpMail(opts: {
     `,
   });
 }
+
+/** 1to1 申込通知メールを送信する */
+export async function sendOneOnOneRequestMail(opts: {
+  to: string;
+  responderName: string;
+  requesterName: string;
+  appTitle: string;
+  apiKey: string;
+  isDev: boolean;
+  fromEmail?: string;
+}): Promise<void> {
+  if (opts.isDev) {
+    console.log(`[DEV] 1to1通知メール → ${opts.to}: ${opts.requesterName}さんから申込`);
+    return;
+  }
+
+  await sendMail({
+    to: opts.to,
+    apiKey: opts.apiKey,
+    fromEmail: opts.fromEmail,
+    subject: `【${opts.appTitle}】${opts.requesterName}さんから1to1の申込が届きました`,
+    text: [
+      `${opts.responderName}さん`,
+      "",
+      `${opts.requesterName}さんから1to1の申込が届きました🤝`,
+      "",
+      `${opts.appTitle}にログインして確認してみましょう！`,
+    ].join("\n"),
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;">
+        <h2 style="color:#B5384B;font-size:20px;margin-bottom:8px;">🤝 ${opts.appTitle}</h2>
+        <p style="color:#4A3E36;line-height:1.7;">
+          ${opts.responderName}さん<br><br>
+          <strong>${opts.requesterName}</strong>さんから1to1の申込が届きました！<br>
+          ${opts.appTitle}を開いて、内容を確認してみましょう。
+        </p>
+      </div>
+    `,
+  });
+}

@@ -7,7 +7,7 @@ import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star } from "l
 import { useSettings } from "@/hooks/use-settings";
 
 export function AdminLayout() {
-  const { termQuest } = useSettings();
+  const { termQuest, appTitle } = useSettings();
 
   const ADMIN_NAV = [
     { to: "/admin",          icon: LayoutDashboard, label: "ダッシュボード",          end: true },
@@ -19,12 +19,12 @@ export function AdminLayout() {
   ] as const;
 
   useEffect(() => {
-    document.title = "チームエンゲージメント管理ダッシュボード";
+    document.title = `${appTitle}-管理者ダッシュボード`;
     return () => {
       // 管理画面から離れたら戻す（AppLayout 側で上書きされるので念のため）
-      document.title = "白樺クエスト";
+      document.title = appTitle;
     };
-  }, []);
+  }, [appTitle]);
 
   return (
     <div className="flex min-h-dvh" style={{ background: "var(--color-paper-100)" }}>

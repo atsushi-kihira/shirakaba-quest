@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X, CheckCircle2, Trophy, Star } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { QuestStory } from "@/lib/quest-story";
 import type { PublicMember, Skill } from "@shared/types";
 
 type Quest = {
@@ -126,9 +127,7 @@ function QuestCard({ quest, termUsp, termQuest, onChallenge }: { quest: Quest; t
               </span>
             )}
           </div>
-          <p className="text-sm leading-relaxed" style={{ color: "var(--color-ink-600)" }}>
-            {quest.story}
-          </p>
+          <QuestStory text={quest.story} className="text-sm leading-relaxed" style={{ color: "var(--color-ink-600)" }} />
         </div>
       </div>
 
@@ -233,7 +232,7 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
               <h2 className="font-semibold" style={{ fontFamily: "var(--font-klee)" }}>{quest.title}</h2>
               {isHard && <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "var(--color-brand)", color: "white" }}>🔥 難題</span>}
             </div>
-            <p className="text-xs mt-1.5 leading-relaxed" style={{ color: "var(--color-ink-500)" }}>{quest.story}</p>
+            <QuestStory text={quest.story} className="text-xs mt-1.5 leading-relaxed" style={{ color: "var(--color-ink-500)" }} />
             <div className="flex gap-3 mt-1.5 text-xs" style={{ color: "var(--color-ink-500)" }}>
               <span>🧩 {quest.skillCount}個</span>
               <span className="font-bold" style={{ color: "var(--color-accent)" }}>

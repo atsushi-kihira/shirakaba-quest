@@ -15,6 +15,7 @@ type MemberResponse  = { data: PublicMember };
 type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
 type OnoListResponse = { data: Array<{ id: string; status: string; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null }> };
 type RealCardResponse = { data: { alreadyRecorded: boolean; message: string } };
+type CardImageResponse = { data: { imageDataUrl: string } };
 
 const STATUS_LABEL: Record<string, { label: string; emoji: string; className: string }> = {
   none:    { label: "未交流",   emoji: "🤝", className: "bg-stone-200 text-stone-600 ring-stone-300" },
@@ -50,6 +51,15 @@ export function MemberDetailScreen() {
     enabled: !isSelf,
   });
 
+  const isUnlockedForCard = !!member && member.connectionStatus !== "none";
+
+  const { data: cardImageData } = useQuery({
+    queryKey: ["card-image", id],
+    queryFn: () => api.get<CardImageResponse>(`/members/${id}/card-image`),
+    enabled: !!id && isUnlockedForCard,
+    retry: false,
+  });
+
   const sessions = onoData?.data ?? [];
 
   // この相手との最新セッション
@@ -60,8 +70,9 @@ export function MemberDetailScreen() {
   );
 
   // 申込
+  const [notifyByEmail, setNotifyByEmail] = useState(false);
   const requestMutation = useMutation({
-    mutationFn: () => api.post<OnoResponse>("/oneonone", { responderId: id }),
+    mutationFn: () => api.post<OnoResponse>("/oneonone", { responderId: id, notifyByEmail }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["oneonone"] }),
   });
 
@@ -196,6 +207,30 @@ export function MemberDetailScreen() {
         )}
       </div>
 
+      {/* リアルカード（撮影画像） */}
+      {!isSelf && (
+        <div className="card-paper rounded-3xl p-5 mb-4">
+          <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🃏 リアルカード</h2>
+          {isUnlocked ? (
+            cardImageData?.data?.imageDataUrl ? (
+              <div className="rounded-2xl overflow-hidden border" style={{ borderColor: "var(--color-paper-300)" }}>
+                <img src={cardImageData.data.imageDataUrl} alt={`${member.name}のカード`} className="w-full object-contain max-h-72" />
+              </div>
+            ) : (
+              <p className="text-sm" style={{ color: "var(--color-ink-400)" }}>カード画像はまだ登録されていません</p>
+            )
+          ) : (
+            <div className="rounded-xl p-3 flex items-center gap-2"
+              style={{ background: "var(--color-paper-200)" }}>
+              <span className="text-lg">🔒</span>
+              <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                1to1を完了するとカード画像が見られます
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* スキルカード */}
       <div className="card-paper rounded-3xl p-5 mb-4">
         <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>
@@ -216,17 +251,28 @@ export function MemberDetailScreen() {
           </h2>
 
           {!activeSession && connStatus === "none" && (
-            <button
-              onClick={handleRequest}
-              disabled={requestMutation.isPending}
-              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition disabled:opacity-50"
-              style={{ background: "var(--color-brand)", color: "white" }}
-            >
-              {requestMutation.isPending
-                ? <><Loader2 size={16} className="animate-spin" /> 申込中...</>
-                : <><Handshake size={16} /> 1to1を申し込む</>
-              }
-            </button>
+            <>
+              <label className="flex items-center gap-2 mb-3 text-sm cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
+                <input
+                  type="checkbox"
+                  checked={notifyByEmail}
+                  onChange={(e) => setNotifyByEmail(e.target.checked)}
+                  className="w-4 h-4 rounded"
+                />
+                📧 {member.name}さんにメールで通知する
+              </label>
+              <button
+                onClick={handleRequest}
+                disabled={requestMutation.isPending}
+                className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition disabled:opacity-50"
+                style={{ background: "var(--color-brand)", color: "white" }}
+              >
+                {requestMutation.isPending
+                  ? <><Loader2 size={16} className="animate-spin" /> 申込中...</>
+                  : <><Handshake size={16} /> 1to1を申し込む</>
+                }
+              </button>
+            </>
           )}
 
           {activeSession?.status === "pending" && myRole === "requester" && (

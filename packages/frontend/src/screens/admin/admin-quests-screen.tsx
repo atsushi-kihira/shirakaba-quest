@@ -7,6 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Sparkles, Pencil, Trash2, Send, RefreshCw, X, Wand2, Check, CheckSquare, Square } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { QuestStory } from "@/lib/quest-story";
 import type { Usp } from "@shared/types";
 
 type AdminQuest = {
@@ -338,7 +339,7 @@ function QuestRow({
               </span>
             )}
           </div>
-          <p className="text-xs mt-1 line-clamp-2" style={{ color: "var(--color-ink-500)" }}>{quest.story}</p>
+          <p className="text-xs mt-1 line-clamp-2" style={{ color: "var(--color-ink-500)" }}>{quest.story.replace(/\[\[([^[\]]+)\]\]/g, "$1")}</p>
           <div className="flex gap-3 mt-1.5 text-xs" style={{ color: "var(--color-ink-400)" }}>
             <span>USP {quest.skillCount}個</span>
             <span>報酬 {quest.reward}pt</span>
@@ -667,6 +668,12 @@ function DraftPreview({
         value={draft.story}
         onChange={(e) => onChange({ ...draft, story: e.target.value })}
       />
+      <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+        💡 USP名を <code className="px-1 rounded" style={{ background: "var(--color-paper-300)" }}>[[USP名]]</code> のように囲むと強調表示されます
+      </p>
+      <div className="text-sm px-2 py-1.5 rounded-xl" style={{ background: "var(--color-paper-50)", color: "var(--color-ink-600)" }}>
+        <QuestStory text={draft.story} />
+      </div>
       <div className="flex gap-4 text-sm flex-wrap">
         <label className="flex items-center gap-1" style={{ color: "var(--color-ink-600)" }}>
           難易度
@@ -824,6 +831,9 @@ function QuestFormModal({
               rows={4} className="w-full px-3 py-2 rounded-xl border text-sm resize-none"
               style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
               placeholder="依頼人の困りごとを2〜3文で" />
+            <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+              💡 USP名を <code className="px-1 rounded" style={{ background: "var(--color-paper-200)" }}>[[USP名]]</code> のように二重角括弧で囲むと、その部分が強調表示されます（例: 「[[リスク判断力]]を活かして…」）
+            </p>
           </div>
 
           <div className="flex gap-4">

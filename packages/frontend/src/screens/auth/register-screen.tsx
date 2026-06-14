@@ -50,7 +50,8 @@ export function RegisterScreen() {
   // Step1
   const [frontImage, setFrontImage]   = useState<string | null>(null);
   const [ocrDone, setOcrDone]         = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
 
   // Step2: スキル（デフォルト3枠）
   const [skills, setSkills] = useState<SkillForm[]>([
@@ -93,6 +94,7 @@ export function RegisterScreen() {
       api.post("/register/submit", {
         ...profile,
         skills: skills.filter((s) => s.name.trim()),
+        cardImageBase64: frontImage ? frontImage.split(",")[1] : undefined,
       }),
     onSuccess: () => setStep(4),
   });
@@ -175,7 +177,8 @@ export function RegisterScreen() {
               scanning={ocrMutation.isPending}
               scanDone={ocrDone}
               scanError={ocrMutation.isError}
-              fileRef={fileRef}
+              cameraRef={cameraRef}
+              galleryRef={galleryRef}
               onNext={() => setStep(2)}
             />
           )}
@@ -200,9 +203,19 @@ export function RegisterScreen() {
         </div>
       </div>
 
-      {/* 隠しファイル入力 */}
+      {/* 隠しファイル入力（カメラ起動用） */}
       <input
-        ref={fileRef}
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="sr-only"
+        onChange={handleFileChange}
+        aria-hidden
+      />
+      {/* 隠しファイル入力（アルバム選択用） */}
+      <input
+        ref={galleryRef}
         type="file"
         accept="image/*"
         className="sr-only"
@@ -235,13 +248,14 @@ function StepDots({ current, total }: { current: number; total: number }) {
 // Step 1: カード撮影
 // ================================================================
 function Step1Scan({
-  frontImage, scanning, scanDone, scanError, fileRef, onNext,
+  frontImage, scanning, scanDone, scanError, cameraRef, galleryRef, onNext,
 }: {
   frontImage: string | null;
   scanning: boolean;
   scanDone: boolean;
   scanError: boolean;
-  fileRef: React.RefObject<HTMLInputElement | null>;
+  cameraRef: React.RefObject<HTMLInputElement | null>;
+  galleryRef: React.RefObject<HTMLInputElement | null>;
   onNext: () => void;
 }) {
   return (
@@ -266,7 +280,7 @@ function Step1Scan({
           borderColor: scanDone ? "var(--color-success)" : "var(--color-paper-300)",
           background: "var(--color-paper-50)",
         }}
-        onClick={() => fileRef.current?.click()}
+        onClick={() => cameraRef.current?.click()}
       >
         {frontImage ? (
           <>
@@ -315,20 +329,29 @@ function Step1Scan({
             <p className="text-base font-medium" style={{ color: "var(--color-ink-500)" }}>
               タップして撮影
             </p>
-            <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-              カメラロールから選択も可能
-            </p>
           </div>
         )}
       </button>
+
+      {/* アルバムから選ぶ */}
+      {!scanning && (
+        <button
+          type="button"
+          className="mt-2 w-full py-2 rounded-2xl text-xs flex items-center justify-center gap-1.5 active:opacity-70"
+          style={{ color: "var(--color-ink-500)" }}
+          onClick={() => galleryRef.current?.click()}
+        >
+          🖼️ カメラロールから選ぶ
+        </button>
+      )}
 
       {/* 撮り直しボタン */}
       {frontImage && !scanning && (
         <button
           type="button"
-          className="mt-3 w-full py-2.5 rounded-2xl text-sm flex items-center justify-center gap-2 active:opacity-70"
+          className="mt-1 w-full py-2.5 rounded-2xl text-sm flex items-center justify-center gap-2 active:opacity-70"
           style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
-          onClick={() => fileRef.current?.click()}
+          onClick={() => cameraRef.current?.click()}
         >
           <RefreshCw size={14} />
           撮り直す

@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { createDb, schema } from "../db/index.ts";
 import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
+import { saveCardImage } from "../services/card-image.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const registerRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -62,6 +63,7 @@ registerRoutes.post("/submit", async (c) => {
     role?: string;
     phone?: string;
     address?: string;
+    cardImageBase64?: string;
     skills?: Array<{
       name: string;
       emoji: string;
@@ -92,6 +94,17 @@ registerRoutes.post("/submit", async (c) => {
   }
 
   const id = newId();
+
+  // カード画像（表面）をR2に保存
+  let cardImageKey: string | null = null;
+  if (body.cardImageBase64) {
+    try {
+      cardImageKey = await saveCardImage(c.env.R2, id, body.cardImageBase64);
+    } catch (err) {
+      console.error("[register/submit] カード画像の保存に失敗", err);
+    }
+  }
+
   await db.insert(schema.members).values({
     id,
     email: body.email.toLowerCase().trim(),
@@ -107,6 +120,7 @@ registerRoutes.post("/submit", async (c) => {
     address: body.address ?? null,
     skills: JSON.stringify(body.skills ?? []),
     customFields: JSON.stringify({}),
+    cardImageKey,
     status: "pending",
     approvedAt: null,
     createdAt: now,

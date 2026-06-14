@@ -87,6 +87,7 @@ export type PublicMember = Omit<
   "email" | "company" | "role" | "phone" | "address" | "qrCodeUrl" | "facebookUrl" | "linkedinUrl" | "instagramUrl" | "customFields"
 > & {
   connectionStatus: ConnectionStatus; // 自分との関係
+  hasCardImage: boolean; // カード画像（表面）の有無
   email: string | null;
   company: string | null;
   role: string | null;

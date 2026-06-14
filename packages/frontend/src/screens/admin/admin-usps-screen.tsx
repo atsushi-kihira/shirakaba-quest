@@ -1,9 +1,9 @@
 // =============================================================
 // 管理画面 — USP管理（追加 / 編集 / 削除 / 並び順変更）
 // =============================================================
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, X, ChevronUp, ChevronDown } from "lucide-react";
+import { Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Download, Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Usp } from "@shared/types";
 
@@ -20,6 +20,8 @@ export function AdminUspsScreen() {
   const [showCreate, setShowCreate] = useState(false);
   const [editUsp, setEditUsp] = useState<Usp | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<Usp | null>(null);
+  const [importMessage, setImportMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "usps"],
@@ -39,7 +41,70 @@ export function AdminUspsScreen() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "usps"] }),
   });
 
+  const importMutation = useMutation({
+    mutationFn: (usps: Array<{ name: string; emoji?: string; description?: string; sortOrder?: number }>) =>
+      api.post<{ data: { created: number; updated: number } }>("/admin/usps/import", { usps }),
+    onSuccess: ({ data }) => {
+      setImportMessage({
+        type: "success",
+        text: `インポートが完了しました（追加 ${data.created} 件 / 更新 ${data.updated} 件）`,
+      });
+      qc.invalidateQueries({ queryKey: ["admin", "usps"] });
+      qc.invalidateQueries({ queryKey: ["usps"] });
+    },
+    onError: (e: Error) => setImportMessage({ type: "error", text: e.message }),
+  });
+
   const usps = data?.data ?? [];
+
+  function handleExport() {
+    const exportData = usps.map((u) => ({
+      name: u.name,
+      emoji: u.emoji,
+      description: u.description ?? "",
+      sortOrder: u.sortOrder,
+    }));
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `usps_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleImportFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        if (!Array.isArray(parsed)) {
+          throw new Error("ファイルの形式が正しくありません（USPの配列が必要です）");
+        }
+        const usps = parsed.map((item) => ({
+          name: String(item.name ?? "").trim(),
+          emoji: item.emoji != null ? String(item.emoji) : undefined,
+          description: item.description != null ? String(item.description) : undefined,
+          sortOrder: typeof item.sortOrder === "number" ? item.sortOrder : undefined,
+        }));
+        if (usps.some((u) => !u.name)) {
+          throw new Error("名前が空のUSPが含まれています");
+        }
+        setImportMessage(null);
+        importMutation.mutate(usps);
+      } catch (err) {
+        setImportMessage({
+          type: "error",
+          text: err instanceof Error ? err.message : "ファイルを読み込めませんでした",
+        });
+      }
+    };
+    reader.readAsText(file);
+  }
 
   function moveUsp(idx: number, direction: "up" | "down") {
     const newOrder = [...usps];
@@ -60,15 +125,57 @@ export function AdminUspsScreen() {
             カードに表示される能力（USP）の一覧を管理します。お題の正解スキルはここから選ばれます。
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-medium text-white transition hover:opacity-80"
-          style={{ background: "var(--color-brand)" }}
-        >
-          <Plus size={15} />
-          USPを追加
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            disabled={usps.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-sm font-medium transition hover:opacity-80 disabled:opacity-40"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+          >
+            <Download size={15} />
+            一括エクスポート
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importMutation.isPending}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-sm font-medium transition hover:opacity-80 disabled:opacity-50"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+          >
+            <Upload size={15} />
+            {importMutation.isPending ? "インポート中..." : "一括インポート"}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json"
+            onChange={handleImportFileChange}
+            className="hidden"
+          />
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-medium text-white transition hover:opacity-80"
+            style={{ background: "var(--color-brand)" }}
+          >
+            <Plus size={15} />
+            USPを追加
+          </button>
+        </div>
       </div>
+
+      {importMessage && (
+        <div
+          className="mb-4 p-3 rounded-2xl text-sm flex items-start justify-between gap-2"
+          style={{
+            background: importMessage.type === "success" ? "var(--color-paper-200)" : "var(--color-brand)",
+            color: importMessage.type === "success" ? "var(--color-ink-700)" : "white",
+          }}
+        >
+          <span>{importMessage.text}</span>
+          <button onClick={() => setImportMessage(null)} className="shrink-0 hover:opacity-70">
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>読み込み中...</div>

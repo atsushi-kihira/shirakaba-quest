@@ -11,6 +11,7 @@ import { eq, or, and } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
+import { sendOneOnOneRequestMail } from "../services/mailer.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -68,7 +69,7 @@ oneOnOneRoutes.get("/", async (c) => {
 oneOnOneRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
   const requesterId = c.get("userId");
-  const { responderId } = await c.req.json<{ responderId: string }>();
+  const { responderId, notifyByEmail } = await c.req.json<{ responderId: string; notifyByEmail?: boolean }>();
 
   if (requesterId === responderId) {
     return c.json({ error: { code: "self_request", message: "自分自身に1to1は申し込めません" } }, 400);
@@ -76,7 +77,7 @@ oneOnOneRoutes.post("/", async (c) => {
 
   // 相手が存在するか確認
   const responder = await db
-    .select({ id: schema.members.id })
+    .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
     .from(schema.members)
     .where(eq(schema.members.id, responderId))
     .get();
@@ -124,6 +125,31 @@ oneOnOneRoutes.post("/", async (c) => {
     .update(schema.connections)
     .set({ oneOnOneRequestedAt: now })
     .where(and(eq(schema.connections.fromMemberId, requesterId), eq(schema.connections.toMemberId, responderId)));
+
+  // メール通知（申込者が希望した場合のみ）
+  if (notifyByEmail && responder.email) {
+    try {
+      const requester = await db
+        .select({ name: schema.members.name })
+        .from(schema.members)
+        .where(eq(schema.members.id, requesterId))
+        .get();
+
+      const design = await db.select().from(schema.cardDesigns).get();
+
+      await sendOneOnOneRequestMail({
+        to: responder.email,
+        responderName: responder.name,
+        requesterName: requester?.name ?? "メンバー",
+        appTitle: design?.appTitle ?? "白樺クエスト",
+        apiKey: c.env.SENDGRID_API_KEY,
+        isDev: c.env.ENVIRONMENT === "development",
+        fromEmail: c.env.SENDGRID_FROM_EMAIL,
+      });
+    } catch (err) {
+      console.error("[oneonone] 通知メール送信失敗", err);
+    }
+  }
 
   return c.json({ data: { id, status: "pending" } }, 201);
 });

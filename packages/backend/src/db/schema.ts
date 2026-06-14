@@ -23,6 +23,7 @@ export const members = sqliteTable("members", {
   linkedinUrl:         text("linkedin_url"),
   instagramUrl:        text("instagram_url"),
   customFields:        text("custom_fields").default("{}"),
+  cardImageKey:        text("card_image_key"),
   status:              text("status").notNull().default("pending"),
   approvedAt:          integer("approved_at"),
   createdAt:           integer("created_at").notNull(),

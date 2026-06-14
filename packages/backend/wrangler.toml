@@ -6,19 +6,19 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "shirakaba-quest"
-database_id = "placeholder-set-after-wrangler-d1-create"
+database_id = "abc32c5c-c253-470a-95f0-945bfc49123e"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "placeholder-set-after-wrangler-kv-create"
+id = "c2bf2279ae10447cbe54168b927298c8"
 
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "shirakaba-assets"
 
 [vars]
-ENVIRONMENT = "development"
-CORS_ORIGIN = "http://localhost:5173"
+ENVIRONMENT = "production"
+CORS_ORIGIN = "https://shirakaba-quest.pages.dev"
 
 # ---- 本番環境 ----
 # wrangler deploy --env production で使用
