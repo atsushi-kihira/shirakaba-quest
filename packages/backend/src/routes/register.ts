@@ -8,6 +8,7 @@ import { createDb, schema } from "../db/index.ts";
 import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
 import { saveCardImage } from "../services/card-image.ts";
+import { sendUspRequestNotificationMail } from "../services/mailer.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const registerRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -71,6 +72,11 @@ registerRoutes.post("/submit", async (c) => {
       connector: string;
       solution: string;
     }>;
+    uspRequests?: Array<{
+      uspName: string;
+      emoji: string;
+      description: string;
+    }>;
   }>();
 
   if (!body.email || !body.name) {
@@ -126,6 +132,57 @@ registerRoutes.post("/submit", async (c) => {
     createdAt: now,
     updatedAt: now,
   });
+
+  // USP承認申請を登録し、管理者にメール通知
+  if (body.uspRequests && body.uspRequests.length > 0) {
+    const now2 = Math.floor(Date.now() / 1000);
+    const { eq: eq2 } = await import("drizzle-orm");
+    const isDev = c.env.ENVIRONMENT === "development";
+
+    for (const req of body.uspRequests) {
+      if (!req.uspName?.trim()) continue;
+      const reqId = newId();
+      await db.insert(schema.uspRequests).values({
+        id: reqId,
+        requesterEmail: body.email.toLowerCase().trim(),
+        requesterName: body.name.trim(),
+        uspName: req.uspName.trim(),
+        emoji: req.emoji || "⭐",
+        description: req.description?.trim() || null,
+        status: "pending",
+        createdAt: now2,
+      });
+    }
+
+    // 管理者全員にメール通知
+    const admins = await db.select({ email: schema.admins.email, name: schema.admins.name })
+      .from(schema.admins)
+      .all();
+
+    const appDesign = await db.select({ appTitle: schema.cardDesigns.appTitle })
+      .from(schema.cardDesigns)
+      .get();
+    const appTitle = appDesign?.appTitle ?? "白樺クエスト";
+
+    for (const req of body.uspRequests) {
+      if (!req.uspName?.trim()) continue;
+      for (const admin of admins) {
+        sendUspRequestNotificationMail({
+          to: admin.email,
+          adminName: admin.name,
+          requesterName: body.name.trim(),
+          requesterEmail: body.email.toLowerCase().trim(),
+          uspName: req.uspName.trim(),
+          emoji: req.emoji || "⭐",
+          description: req.description?.trim() || "",
+          appTitle,
+          apiKey: c.env.SENDGRID_API_KEY,
+          isDev,
+          fromEmail: c.env.SENDGRID_FROM_EMAIL,
+        }).catch((e) => console.error("[usp-request-mail]", e));
+      }
+    }
+  }
 
   return c.json({
     data: {

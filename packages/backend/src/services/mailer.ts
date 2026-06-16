@@ -78,6 +78,123 @@ export async function sendOtpMail(opts: {
   });
 }
 
+/** USP新規申請を管理者に通知するメール */
+export async function sendUspRequestNotificationMail(opts: {
+  to: string;
+  adminName: string;
+  requesterName: string;
+  requesterEmail: string;
+  uspName: string;
+  emoji: string;
+  description: string;
+  appTitle: string;
+  apiKey: string;
+  isDev: boolean;
+  fromEmail?: string;
+}): Promise<void> {
+  if (opts.isDev) {
+    console.log(`[DEV] USP申請通知 → ${opts.to}: ${opts.requesterName}さんが「${opts.uspName}」を申請`);
+    return;
+  }
+
+  await sendMail({
+    to: opts.to,
+    apiKey: opts.apiKey,
+    fromEmail: opts.fromEmail,
+    subject: `【${opts.appTitle}】新しいUSP申請が届きました：${opts.uspName}`,
+    text: [
+      `${opts.adminName}さん`,
+      "",
+      `${opts.requesterName}さん（${opts.requesterEmail}）から新しいUSPの申請が届きました。`,
+      "",
+      `USP名: ${opts.emoji} ${opts.uspName}`,
+      `説明: ${opts.description || "（説明なし）"}`,
+      "",
+      "管理画面のUSP管理から承認または却下を行ってください。",
+    ].join("\n"),
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;">
+        <h2 style="color:#B5384B;font-size:20px;margin-bottom:8px;">⭐ ${opts.appTitle}</h2>
+        <p style="color:#4A3E36;line-height:1.7;">
+          ${opts.adminName}さん<br><br>
+          <strong>${opts.requesterName}</strong>さん（${opts.requesterEmail}）から<br>
+          新しいUSPの申請が届きました！
+        </p>
+        <div style="background:#FAF5E8;border:2px solid #D9C9B0;border-radius:16px;padding:20px;margin:16px 0;">
+          <p style="font-size:22px;font-weight:bold;color:#1A1410;margin:0 0 8px;">
+            ${opts.emoji} ${opts.uspName}
+          </p>
+          <p style="color:#6B5E50;font-size:14px;margin:0;">
+            ${opts.description || "（説明なし）"}
+          </p>
+        </div>
+        <p style="color:#9B8B7A;font-size:13px;">
+          管理画面の「USP管理」から承認または却下を行ってください。
+        </p>
+      </div>
+    `,
+  });
+}
+
+/** USP申請の審査結果をメンバーに通知するメール */
+export async function sendUspRequestResultMail(opts: {
+  to: string;
+  requesterName: string;
+  uspName: string;
+  emoji: string;
+  approved: boolean;
+  reviewNote?: string;
+  appTitle: string;
+  apiKey: string;
+  isDev: boolean;
+  fromEmail?: string;
+}): Promise<void> {
+  if (opts.isDev) {
+    console.log(`[DEV] USP審査結果 → ${opts.to}: 「${opts.uspName}」${opts.approved ? "承認" : "却下"}`);
+    return;
+  }
+
+  const resultLabel = opts.approved ? "✅ 承認されました！" : "❌ 今回は見送りとなりました";
+  const resultColor = opts.approved ? "#5A8C5C" : "#B5384B";
+
+  await sendMail({
+    to: opts.to,
+    apiKey: opts.apiKey,
+    fromEmail: opts.fromEmail,
+    subject: `【${opts.appTitle}】USP申請の結果：${opts.uspName}`,
+    text: [
+      `${opts.requesterName}さん`,
+      "",
+      `申請されたUSP「${opts.uspName}」の審査結果をお知らせします。`,
+      "",
+      `結果: ${opts.approved ? "承認されました！" : "今回は見送りとなりました"}`,
+      ...(opts.reviewNote ? [`コメント: ${opts.reviewNote}`] : []),
+      "",
+      opts.approved
+        ? "ログインしてUSPを選択してください。"
+        : "ご不明な点は運営チームにお問い合わせください。",
+    ].join("\n"),
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;">
+        <h2 style="color:#B5384B;font-size:20px;margin-bottom:8px;">🃏 ${opts.appTitle}</h2>
+        <p style="color:#4A3E36;line-height:1.7;">
+          ${opts.requesterName}さん<br><br>
+          申請されたUSP「<strong>${opts.emoji} ${opts.uspName}</strong>」の審査結果が届きました。
+        </p>
+        <div style="background:#FAF5E8;border:2px solid ${resultColor};border-radius:16px;padding:20px;margin:16px 0;text-align:center;">
+          <p style="font-size:18px;font-weight:bold;color:${resultColor};margin:0;">
+            ${resultLabel}
+          </p>
+          ${opts.reviewNote ? `<p style="color:#6B5E50;font-size:14px;margin:12px 0 0;">${opts.reviewNote}</p>` : ""}
+        </div>
+        <p style="color:#9B8B7A;font-size:13px;">
+          ${opts.approved ? "ログインしてUSP選択からご利用いただけます。" : "ご不明な点は運営チームにお問い合わせください。"}
+        </p>
+      </div>
+    `,
+  });
+}
+
 /** 1to1 申込通知メールを送信する */
 export async function sendOneOnOneRequestMail(opts: {
   to: string;

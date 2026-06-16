@@ -295,6 +295,26 @@ export type RankingEntry = {
 };
 
 // -------------------------------------------------------
+// USP承認申請
+// -------------------------------------------------------
+
+export type UspRequestStatus = "pending" | "approved" | "rejected";
+
+export type UspRequest = {
+  id: string;
+  requesterEmail: string;
+  requesterName: string;
+  uspName: string;
+  emoji: string;
+  description?: string;
+  status: UspRequestStatus;
+  reviewNote?: string;
+  reviewedBy?: string;
+  reviewedAt?: number;
+  createdAt: number;
+};
+
+// -------------------------------------------------------
 // ユーティリティ
 // -------------------------------------------------------
 

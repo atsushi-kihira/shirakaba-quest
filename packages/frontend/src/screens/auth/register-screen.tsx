@@ -7,7 +7,7 @@
 // =============================================================
 import { useState, useRef, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw } from "lucide-react";
+import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw, Plus, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { Usp } from "@shared/types";
@@ -19,6 +19,12 @@ type SkillOcr = {
   issue: string;
   connector: string;
   solution: string;
+};
+
+type PendingUspRequest = {
+  uspName: string;
+  emoji: string;
+  description: string;
 };
 
 type CardOcrResult = {
@@ -58,6 +64,9 @@ export function RegisterScreen() {
     EMPTY_SKILL("💡"), EMPTY_SKILL("🔧"), EMPTY_SKILL("🎯"),
   ]);
 
+  // Step2: USP承認申請（リストにないUSP）
+  const [pendingUspRequests, setPendingUspRequests] = useState<PendingUspRequest[]>([]);
+
   // Step3: プロフィール
   const [profile, setProfile] = useState({
     name: "", furigana: "", email: "",
@@ -95,6 +104,7 @@ export function RegisterScreen() {
         ...profile,
         skills: skills.filter((s) => s.name.trim()),
         cardImageBase64: frontImage ? frontImage.split(",")[1] : undefined,
+        uspRequests: pendingUspRequests.length > 0 ? pendingUspRequests : undefined,
       }),
     onSuccess: () => setStep(4),
   });
@@ -187,6 +197,8 @@ export function RegisterScreen() {
               skills={skills}
               onUpdate={updateSkill}
               onSkillsChange={setSkills}
+              pendingUspRequests={pendingUspRequests}
+              onPendingUspRequestsChange={setPendingUspRequests}
               onNext={() => setStep(3)}
             />
           )}
@@ -390,17 +402,23 @@ function Step1Scan({
 }
 
 // ================================================================
-// Step 2: USP 選択 + スキル詳細入力
+// Step 2: USP 選択 + スキル詳細入力 + USP申請
 // ================================================================
 function Step2Skills({
-  skills, onUpdate, onSkillsChange, onNext,
+  skills, onUpdate, onSkillsChange,
+  pendingUspRequests, onPendingUspRequestsChange,
+  onNext,
 }: {
   skills: SkillForm[];
   onUpdate: (idx: number, field: keyof SkillForm, value: string) => void;
   onSkillsChange: (skills: SkillForm[]) => void;
+  pendingUspRequests: PendingUspRequest[];
+  onPendingUspRequestsChange: (reqs: PendingUspRequest[]) => void;
   onNext: () => void;
 }) {
-  // 定義済み USP 一覧を取得
+  const [showRequestForm, setShowRequestForm] = useState(false);
+  const [reqForm, setReqForm] = useState<PendingUspRequest>({ uspName: "", emoji: "⭐", description: "" });
+
   const { data: uspsData } = useQuery({
     queryKey: ["usps"],
     queryFn: () => api.get<{ data: Usp[] }>("/usps"),
@@ -409,25 +427,31 @@ function Step2Skills({
   const usps = uspsData?.data ?? [];
 
   const selectedNames = skills.map((s) => s.name).filter(Boolean);
-  const canProceed = selectedNames.length > 0;
+  const canProceed = selectedNames.length > 0 || pendingUspRequests.length > 0;
 
   function toggleUsp(usp: Usp) {
     if (selectedNames.includes(usp.name)) {
-      // 選択解除
       onSkillsChange(skills.filter((s) => s.name !== usp.name));
     } else {
-      // 選択追加
-      const existing = skills.find((s) => s.name === usp.name);
-      if (!existing) {
-        onSkillsChange([...skills.filter((s) => s.name), {
-          name: usp.name,
-          emoji: usp.emoji,
-          issue: "",
-          connector: "に対して、",
-          solution: "",
-        }]);
-      }
+      onSkillsChange([...skills.filter((s) => s.name), {
+        name: usp.name,
+        emoji: usp.emoji,
+        issue: "",
+        connector: "に対して、",
+        solution: "",
+      }]);
     }
+  }
+
+  function addUspRequest() {
+    if (!reqForm.uspName.trim()) return;
+    onPendingUspRequestsChange([...pendingUspRequests, { ...reqForm, uspName: reqForm.uspName.trim() }]);
+    setReqForm({ uspName: "", emoji: "⭐", description: "" });
+    setShowRequestForm(false);
+  }
+
+  function removeUspRequest(idx: number) {
+    onPendingUspRequestsChange(pendingUspRequests.filter((_, i) => i !== idx));
   }
 
   return (
@@ -440,7 +464,7 @@ function Step2Skills({
         カードに表示するUSP（独自の強み）を選択してください。
       </p>
       <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
-        ※ 1つ以上選択すれば次に進めます
+        ※ 1つ以上選択するか、新しいUSPを申請すれば次に進めます
       </p>
 
       {/* USP チップ選択 */}
@@ -482,7 +506,7 @@ function Step2Skills({
 
       {/* 選択済み USP の詳細入力 */}
       {skills.filter((s) => s.name).length > 0 && (
-        <div>
+        <div className="mb-5">
           <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>
             選択したUSPの説明を入力（任意）
           </p>
@@ -500,6 +524,110 @@ function Step2Skills({
           </div>
         </div>
       )}
+
+      {/* ---- リストにないUSPの申請 ---- */}
+      <div className="mb-2">
+        <div
+          className="rounded-3xl overflow-hidden"
+          style={{ border: "1.5px solid var(--color-paper-300)", background: "var(--color-paper-50)" }}
+        >
+          <button
+            type="button"
+            onClick={() => setShowRequestForm((v) => !v)}
+            className="w-full flex items-center gap-2 px-4 py-3 text-sm font-medium active:opacity-70 transition"
+            style={{ color: "var(--color-ink-600)" }}
+          >
+            <Plus size={15} style={{ color: "var(--color-brand)" }} />
+            リストにないUSPを申請する
+            <span className="ml-auto text-xs" style={{ color: "var(--color-ink-400)" }}>
+              {showRequestForm ? "▲" : "▼"}
+            </span>
+          </button>
+
+          {showRequestForm && (
+            <div className="px-4 pb-4 space-y-3 border-t" style={{ borderColor: "var(--color-paper-300)" }}>
+              <p className="text-xs pt-3" style={{ color: "var(--color-ink-400)" }}>
+                希望するUSP名と説明を入力してください。登録後に管理者が審査し、承認結果をメールでお知らせします。
+              </p>
+              <div className="flex gap-2">
+                <div style={{ width: "52px" }}>
+                  <label className="block text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>絵文字</label>
+                  <input
+                    value={reqForm.emoji}
+                    onChange={(e) => setReqForm((f) => ({ ...f, emoji: e.target.value }))}
+                    className="w-full rounded-xl border text-center text-lg"
+                    style={{ padding: "8px 4px", borderColor: "var(--color-paper-300)", background: "white", fontSize: "20px" }}
+                    maxLength={2}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>USP名 *</label>
+                  <input
+                    value={reqForm.uspName}
+                    onChange={(e) => setReqForm((f) => ({ ...f, uspName: e.target.value }))}
+                    placeholder="例: 事業再生支援力"
+                    className="w-full rounded-xl border"
+                    style={{ fontSize: "16px", padding: "8px 12px", borderColor: "var(--color-paper-300)", background: "white", color: "var(--color-ink-800)" }}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>説明（任意）</label>
+                <textarea
+                  value={reqForm.description}
+                  onChange={(e) => setReqForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="例: 事業の立て直しや再生計画の策定を支援する能力"
+                  rows={2}
+                  className="w-full rounded-xl border resize-none"
+                  style={{ fontSize: "16px", padding: "8px 12px", borderColor: "var(--color-paper-300)", background: "white", color: "var(--color-ink-800)" }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={addUspRequest}
+                disabled={!reqForm.uspName.trim()}
+                className="w-full py-2.5 rounded-2xl text-sm font-semibold flex items-center justify-center gap-1.5 active:opacity-80 disabled:opacity-40 transition"
+                style={{ background: "var(--color-brand)", color: "white" }}
+              >
+                <Plus size={14} />
+                申請リストに追加
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 追加済み申請一覧 */}
+        {pendingUspRequests.length > 0 && (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs font-medium" style={{ color: "var(--color-ink-500)" }}>
+              📨 申請予定のUSP（登録完了時に申請されます）
+            </p>
+            {pendingUspRequests.map((req, idx) => (
+              <div
+                key={idx}
+                className="flex items-center gap-2 px-3 py-2 rounded-2xl"
+                style={{ background: "rgba(181,56,75,0.08)", border: "1px solid rgba(181,56,75,0.2)" }}
+              >
+                <span className="text-lg">{req.emoji}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{req.uspName}</p>
+                  {req.description && (
+                    <p className="text-xs truncate" style={{ color: "var(--color-ink-400)" }}>{req.description}</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeUspRequest(idx)}
+                  className="shrink-0 p-1 rounded-full active:opacity-60"
+                  style={{ color: "var(--color-ink-400)" }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <button
         type="button"

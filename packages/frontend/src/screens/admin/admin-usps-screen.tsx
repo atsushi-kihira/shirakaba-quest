@@ -3,9 +3,9 @@
 // =============================================================
 import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Download, Upload } from "lucide-react";
+import { Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Download, Upload, Check, ChevronDown as CollapseIcon } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Usp } from "@shared/types";
+import type { Usp, UspRequest } from "@shared/types";
 
 type UspForm = {
   name: string;
@@ -21,6 +21,7 @@ export function AdminUspsScreen() {
   const [editUsp, setEditUsp] = useState<Usp | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<Usp | null>(null);
   const [importMessage, setImportMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [importPending, setImportPending] = useState<Array<{ name: string; emoji?: string; description?: string; sortOrder?: number }> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading } = useQuery({
@@ -43,11 +44,11 @@ export function AdminUspsScreen() {
 
   const importMutation = useMutation({
     mutationFn: (usps: Array<{ name: string; emoji?: string; description?: string; sortOrder?: number }>) =>
-      api.post<{ data: { created: number; updated: number } }>("/admin/usps/import", { usps }),
+      api.post<{ data: { count: number } }>("/admin/usps/import", { usps }),
     onSuccess: ({ data }) => {
       setImportMessage({
         type: "success",
-        text: `インポートが完了しました（追加 ${data.created} 件 / 更新 ${data.updated} 件）`,
+        text: `インポートが完了しました（${data.count} 件のUSPに置き換えました）`,
       });
       qc.invalidateQueries({ queryKey: ["admin", "usps"] });
       qc.invalidateQueries({ queryKey: ["usps"] });
@@ -58,11 +59,11 @@ export function AdminUspsScreen() {
   const usps = data?.data ?? [];
 
   function handleExport() {
-    const exportData = usps.map((u) => ({
+    const exportData = usps.map((u, idx) => ({
       name: u.name,
       emoji: u.emoji,
       description: u.description ?? "",
-      sortOrder: u.sortOrder,
+      sortOrder: idx + 1,
     }));
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -95,7 +96,7 @@ export function AdminUspsScreen() {
           throw new Error("名前が空のUSPが含まれています");
         }
         setImportMessage(null);
-        importMutation.mutate(usps);
+        setImportPending(usps);
       } catch (err) {
         setImportMessage({
           type: "error",
@@ -176,6 +177,9 @@ export function AdminUspsScreen() {
           </button>
         </div>
       )}
+
+      {/* ---- USP承認申請セクション ---- */}
+      <UspRequestsSection />
 
       {isLoading ? (
         <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>読み込み中...</div>
@@ -269,6 +273,40 @@ export function AdminUspsScreen() {
             qc.invalidateQueries({ queryKey: ["usps"] });
           }}
         />
+      )}
+
+      {/* 一括インポート確認 */}
+      {importPending && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.4)" }}
+          onClick={() => setImportPending(null)}
+        >
+          <div className="card-paper p-6 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+            <p className="font-medium mb-1" style={{ color: "var(--color-ink-800)" }}>
+              現在のUSP一覧をすべて削除して、{importPending.length}件のUSPに置き換えます。
+            </p>
+            <p className="text-sm mb-4" style={{ color: "var(--color-ink-500)" }}>
+              この操作は取り消せません。よろしいですか？
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setImportPending(null)}
+                className="flex-1 py-2.5 rounded-2xl text-sm"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  importMutation.mutate(importPending);
+                  setImportPending(null);
+                }}
+                disabled={importMutation.isPending}
+                className="flex-1 py-2.5 rounded-2xl text-sm text-white"
+                style={{ background: "var(--color-brand)" }}>
+                置き換える
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 削除確認 */}
@@ -407,6 +445,183 @@ function UspFormModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ================================================================
+// USP承認申請レビューセクション
+// ================================================================
+function UspRequestsSection() {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(true);
+  const [rejectModal, setRejectModal] = useState<UspRequest | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
+
+  const { data } = useQuery({
+    queryKey: ["admin", "usp-requests"],
+    queryFn: () => api.get<{ data: UspRequest[] }>("/admin/usps/requests"),
+  });
+
+  const requests = data?.data ?? [];
+  const pending = requests.filter((r) => r.status === "pending");
+  const reviewed = requests.filter((r) => r.status !== "pending");
+
+  const approveMutation = useMutation({
+    mutationFn: (id: string) => api.post(`/admin/usps/requests/${id}/approve`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "usp-requests"] });
+      qc.invalidateQueries({ queryKey: ["admin", "usps"] });
+      qc.invalidateQueries({ queryKey: ["usps"] });
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: ({ id, note }: { id: string; note: string }) =>
+      api.post(`/admin/usps/requests/${id}/reject`, { reviewNote: note }),
+    onSuccess: () => {
+      setRejectModal(null);
+      setRejectNote("");
+      qc.invalidateQueries({ queryKey: ["admin", "usp-requests"] });
+    },
+  });
+
+  if (requests.length === 0) return null;
+
+  return (
+    <div className="mb-6 rounded-3xl overflow-hidden" style={{ border: "1.5px solid var(--color-paper-300)" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-4 py-3 text-sm font-semibold transition hover:opacity-80"
+        style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+      >
+        <span>📨 USP申請</span>
+        {pending.length > 0 && (
+          <span
+            className="px-2 py-0.5 rounded-full text-xs text-white font-bold"
+            style={{ background: "var(--color-brand)" }}
+          >
+            {pending.length}件 承認待ち
+          </span>
+        )}
+        <CollapseIcon size={16} className={`ml-auto transition-transform ${open ? "rotate-180" : ""}`} style={{ color: "var(--color-ink-400)" }} />
+      </button>
+
+      {open && (
+        <div className="divide-y" style={{ borderColor: "var(--color-paper-300)" }}>
+          {pending.length === 0 && reviewed.length > 0 && (
+            <p className="px-4 py-3 text-sm" style={{ color: "var(--color-ink-400)" }}>
+              承認待ちの申請はありません
+            </p>
+          )}
+
+          {/* 承認待ち */}
+          {pending.map((req) => (
+            <div key={req.id} className="px-4 py-3">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl mt-0.5">{req.emoji}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{req.uspName}</p>
+                  {req.description && (
+                    <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>{req.description}</p>
+                  )}
+                  <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+                    申請者: {req.requesterName}（{req.requesterEmail}）
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => approveMutation.mutate(req.id)}
+                  disabled={approveMutation.isPending}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-medium text-white transition hover:opacity-80 disabled:opacity-50"
+                  style={{ background: "var(--color-success)" }}
+                >
+                  <Check size={13} />
+                  承認してUSPに追加
+                </button>
+                <button
+                  onClick={() => { setRejectModal(req); setRejectNote(""); }}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-medium transition hover:opacity-80"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+                >
+                  却下
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {/* 審査済み（折りたたみ） */}
+          {reviewed.length > 0 && (
+            <details className="px-4 py-2">
+              <summary className="text-xs cursor-pointer select-none" style={{ color: "var(--color-ink-400)" }}>
+                審査済み {reviewed.length}件 ▼
+              </summary>
+              <div className="mt-2 space-y-2">
+                {reviewed.map((req) => (
+                  <div key={req.id} className="flex items-center gap-2 py-1">
+                    <span className="text-lg">{req.emoji}</span>
+                    <span className="text-sm flex-1" style={{ color: "var(--color-ink-600)" }}>{req.uspName}</span>
+                    <span
+                      className="text-xs px-2 py-0.5 rounded-full font-medium"
+                      style={{
+                        background: req.status === "approved" ? "rgba(90,140,92,0.15)" : "rgba(181,56,75,0.1)",
+                        color: req.status === "approved" ? "var(--color-success)" : "var(--color-brand)",
+                      }}
+                    >
+                      {req.status === "approved" ? "承認済み" : "却下済み"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
+      {/* 却下モーダル */}
+      {rejectModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(0,0,0,0.4)" }}
+          onClick={() => setRejectModal(null)}
+        >
+          <div className="card-paper p-6 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold mb-1" style={{ color: "var(--color-ink-800)" }}>
+              {rejectModal.emoji} {rejectModal.uspName}を却下
+            </h3>
+            <p className="text-sm mb-3" style={{ color: "var(--color-ink-500)" }}>
+              却下理由をメンバーにお伝えするコメントを入力できます（任意）。
+            </p>
+            <textarea
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              rows={3}
+              placeholder="例: 既存のUSP「リスク判断力」と重複するため"
+              className="w-full rounded-2xl border text-sm resize-none px-3 py-2 mb-4"
+              style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", fontSize: "16px" }}
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setRejectModal(null)}
+                className="flex-1 py-2.5 rounded-2xl text-sm"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => rejectMutation.mutate({ id: rejectModal.id, note: rejectNote })}
+                disabled={rejectMutation.isPending}
+                className="flex-1 py-2.5 rounded-2xl text-sm text-white disabled:opacity-50"
+                style={{ background: "var(--color-brand)" }}
+              >
+                {rejectMutation.isPending ? "処理中..." : "却下する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

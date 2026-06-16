@@ -125,6 +125,20 @@ export const usps = sqliteTable("usps", {
   updatedAt:   integer("updated_at").notNull(),
 });
 
+export const uspRequests = sqliteTable("usp_requests", {
+  id:             text("id").primaryKey(),
+  requesterEmail: text("requester_email").notNull(),
+  requesterName:  text("requester_name").notNull().default(""),
+  uspName:        text("usp_name").notNull(),
+  emoji:          text("emoji").notNull().default("⭐"),
+  description:    text("description"),
+  status:         text("status").notNull().default("pending"), // pending | approved | rejected
+  reviewNote:     text("review_note"),
+  reviewedBy:     text("reviewed_by"),
+  reviewedAt:     integer("reviewed_at"),
+  createdAt:      integer("created_at").notNull(),
+});
+
 export const cardDesigns = sqliteTable("card_designs", {
   id:                   text("id").primaryKey().default("default"),
   frontFeatureLabel:    text("front_feature_label").notNull().default("USP・SKILLs"),
