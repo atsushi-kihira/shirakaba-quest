@@ -197,7 +197,11 @@ export type PointReason =
   | "quest_normal_solved"
   | "quest_hard_solved"
   | "admin_reset"
-  | "admin_adjust";
+  | "admin_adjust"
+  | "visitor_invite_resolved"
+  | "welcome_quest_bonus"
+  | "real_card_event_bonus"
+  | "1on1_team_bonus";
 
 export type PointTransaction = {
   id: string;
@@ -312,6 +316,115 @@ export type UspRequest = {
   reviewedBy?: string;
   reviewedAt?: number;
   createdAt: number;
+};
+
+// -------------------------------------------------------
+// チーム
+// -------------------------------------------------------
+
+export type Team = {
+  id: string;
+  name: string;
+  emblemEmoji: string;
+  seasonId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  members: TeamMemberInfo[];
+};
+
+export type TeamMemberInfo = {
+  id: string;
+  memberId: string;
+  teamId: string;
+  isLeader: boolean;
+  joinedAt: number;
+  member?: Pick<Member, "id" | "name" | "furigana" | "emoji" | "bgColor" | "category">;
+};
+
+export type TeamRankingEntry = {
+  rank: number;
+  team: Pick<Team, "id" | "name" | "emblemEmoji">;
+  totalPoints: number;
+};
+
+// -------------------------------------------------------
+// イベント
+// -------------------------------------------------------
+
+export type EventType = "special_quest_week" | "welcome_quest" | "featured_member" | "visitor_invite_quest";
+
+export type EventCampaign = {
+  id: string;
+  type: EventType;
+  title: string;
+  description: string;
+  startsAt: number;
+  endsAt: number | null;
+  relatedMemberId: string | null;
+  multiplier: number | null;
+  status: "active" | "ended";
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type VisitorInvite = {
+  id: string;
+  memberId: string;
+  visitorName: string;
+  status: "pending" | "resolved";
+  resolvedAt: number | null;
+  pointsAwarded: number;
+  createdAt: number;
+};
+
+// -------------------------------------------------------
+// シーズン
+// -------------------------------------------------------
+
+export type Season = {
+  id: string;
+  name: string;
+  theme: string;
+  startsAt: number;
+  endsAt: number | null;
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type SeasonRankingEntry = {
+  rank: number;
+  member: Pick<Member, "id" | "name" | "furigana" | "emoji" | "bgColor" | "category">;
+  points: number;
+};
+
+// -------------------------------------------------------
+// バッジ
+// -------------------------------------------------------
+
+export type BadgeConditionType =
+  | "first_1on1"
+  | "members_collected_10"
+  | "quest_master_10"
+  | "real_card_5"
+  | "monthly_mvp";
+
+export type Badge = {
+  id: string;
+  name: string;
+  emoji: string;
+  description: string;
+  conditionType: BadgeConditionType;
+  conditionValue?: number;
+  sortOrder: number;
+};
+
+export type MemberBadge = {
+  id: string;
+  memberId: string;
+  badgeId: string;
+  earnedAt: number;
+  badge: Badge;
 };
 
 // -------------------------------------------------------

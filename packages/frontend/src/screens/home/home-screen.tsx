@@ -8,7 +8,11 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 
+import type { Season, EventCampaign } from "@shared/types";
+
 type MyRankResponse  = { data: { points: number; rank: number } };
+type ActiveSeasonResponse = { data: Season | null };
+type ActiveEventsResponse = { data: EventCampaign[] };
 type OnoSession = {
   id: string;
   status: string;
@@ -43,9 +47,25 @@ export function HomeScreen() {
     enabled: !!user,
   });
 
-  const rank     = rankData?.data;
-  const sessions = onoData?.data ?? [];
-  const quests   = (questData?.data ?? []).slice(0, 2);
+  const { data: seasonData } = useQuery({
+    queryKey: ["season"],
+    queryFn: () => api.get<ActiveSeasonResponse>("/season"),
+  });
+
+  const { data: eventsData } = useQuery({
+    queryKey: ["events", "active"],
+    queryFn: () => api.get<ActiveEventsResponse>("/events/active"),
+    enabled: !!user,
+  });
+
+  const rank          = rankData?.data;
+  const sessions      = onoData?.data ?? [];
+  const quests        = (questData?.data ?? []).slice(0, 2);
+  const activeSeason  = seasonData?.data ?? null;
+  const activeEvents  = eventsData?.data ?? [];
+  const featuredEvent = activeEvents.find((e) => e.type === "featured_member");
+  const specialWeek   = activeEvents.find((e) => e.type === "special_quest_week");
+  const welcomeEvents = activeEvents.filter((e) => e.type === "welcome_quest");
 
   // 通知が必要なセッション
   const needAction = sessions.filter((s) => {
@@ -79,6 +99,42 @@ export function HomeScreen() {
           {user?.emoji ?? "🙂"}
         </div>
       </div>
+
+      {/* アクティブシーズン */}
+      {activeSeason && (
+        <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.2)" }}>
+          <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--color-brand)" }}>🌸 現在のシーズン</p>
+          <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{activeSeason.name}</p>
+          {activeSeason.theme && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>{activeSeason.theme}</p>}
+        </div>
+      )}
+
+      {/* 特別お題ウィーク */}
+      {specialWeek && (
+        <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(212,160,59,0.12)", border: "1px solid rgba(212,160,59,0.3)" }}>
+          <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--color-accent)" }}>📅 {specialWeek.title}</p>
+          {specialWeek.description && <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>{specialWeek.description}</p>}
+        </div>
+      )}
+
+      {/* 注目メンバー */}
+      {featuredEvent && (
+        <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.25)" }}>
+          <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--color-success)" }}>⭐ {featuredEvent.title}</p>
+          {featuredEvent.description && <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>{featuredEvent.description}</p>}
+        </div>
+      )}
+
+      {/* 新メンバー歓迎クエスト */}
+      {welcomeEvents.length > 0 && (
+        <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.2)" }}>
+          <p className="text-xs font-semibold mb-1" style={{ color: "var(--color-brand)" }}>🎉 新メンバー歓迎クエスト実施中！</p>
+          {welcomeEvents.map((ev) => (
+            <p key={ev.id} className="text-sm" style={{ color: "var(--color-ink-700)" }}>{ev.title}</p>
+          ))}
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>1to1完了で +1pt ボーナス！</p>
+        </div>
+      )}
 
       {/* 1to1 要対応バナー（承諾待ち・完了待ち） */}
       {needAction.length > 0 && (

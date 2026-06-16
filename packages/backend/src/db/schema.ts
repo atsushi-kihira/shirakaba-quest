@@ -139,6 +139,96 @@ export const uspRequests = sqliteTable("usp_requests", {
   createdAt:      integer("created_at").notNull(),
 });
 
+export const teams = sqliteTable("teams", {
+  id:          text("id").primaryKey(),
+  name:        text("name").notNull(),
+  emblemEmoji: text("emblem_emoji").notNull().default("🦊"),
+  seasonId:    text("season_id"),
+  createdAt:   integer("created_at").notNull(),
+  updatedAt:   integer("updated_at").notNull(),
+});
+
+export const teamMembers = sqliteTable(
+  "team_members",
+  {
+    id:       text("id").primaryKey(),
+    teamId:   text("team_id").notNull(),
+    memberId: text("member_id").notNull(),
+    isLeader: integer("is_leader").notNull().default(0),
+    joinedAt: integer("joined_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_team_member").on(t.teamId, t.memberId)]
+);
+
+export const eventCampaigns = sqliteTable("event_campaigns", {
+  id:              text("id").primaryKey(),
+  type:            text("type").notNull(),
+  title:           text("title").notNull(),
+  description:     text("description").notNull().default(""),
+  startsAt:        integer("starts_at").notNull(),
+  endsAt:          integer("ends_at"),
+  relatedMemberId: text("related_member_id"),
+  multiplier:      integer("multiplier"),
+  status:          text("status").notNull().default("active"),
+  createdAt:       integer("created_at").notNull(),
+  updatedAt:       integer("updated_at").notNull(),
+});
+
+export const visitorInvites = sqliteTable("visitor_invites", {
+  id:           text("id").primaryKey(),
+  memberId:     text("member_id").notNull(),
+  visitorName:  text("visitor_name").notNull().default(""),
+  attendedAt:   integer("attended_at"),
+  status:       text("status").notNull().default("pending"),
+  resolvedAt:   integer("resolved_at"),
+  pointsAwarded: integer("points_awarded").notNull().default(5),
+  createdAt:    integer("created_at").notNull(),
+});
+
+export const seasons = sqliteTable("seasons", {
+  id:        text("id").primaryKey(),
+  name:      text("name").notNull(),
+  theme:     text("theme").notNull().default(""),
+  startsAt:  integer("starts_at").notNull(),
+  endsAt:    integer("ends_at"),
+  isActive:  integer("is_active").notNull().default(0),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const seasonRankings = sqliteTable(
+  "season_rankings",
+  {
+    id:       text("id").primaryKey(),
+    seasonId: text("season_id").notNull(),
+    memberId: text("member_id").notNull(),
+    points:   integer("points").notNull().default(0),
+  },
+  (t) => [uniqueIndex("uniq_season_ranking").on(t.seasonId, t.memberId)]
+);
+
+export const badges = sqliteTable("badges", {
+  id:             text("id").primaryKey(),
+  name:           text("name").notNull(),
+  emoji:          text("emoji").notNull(),
+  description:    text("description").notNull().default(""),
+  conditionType:  text("condition_type").notNull(),
+  conditionValue: integer("condition_value"),
+  sortOrder:      integer("sort_order").notNull().default(0),
+  createdAt:      integer("created_at").notNull(),
+});
+
+export const memberBadges = sqliteTable(
+  "member_badges",
+  {
+    id:       text("id").primaryKey(),
+    memberId: text("member_id").notNull(),
+    badgeId:  text("badge_id").notNull(),
+    earnedAt: integer("earned_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_member_badge").on(t.memberId, t.badgeId)]
+);
+
 export const cardDesigns = sqliteTable("card_designs", {
   id:                   text("id").primaryKey().default("default"),
   frontFeatureLabel:    text("front_feature_label").notNull().default("USP・SKILLs"),

@@ -11,6 +11,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
+import { checkAndAwardBadges } from "../services/badge.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const questRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -178,6 +179,9 @@ questRoutes.post("/:id/attempts", async (c) => {
         createdAt: now,
       });
     }
+
+    // バッジ判定
+    await checkAndAwardBadges(db, memberId, schema);
 
     return c.json({
       data: {

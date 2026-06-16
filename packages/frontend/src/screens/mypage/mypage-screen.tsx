@@ -13,6 +13,8 @@ import { queryClient as globalQc } from "@/lib/query-client";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
 
+import type { MemberBadge } from "@shared/types";
+
 type MeResponse      = { data: { id: string; name: string; email: string; emoji: string; bgColor: string; userType: string } };
 type MemberResponse  = { data: PublicMember };
 type MyRankResponse  = { data: { points: number; rank: number } };
@@ -20,6 +22,7 @@ type HistoryItem     = { id: string; delta: number; reason: string; label: strin
 type HistoryResponse = { data: HistoryItem[]; totalPoints: number };
 type AdminMemberResponse = { data: { id: string; name: string; furigana: string; emoji: string; bgColor: string; category: string; businessDescription: string; skills: Skill[]; company?: string; role?: string; status: string } | null };
 type CardImageResponse = { data: { imageDataUrl: string } };
+type BadgesResponse = { data: MemberBadge[] };
 
 const AVATAR_BG = [
   { cls: "bg-rose-100" }, { cls: "bg-amber-100" }, { cls: "bg-emerald-100" },
@@ -67,6 +70,12 @@ export function MypageScreen() {
     queryKey: ["points-history"],
     queryFn: () => api.get<HistoryResponse>("/ranking/history"),
     enabled: tab === "history" && !isAdmin,
+  });
+
+  const { data: badgesData } = useQuery({
+    queryKey: ["my-badges"],
+    queryFn: () => api.get<BadgesResponse>("/members/me/badges"),
+    enabled: !isAdmin && !!memberId,
   });
 
   // 管理者の場合はadminMemberData、それ以外はmemberData
@@ -270,6 +279,22 @@ export function MypageScreen() {
                 <div className="text-sm pb-1" style={{ color: "var(--color-ink-500)" }}>
                   現在 <span className="font-bold text-lg" style={{ color: "var(--color-ink-800)" }}>{rank.rank}</span> 位
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* バッジ */}
+          {!isAdmin && badgesData && badgesData.data.length > 0 && (
+            <div className="card-paper rounded-3xl p-5">
+              <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🏅 獲得バッジ</h2>
+              <div className="flex flex-wrap gap-2">
+                {badgesData.data.map((mb) => (
+                  <div key={mb.id} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm" style={{ background: "var(--color-paper-200)" }}
+                    title={mb.badge.description}>
+                    <span>{mb.badge.emoji}</span>
+                    <span style={{ color: "var(--color-ink-700)" }}>{mb.badge.name}</span>
+                  </div>
+                ))}
               </div>
             </div>
           )}

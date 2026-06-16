@@ -7,11 +7,12 @@
 // PATCH /api/oneonone/:id/complete → 完了押下（双方で確定）
 // =============================================================
 import { Hono } from "hono";
-import { eq, or, and } from "drizzle-orm";
+import { eq, or, and, sql } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { sendOneOnOneRequestMail } from "../services/mailer.ts";
+import { checkAndAwardBadges } from "../services/badge.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -272,6 +273,85 @@ oneOnOneRoutes.patch("/:id/complete", async (c) => {
         createdAt: now,
       });
     }
+
+    // welcome_quest ボーナス: アクティブな welcome_quest イベントがあり、対象メンバーが参加者なら +1pt
+    try {
+      const nowTs = now;
+      const welcomeEvents = await db
+        .select()
+        .from(schema.eventCampaigns)
+        .where(
+          and(
+            eq(schema.eventCampaigns.type, "welcome_quest"),
+            eq(schema.eventCampaigns.status, "active"),
+            sql`(${schema.eventCampaigns.endsAt} IS NULL OR ${schema.eventCampaigns.endsAt} >= ${nowTs})`
+          )
+        )
+        .all();
+
+      for (const ev of welcomeEvents) {
+        const targetId = ev.relatedMemberId;
+        if (!targetId) continue;
+        // targetId が requesterId か responderId なら、相手にボーナス付与
+        for (const [giver, receiver] of [
+          [session.requesterId, session.responderId],
+          [session.responderId, session.requesterId],
+        ]) {
+          if (receiver === targetId) {
+            // giver が targetId と1on1 → giver に +1pt
+            await db.insert(schema.pointTransactions).values({
+              id: newId(),
+              memberId: giver,
+              delta: 1,
+              reason: "welcome_quest_bonus",
+              relatedId: ev.id,
+              createdAt: now,
+            });
+          }
+        }
+      }
+    } catch { /* ボーナスエラーは握り潰す */ }
+
+    // チーム内1on1ボーナス: 同一チームなら双方に +50% の差分を付与
+    try {
+      const requesterTeam = await db
+        .select({ teamId: schema.teamMembers.teamId })
+        .from(schema.teamMembers)
+        .where(eq(schema.teamMembers.memberId, session.requesterId))
+        .get();
+
+      if (requesterTeam) {
+        const responderTeam = await db
+          .select({ teamId: schema.teamMembers.teamId })
+          .from(schema.teamMembers)
+          .where(
+            and(
+              eq(schema.teamMembers.memberId, session.responderId),
+              eq(schema.teamMembers.teamId, requesterTeam.teamId)
+            )
+          )
+          .get();
+
+        if (responderTeam) {
+          // 同じチーム → ベースポイント1ptの50%=0.5pt → floor = 0 だと意味がないので最低1
+          const bonus = Math.max(1, Math.floor(1 * 0.5));
+          for (const memberId of [session.requesterId, session.responderId]) {
+            await db.insert(schema.pointTransactions).values({
+              id: newId(),
+              memberId,
+              delta: bonus,
+              reason: "1on1_team_bonus",
+              relatedId: sessionId,
+              createdAt: now,
+            });
+          }
+        }
+      }
+    } catch { /* チームボーナスエラーは握り潰す */ }
+
+    // バッジ判定（双方）
+    await checkAndAwardBadges(db, session.requesterId, schema);
+    await checkAndAwardBadges(db, session.responderId, schema);
 
     return c.json({ data: { status: "completed", bothCompleted: true } });
   }

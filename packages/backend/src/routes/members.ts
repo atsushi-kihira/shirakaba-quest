@@ -12,6 +12,7 @@ import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { saveCardImage, getCardImageDataUrl } from "../services/card-image.ts";
+import { checkAndAwardBadges } from "../services/badge.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -350,6 +351,9 @@ memberRoutes.post("/:id/real-card", async (c) => {
     relatedId: targetId,
     createdAt: now,
   });
+
+  // バッジ判定
+  await checkAndAwardBadges(db, myId, schema);
 
   console.log(`[REAL CARD] ${myId} received real card from ${targetId}`);
   return c.json({ data: { alreadyRecorded: false, message: `${target.name}さんのリアルカードを受け取りました！ +1pt` } });

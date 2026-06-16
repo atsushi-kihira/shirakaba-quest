@@ -6,6 +6,10 @@ import { sum } from "drizzle-orm";
 import { adminMemberRoutes } from "./members.ts";
 import { adminQuestRoutes } from "./quests.ts";
 import { adminUspRoutes } from "./usps.ts";
+import { adminBadgeRoutes } from "./badges.ts";
+import { adminSeasonRoutes } from "./seasons.ts";
+import { adminEventRoutes } from "./events.ts";
+import { adminTeamRoutes } from "./teams.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -15,6 +19,10 @@ export const adminRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 adminRoutes.route("/members", adminMemberRoutes);
 adminRoutes.route("/quests", adminQuestRoutes);
 adminRoutes.route("/usps", adminUspRoutes);
+adminRoutes.route("/badges", adminBadgeRoutes);
+adminRoutes.route("/seasons", adminSeasonRoutes);
+adminRoutes.route("/events", adminEventRoutes);
+adminRoutes.route("/teams", adminTeamRoutes);
 
 // ---- POST /api/admin/points/reset ----
 adminRoutes.post("/points/reset", async (c) => {

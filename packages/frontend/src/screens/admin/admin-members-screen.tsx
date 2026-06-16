@@ -3,8 +3,9 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle, PauseCircle, PlayCircle, Trash2 } from "lucide-react";
+import { CheckCircle, PauseCircle, PlayCircle, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "@/lib/api";
+import type { Skill } from "@shared/types";
 
 type AdminMember = {
   id: string;
@@ -14,8 +15,10 @@ type AdminMember = {
   emoji: string;
   bgColor: string;
   category: string;
+  businessDescription: string | null;
   company: string | null;
   role: string | null;
+  skills: Skill[];
   status: "pending" | "active" | "suspended" | "deleted";
   approvedAt: number | null;
   createdAt: number;
@@ -32,6 +35,7 @@ export function AdminMembersScreen() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<"all" | "pending" | "active" | "suspended">("all");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "members"],
@@ -113,6 +117,7 @@ export function AdminMembersScreen() {
         <div className="flex flex-col gap-3">
           {filtered.map((m) => {
             const st = STATUS_LABEL[m.status] ?? { label: m.status, color: "var(--color-ink-400)" };
+            const isExpanded = expandedId === m.id;
             return (
               <div key={m.id} className="card-paper p-4">
                 <div className="flex items-start gap-3">
@@ -145,16 +150,29 @@ export function AdminMembersScreen() {
                   {/* アクション */}
                   <div className="flex gap-2 shrink-0">
                     {m.status === "pending" && (
-                      <button
-                        onClick={() => approve.mutate(m.id)}
-                        disabled={approve.isPending}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs font-medium text-white transition hover:opacity-80"
-                        style={{ background: "var(--color-success)" }}
-                        title="承認"
-                      >
-                        <CheckCircle size={14} />
-                        承認
-                      </button>
+                      <>
+                        <button
+                          onClick={() => setExpandedId(isExpanded ? null : m.id)}
+                          className="p-2 rounded-2xl transition hover:opacity-80"
+                          style={{ background: "var(--color-paper-200)" }}
+                          title="プロフィール確認"
+                        >
+                          {isExpanded
+                            ? <ChevronUp size={16} style={{ color: "var(--color-ink-500)" }} />
+                            : <ChevronDown size={16} style={{ color: "var(--color-ink-500)" }} />
+                          }
+                        </button>
+                        <button
+                          onClick={() => approve.mutate(m.id)}
+                          disabled={approve.isPending}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs font-medium text-white transition hover:opacity-80"
+                          style={{ background: "var(--color-success)" }}
+                          title="承認"
+                        >
+                          <CheckCircle size={14} />
+                          承認
+                        </button>
+                      </>
                     )}
                     {m.status === "active" && (
                       <button
@@ -190,6 +208,45 @@ export function AdminMembersScreen() {
                     )}
                   </div>
                 </div>
+
+                {/* 承認待ちメンバーのプロフィール展開パネル */}
+                {m.status === "pending" && isExpanded && (
+                  <div className="mt-4 pt-4 border-t space-y-3" style={{ borderColor: "var(--color-paper-300)" }}>
+                    {/* 基本情報 */}
+                    <div className="space-y-1">
+                      {m.role && (
+                        <div className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+                          <span className="font-medium" style={{ color: "var(--color-ink-500)" }}>役職:</span> {m.role}
+                        </div>
+                      )}
+                      {m.businessDescription && (
+                        <div className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+                          <span className="font-medium" style={{ color: "var(--color-ink-500)" }}>事業内容:</span> {m.businessDescription}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* USP・スキル */}
+                    {m.skills && m.skills.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>✨ USP・スキル</p>
+                        <div className="space-y-2">
+                          {m.skills.map((skill, i) => (
+                            <div key={i} className="p-3 rounded-xl text-sm" style={{ background: "var(--color-paper-200)" }}>
+                              <div className="flex items-center gap-1.5 font-semibold mb-0.5" style={{ color: "var(--color-ink-800)" }}>
+                                <span>{skill.emoji}</span>
+                                <span>{skill.name}</span>
+                              </div>
+                              <div className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                                {skill.issue}{skill.connector}{skill.solution}{skill.noEnding ? "" : "ことができる"}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

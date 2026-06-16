@@ -9,6 +9,10 @@ import { memberRoutes } from "./routes/members.ts";
 import { rankingRoutes } from "./routes/ranking.ts";
 import { oneOnOneRoutes } from "./routes/oneonone.ts";
 import { questRoutes } from "./routes/quests.ts";
+import { badgeRoutes } from "./routes/badges.ts";
+import { seasonRoutes } from "./routes/seasons.ts";
+import { eventRoutes } from "./routes/events.ts";
+import { teamRoutes } from "./routes/teams.ts";
 import { registerRoutes } from "./routes/register.ts";
 import { adminRoutes } from "./routes/admin/index.ts";
 import { authMiddleware } from "./middleware/auth.ts";
@@ -37,6 +41,10 @@ app.route("/api/members", memberRoutes);
 app.route("/api/ranking", rankingRoutes);
 app.route("/api/oneonone", oneOnOneRoutes);
 app.route("/api/quests", questRoutes);
+app.route("/api", badgeRoutes);
+app.route("/api/season", seasonRoutes);
+app.route("/api/events", eventRoutes);
+app.route("/api/teams", teamRoutes);
 
 // ---- 公開アプリ設定（認証不要・全ユーザー対象） ----
 app.get("/api/settings", async (c) => {

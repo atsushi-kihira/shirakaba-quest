@@ -9,13 +9,14 @@ import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { buildSkillDescription } from "@shared/types";
-import type { PublicMember, Skill } from "@shared/types";
+import type { PublicMember, Skill, MemberBadge } from "@shared/types";
 
 type MemberResponse  = { data: PublicMember };
 type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
 type OnoListResponse = { data: Array<{ id: string; status: string; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null }> };
 type RealCardResponse = { data: { alreadyRecorded: boolean; message: string } };
 type CardImageResponse = { data: { imageDataUrl: string } };
+type BadgesResponse = { data: MemberBadge[] };
 
 const STATUS_LABEL: Record<string, { label: string; emoji: string; className: string }> = {
   none:    { label: "未交流",   emoji: "🤝", className: "bg-stone-200 text-stone-600 ring-stone-300" },
@@ -58,6 +59,12 @@ export function MemberDetailScreen() {
     queryFn: () => api.get<CardImageResponse>(`/members/${id}/card-image`),
     enabled: !!id && isUnlockedForCard,
     retry: false,
+  });
+
+  const { data: badgesData } = useQuery({
+    queryKey: ["member-badges", id],
+    queryFn: () => api.get<BadgesResponse>(`/members/${id}/badges`),
+    enabled: !!id,
   });
 
   const sessions = onoData?.data ?? [];
@@ -242,6 +249,22 @@ export function MemberDetailScreen() {
           ))}
         </div>
       </div>
+
+      {/* バッジ */}
+      {badgesData && badgesData.data.length > 0 && (
+        <div className="card-paper rounded-3xl p-5 mb-4">
+          <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🏅 獲得バッジ</h2>
+          <div className="flex flex-wrap gap-2">
+            {badgesData.data.map((mb) => (
+              <div key={mb.id} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm"
+                style={{ background: "var(--color-paper-200)" }} title={mb.badge.description}>
+                <span>{mb.badge.emoji}</span>
+                <span style={{ color: "var(--color-ink-700)" }}>{mb.badge.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 1to1 アクションボタン（自分のページ以外） */}
       {!isSelf && (
