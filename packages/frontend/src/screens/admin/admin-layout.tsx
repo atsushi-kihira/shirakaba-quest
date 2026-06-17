@@ -30,38 +30,56 @@ export function AdminLayout() {
   }, [appTitle]);
 
   return (
-    <div className="flex min-h-dvh" style={{ background: "var(--color-paper-100)" }}>
-      {/* PC: 左サイドバー */}
-      <nav className="hidden lg:flex flex-col w-64 shrink-0 border-r pt-6 px-4 gap-1"
-        style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}>
+    <div className="admin-theme flex min-h-dvh" style={{ background: "var(--color-paper-100)" }}>
+      {/* PC: 左サイドバー — ダークスレート */}
+      <nav className="hidden lg:flex flex-col w-64 shrink-0 pt-6 px-4 gap-1"
+        style={{ background: "#0f172a" }}>
+        {/* ヘッダー */}
         <div className="flex items-center gap-2 px-3 mb-6">
           <span className="text-2xl">⚙️</span>
-          <span className="font-semibold text-lg" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
-            管理ダッシュボード
-          </span>
+          <div>
+            <div className="font-semibold text-sm leading-tight" style={{ fontFamily: "var(--font-klee)", color: "white" }}>
+              管理ダッシュボード
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.4)" }}>
+              {appTitle}
+            </div>
+          </div>
         </div>
+
+        {/* ナビゲーション */}
         {ADMIN_NAV.map(({ to, icon: Icon, label, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium transition ${
-                isActive ? "text-white" : "hover:opacity-80"
-              }`
-            }
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition"
             style={({ isActive }) => ({
-              background: isActive ? "var(--color-brand)" : "transparent",
-              color: isActive ? "white" : "var(--color-ink-600)",
+              background: isActive ? "rgba(99,102,241,0.85)" : "transparent",
+              color: isActive ? "white" : "rgba(255,255,255,0.6)",
             })}
+            onMouseEnter={(e) => {
+              const el = e.currentTarget;
+              if (!el.dataset.active) el.style.color = "rgba(255,255,255,0.9)";
+            }}
+            onMouseLeave={(e) => {
+              const el = e.currentTarget;
+              if (!el.dataset.active) el.style.color = "rgba(255,255,255,0.6)";
+            }}
           >
             <Icon size={18} />
             {label}
           </NavLink>
         ))}
-        <div className="mt-auto pb-6 px-3">
-          <NavLink to="/" className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-            ← メンバー画面へ
+
+        {/* フッター */}
+        <div className="mt-auto pb-6 pt-4 px-3 border-t" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+          <NavLink
+            to="/"
+            className="flex items-center gap-1.5 text-xs transition"
+            style={{ color: "rgba(255,255,255,0.35)" }}
+          >
+            ← メンバー画面へ戻る
           </NavLink>
         </div>
       </nav>
@@ -71,8 +89,8 @@ export function AdminLayout() {
         <Outlet />
       </main>
 
-      {/* モバイル: 下部タブバー */}
-      <div className="tab-bar lg:hidden overflow-x-auto">
+      {/* モバイル: 下部タブバー — ダークスレート */}
+      <div className="tab-bar lg:hidden overflow-x-auto" style={{ background: "#0f172a", borderTopColor: "#1e293b" }}>
         {ADMIN_NAV.map(({ to, icon: Icon, label, end }) => (
           <NavLink
             key={to}
@@ -84,7 +102,7 @@ export function AdminLayout() {
               }`
             }
             style={({ isActive }) => ({
-              color: isActive ? "var(--color-brand)" : "var(--color-ink-400)",
+              color: isActive ? "#818cf8" : "rgba(255,255,255,0.45)",
             })}
           >
             <Icon size={20} />

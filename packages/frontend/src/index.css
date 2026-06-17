@@ -94,3 +94,32 @@ p {
   padding-bottom: env(safe-area-inset-bottom);
   height: calc(64px + env(safe-area-inset-bottom));
 }
+
+/* ======================================================
+   管理画面テーマ（admin-theme スコープ）
+   ユーザー向けの暖かい紙色とは切り離し、
+   クールなスレート系のプロフェッショナルな外観にする
+   ====================================================== */
+.admin-theme {
+  --color-paper-50:  #ffffff;
+  --color-paper-100: #f1f5f9;
+  --color-paper-200: #e2e8f0;
+  --color-paper-300: #cbd5e1;
+  --color-paper-400: #94a3b8;
+
+  --color-ink-900: #0f172a;
+  --color-ink-800: #1e293b;
+  --color-ink-700: #334155;
+  --color-ink-600: #475569;
+  --color-ink-500: #64748b;
+  --color-ink-400: #94a3b8;
+}
+
+/* 管理画面のカード: 紙質感テクスチャを除去し、クリーンな白カードに */
+.admin-theme .card-paper {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.07),
+    0 1px 2px rgba(15, 23, 42, 0.04);
+}

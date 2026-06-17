@@ -92,6 +92,60 @@ export function LoginScreen() {
     }
   }
 
+  // 管理者ログインモード時はダークスレートテーマ
+  if (isAdminMode) {
+    return (
+      <div className="min-h-dvh flex flex-col items-center justify-center px-4 py-8"
+        style={{ background: "#0f172a" }}>
+        {/* ロゴ・タイトル */}
+        <div className="mb-8 text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center"
+            style={{ background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.3)" }}>
+            <span className="text-3xl">⚙️</span>
+          </div>
+          <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "white" }}>
+            管理ダッシュボード
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: "rgba(255,255,255,0.45)" }}>
+            白樺クエスト 運営者専用
+          </p>
+        </div>
+
+        {/* 承認待ちバナー（管理者では不要だが念のため） */}
+        {isPending && error && (
+          <div className="w-full max-w-sm mb-4 rounded-2xl px-4 py-3"
+            style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)" }}>
+            <p className="text-sm" style={{ color: "rgba(255,255,255,0.7)" }}>⚠️ {error}</p>
+          </div>
+        )}
+
+        {/* ログインカード */}
+        <div className="w-full max-w-sm rounded-2xl p-8"
+          style={{ background: "#1e293b", border: "1px solid #334155" }}>
+          {step === "email" ? (
+            <AdminEmailStep
+              email={email}
+              onChange={setEmail}
+              onSubmit={handleEmailSubmit}
+              isLoading={isLoading}
+              error={isPending ? null : error}
+            />
+          ) : (
+            <AdminOtpStep
+              email={email}
+              otp={otp}
+              onChange={setOtp}
+              onSubmit={handleOtpSubmit}
+              onBack={() => { setStep("email"); setOtp(""); setError(null); }}
+              isLoading={isLoading}
+              error={error}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center px-4 py-8" style={{ background: "var(--color-paper-100)" }}>
       {/* ロゴ・タイトル */}
@@ -101,20 +155,9 @@ export function LoginScreen() {
           白樺クエスト
         </h1>
         <p className="mt-1 text-sm" style={{ color: "var(--color-ink-500)" }}>
-          {isAdminMode ? "管理者ダッシュボード" : "仲間と一緒に、1to1でつながろう"}
+          仲間と一緒に、1to1でつながろう
         </p>
       </div>
-
-      {/* 管理者ログインバナー */}
-      {isAdminMode && (
-        <div className="w-full max-w-sm mb-4 rounded-2xl px-4 py-3 flex items-center gap-2"
-          style={{ background: "var(--color-paper-200)" }}>
-          <span className="text-lg">⚙️</span>
-          <p className="text-sm" style={{ color: "var(--color-ink-600)" }}>
-            管理者メールアドレスでログインしてください
-          </p>
-        </div>
-      )}
 
       {/* 承認待ちバナー */}
       {isPending && error && (
@@ -170,6 +213,131 @@ export function LoginScreen() {
         </div>
       )}
     </div>
+  );
+}
+
+// ---- 管理者向け Email 入力ステップ（ダークテーマ） ----
+function AdminEmailStep({ email, onChange, onSubmit, isLoading, error }: EmailStepProps) {
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-5">
+      <div>
+        <h2 className="text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "white" }}>
+          管理者ログイン
+        </h2>
+        <p className="text-sm" style={{ color: "rgba(255,255,255,0.45)" }}>
+          登録済みの管理者メールアドレスを入力してください
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium mb-1.5" style={{ color: "rgba(255,255,255,0.6)" }}>
+          メールアドレス
+        </label>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => onChange(e.target.value)}
+          required
+          autoComplete="email"
+          placeholder="admin@example.com"
+          className="w-full rounded-xl px-4 py-3 text-sm outline-none transition"
+          style={{
+            background: "#0f172a",
+            border: "1.5px solid #334155",
+            color: "white",
+          }}
+        />
+      </div>
+
+      {error && (
+        <p className="text-xs rounded-xl px-4 py-3"
+          style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#fca5a5" }}>
+          ⚠️ {error}
+        </p>
+      )}
+
+      <button
+        type="submit"
+        disabled={isLoading || !email}
+        className="w-full flex items-center justify-center gap-2 rounded-xl py-3 font-medium text-sm transition disabled:opacity-40"
+        style={{ background: "#6366f1", color: "white" }}
+      >
+        {isLoading ? (
+          <Loader2 size={16} className="animate-spin" />
+        ) : (
+          <Sparkles size={16} />
+        )}
+        {isLoading ? "送信中..." : "認証コードを送信"}
+      </button>
+    </form>
+  );
+}
+
+// ---- 管理者向け OTP 入力ステップ（ダークテーマ） ----
+function AdminOtpStep({ email, otp, onChange, onSubmit, onBack, isLoading, error }: OtpStepProps) {
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-5">
+      <div>
+        <h2 className="text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "white" }}>
+          確認コードを入力
+        </h2>
+        <p className="text-sm" style={{ color: "rgba(255,255,255,0.45)" }}>
+          <span style={{ color: "rgba(255,255,255,0.7)" }}>{email}</span> に送信した6桁のコードを入力してください
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium mb-1.5" style={{ color: "rgba(255,255,255,0.6)" }}>
+          確認コード（6桁）
+        </label>
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]{6}"
+          maxLength={6}
+          value={otp}
+          onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          required
+          placeholder="123456"
+          className="w-full rounded-xl px-4 py-3 text-center text-2xl tracking-[0.5em] font-semibold outline-none transition"
+          style={{
+            background: "#0f172a",
+            border: "1.5px solid #334155",
+            color: "white",
+            fontFamily: "monospace",
+          }}
+        />
+        <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.3)" }}>
+          ※ コードの有効期限は10分です
+        </p>
+      </div>
+
+      {error && (
+        <p className="text-xs rounded-xl px-4 py-3"
+          style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#fca5a5" }}>
+          ⚠️ {error}
+        </p>
+      )}
+
+      <button
+        type="submit"
+        disabled={isLoading || otp.length !== 6}
+        className="w-full flex items-center justify-center gap-2 rounded-xl py-3 font-medium text-sm transition disabled:opacity-40"
+        style={{ background: "#6366f1", color: "white" }}
+      >
+        {isLoading ? <Loader2 size={16} className="animate-spin" /> : "ログインする"}
+      </button>
+
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex items-center justify-center gap-1 text-sm w-full py-2 rounded-xl transition"
+        style={{ color: "rgba(255,255,255,0.35)" }}
+      >
+        <ArrowLeft size={14} />
+        メールアドレスを入力し直す
+      </button>
+    </form>
   );
 }
 
