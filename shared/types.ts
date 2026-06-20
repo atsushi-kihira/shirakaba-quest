@@ -88,6 +88,7 @@ export type PublicMember = Omit<
 > & {
   connectionStatus: ConnectionStatus; // 自分との関係
   hasCardImage: boolean; // カード画像（表面）の有無
+  avatarImageKey: string | null; // アバター画像キー（設定済みなら /api/members/:id/avatar で取得）
   email: string | null;
   company: string | null;
   role: string | null;

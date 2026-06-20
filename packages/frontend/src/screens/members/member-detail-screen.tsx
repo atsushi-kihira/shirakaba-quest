@@ -17,6 +17,8 @@ type OnoListResponse = { data: Array<{ id: string; status: string; requesterId: 
 type RealCardResponse = { data: { alreadyRecorded: boolean; message: string } };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
+type HistoryItem = { id: string; delta: number; label: string; createdAt: number };
+type MemberHistoryResponse = { data: { totalPoints: number; history: HistoryItem[] } };
 
 const STATUS_LABEL: Record<string, { label: string; emoji: string; className: string }> = {
   none:    { label: "未交流",   emoji: "🤝", className: "bg-stone-200 text-stone-600 ring-stone-300" },
@@ -64,6 +66,12 @@ export function MemberDetailScreen() {
   const { data: badgesData } = useQuery({
     queryKey: ["member-badges", id],
     queryFn: () => api.get<BadgesResponse>(`/members/${id}/badges`),
+    enabled: !!id,
+  });
+
+  const { data: memberHistoryData } = useQuery({
+    queryKey: ["member-history", id],
+    queryFn: () => api.get<MemberHistoryResponse>(`/members/${id}/history`),
     enabled: !!id,
   });
 
@@ -352,6 +360,41 @@ export function MemberDetailScreen() {
             <div className="mt-3 rounded-xl p-3 text-sm flex items-center gap-2"
               style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
               <CheckCircle2 size={16} /> リアルカード取得済み ✨
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ポイント・活動履歴 */}
+      {memberHistoryData?.data && (
+        <div className="card-paper rounded-2xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-lg">⭐️</span>
+            <h3 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+              獲得ポイント・活動履歴
+            </h3>
+          </div>
+          <div className="text-3xl font-bold mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
+            {memberHistoryData.data.totalPoints}
+            <span className="text-base ml-1 font-normal" style={{ color: "var(--color-ink-400)" }}>pt</span>
+          </div>
+          {memberHistoryData.data.history.length === 0 ? (
+            <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>まだ活動記録がありません</p>
+          ) : (
+            <div className="space-y-1.5">
+              {memberHistoryData.data.history.map((item) => (
+                <div key={item.id} className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs" style={{ color: "var(--color-ink-700)" }}>{item.label}</p>
+                    <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+                      {new Date(item.createdAt * 1000).toLocaleDateString("ja-JP")}
+                    </p>
+                  </div>
+                  <span className="text-sm font-bold shrink-0 ml-2" style={{ color: item.delta >= 0 ? "var(--color-accent)" : "var(--color-brand)" }}>
+                    {item.delta >= 0 ? "+" : ""}{item.delta}pt
+                  </span>
+                </div>
+              ))}
             </div>
           )}
         </div>

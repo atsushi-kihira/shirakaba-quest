@@ -2,16 +2,18 @@
 // ランキング画面
 // =============================================================
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Trophy } from "lucide-react";
 import { api } from "@/lib/api";
+import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import type { Season, SeasonRankingEntry, TeamRankingEntry } from "@shared/types";
 
 type RankingEntry = {
   rank: number;
-  member: { id: string; name: string; furigana: string; emoji: string; bgColor: string; category: string };
+  member: { id: string; name: string; furigana: string; emoji: string; bgColor: string; category: string; avatarImageKey?: string | null };
   points: number;
   lastPointedAt: number | null;
 };
@@ -170,7 +172,7 @@ function RankingList({
   entries,
   meId,
 }: {
-  entries: Array<{ rank: number; member: { id: string; name: string; emoji: string; bgColor: string; category: string }; points: number }>;
+  entries: Array<{ rank: number; member: { id: string; name: string; emoji: string; bgColor: string; category: string; avatarImageKey?: string | null }; points: number }>;
   meId?: string;
 }) {
   if (entries.length === 0) {
@@ -187,9 +189,10 @@ function RankingList({
         const isMe = entry.member.id === meId;
         const medal = RANK_MEDAL[entry.rank];
         return (
-          <div
+          <Link
             key={`${entry.rank}-${entry.member.id}`}
-            className={`card-paper rounded-2xl px-4 py-3 flex items-center gap-3 ${isMe ? "ring-2" : ""}`}
+            to={`/members/${entry.member.id}`}
+            className={`card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-75 ${isMe ? "ring-2" : ""}`}
             style={isMe ? { "--tw-ring-color": "var(--color-brand)" } as React.CSSProperties : {}}
           >
             <div className="w-9 text-center shrink-0">
@@ -198,9 +201,13 @@ function RankingList({
                 : <span className="font-bold text-sm" style={{ color: "var(--color-ink-400)" }}>{entry.rank}</span>
               }
             </div>
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0 ${entry.member.bgColor}`}>
-              {entry.member.emoji}
-            </div>
+            <MemberAvatar
+              memberId={entry.member.id}
+              emoji={entry.member.emoji}
+              bgColor={entry.member.bgColor}
+              avatarImageKey={entry.member.avatarImageKey}
+              size="md"
+            />
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5">
                 <span className="font-medium text-sm" style={{ color: "var(--color-ink-900)" }}>
@@ -223,7 +230,7 @@ function RankingList({
               </div>
               <div className="text-xs" style={{ color: "var(--color-ink-400)" }}>pt</div>
             </div>
-          </div>
+          </Link>
         );
       })}
     </div>

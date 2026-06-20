@@ -3,10 +3,10 @@
 // =============================================================
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, LogOut, QrCode, X, ChevronRight, Pencil, Check, Plus, Trash2, Camera, RefreshCw } from "lucide-react";
+import { Loader2, LogOut, QrCode, X, ChevronRight, Pencil, Check, Plus, Trash2, Camera, RefreshCw, Upload, RotateCcw } from "lucide-react";
 import { useNavigate, Link } from "react-router-dom";
 import QRCode from "qrcode";
-import { api } from "@/lib/api";
+import { api, API_BASE_URL } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { queryClient as globalQc } from "@/lib/query-client";
@@ -484,6 +484,7 @@ type EditForm = {
 function EditModal({ member, onClose, onSaved }: {
   member: PublicMember; memberId?: string; onClose: () => void; onSaved: () => void;
 }) {
+  const qcEdit = useQueryClient();
   const [form, setForm] = useState<EditForm>({
     name: member.name ?? "",
     furigana: member.furigana ?? "",
@@ -496,6 +497,24 @@ function EditModal({ member, onClose, onSaved }: {
     skills: (member.skills as Skill[]) ?? [],
   });
   const [error, setError] = useState("");
+  const avatarFileRef = useRef<HTMLInputElement>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const hasAvatar = !!member.avatarImageKey || !!avatarPreview;
+
+  const uploadAvatar = useMutation({
+    mutationFn: (imageBase64: string) => api.post("/members/me/avatar", { imageBase64 }),
+    onSuccess: () => {
+      qcEdit.invalidateQueries({ queryKey: ["member", member.id] });
+    },
+  });
+
+  const deleteAvatar = useMutation({
+    mutationFn: () => api.delete("/members/me/avatar"),
+    onSuccess: () => {
+      setAvatarPreview(null);
+      qcEdit.invalidateQueries({ queryKey: ["member", member.id] });
+    },
+  });
 
   const saveMutation = useMutation({
     mutationFn: () => api.patch(`/members/me`, {
@@ -544,27 +563,68 @@ function EditModal({ member, onClose, onSaved }: {
           {/* アバター */}
           <div>
             <label className="block text-xs font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>アバター</label>
-            <div className="flex items-center gap-4">
-              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shrink-0 ${form.bgColor}`}>{form.emoji}</div>
-              <div>
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {AVATAR_EMOJIS.map((e) => (
-                    <button key={e} type="button" onClick={() => setForm((f) => ({ ...f, emoji: e }))}
-                      className="text-xl w-9 h-9 rounded-full flex items-center justify-center active:scale-90"
-                      style={{ outline: form.emoji === e ? "2px solid var(--color-brand)" : "none", background: form.emoji === e ? "var(--color-paper-200)" : "transparent" }}>
-                      {e}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  {AVATAR_BG.map(({ cls }) => (
-                    <button key={cls} type="button" onClick={() => setForm((f) => ({ ...f, bgColor: cls }))}
-                      className={`w-8 h-8 rounded-full ${cls} active:scale-90`}
-                      style={{ outline: form.bgColor === cls ? "2.5px solid var(--color-brand)" : "none", outlineOffset: "2px" }} />
-                  ))}
-                </div>
+            <div className="flex items-center gap-4 mb-3">
+              {/* プレビュー */}
+              <div className={`w-14 h-14 rounded-2xl shrink-0 overflow-hidden flex items-center justify-center ${avatarPreview || member.avatarImageKey ? "" : form.bgColor}`}>
+                {avatarPreview ? (
+                  <img src={avatarPreview} alt="アバタープレビュー" className="w-full h-full object-cover" />
+                ) : member.avatarImageKey ? (
+                  <img src={`${API_BASE_URL}/members/${member.id}/avatar?t=${Date.now()}`} alt="アバター" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-3xl">{form.emoji}</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-2 flex-1">
+                <input ref={avatarFileRef} type="file" accept="image/png,image/jpeg" className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      const b64 = ev.target?.result as string;
+                      setAvatarPreview(b64);
+                      uploadAvatar.mutate(b64);
+                    };
+                    reader.readAsDataURL(file);
+                  }} />
+                <button type="button" onClick={() => avatarFileRef.current?.click()}
+                  disabled={uploadAvatar.isPending}
+                  className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-medium disabled:opacity-50"
+                  style={{ background: "var(--color-brand)", color: "white" }}>
+                  <Upload size={12} />
+                  {uploadAvatar.isPending ? "アップロード中..." : "写真をアップロード"}
+                </button>
+                {hasAvatar && (
+                  <button type="button" onClick={() => deleteAvatar.mutate()}
+                    disabled={deleteAvatar.isPending}
+                    className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-medium disabled:opacity-50"
+                    style={{ background: "var(--color-paper-300)", color: "var(--color-ink-700)" }}>
+                    <RotateCcw size={12} />
+                    絵文字に戻す
+                  </button>
+                )}
               </div>
             </div>
+            {!hasAvatar && (
+            <div>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {AVATAR_EMOJIS.map((e) => (
+                  <button key={e} type="button" onClick={() => setForm((f) => ({ ...f, emoji: e }))}
+                    className="text-xl w-9 h-9 rounded-full flex items-center justify-center active:scale-90"
+                    style={{ outline: form.emoji === e ? "2px solid var(--color-brand)" : "none", background: form.emoji === e ? "var(--color-paper-200)" : "transparent" }}>
+                    {e}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                {AVATAR_BG.map(({ cls }) => (
+                  <button key={cls} type="button" onClick={() => setForm((f) => ({ ...f, bgColor: cls }))}
+                    className={`w-8 h-8 rounded-full ${cls} active:scale-90`}
+                    style={{ outline: form.bgColor === cls ? "2.5px solid var(--color-brand)" : "none", outlineOffset: "2px" }} />
+                ))}
+              </div>
+            </div>
+            )}
           </div>
 
           {/* 基本情報 */}

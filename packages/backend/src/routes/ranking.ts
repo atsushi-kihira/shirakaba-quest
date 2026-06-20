@@ -37,6 +37,7 @@ rankingRoutes.get("/", async (c) => {
       emoji: schema.members.emoji,
       bgColor: schema.members.bgColor,
       category: schema.members.category,
+      avatarImageKey: schema.members.avatarImageKey,
     })
     .from(schema.members)
     .where(eq(schema.members.status, "active"))
@@ -117,13 +118,37 @@ rankingRoutes.get("/history", async (c) => {
     : [];
   const questMap = new Map(quests.map((q) => [q.id, q]));
 
-  // relatedId からメンバー名を補足（1to1、リアルカード）
-  const memberRelatedIds = txs
-    .filter((t) => t.reason === "one_on_one_completed" || t.reason === "real_card_exchanged")
+  // 1on1: session ID からパートナー memberId を解決
+  const sessionIds = txs
+    .filter((t) => t.reason === "one_on_one_completed")
     .map((t) => t.relatedId)
     .filter((id): id is string => !!id);
 
-  const relatedMembers = memberRelatedIds.length > 0
+  const sessions = sessionIds.length > 0
+    ? await db
+        .select({ id: schema.oneOnOneSessions.id, requesterId: schema.oneOnOneSessions.requesterId, responderId: schema.oneOnOneSessions.responderId })
+        .from(schema.oneOnOneSessions)
+        .all()
+    : [];
+  const sessionMap = new Map(sessions.map((s) => [s.id, s]));
+
+  // real_card_exchanged は relatedId = 相手の member ID
+  const realCardMemberIds = txs
+    .filter((t) => t.reason === "real_card_exchanged")
+    .map((t) => t.relatedId)
+    .filter((id): id is string => !!id);
+
+  // 1on1 パートナー + real card 相手 の member IDs を収集
+  const partnerMemberIds = new Set<string>();
+  for (const tx of txs) {
+    if (tx.reason === "one_on_one_completed" && tx.relatedId) {
+      const s = sessionMap.get(tx.relatedId);
+      if (s) partnerMemberIds.add(s.requesterId === userId ? s.responderId : s.requesterId);
+    }
+  }
+  for (const id of realCardMemberIds) partnerMemberIds.add(id);
+
+  const relatedMembers = partnerMemberIds.size > 0
     ? await db
         .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji })
         .from(schema.members)
@@ -131,18 +156,37 @@ rankingRoutes.get("/history", async (c) => {
     : [];
   const memberMap = new Map(relatedMembers.map((m) => [m.id, m]));
 
+  // session ID → partner member ID のマップ
+  const sessionToMember = new Map<string, typeof relatedMembers[number]>();
+  for (const tx of txs) {
+    if (tx.reason === "one_on_one_completed" && tx.relatedId) {
+      const s = sessionMap.get(tx.relatedId);
+      if (s) {
+        const partnerId = s.requesterId === userId ? s.responderId : s.requesterId;
+        const m = memberMap.get(partnerId);
+        if (m) sessionToMember.set(tx.relatedId, m);
+      }
+    }
+  }
+
   const REASON_LABEL: Record<string, string> = {
-    one_on_one_completed: "🤝 1to1完了",
-    real_card_exchanged:  "🃏 リアルカード受け取り",
-    quest_normal_solved:  "⚔️ お題クリア",
-    quest_hard_solved:    "🔥 難題クリア",
-    admin_reset:          "🔄 ポイントリセット",
+    one_on_one_completed:     "🤝 1to1完了",
+    one_on_one_team_bonus:    "🤝 1to1チームボーナス",
+    real_card_exchanged:      "🃏 リアルカード受け取り",
+    quest_normal_solved:      "⚔️ お題クリア",
+    quest_hard_solved:        "🔥 難題クリア",
+    welcome_quest_bonus:      "🎉 歓迎クエストボーナス",
+    visitor_invite_resolved:  "🙌 ゲスト招待達成",
+    admin_reset:              "🔄 ポイントリセット",
+    admin_adjust:             "✏️ 管理者調整",
   };
 
   const data = txs.map((t) => {
     const label = REASON_LABEL[t.reason] ?? t.reason;
     const quest = questMap.get(t.relatedId ?? "");
-    const member = memberMap.get(t.relatedId ?? "");
+    const member = t.reason === "one_on_one_completed"
+      ? sessionToMember.get(t.relatedId ?? "")
+      : memberMap.get(t.relatedId ?? "");
     const detail = quest
       ? `${quest.emoji} ${quest.title}`
       : member

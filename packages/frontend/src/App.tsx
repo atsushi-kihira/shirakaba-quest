@@ -11,6 +11,7 @@ import { MemberDetailScreen } from "@/screens/members/member-detail-screen";
 import { QuestsScreen } from "@/screens/quests/quests-screen";
 import { RankingScreen } from "@/screens/ranking/ranking-screen";
 import { MypageScreen } from "@/screens/mypage/mypage-screen";
+import { TeamScreen } from "@/screens/home/team-screen";
 import { OneOnOneScreen } from "@/screens/oneonone/oneonone-screen";
 import { ReceiveCardScreen } from "@/screens/cards/receive-card-screen";
 import { AdminLayout } from "@/screens/admin/admin-layout";
@@ -52,6 +53,7 @@ export default function App() {
                 <Route path="quests" element={<QuestsScreen />} />
                 <Route path="ranking" element={<RankingScreen />} />
                 <Route path="me" element={<MypageScreen />} />
+                <Route path="team" element={<TeamScreen />} />
                 <Route path="oneonone" element={<OneOnOneScreen />} />
               </Route>
             </Route>

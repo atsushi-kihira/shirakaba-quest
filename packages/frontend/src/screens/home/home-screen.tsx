@@ -1,10 +1,12 @@
 // =============================================================
 // ホーム画面
 // =============================================================
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight } from "lucide-react";
+import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
+import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 
@@ -12,7 +14,8 @@ import type { Season, EventCampaign } from "@shared/types";
 
 type MyRankResponse  = { data: { points: number; rank: number } };
 type ActiveSeasonResponse = { data: Season | null };
-type ActiveEventsResponse = { data: EventCampaign[] };
+type ActiveEvent = EventCampaign & { relatedMemberName?: string | null; relatedMemberEmoji?: string | null };
+type ActiveEventsResponse = { data: ActiveEvent[] };
 type OnoSession = {
   id: string;
   status: string;
@@ -27,6 +30,8 @@ type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
   const { termQuest, termUsp, characterImageUrl, appTitle } = useSettings();
+  const [seasonExpanded, setSeasonExpanded] = useState(false);
+  const [pointsExpanded, setPointsExpanded] = useState(false);
 
   const { data: rankData } = useQuery({
     queryKey: ["ranking", "me"],
@@ -58,6 +63,13 @@ export function HomeScreen() {
     enabled: !!user,
   });
 
+  type HistoryItem = { id: string; delta: number; reason: string; label: string; detail?: string; createdAt: number };
+  const { data: historyData } = useQuery({
+    queryKey: ["ranking", "history"],
+    queryFn: () => api.get<{ data: HistoryItem[]; totalPoints: number }>("/ranking/history"),
+    enabled: !!user && pointsExpanded,
+  });
+
   const rank          = rankData?.data;
   const sessions      = onoData?.data ?? [];
   const quests        = (questData?.data ?? []).slice(0, 2);
@@ -65,7 +77,7 @@ export function HomeScreen() {
   const activeEvents  = eventsData?.data ?? [];
   const featuredEvent = activeEvents.find((e) => e.type === "featured_member");
   const specialWeek   = activeEvents.find((e) => e.type === "special_quest_week");
-  const welcomeEvents = activeEvents.filter((e) => e.type === "welcome_quest");
+  const welcomeEvents = activeEvents.filter((e): e is ActiveEvent => e.type === "welcome_quest");
 
   // 通知が必要なセッション
   const needAction = sessions.filter((s) => {
@@ -105,19 +117,43 @@ export function HomeScreen() {
             style={{ filter: "drop-shadow(0 2px 6px rgba(181,56,75,0.15))" }}
             onError={(e) => { e.currentTarget.src = "/character-default.png"; }}
           />
-          <div className={`w-11 h-11 rounded-full flex items-center justify-center text-2xl ${user?.bgColor ?? "bg-amber-100"}`}>
-            {user?.emoji ?? "🙂"}
-          </div>
+          {user && (
+            <MemberAvatar
+              memberId={user.id}
+              emoji={user.emoji ?? "🙂"}
+              bgColor={user.bgColor ?? "bg-amber-100"}
+              avatarImageKey={user.avatarImageKey}
+              size="md"
+              rounded="rounded-full"
+            />
+          )}
         </div>
       </div>
 
       {/* アクティブシーズン */}
       {activeSeason && (
-        <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.2)" }}>
-          <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--color-brand)" }}>🌸 現在のシーズン</p>
-          <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{activeSeason.name}</p>
-          {activeSeason.theme && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>{activeSeason.theme}</p>}
-        </div>
+        <button
+          onClick={() => activeSeason.theme && setSeasonExpanded((v) => !v)}
+          className="w-full text-left px-4 py-3 rounded-2xl transition active:opacity-80"
+          style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.2)", cursor: activeSeason.theme ? "pointer" : "default" }}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--color-brand)" }}>🌸 現在のシーズン</p>
+              <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{activeSeason.name}</p>
+            </div>
+            {activeSeason.theme && (
+              <ChevronDown
+                size={16}
+                className="shrink-0 transition-transform"
+                style={{ color: "var(--color-brand)", transform: seasonExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
+              />
+            )}
+          </div>
+          {seasonExpanded && activeSeason.theme && (
+            <p className="text-sm mt-2 leading-relaxed" style={{ color: "var(--color-ink-700)" }}>{activeSeason.theme}</p>
+          )}
+        </button>
       )}
 
       {/* 特別お題ウィーク */}
@@ -141,7 +177,18 @@ export function HomeScreen() {
         <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.2)" }}>
           <p className="text-xs font-semibold mb-1" style={{ color: "var(--color-brand)" }}>🎉 新メンバー歓迎クエスト実施中！</p>
           {welcomeEvents.map((ev) => (
-            <p key={ev.id} className="text-sm" style={{ color: "var(--color-ink-700)" }}>{ev.title}</p>
+            <div key={ev.id} className="flex items-center gap-1 flex-wrap">
+              {ev.relatedMemberId ? (
+                <Link to={`/members/${ev.relatedMemberId}`} className="text-sm font-semibold underline underline-offset-2" style={{ color: "var(--color-brand)" }}>
+                  {ev.relatedMemberEmoji} {ev.relatedMemberName ?? ev.title}
+                </Link>
+              ) : (
+                <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>{ev.title}</span>
+              )}
+              {ev.relatedMemberId && (
+                <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>さんが仲間入り！</span>
+              )}
+            </div>
           ))}
           <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>1to1完了で +1pt ボーナス！</p>
         </div>
@@ -168,10 +215,20 @@ export function HomeScreen() {
       )}
 
       {/* ポイント */}
-      <div className="card-paper rounded-3xl p-5">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-xl">⭐️</span>
-          <span className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>現在のポイント</span>
+      <button
+        onClick={() => setPointsExpanded((v) => !v)}
+        className="w-full text-left card-paper rounded-3xl p-5 transition active:opacity-80"
+      >
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">⭐️</span>
+            <span className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>現在のポイント</span>
+          </div>
+          <ChevronDown
+            size={16}
+            className="transition-transform"
+            style={{ color: "var(--color-ink-400)", transform: pointsExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
+          />
         </div>
         {rank ? (
           <div className="flex items-end gap-3">
@@ -191,7 +248,33 @@ export function HomeScreen() {
         <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
           1to1完了・リアルカード交換・{termQuest}クリアで増やそう！
         </p>
-      </div>
+        {pointsExpanded && (
+          <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+            <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>獲得履歴（直近）</p>
+            {!historyData ? (
+              <div className="flex justify-center py-3">
+                <Loader2 size={18} className="animate-spin" style={{ color: "var(--color-brand)" }} />
+              </div>
+            ) : historyData.data.length === 0 ? (
+              <p className="text-xs text-center py-2" style={{ color: "var(--color-ink-400)" }}>まだポイント履歴がありません</p>
+            ) : (
+              <div className="space-y-1.5">
+                {historyData.data.slice(0, 5).map((item) => (
+                  <div key={item.id} className="flex items-center justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs" style={{ color: "var(--color-ink-700)" }}>{item.label}</p>
+                      {item.detail && <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{item.detail}</p>}
+                    </div>
+                    <span className="text-sm font-bold shrink-0 ml-2" style={{ color: item.delta >= 0 ? "var(--color-accent)" : "var(--color-brand)" }}>
+                      {item.delta >= 0 ? "+" : ""}{item.delta}pt
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </button>
 
       {/* 進行中の1to1（ローディング中） */}
       {onoLoading && (
@@ -298,6 +381,7 @@ export function HomeScreen() {
         <div className="grid grid-cols-1 gap-2">
           <QuickLink to="/members"  icon={<Users size={18} />}      label="なかまを探して1to1しよう" sub="+1pt"  color="var(--color-brand)" />
           <QuickLink to="/quests"   icon={<ScrollText size={18} />} label={`${termQuest}に挑戦しよう`} sub="+5pt〜" color="var(--color-success)" />
+          <QuickLink to="/team"     icon={<span className="text-base">🦊</span>} label="チームの活動を確認しよう" sub="" color="var(--color-accent)" />
           <QuickLink to="/ranking"  icon={<Trophy size={18} />}     label="ランキングをチェック"      sub=""       color="var(--color-accent)" />
           <QuickLink to="/me"       icon={<QrCode size={18} />}     label="自分のQRを表示してカードを渡す" sub="🃏"  color="var(--color-ink-500)" />
         </div>

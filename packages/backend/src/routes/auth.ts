@@ -188,6 +188,7 @@ authRoutes.get("/me", authMiddleware, async (c) => {
         bgColor: member.bgColor,
         userType: "member",
         status: member.status,
+        avatarImageKey: member.avatarImageKey ?? null,
       },
     });
   }

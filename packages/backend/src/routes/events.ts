@@ -30,7 +30,29 @@ eventRoutes.get("/active", async (c) => {
     )
     .all();
 
-  return c.json({ data: events.map(toPublic) });
+  // welcome_quest イベントのメンバー名を補足
+  const memberIds = events
+    .filter((e) => e.type === "welcome_quest" && e.relatedMemberId)
+    .map((e) => e.relatedMemberId as string);
+
+  const members = memberIds.length > 0
+    ? await db
+        .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji })
+        .from(schema.members)
+        .all()
+    : [];
+  const memberMap = new Map(members.map((m) => [m.id, m]));
+
+  return c.json({
+    data: events.map((e) => {
+      const base = toPublic(e);
+      if (e.type === "welcome_quest" && e.relatedMemberId) {
+        const m = memberMap.get(e.relatedMemberId);
+        return { ...base, relatedMemberName: m?.name ?? null, relatedMemberEmoji: m?.emoji ?? null };
+      }
+      return base;
+    }),
+  });
 });
 
 // GET /api/events/visitor-invite/mine

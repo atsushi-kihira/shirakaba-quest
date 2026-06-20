@@ -31,9 +31,10 @@ teamRoutes.get("/", async (c) => {
     ? await db.select({
         id: schema.members.id, name: schema.members.name, furigana: schema.members.furigana,
         emoji: schema.members.emoji, bgColor: schema.members.bgColor, category: schema.members.category,
+        skills: schema.members.skills,
       }).from(schema.members).all()
     : [];
-  const memberMap = new Map(members.map((m) => [m.id, m]));
+  const memberMap = new Map(members.map((m) => [m.id, { ...m, skills: JSON.parse(m.skills ?? "[]") }]));
 
   const result = teams.map((t) => {
     const tms = allTeamMembers.filter((tm) => tm.teamId === t.id);
@@ -70,9 +71,10 @@ teamRoutes.get("/:id", async (c) => {
     ? await db.select({
         id: schema.members.id, name: schema.members.name, furigana: schema.members.furigana,
         emoji: schema.members.emoji, bgColor: schema.members.bgColor, category: schema.members.category,
+        skills: schema.members.skills,
       }).from(schema.members).all()
     : [];
-  const memberMap = new Map(members.map((m) => [m.id, m]));
+  const memberMap = new Map(members.map((m) => [m.id, { ...m, skills: JSON.parse(m.skills ?? "[]") }]));
 
   return c.json({
     data: {

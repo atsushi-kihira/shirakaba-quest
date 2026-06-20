@@ -11,6 +11,7 @@ type AuthUser = {
   email: string;
   emoji: string;
   bgColor: string;
+  avatarImageKey?: string | null;
 };
 
 type AuthStore = {

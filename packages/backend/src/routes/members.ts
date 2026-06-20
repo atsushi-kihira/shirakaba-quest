@@ -5,7 +5,7 @@
 // PATCH /api/members/me      → 自分のプロフィール編集
 // =============================================================
 import { Hono } from "hono";
-import { eq, and, or, like } from "drizzle-orm";
+import { eq, and, or, like, sum, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -13,6 +13,7 @@ import { scanCard } from "../services/ocr.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { saveCardImage, getCardImageDataUrl } from "../services/card-image.ts";
 import { checkAndAwardBadges } from "../services/badge.ts";
+import { getActiveSeasonPoints } from "../services/season-points.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -135,6 +136,7 @@ memberRoutes.get("/:id", async (c) => {
       skills: parseJson<Skill[]>(member.skills, []),
       connectionStatus: connStatus,
       hasCardImage: isUnlocked ? !!member.cardImageKey : false,
+      avatarImageKey: member.avatarImageKey ?? null,
       company:      isUnlocked ? member.company      : null,
       role:         isUnlocked ? member.role         : null,
       phone:        isUnlocked ? member.phone        : null,
@@ -209,6 +211,74 @@ memberRoutes.patch("/me", async (c) => {
 });
 
 // ---- POST /api/members/me/card-image ----
+// ---- POST /api/members/me/avatar ----
+// 自分のアバター画像をR2に保存する
+memberRoutes.post("/me/avatar", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+  const userType = c.get("userType");
+
+  if (userType !== "member") {
+    return c.json({ error: { code: "forbidden", message: "メンバーのみ利用可能です" } }, 403);
+  }
+
+  const body = await c.req.json<{ imageBase64?: string }>();
+  if (!body.imageBase64) {
+    return c.json({ error: { code: "bad_request", message: "画像データが必要です" } }, 400);
+  }
+
+  const key = await saveCardImage(c.env.R2, `avatar_${userId}`, body.imageBase64);
+
+  await db
+    .update(schema.members)
+    .set({ avatarImageKey: key, updatedAt: Math.floor(Date.now() / 1000) })
+    .where(eq(schema.members.id, userId));
+
+  return c.json({ ok: true });
+});
+
+// ---- DELETE /api/members/me/avatar ----
+memberRoutes.delete("/me/avatar", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+
+  await db
+    .update(schema.members)
+    .set({ avatarImageKey: null, updatedAt: Math.floor(Date.now() / 1000) })
+    .where(eq(schema.members.id, userId));
+
+  return c.json({ ok: true });
+});
+
+// ---- GET /api/members/:id/avatar ----
+// アバター画像を返す（公開。設定されていなければ404）
+memberRoutes.get("/:id/avatar", async (c) => {
+  const db = createDb(c.env.DB);
+  const targetId = c.req.param("id");
+
+  const member = await db
+    .select({ avatarImageKey: schema.members.avatarImageKey })
+    .from(schema.members)
+    .where(eq(schema.members.id, targetId))
+    .get();
+
+  if (!member?.avatarImageKey) {
+    return c.json({ error: { code: "not_found", message: "アバター画像が設定されていません" } }, 404);
+  }
+
+  const obj = await c.env.R2.get(member.avatarImageKey);
+  if (!obj) return c.json({ error: { code: "not_found", message: "画像が見つかりません" } }, 404);
+
+  const contentType = obj.httpMetadata?.contentType ?? "image/png";
+  const buf = await obj.arrayBuffer();
+  return new Response(buf, {
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=60",
+    },
+  });
+});
+
 // 自分のカード画像（表面）をR2に保存する
 memberRoutes.post("/me/card-image", async (c) => {
   const db = createDb(c.env.DB);
@@ -342,11 +412,11 @@ memberRoutes.post("/:id/real-card", async (c) => {
     .set({ status: "real", realCardReceivedAt: now })
     .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)));
 
-  // +1pt 付与
+  const seasonPts = await getActiveSeasonPoints(db);
   await db.insert(schema.pointTransactions).values({
     id: newId(),
     memberId: myId,
-    delta: 1,
+    delta: seasonPts.realCard,
     reason: "real_card_exchanged",
     relatedId: targetId,
     createdAt: now,
@@ -604,11 +674,11 @@ memberRoutes.post("/:id/import-card", async (c) => {
     .set({ status: "digital", oneOnOneCompletedAt: now })
     .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)));
 
-  // +1pt 付与
+  const seasonPtsImport = await getActiveSeasonPoints(db);
   await db.insert(schema.pointTransactions).values({
     id: newId(),
     memberId: myId,
-    delta: 1,
+    delta: seasonPtsImport.oneOnOne,
     reason: "one_on_one_completed",
     relatedId: targetId,
     createdAt: now,
@@ -619,6 +689,51 @@ memberRoutes.post("/:id/import-card", async (c) => {
     data: {
       alreadyRecorded: false,
       message: `${target.name}さんとの1to1を記録しました！ +1pt`,
+    },
+  });
+});
+
+// ---- GET /api/members/:id/history ----
+// 公開活動履歴（ポイント合計 + 最近の活動）
+memberRoutes.get("/:id/history", async (c) => {
+  const db = createDb(c.env.DB);
+  const { sum, desc } = await import("drizzle-orm");
+  const targetId = c.req.param("id");
+
+  const [totalRow, txs] = await Promise.all([
+    db.select({ total: sum(schema.pointTransactions.delta) })
+      .from(schema.pointTransactions)
+      .where(eq(schema.pointTransactions.memberId, targetId))
+      .get() as Promise<{ total: number | null } | undefined>,
+    db.select({ id: schema.pointTransactions.id, delta: schema.pointTransactions.delta, reason: schema.pointTransactions.reason, createdAt: schema.pointTransactions.createdAt })
+      .from(schema.pointTransactions)
+      .where(eq(schema.pointTransactions.memberId, targetId))
+      .orderBy(desc(schema.pointTransactions.createdAt))
+      .limit(20)
+      .all(),
+  ]);
+
+  const REASON_LABEL: Record<string, string> = {
+    one_on_one_completed:    "🤝 1to1完了",
+    one_on_one_team_bonus:   "🤝 1to1チームボーナス",
+    real_card_exchanged:     "🃏 リアルカード受け取り",
+    quest_normal_solved:     "⚔️ お題クリア",
+    quest_hard_solved:       "🔥 難題クリア",
+    welcome_quest_bonus:     "🎉 歓迎クエストボーナス",
+    visitor_invite_resolved: "🙌 ゲスト招待達成",
+    admin_reset:             "🔄 ポイントリセット",
+    admin_adjust:            "✏️ 管理者調整",
+  };
+
+  return c.json({
+    data: {
+      totalPoints: Number(totalRow?.total ?? 0),
+      history: txs.map((t) => ({
+        id: t.id,
+        delta: t.delta,
+        label: REASON_LABEL[t.reason] ?? t.reason,
+        createdAt: t.createdAt,
+      })),
     },
   });
 });

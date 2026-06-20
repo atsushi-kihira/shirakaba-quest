@@ -14,6 +14,7 @@ type MeResponse = {
     userType: "member" | "admin";
     status?: string;
     role?: string;
+    avatarImageKey?: string | null;
   };
 };
 
@@ -38,6 +39,7 @@ export function useMe() {
         email: u.email,
         emoji: u.emoji,
         bgColor: u.bgColor,
+        avatarImageKey: u.avatarImageKey ?? null,
       });
     }
     if (query.error) {

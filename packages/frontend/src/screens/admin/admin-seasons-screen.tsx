@@ -131,14 +131,72 @@ export function AdminSeasonsScreen() {
   );
 }
 
+type PointConfig = {
+  pointOneOnOne: string;
+  pointRealCard: string;
+  pointQuestNormal: string;
+  pointQuestHard: string;
+  pointWelcomeQuestBonus: string;
+};
+
+function PointConfigFields({ pts, onChange }: { pts: PointConfig; onChange: (key: keyof PointConfig, v: string) => void }) {
+  const fields: { key: keyof PointConfig; label: string }[] = [
+    { key: "pointOneOnOne",          label: "🤝 1to1完了" },
+    { key: "pointRealCard",          label: "🃏 リアルカード受け取り" },
+    { key: "pointQuestNormal",       label: "⚔️ 通常お題クリア" },
+    { key: "pointQuestHard",         label: "🔥 難題クリア" },
+    { key: "pointWelcomeQuestBonus", label: "🎉 歓迎クエストボーナス" },
+  ];
+  return (
+    <div>
+      <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>
+        💎 ポイント配分（空欄でデフォルト値を使用）
+      </p>
+      <div className="space-y-2">
+        {fields.map(({ key, label }) => (
+          <div key={key} className="flex items-center gap-2">
+            <label className="flex-1 text-xs" style={{ color: "var(--color-ink-600)" }}>{label}</label>
+            <input
+              type="number"
+              min={0}
+              value={pts[key]}
+              onChange={(e) => onChange(key, e.target.value)}
+              placeholder="デフォルト"
+              className="w-20 px-2 py-1 rounded-lg border text-sm text-center"
+              style={{ borderColor: "var(--color-paper-300)" }}
+            />
+            <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>pt</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function emptyPts(): PointConfig {
+  return { pointOneOnOne: "", pointRealCard: "", pointQuestNormal: "", pointQuestHard: "", pointWelcomeQuestBonus: "" };
+}
+
+function ptsToBody(pts: PointConfig) {
+  const parse = (v: string) => v.trim() === "" ? null : Number(v);
+  return {
+    pointOneOnOne:          parse(pts.pointOneOnOne),
+    pointRealCard:          parse(pts.pointRealCard),
+    pointQuestNormal:       parse(pts.pointQuestNormal),
+    pointQuestHard:         parse(pts.pointQuestHard),
+    pointWelcomeQuestBonus: parse(pts.pointWelcomeQuestBonus),
+  };
+}
+
 // ---- 新規作成モーダル ----
 function CreateModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [theme, setTheme] = useState("");
+  const [pts, setPts] = useState<PointConfig>(emptyPts());
 
   const create = useMutation({
-    mutationFn: () => api.post("/admin/seasons", { name: name.trim(), theme: theme.trim() }),
+    mutationFn: () => api.post("/admin/seasons", { name: name.trim(), theme: theme.trim(), ...ptsToBody(pts) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "seasons"] });
       onClose();
@@ -148,7 +206,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.4)" }} onClick={onClose}>
-      <div className="card-paper p-6 w-full max-w-md rounded-3xl" onClick={(e) => e.stopPropagation()}>
+      <div className="card-paper p-6 w-full max-w-md rounded-3xl overflow-y-auto" style={{ maxHeight: "90dvh" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-klee)" }}>🌸 新しいシーズン</h2>
           <button onClick={onClose} className="p-1.5 rounded-full" style={{ background: "var(--color-paper-200)" }}>
@@ -177,6 +235,7 @@ function CreateModal({ onClose }: { onClose: () => void }) {
               style={{ borderColor: "var(--color-paper-300)" }}
             />
           </div>
+          <PointConfigFields pts={pts} onChange={(key, v) => setPts((p) => ({ ...p, [key]: v }))} />
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-2xl text-sm font-medium"
@@ -199,13 +258,20 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 }
 
 // ---- 編集フォーム ----
-function EditForm({ season, onDone }: { season: Season; onDone: () => void }) {
+function EditForm({ season, onDone }: { season: Season & { pointOneOnOne?: number | null; pointRealCard?: number | null; pointQuestNormal?: number | null; pointQuestHard?: number | null; pointWelcomeQuestBonus?: number | null }; onDone: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState(season.name);
   const [theme, setTheme] = useState(season.theme);
+  const [pts, setPts] = useState<PointConfig>({
+    pointOneOnOne:          season.pointOneOnOne          != null ? String(season.pointOneOnOne)          : "",
+    pointRealCard:          season.pointRealCard           != null ? String(season.pointRealCard)           : "",
+    pointQuestNormal:       season.pointQuestNormal        != null ? String(season.pointQuestNormal)        : "",
+    pointQuestHard:         season.pointQuestHard          != null ? String(season.pointQuestHard)          : "",
+    pointWelcomeQuestBonus: season.pointWelcomeQuestBonus  != null ? String(season.pointWelcomeQuestBonus)  : "",
+  });
 
   const save = useMutation({
-    mutationFn: () => api.patch(`/admin/seasons/${season.id}`, { name: name.trim(), theme: theme.trim() }),
+    mutationFn: () => api.patch(`/admin/seasons/${season.id}`, { name: name.trim(), theme: theme.trim(), ...ptsToBody(pts) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "seasons"] });
       onDone();
@@ -228,6 +294,7 @@ function EditForm({ season, onDone }: { season: Season; onDone: () => void }) {
           className="w-full px-3 py-2 rounded-xl border text-sm resize-none"
           style={{ borderColor: "var(--color-paper-300)" }}
         />
+        <PointConfigFields pts={pts} onChange={(key, v) => setPts((p) => ({ ...p, [key]: v }))} />
       </div>
       <div className="flex gap-2 mt-3">
         <button onClick={onDone} className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs"

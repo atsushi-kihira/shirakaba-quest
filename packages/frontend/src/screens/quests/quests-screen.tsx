@@ -14,8 +14,14 @@ type Quest = {
   level: "normal" | "hard"; skillCount: number; required2x: number | null;
   reward: number; deadline: number | null; status: string; isSolved: boolean;
 };
+type TeamMember = {
+  id: string; memberId: string; isLeader: boolean;
+  member?: { id: string; name: string; emoji: string; bgColor: string; category: string; skills: Skill[] };
+};
+type Team = { id: string; name: string; emblemEmoji: string; isMine: boolean; members: TeamMember[] };
 type QuestsResponse  = { data: Quest[] };
 type MembersResponse = { data: PublicMember[] };
+type TeamsResponse   = { data: Team[] };
 type AttemptResult   = { data: { isCorrect: boolean; reward: number; message: string; isFirstCorrect: boolean } };
 
 export function QuestsScreen() {
@@ -152,30 +158,64 @@ function QuestCard({ quest, termUsp, termQuest, onChallenge }: { quest: Quest; t
 // ---- 挑戦モーダル ----
 function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: string; onClose: () => void }) {
   const qc = useQueryClient();
+  const [mode, setMode] = useState<"connections" | "team">("connections");
 
   const { data: membersData, isLoading: membersLoading } = useQuery({
     queryKey: ["members"],
     queryFn: () => api.get<MembersResponse>("/members"),
   });
 
+  const { data: teamsData, isLoading: teamsLoading } = useQuery({
+    queryKey: ["teams"],
+    queryFn: () => api.get<TeamsResponse>("/teams"),
+    enabled: mode === "team",
+  });
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<AttemptResult["data"] | null>(null);
 
-  // 利用可能スキル（自分 + digital/real 接続メンバー）
-  const availableSkills: { skill: Skill; memberName: string; memberId: string; connectionStatus: string }[] = [];
   const members = membersData?.data ?? [];
+  const teams = teamsData?.data ?? [];
+  const myTeam = teams.find((t) => t.isMine) ?? (teams.length > 0 ? teams[0] : null);
 
-  for (const member of members) {
-    // バックエンドが自分のレコードに "self" を返すので、IDの比較は不要
-    const isSelf = member.connectionStatus === "self";
-    const unlocked = isSelf || member.connectionStatus === "digital" || member.connectionStatus === "real";
-    if (unlocked) {
-      for (const skill of member.skills) {
+  // 接続状態マップ（×2ボーナス計算用）
+  const connectionMap = new Map<string, string>(
+    members.map((m) => [m.id, m.connectionStatus])
+  );
+
+  // 利用可能スキル（モードによって切り替え）
+  const availableSkills: { skill: Skill; memberName: string; memberId: string; connectionStatus: string }[] = [];
+
+  if (mode === "connections") {
+    // 自分 + digital/real 接続メンバー
+    for (const member of members) {
+      const isSelf = member.connectionStatus === "self";
+      const unlocked = isSelf || member.connectionStatus === "digital" || member.connectionStatus === "real";
+      if (unlocked) {
+        for (const skill of member.skills) {
+          availableSkills.push({
+            skill,
+            memberName: isSelf ? "自分" : member.name,
+            memberId: member.id,
+            connectionStatus: member.connectionStatus,
+          });
+        }
+      }
+    }
+  } else {
+    // チームメンバー全員
+    const teamMembers = myTeam?.members ?? [];
+    for (const tm of teamMembers) {
+      const m = tm.member;
+      if (!m) continue;
+      const connStatus = connectionMap.get(m.id) ?? "none";
+      const isSelf = connStatus === "self";
+      for (const skill of m.skills) {
         availableSkills.push({
           skill,
-          memberName: isSelf ? "自分" : member.name,
-          memberId: member.id,
-          connectionStatus: member.connectionStatus,
+          memberName: isSelf ? "自分" : m.name,
+          memberId: m.id,
+          connectionStatus: connStatus,
         });
       }
     }
@@ -261,19 +301,41 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
                 </div>
               )}
 
+              {/* USP選択モード */}
+              <div className="flex gap-2 mb-3">
+                <button
+                  onClick={() => { setMode("connections"); setSelected(new Set()); }}
+                  className="flex-1 py-1.5 text-xs rounded-xl font-medium transition"
+                  style={{
+                    background: mode === "connections" ? "var(--color-brand)" : "var(--color-paper-200)",
+                    color: mode === "connections" ? "white" : "var(--color-ink-600)",
+                  }}
+                >🤝 自分+1to1なかま</button>
+                <button
+                  onClick={() => { setMode("team"); setSelected(new Set()); }}
+                  className="flex-1 py-1.5 text-xs rounded-xl font-medium transition"
+                  style={{
+                    background: mode === "team" ? "var(--color-brand)" : "var(--color-paper-200)",
+                    color: mode === "team" ? "white" : "var(--color-ink-600)",
+                  }}
+                >🦊 チームメンバー</button>
+              </div>
+
               <p className="text-sm font-medium mb-3" style={{ color: "var(--color-ink-700)" }}>
                 🧩 {termUsp}を <span className="font-bold" style={{ color: "var(--color-brand)" }}>{quest.skillCount}個</span> 選ぼう
                 <span className="ml-2 text-xs" style={{ color: "var(--color-ink-400)" }}>({selected.size}/{quest.skillCount})</span>
               </p>
 
-              {membersLoading ? (
+              {membersLoading || (mode === "team" && teamsLoading) ? (
                 <div className="flex justify-center py-8">
                   <Loader2 size={24} className="animate-spin" style={{ color: "var(--color-brand)" }} />
                 </div>
               ) : availableSkills.length === 0 ? (
                 <div className="text-center py-6" style={{ color: "var(--color-ink-400)" }}>
                   <p className="text-sm">使える{termUsp}がありません</p>
-                  <p className="text-xs mt-1">1to1を完了すると{termUsp}が増えます</p>
+                  <p className="text-xs mt-1">
+                    {mode === "connections" ? "1to1を完了すると" + termUsp + "が増えます" : "チームに所属するとメンバーの" + termUsp + "が使えます"}
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-1.5 max-h-72 overflow-y-auto -mx-1 px-1">

@@ -29,7 +29,8 @@ adminSeasonRoutes.get("/", async (c) => {
 adminSeasonRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
   const now = Math.floor(Date.now() / 1000);
-  const body = await c.req.json<{ name: string; theme?: string; startsAt?: number; endsAt?: number }>();
+  type CreateBody = { name: string; theme?: string; startsAt?: number; endsAt?: number; pointOneOnOne?: number; pointRealCard?: number; pointQuestNormal?: number; pointQuestHard?: number; pointWelcomeQuestBonus?: number };
+  const body = await c.req.json<CreateBody>();
 
   if (!body.name?.trim()) {
     return c.json({ error: { code: "invalid_input", message: "シーズン名は必須です" } }, 400);
@@ -45,6 +46,11 @@ adminSeasonRoutes.post("/", async (c) => {
     isActive: 0,
     createdAt: now,
     updatedAt: now,
+    pointOneOnOne:          body.pointOneOnOne          ?? null,
+    pointRealCard:          body.pointRealCard           ?? null,
+    pointQuestNormal:       body.pointQuestNormal        ?? null,
+    pointQuestHard:         body.pointQuestHard          ?? null,
+    pointWelcomeQuestBonus: body.pointWelcomeQuestBonus  ?? null,
   });
 
   const season = await db.select().from(schema.seasons).where(eq(schema.seasons.id, id)).get();
@@ -55,13 +61,18 @@ adminSeasonRoutes.post("/", async (c) => {
 adminSeasonRoutes.patch("/:id", async (c) => {
   const db = createDb(c.env.DB);
   const now = Math.floor(Date.now() / 1000);
-  const body = await c.req.json<{ name?: string; theme?: string; endsAt?: number | null }>()
-    .catch(() => ({} as { name?: string; theme?: string; endsAt?: number | null }));
+  type PatchBody = { name?: string; theme?: string; endsAt?: number | null; pointOneOnOne?: number | null; pointRealCard?: number | null; pointQuestNormal?: number | null; pointQuestHard?: number | null; pointWelcomeQuestBonus?: number | null };
+  const body = await c.req.json<PatchBody>().catch(() => ({} as PatchBody));
 
   await db.update(schema.seasons).set({
-    ...(body.name  !== undefined && { name: body.name.trim() }),
-    ...(body.theme !== undefined && { theme: body.theme.trim() }),
+    ...(body.name  !== undefined && { name: body.name!.trim() }),
+    ...(body.theme !== undefined && { theme: body.theme!.trim() }),
     ...(body.endsAt !== undefined && { endsAt: body.endsAt }),
+    ...(body.pointOneOnOne          !== undefined && { pointOneOnOne: body.pointOneOnOne }),
+    ...(body.pointRealCard           !== undefined && { pointRealCard: body.pointRealCard }),
+    ...(body.pointQuestNormal        !== undefined && { pointQuestNormal: body.pointQuestNormal }),
+    ...(body.pointQuestHard          !== undefined && { pointQuestHard: body.pointQuestHard }),
+    ...(body.pointWelcomeQuestBonus  !== undefined && { pointWelcomeQuestBonus: body.pointWelcomeQuestBonus }),
     updatedAt: now,
   }).where(eq(schema.seasons.id, c.req.param("id")));
 
@@ -106,5 +117,10 @@ function toPublic(s: typeof schema.seasons.$inferSelect) {
     isActive: !!s.isActive,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
+    pointOneOnOne:          s.pointOneOnOne          ?? null,
+    pointRealCard:          s.pointRealCard           ?? null,
+    pointQuestNormal:       s.pointQuestNormal        ?? null,
+    pointQuestHard:         s.pointQuestHard          ?? null,
+    pointWelcomeQuestBonus: s.pointWelcomeQuestBonus  ?? null,
   };
 }

@@ -13,6 +13,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { sendOneOnOneRequestMail } from "../services/mailer.ts";
 import { checkAndAwardBadges } from "../services/badge.ts";
+import { getActiveSeasonPoints } from "../services/season-points.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -262,19 +263,20 @@ oneOnOneRoutes.patch("/:id/complete", async (c) => {
         .where(and(eq(schema.connections.fromMemberId, from), eq(schema.connections.toMemberId, to)));
     }
 
-    // 双方に +1pt 付与
+    // 双方にポイント付与（シーズン設定を優先）
+    const seasonPts = await getActiveSeasonPoints(db);
     for (const memberId of [session.requesterId, session.responderId]) {
       await db.insert(schema.pointTransactions).values({
         id: newId(),
         memberId,
-        delta: 1,
+        delta: seasonPts.oneOnOne,
         reason: "one_on_one_completed",
         relatedId: sessionId,
         createdAt: now,
       });
     }
 
-    // welcome_quest ボーナス: アクティブな welcome_quest イベントがあり、対象メンバーが参加者なら +1pt
+    // welcome_quest ボーナス
     try {
       const nowTs = now;
       const welcomeEvents = await db
@@ -298,11 +300,10 @@ oneOnOneRoutes.patch("/:id/complete", async (c) => {
           [session.responderId, session.requesterId],
         ]) {
           if (receiver === targetId) {
-            // giver が targetId と1on1 → giver に +1pt
             await db.insert(schema.pointTransactions).values({
               id: newId(),
               memberId: giver,
-              delta: 1,
+              delta: seasonPts.welcomeQuestBonus,
               reason: "welcome_quest_bonus",
               relatedId: ev.id,
               createdAt: now,

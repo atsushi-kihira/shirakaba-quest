@@ -24,6 +24,7 @@ export const members = sqliteTable("members", {
   instagramUrl:        text("instagram_url"),
   customFields:        text("custom_fields").default("{}"),
   cardImageKey:        text("card_image_key"),
+  avatarImageKey:      text("avatar_image_key"),
   status:              text("status").notNull().default("pending"),
   approvedAt:          integer("approved_at"),
   createdAt:           integer("created_at").notNull(),
@@ -194,6 +195,12 @@ export const seasons = sqliteTable("seasons", {
   isActive:  integer("is_active").notNull().default(0),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
+  // ポイント設定（null = デフォルト値を使用）
+  pointOneOnOne:          integer("point_one_on_one"),
+  pointRealCard:          integer("point_real_card"),
+  pointQuestNormal:       integer("point_quest_normal"),
+  pointQuestHard:         integer("point_quest_hard"),
+  pointWelcomeQuestBonus: integer("point_welcome_quest_bonus"),
 });
 
 export const seasonRankings = sqliteTable(
