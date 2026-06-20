@@ -362,8 +362,9 @@ export type EventCampaign = {
   startsAt: number;
   endsAt: number | null;
   relatedMemberId: string | null;
+  relatedMemberIds?: string[] | null;
   multiplier: number | null;
-  status: "active" | "ended";
+  status: "active" | "ended" | "deleted";
   createdAt: number;
   updatedAt: number;
 };

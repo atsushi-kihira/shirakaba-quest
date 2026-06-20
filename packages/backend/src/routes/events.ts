@@ -30,12 +30,16 @@ eventRoutes.get("/active", async (c) => {
     )
     .all();
 
-  // welcome_quest イベントのメンバー名を補足
-  const memberIds = events
-    .filter((e) => e.type === "welcome_quest" && e.relatedMemberId)
-    .map((e) => e.relatedMemberId as string);
+  // welcome_quest / featured_member のメンバー名を補足（複数対応）
+  const allMemberIds = [...new Set(
+    events.flatMap((e) => {
+      if (e.type !== "welcome_quest" && e.type !== "featured_member") return [];
+      const ids = parseIds(e.relatedMemberIds) ?? (e.relatedMemberId ? [e.relatedMemberId] : []);
+      return ids;
+    })
+  )];
 
-  const members = memberIds.length > 0
+  const members = allMemberIds.length > 0
     ? await db
         .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji })
         .from(schema.members)
@@ -46,9 +50,15 @@ eventRoutes.get("/active", async (c) => {
   return c.json({
     data: events.map((e) => {
       const base = toPublic(e);
-      if (e.type === "welcome_quest" && e.relatedMemberId) {
-        const m = memberMap.get(e.relatedMemberId);
-        return { ...base, relatedMemberName: m?.name ?? null, relatedMemberEmoji: m?.emoji ?? null };
+      const ids = parseIds(e.relatedMemberIds) ?? (e.relatedMemberId ? [e.relatedMemberId] : []);
+      if ((e.type === "welcome_quest" || e.type === "featured_member") && ids.length > 0) {
+        const firstMember = memberMap.get(ids[0]);
+        return {
+          ...base,
+          relatedMemberName: firstMember?.name ?? null,
+          relatedMemberEmoji: firstMember?.emoji ?? null,
+          relatedMemberIds: ids,
+        };
       }
       return base;
     }),
@@ -155,9 +165,15 @@ function toPublic(e: typeof schema.eventCampaigns.$inferSelect) {
     startsAt: e.startsAt,
     endsAt: e.endsAt,
     relatedMemberId: e.relatedMemberId,
+    relatedMemberIds: parseIds(e.relatedMemberIds) ?? (e.relatedMemberId ? [e.relatedMemberId] : []),
     multiplier: e.multiplier,
     status: e.status,
     createdAt: e.createdAt,
     updatedAt: e.updatedAt,
   };
+}
+
+function parseIds(str: string | null | undefined): string[] | null {
+  if (!str) return null;
+  try { return JSON.parse(str) as string[]; } catch { return null; }
 }

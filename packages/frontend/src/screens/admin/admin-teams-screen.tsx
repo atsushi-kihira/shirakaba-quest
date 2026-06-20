@@ -3,7 +3,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus, Pencil, UserPlus } from "lucide-react";
+import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus, Pencil, UserPlus, ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Team } from "@shared/types";
 
@@ -119,26 +119,76 @@ export function AdminTeamsScreen() {
               チームランキングを計算中...
             </div>
           ) : (
-            (rankingData?.data ?? []).map((entry) => (
-              <div key={entry.team.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3">
-                <div className="w-8 text-center font-bold text-sm shrink-0" style={{ color: "var(--color-ink-500)" }}>
-                  {entry.rank}
-                </div>
-                <span className="text-2xl">{entry.team.emblemEmoji}</span>
-                <div className="flex-1">
-                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{entry.team.name}</p>
-                </div>
-                <div className="font-bold text-lg" style={{ color: "var(--color-accent)" }}>
-                  {entry.totalPoints}<span className="text-xs ml-0.5">pt</span>
-                </div>
-              </div>
-            ))
+            (rankingData?.data ?? []).map((entry) => {
+              const teamDetail = teams.find((t) => t.id === entry.team.id);
+              return (
+                <RankingRow key={entry.team.id} entry={entry} teamDetail={teamDetail} />
+              );
+            })
           )}
         </div>
       )}
 
       {showCreate && <CreateTeamModal onClose={() => setShowCreate(false)} />}
       {showAutoAssign && <AutoAssignModal onClose={() => setShowAutoAssign(false)} />}
+    </div>
+  );
+}
+
+// ---- ランキング行（メンバー展開付き）----
+function RankingRow({
+  entry,
+  teamDetail,
+}: {
+  entry: { rank: number; team: { id: string; name: string; emblemEmoji: string }; totalPoints: number };
+  teamDetail: Team | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const members = teamDetail?.members ?? [];
+
+  const medalColors: Record<number, string> = { 1: "#D4A03B", 2: "#9E9E9E", 3: "#CD7F32" };
+  const medalColor = medalColors[entry.rank];
+
+  return (
+    <div className="card-paper rounded-2xl overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-4 py-3 flex items-center gap-3 text-left"
+      >
+        <div className="w-8 text-center font-bold text-sm shrink-0" style={{ color: medalColor ?? "var(--color-ink-500)" }}>
+          {entry.rank === 1 ? "🥇" : entry.rank === 2 ? "🥈" : entry.rank === 3 ? "🥉" : entry.rank}
+        </div>
+        <span className="text-2xl">{entry.team.emblemEmoji}</span>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{entry.team.name}</p>
+          <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{members.length}名</p>
+        </div>
+        <div className="font-bold text-lg shrink-0" style={{ color: "var(--color-accent)" }}>
+          {entry.totalPoints}<span className="text-xs ml-0.5">pt</span>
+        </div>
+        {open
+          ? <ChevronUp size={14} style={{ color: "var(--color-ink-400)", flexShrink: 0 }} />
+          : <ChevronDown size={14} style={{ color: "var(--color-ink-400)", flexShrink: 0 }} />
+        }
+      </button>
+      {open && members.length > 0 && (
+        <div className="border-t px-4 pt-2 pb-3 space-y-1.5" style={{ borderColor: "var(--color-paper-300)" }}>
+          {members.map((tm) => (
+            <div key={tm.id} className="flex items-center gap-2">
+              <span className="text-base">{tm.member?.emoji ?? "🙂"}</span>
+              <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+                {tm.member?.name ?? tm.memberId}
+              </span>
+              {tm.isLeader && (
+                <span className="text-xs font-bold" style={{ color: "var(--color-accent)" }}>👑</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {open && members.length === 0 && (
+        <p className="px-4 pb-3 text-xs" style={{ color: "var(--color-ink-400)" }}>メンバーがいません</p>
+      )}
     </div>
   );
 }
