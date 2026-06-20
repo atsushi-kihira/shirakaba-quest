@@ -38,11 +38,17 @@ export function QuestsScreen() {
   const [filter, setFilter] = useState<"all" | "unsolved" | "solved">("all");
 
   const quests = data?.data ?? [];
-  const filtered = quests.filter((q) => {
-    if (filter === "unsolved") return !q.isSolved;
-    if (filter === "solved")   return q.isSolved;
-    return true;
-  });
+  const filtered = (() => {
+    const base = quests.filter((q) => {
+      if (filter === "unsolved") return !q.isSolved;
+      if (filter === "solved")   return q.isSolved;
+      return true;
+    });
+    if (filter === "all") {
+      return [...base.filter((q) => !q.isSolved), ...base.filter((q) => q.isSolved)];
+    }
+    return base;
+  })();
 
   const solvedCount = quests.filter((q) => q.isSolved).length;
 
@@ -112,12 +118,13 @@ export function QuestsScreen() {
 // ---- クエストカード ----
 function QuestCard({ quest, termUsp, termQuest, onChallenge }: { quest: Quest; termUsp: string; termQuest: string; onChallenge: () => void }) {
   const isHard = quest.level === "hard";
+  const [storyExpanded, setStoryExpanded] = useState(false);
   return (
     <div className="card-paper rounded-3xl p-5"
       style={{ opacity: quest.isSolved ? 0.75 : 1 }}>
       <div className="flex items-start gap-3 mb-3">
         <span className="text-3xl shrink-0">{quest.emoji}</span>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
             <h2 className="font-semibold text-base" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
               {quest.title}
@@ -133,7 +140,18 @@ function QuestCard({ quest, termUsp, termQuest, onChallenge }: { quest: Quest; t
               </span>
             )}
           </div>
-          <QuestStory text={quest.story} className="text-sm leading-relaxed" style={{ color: "var(--color-ink-600)" }} />
+          <QuestStory
+            text={quest.story}
+            className={`text-sm leading-relaxed${storyExpanded ? "" : " line-clamp-2"}`}
+            style={{ color: "var(--color-ink-600)" }}
+          />
+          <button
+            onClick={() => setStoryExpanded((v) => !v)}
+            className="text-xs mt-0.5"
+            style={{ color: "var(--color-brand)" }}
+          >
+            {storyExpanded ? "閉じる ▲" : "続きを読む ▼"}
+          </button>
         </div>
       </div>
 

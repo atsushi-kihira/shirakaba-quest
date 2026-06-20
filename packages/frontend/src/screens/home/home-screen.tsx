@@ -25,7 +25,7 @@ type OnoSession = {
   partner: { id: string; name: string; emoji: string; bgColor: string; category: string } | null;
 };
 type OnoListResponse  = { data: OnoSession[] };
-type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string; reward: number; skillCount: number }> };
+type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string; reward: number; skillCount: number; isSolved: boolean }> };
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
@@ -72,7 +72,7 @@ export function HomeScreen() {
 
   const rank          = rankData?.data;
   const sessions      = onoData?.data ?? [];
-  const quests        = (questData?.data ?? []).slice(0, 2);
+  const quests        = (questData?.data ?? []).filter((q) => !q.isSolved).slice(0, 2);
   const activeSeason  = seasonData?.data ?? null;
   const activeEvents  = eventsData?.data ?? [];
   const featuredEvent = activeEvents.find((e) => e.type === "featured_member");
