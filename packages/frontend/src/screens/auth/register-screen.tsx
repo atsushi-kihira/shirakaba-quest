@@ -8,8 +8,9 @@
 import { useState, useRef, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw, Plus, X } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useSettings } from "@/hooks/use-settings";
 import type { Usp } from "@shared/types";
 
 // ---- 型定義 ----
@@ -51,6 +52,8 @@ const AVATAR_EMOJIS = ["😊","😄","🤗","😎","🥰","🌟","💪","🎯","
 
 // ---- メインコンポーネント ----
 export function RegisterScreen() {
+  const navigate = useNavigate();
+  const { appTitle, characterImageUrl } = useSettings();
   const [step, setStep] = useState(1);
 
   // Step1
@@ -150,7 +153,7 @@ export function RegisterScreen() {
       >
         {step < 4 ? (
           <button
-            onClick={() => step > 1 ? setStep(step - 1) : undefined}
+            onClick={() => step > 1 ? setStep(step - 1) : navigate("/login")}
             className="p-2 -ml-2 rounded-full active:opacity-60"
           >
             <ArrowLeft size={22} style={{ color: "var(--color-ink-500)" }} />
@@ -189,6 +192,8 @@ export function RegisterScreen() {
               scanError={ocrMutation.isError}
               cameraRef={cameraRef}
               galleryRef={galleryRef}
+              appTitle={appTitle}
+              characterImageUrl={characterImageUrl}
               onNext={() => setStep(2)}
             />
           )}
@@ -260,7 +265,7 @@ function StepDots({ current, total }: { current: number; total: number }) {
 // Step 1: カード撮影
 // ================================================================
 function Step1Scan({
-  frontImage, scanning, scanDone, scanError, cameraRef, galleryRef, onNext,
+  frontImage, scanning, scanDone, scanError, cameraRef, galleryRef, appTitle, characterImageUrl, onNext,
 }: {
   frontImage: string | null;
   scanning: boolean;
@@ -268,10 +273,29 @@ function Step1Scan({
   scanError: boolean;
   cameraRef: React.RefObject<HTMLInputElement | null>;
   galleryRef: React.RefObject<HTMLInputElement | null>;
+  appTitle: string;
+  characterImageUrl: string;
   onNext: () => void;
 }) {
   return (
     <div>
+      {/* キャラクター画像 + アプリ名 */}
+      <div className="flex flex-col items-center mb-5">
+        <img
+          src={characterImageUrl}
+          alt="キャラクター"
+          className="w-32 h-32 object-contain"
+          style={{ filter: "drop-shadow(0 4px 12px rgba(181,56,75,0.15))" }}
+          onError={(e) => { e.currentTarget.src = "/character-default.png"; }}
+        />
+        <p
+          className="text-xl font-semibold mt-2"
+          style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}
+        >
+          {appTitle}
+        </p>
+      </div>
+
       <h2
         className="text-xl font-semibold mb-1"
         style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}
