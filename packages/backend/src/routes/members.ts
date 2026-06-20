@@ -11,7 +11,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
-import { saveCardImage, getCardImageDataUrl } from "../services/card-image.ts";
+import { saveCardImage, saveAvatarImage, getCardImageDataUrl } from "../services/card-image.ts";
 import { checkAndAwardBadges } from "../services/badge.ts";
 import { getActiveSeasonPoints } from "../services/season-points.ts";
 import type { Env, Variables } from "../types.ts";
@@ -257,7 +257,7 @@ memberRoutes.post("/me/avatar", async (c) => {
     return c.json({ error: { code: "bad_request", message: "画像データが必要です" } }, 400);
   }
 
-  const key = await saveCardImage(c.env.R2, `avatar_${userId}`, body.imageBase64);
+  const key = await saveAvatarImage(c.env.R2, userId, body.imageBase64);
 
   await db
     .update(schema.members)

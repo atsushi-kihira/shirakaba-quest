@@ -2,6 +2,21 @@
 // カード画像（R2）操作ヘルパー
 // =============================================================
 
+/** アバター画像をPNG形式でR2に保存し、保存キーを返す（透明度保持） */
+export async function saveAvatarImage(
+  r2: R2Bucket,
+  userId: string,
+  imageBase64: string
+): Promise<string> {
+  const base64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
+  const binary = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const key = `avatar-images/${userId}.png`;
+  await r2.put(key, binary, {
+    httpMetadata: { contentType: "image/png" },
+  });
+  return key;
+}
+
 /** base64文字列（data URLプレフィックス有無どちらでも可）をR2に保存し、保存キーを返す */
 export async function saveCardImage(
   r2: R2Bucket,

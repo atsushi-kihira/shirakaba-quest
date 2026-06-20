@@ -606,7 +606,7 @@ function EditModal({ member, onClose, onSaved }: {
                         const canvas = document.createElement("canvas");
                         canvas.width = w; canvas.height = h;
                         canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
-                        const resized = canvas.toDataURL("image/jpeg", 0.85);
+                        const resized = canvas.toDataURL("image/png");
                         setAvatarPreview(resized);
                         uploadAvatar.mutate(resized.split(",")[1]);
                       };
