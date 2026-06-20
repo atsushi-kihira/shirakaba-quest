@@ -242,6 +242,7 @@ export const cardDesigns = sqliteTable("card_designs", {
   termQuest:            text("term_quest").notNull().default("お題"),
   termUsp:              text("term_usp").notNull().default("USP"),
   termOneOnOne:         text("term_one_on_one").notNull().default("1to1"),
+  characterImageKey:    text("character_image_key"),
   updatedAt:            integer("updated_at").notNull(),
   updatedBy:            text("updated_by").notNull(),
 });

@@ -26,7 +26,7 @@ type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
-  const { termQuest, termUsp } = useSettings();
+  const { termQuest, termUsp, characterImageUrl, appTitle } = useSettings();
 
   const { data: rankData } = useQuery({
     queryKey: ["ranking", "me"],
@@ -89,14 +89,25 @@ export function HomeScreen() {
 
       {/* ヘッダー */}
       <div className="flex items-center justify-between">
-        <div>
+        <div className="flex-1">
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>おかえりなさい 👋</p>
           <h1 className="text-2xl font-semibold mt-0.5" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
             {user?.name ?? "メンバー"}さん
           </h1>
+          <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{appTitle}</p>
         </div>
-        <div className={`w-11 h-11 rounded-full flex items-center justify-center text-2xl ${user?.bgColor ?? "bg-amber-100"}`}>
-          {user?.emoji ?? "🙂"}
+        <div className="flex items-center gap-2">
+          {/* キャラクター（小） */}
+          <img
+            src={characterImageUrl}
+            alt="キャラクター"
+            className="w-14 h-14 object-contain"
+            style={{ filter: "drop-shadow(0 2px 6px rgba(181,56,75,0.15))" }}
+            onError={(e) => { e.currentTarget.src = "/character-default.png"; }}
+          />
+          <div className={`w-11 h-11 rounded-full flex items-center justify-center text-2xl ${user?.bgColor ?? "bg-amber-100"}`}>
+            {user?.emoji ?? "🙂"}
+          </div>
         </div>
       </div>
 

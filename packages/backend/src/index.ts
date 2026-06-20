@@ -53,12 +53,37 @@ app.get("/api/settings", async (c) => {
   const design = await db.select().from(schema.cardDesigns).get();
   return c.json({
     data: {
-      appTitle:     design?.appTitle     ?? "白樺クエスト",
-      appLogo:      design?.appLogo      ?? "🃏",
-      appPointName: design?.appPointName ?? "pt",
-      termQuest:    design?.termQuest    ?? "お題",
-      termUsp:      design?.termUsp      ?? "USP",
-      termOneOnOne: design?.termOneOnOne ?? "1to1",
+      appTitle:          design?.appTitle          ?? "白樺クエスト",
+      appLogo:           design?.appLogo           ?? "🃏",
+      appPointName:      design?.appPointName      ?? "pt",
+      termQuest:         design?.termQuest         ?? "お題",
+      termUsp:           design?.termUsp           ?? "USP",
+      termOneOnOne:      design?.termOneOnOne      ?? "1to1",
+      characterImageKey: design?.characterImageKey ?? null,
+    },
+  });
+});
+
+// ---- 公開キャラクター画像配信（R2 or デフォルト） ----
+app.get("/api/character-image", async (c) => {
+  const { createDb, schema } = await import("./db/index.ts");
+  const db = createDb(c.env.DB);
+  const design = await db.select({ characterImageKey: schema.cardDesigns.characterImageKey }).from(schema.cardDesigns).get();
+
+  if (!design?.characterImageKey) {
+    // カスタム未設定: 404 を返してフロントはデフォルト画像を使う
+    return c.json({ error: { code: "not_found", message: "カスタムキャラクター画像が未設定です" } }, 404);
+  }
+
+  const obj = await c.env.R2.get(design.characterImageKey);
+  if (!obj) return c.json({ error: { code: "not_found", message: "画像が見つかりません" } }, 404);
+
+  const contentType = obj.httpMetadata?.contentType ?? "image/png";
+  const buf = await obj.arrayBuffer();
+  return new Response(buf, {
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=86400",
     },
   });
 });

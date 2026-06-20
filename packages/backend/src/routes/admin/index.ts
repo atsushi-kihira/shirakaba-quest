@@ -141,3 +141,51 @@ adminRoutes.patch("/app-settings", async (c) => {
 
   return c.json({ ok: true });
 });
+
+// ---- POST /api/admin/app-settings/character — キャラクター画像アップロード ----
+adminRoutes.post("/app-settings/character", async (c) => {
+  const db = createDb(c.env.DB);
+  const adminId = c.get("userId");
+  const now = Math.floor(Date.now() / 1000);
+  const { eq } = await import("drizzle-orm");
+
+  const body = await c.req.json<{ imageBase64: string; mimeType?: string }>();
+  if (!body.imageBase64) {
+    return c.json({ error: { code: "bad_request", message: "画像データが必要です" } }, 400);
+  }
+
+  const base64 = body.imageBase64.includes(",") ? body.imageBase64.split(",")[1] : body.imageBase64;
+  const mimeType = body.mimeType ?? (body.imageBase64.startsWith("data:image/png") ? "image/png" : "image/jpeg");
+  const ext = mimeType === "image/png" ? "png" : "jpg";
+  const key = `system/character-image.${ext}`;
+
+  const binary = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+  await c.env.R2.put(key, binary, { httpMetadata: { contentType: mimeType } });
+
+  await db.update(schema.cardDesigns)
+    .set({ characterImageKey: key, updatedAt: now, updatedBy: adminId })
+    .where(eq(schema.cardDesigns.id, "default"));
+
+  return c.json({ ok: true, key });
+});
+
+// ---- DELETE /api/admin/app-settings/character — デフォルトに戻す ----
+adminRoutes.delete("/app-settings/character", async (c) => {
+  const db = createDb(c.env.DB);
+  const adminId = c.get("userId");
+  const now = Math.floor(Date.now() / 1000);
+  const { eq } = await import("drizzle-orm");
+
+  // R2から削除（存在しなくてもエラーにしない）
+  const design = await db.select({ characterImageKey: schema.cardDesigns.characterImageKey })
+    .from(schema.cardDesigns).get();
+  if (design?.characterImageKey) {
+    await c.env.R2.delete(design.characterImageKey).catch(() => {});
+  }
+
+  await db.update(schema.cardDesigns)
+    .set({ characterImageKey: null, updatedAt: now, updatedBy: adminId })
+    .where(eq(schema.cardDesigns.id, "default"));
+
+  return c.json({ ok: true });
+});

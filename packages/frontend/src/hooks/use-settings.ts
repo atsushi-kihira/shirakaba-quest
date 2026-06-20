@@ -1,6 +1,5 @@
 // =============================================================
 // アプリ設定フック（公開エンドポイント、全ユーザー共通）
-// 用語カスタマイズ（お題/USP/1to1）などを取得する
 // =============================================================
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -9,12 +8,20 @@ export type AppSettings = {
   appTitle: string;
   appLogo: string;
   appPointName: string;
-  termQuest: string;    // "お題" など
-  termUsp: string;      // "USP" "強み" "価値" など
-  termOneOnOne: string; // "1to1" "面談" など
+  termQuest: string;
+  termUsp: string;
+  termOneOnOne: string;
+  characterImageKey: string | null;
+  /** 表示用URL（カスタム未設定時はデフォルト画像を指す） */
+  characterImageUrl: string;
 };
 
-type SettingsResponse = { data: AppSettings };
+type SettingsResponse = {
+  data: Omit<AppSettings, "characterImageUrl">;
+};
+
+const DEFAULT_CHARACTER_URL = "/character-default.png";
+const CUSTOM_CHARACTER_URL  = "/api/character-image";
 
 const DEFAULTS: AppSettings = {
   appTitle: "白樺クエスト",
@@ -23,6 +30,8 @@ const DEFAULTS: AppSettings = {
   termQuest: "お題",
   termUsp: "USP",
   termOneOnOne: "1to1",
+  characterImageKey: null,
+  characterImageUrl: DEFAULT_CHARACTER_URL,
 };
 
 export function useSettings(): AppSettings {
@@ -31,5 +40,9 @@ export function useSettings(): AppSettings {
     queryFn: () => api.get<SettingsResponse>("/settings"),
     staleTime: 5 * 60 * 1000,
   });
-  return data?.data ?? DEFAULTS;
+  if (!data?.data) return DEFAULTS;
+  return {
+    ...data.data,
+    characterImageUrl: data.data.characterImageKey ? CUSTOM_CHARACTER_URL : DEFAULT_CHARACTER_URL,
+  };
 }

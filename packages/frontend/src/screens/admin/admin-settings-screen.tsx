@@ -1,9 +1,9 @@
 // =============================================================
 // 管理画面 — アプリ設定（用語カスタマイズ含む）
 // =============================================================
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save } from "lucide-react";
+import { Save, Upload, RotateCcw, ImageIcon } from "lucide-react";
 import { api } from "@/lib/api";
 
 type AppSettings = {
@@ -14,6 +14,7 @@ type AppSettings = {
   termQuest: string;
   termUsp: string;
   termOneOnOne: string;
+  characterImageKey: string | null;
 };
 
 type FormState = {
@@ -44,6 +45,44 @@ export function AdminSettingsScreen() {
 
   const [form, setForm] = useState<FormState>(DEFAULTS);
   const [saved, setSaved] = useState(false);
+
+  // キャラクター画像
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [characterPreview, setCharacterPreview] = useState<string | null>(null);
+  const hasCustomCharacter = data?.data?.characterImageKey != null;
+
+  const uploadCharacter = useMutation({
+    mutationFn: (imageBase64: string) =>
+      api.post("/admin/app-settings/character", {
+        imageBase64,
+        mimeType: imageBase64.startsWith("data:image/png") ? "image/png" : "image/jpeg",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "app-settings"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  const resetCharacter = useMutation({
+    mutationFn: () => api.delete("/admin/app-settings/character"),
+    onSuccess: () => {
+      setCharacterPreview(null);
+      qc.invalidateQueries({ queryKey: ["admin", "app-settings"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const base64 = ev.target?.result as string;
+      setCharacterPreview(base64);
+      uploadCharacter.mutate(base64);
+    };
+    reader.readAsDataURL(file);
+  }
 
   useEffect(() => {
     if (data?.data) {
@@ -231,6 +270,69 @@ export function AdminSettingsScreen() {
           <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>
             「{form.termUsp || "USP"}を {form.termQuest || "お題"}に組み合わせて、{form.termOneOnOne || "1to1"}でなかまのカードを集めよう！」
           </p>
+        </div>
+      </div>
+
+      {/* ---- キャラクター画像 ---- */}
+      <div className="card-paper p-6 space-y-4 mb-5">
+        <div>
+          <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+            🧙 トップキャラクター画像
+          </h2>
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            ログイン画面などに大きく表示されるキャラクター画像。PNG・JPEGに対応。
+          </p>
+        </div>
+
+        {/* プレビュー */}
+        <div className="flex items-center gap-4">
+          <div className="w-28 h-28 rounded-2xl overflow-hidden flex items-center justify-center shrink-0"
+            style={{ background: "var(--color-paper-200)", border: "2px solid var(--color-paper-300)" }}>
+            {characterPreview ? (
+              <img src={characterPreview} alt="キャラクタープレビュー" className="w-full h-full object-contain" />
+            ) : hasCustomCharacter ? (
+              <img src={`/api/character-image?t=${Date.now()}`} alt="現在のキャラクター" className="w-full h-full object-contain" />
+            ) : (
+              <img src="/character-default.png" alt="デフォルトキャラクター" className="w-full h-full object-contain" />
+            )}
+          </div>
+          <div className="flex flex-col gap-2 flex-1">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg"
+              className="hidden"
+              onChange={handleFileSelect}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadCharacter.isPending}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition hover:opacity-80 disabled:opacity-50"
+              style={{ background: "var(--color-brand)", color: "white" }}
+            >
+              <Upload size={15} />
+              {uploadCharacter.isPending ? "アップロード中..." : "画像を変更する"}
+            </button>
+            {hasCustomCharacter || characterPreview ? (
+              <button
+                onClick={() => resetCharacter.mutate()}
+                disabled={resetCharacter.isPending}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition hover:opacity-80 disabled:opacity-50"
+                style={{ background: "var(--color-paper-300)", color: "var(--color-ink-700)" }}
+              >
+                <RotateCcw size={14} />
+                デフォルトに戻す
+              </button>
+            ) : (
+              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+                <ImageIcon size={12} className="inline mr-1" />
+                現在はデフォルト画像を使用中
+              </p>
+            )}
+            {uploadCharacter.isSuccess && (
+              <p className="text-xs" style={{ color: "var(--color-success)" }}>✅ アップロード完了</p>
+            )}
+          </div>
         </div>
       </div>
 

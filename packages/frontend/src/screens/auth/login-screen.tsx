@@ -6,6 +6,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Mail, Sparkles, ArrowLeft, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
 import type { PublicMember } from "@shared/types";
 
 type Step = "email" | "otp";
@@ -20,6 +21,7 @@ export function LoginScreen() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
+  const { characterImageUrl, appTitle } = useSettings();
 
   // /admin からのリダイレクト時は管理者ログインモード
   const redirectTo = searchParams.get("redirect") ?? null;
@@ -148,11 +150,21 @@ export function LoginScreen() {
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center px-4 py-8" style={{ background: "var(--color-paper-100)" }}>
+      {/* キャラクター画像 */}
+      <div className="mb-2 relative">
+        <img
+          src={characterImageUrl}
+          alt="キャラクター"
+          className="w-52 h-52 object-contain drop-shadow-lg"
+          style={{ filter: "drop-shadow(0 4px 16px rgba(181,56,75,0.18))" }}
+          onError={(e) => { e.currentTarget.src = "/character-default.png"; }}
+        />
+      </div>
+
       {/* ロゴ・タイトル */}
       <div className="mb-8 text-center">
-        <div className="text-6xl mb-3">🃏</div>
         <h1 className="text-3xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
-          白樺クエスト
+          {appTitle}
         </h1>
         <p className="mt-1 text-sm" style={{ color: "var(--color-ink-500)" }}>
           仲間と一緒に、1to1でつながろう
