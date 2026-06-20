@@ -26,11 +26,10 @@ export function MemberAvatar({ memberId, emoji, bgColor, avatarImageKey, size = 
     return (
       <div className={`${sizeClass} ${rounded} shrink-0 overflow-hidden ${className}`}>
         <img
-          src={`${API_BASE_URL}/members/${memberId}/avatar`}
+          src={`${API_BASE_URL}/members/${memberId}/avatar?k=${encodeURIComponent(avatarImageKey)}`}
           alt={emoji}
           className="w-full h-full object-cover"
           onError={(e) => {
-            // 画像が読み込めなければ絵文字を表示
             const parent = e.currentTarget.parentElement;
             if (parent) {
               parent.innerHTML = `<div class="${sizeClass} ${rounded} flex items-center justify-center ${bgColor}">${emoji}</div>`;

@@ -29,7 +29,7 @@ type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
-  const { termQuest, termUsp, characterImageUrl, appTitle } = useSettings();
+  const { termQuest, termUsp, appTitle } = useSettings();
   const [seasonExpanded, setSeasonExpanded] = useState(false);
   const [pointsExpanded, setPointsExpanded] = useState(false);
 
@@ -109,14 +109,6 @@ export function HomeScreen() {
           <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{appTitle}</p>
         </div>
         <div className="flex items-center gap-2">
-          {/* キャラクター（小） */}
-          <img
-            src={characterImageUrl}
-            alt="キャラクター"
-            className="w-14 h-14 object-contain"
-            style={{ filter: "drop-shadow(0 2px 6px rgba(181,56,75,0.15))" }}
-            onError={(e) => { e.currentTarget.src = "/character-default.png"; }}
-          />
           {user && (
             <MemberAvatar
               memberId={user.id}

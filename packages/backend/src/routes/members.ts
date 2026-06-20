@@ -19,6 +19,35 @@ import type { Skill } from "@shared/types";
 
 export const memberRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
+// ---- GET /api/members/:id/avatar (公開 — 認証不要) ----
+// authMiddleware より前に登録することで <img> タグからも取得可能にする
+memberRoutes.get("/:id/avatar", async (c) => {
+  const db = createDb(c.env.DB);
+  const targetId = c.req.param("id");
+
+  const member = await db
+    .select({ avatarImageKey: schema.members.avatarImageKey })
+    .from(schema.members)
+    .where(eq(schema.members.id, targetId))
+    .get();
+
+  if (!member?.avatarImageKey) {
+    return c.json({ error: { code: "not_found", message: "アバター画像が設定されていません" } }, 404);
+  }
+
+  const obj = await c.env.R2.get(member.avatarImageKey);
+  if (!obj) return c.json({ error: { code: "not_found", message: "画像が見つかりません" } }, 404);
+
+  const contentType = obj.httpMetadata?.contentType ?? "image/jpeg";
+  const buf = await obj.arrayBuffer();
+  return new Response(buf, {
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=60",
+    },
+  });
+});
+
 memberRoutes.use("*", authMiddleware);
 
 // ---- GET /api/members ----
@@ -249,35 +278,6 @@ memberRoutes.delete("/me/avatar", async (c) => {
     .where(eq(schema.members.id, userId));
 
   return c.json({ ok: true });
-});
-
-// ---- GET /api/members/:id/avatar ----
-// アバター画像を返す（公開。設定されていなければ404）
-memberRoutes.get("/:id/avatar", async (c) => {
-  const db = createDb(c.env.DB);
-  const targetId = c.req.param("id");
-
-  const member = await db
-    .select({ avatarImageKey: schema.members.avatarImageKey })
-    .from(schema.members)
-    .where(eq(schema.members.id, targetId))
-    .get();
-
-  if (!member?.avatarImageKey) {
-    return c.json({ error: { code: "not_found", message: "アバター画像が設定されていません" } }, 404);
-  }
-
-  const obj = await c.env.R2.get(member.avatarImageKey);
-  if (!obj) return c.json({ error: { code: "not_found", message: "画像が見つかりません" } }, 404);
-
-  const contentType = obj.httpMetadata?.contentType ?? "image/png";
-  const buf = await obj.arrayBuffer();
-  return new Response(buf, {
-    headers: {
-      "Content-Type": contentType,
-      "Cache-Control": "public, max-age=60",
-    },
-  });
 });
 
 // 自分のカード画像（表面）をR2に保存する
