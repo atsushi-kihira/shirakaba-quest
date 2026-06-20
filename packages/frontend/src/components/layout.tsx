@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Home, Users, ScrollText, Trophy, User } from "lucide-react";
+import { Home, Users, ScrollText, Trophy, User, Shield } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
@@ -49,6 +49,7 @@ export function AppLayout() {
   const NAV_ITEMS = [
     { to: "/",        icon: Home,       label: "ホーム" },
     { to: "/members", icon: Users,      label: "なかま" },
+    { to: "/team",    icon: Shield,     label: "チーム" },
     { to: "/quests",  icon: ScrollText, label: settings.termQuest },
     { to: "/ranking", icon: Trophy,     label: "順位" },
     { to: "/me",      icon: User,       label: "マイ" },
@@ -96,11 +97,11 @@ export function AppLayout() {
         {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
           <NavLink key={to} to={to} end={to === "/"}
             className={({ isActive }) =>
-              `flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition min-w-[56px] text-xs relative ${isActive ? "font-medium" : ""}`
+              `flex flex-col items-center gap-0.5 flex-1 px-1 py-1.5 rounded-xl transition text-xs relative ${isActive ? "font-medium" : ""}`
             }
             style={({ isActive }) => ({ color: isActive ? "var(--color-brand)" : "var(--color-ink-400)" })}>
             <div className="relative">
-              <Icon size={22} />
+              <Icon size={20} />
               {/* ホームタブに通知バッジ */}
               {to === "/" && pendingCount > 0 && (
                 <span className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] rounded-full text-white flex items-center justify-center px-0.5 font-bold"

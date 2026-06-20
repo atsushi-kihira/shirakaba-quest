@@ -3,7 +3,7 @@
 // =============================================================
 import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Download, Upload, Check, ChevronDown as CollapseIcon } from "lucide-react";
+import { Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Download, Upload, Check, ChevronDown as CollapseIcon, GripVertical } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Usp, UspRequest } from "@shared/types";
 
@@ -57,6 +57,22 @@ export function AdminUspsScreen() {
   });
 
   const usps = data?.data ?? [];
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  function handleDrop(targetIdx: number) {
+    if (dragIdx === null || dragIdx === targetIdx) {
+      setDragIdx(null);
+      setDragOverIdx(null);
+      return;
+    }
+    const newOrder = [...usps];
+    const [moved] = newOrder.splice(dragIdx, 1);
+    newOrder.splice(targetIdx, 0, moved);
+    reorderMutation.mutate(newOrder.map((u) => u.id));
+    setDragIdx(null);
+    setDragOverIdx(null);
+  }
 
   function handleExport() {
     const exportData = usps.map((u, idx) => ({
@@ -192,8 +208,24 @@ export function AdminUspsScreen() {
       ) : (
         <div className="flex flex-col gap-2 mt-4">
           {usps.map((usp, idx) => (
-            <div key={usp.id} className="card-paper flex items-center gap-3 px-4 py-3">
-              {/* 並び替えボタン */}
+            <div
+              key={usp.id}
+              className="card-paper flex items-center gap-3 px-3 py-3 transition-all"
+              draggable={true}
+              onDragStart={() => setDragIdx(idx)}
+              onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
+              onDragOver={(e) => { e.preventDefault(); setDragOverIdx(idx); }}
+              onDrop={(e) => { e.preventDefault(); handleDrop(idx); }}
+              style={{
+                opacity: dragIdx === idx ? 0.5 : 1,
+                borderTop: dragOverIdx === idx && dragIdx !== idx ? "2px solid var(--color-brand)" : undefined,
+                cursor: "grab",
+              }}
+            >
+              {/* ドラッグハンドル */}
+              <GripVertical size={16} className="shrink-0 cursor-grab" style={{ color: "var(--color-ink-300)" }} />
+
+              {/* 上下ボタン（モバイル用） */}
               <div className="flex flex-col gap-0.5 shrink-0">
                 <button
                   onClick={() => moveUsp(idx, "up")}

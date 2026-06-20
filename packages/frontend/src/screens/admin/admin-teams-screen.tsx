@@ -3,12 +3,12 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus } from "lucide-react";
+import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus, Pencil, UserPlus } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Team } from "@shared/types";
 
 type TeamsResponse = { data: Team[] };
-type MembersResponse = { data: Array<{ id: string; name: string; emoji: string; bgColor: string }> };
+type MembersResponse = { data: Array<{ id: string; name: string; emoji: string; bgColor: string; status: string }> };
 type TeamRankingResponse = { data: Array<{ rank: number; team: { id: string; name: string; emblemEmoji: string }; totalPoints: number }> };
 
 const DEFAULT_EMOJIS = ["🦊", "🐻", "🐝", "🦉", "🐢", "🐧", "🦁", "🐯"];
@@ -24,6 +24,11 @@ export function AdminTeamsScreen() {
     queryFn: () => api.get<TeamsResponse>("/admin/teams"),
   });
 
+  const { data: membersData } = useQuery({
+    queryKey: ["admin", "members"],
+    queryFn: () => api.get<MembersResponse>("/admin/members"),
+  });
+
   const { data: rankingData } = useQuery({
     queryKey: ["teams", "ranking"],
     queryFn: () => api.get<TeamRankingResponse>("/teams/ranking"),
@@ -31,6 +36,11 @@ export function AdminTeamsScreen() {
   });
 
   const teams = data?.data ?? [];
+  const allMembers = (membersData?.data ?? []).filter((m) => m.status === "active");
+
+  // チームに所属しているメンバーIDのセット
+  const assignedMemberIds = new Set(teams.flatMap((t) => t.members.map((m) => m.memberId)));
+  const unassignedMembers = allMembers.filter((m) => !assignedMemberIds.has(m.id));
 
   const deleteTeam = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/teams/${id}`),
@@ -93,26 +103,37 @@ export function AdminTeamsScreen() {
               ))}
             </div>
           )}
+
+          {/* 未割り当てメンバー */}
+          {!isLoading && unassignedMembers.length > 0 && teams.length > 0 && (
+            <UnassignedMembersSection unassigned={unassignedMembers} teams={teams} />
+          )}
         </>
       )}
 
       {/* チームランキング */}
       {tab === "ranking" && (
         <div className="space-y-2">
-          {(rankingData?.data ?? []).map((entry) => (
-            <div key={entry.team.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3">
-              <div className="w-8 text-center font-bold text-sm shrink-0" style={{ color: "var(--color-ink-500)" }}>
-                {entry.rank}
-              </div>
-              <span className="text-2xl">{entry.team.emblemEmoji}</span>
-              <div className="flex-1">
-                <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{entry.team.name}</p>
-              </div>
-              <div className="font-bold text-lg" style={{ color: "var(--color-accent)" }}>
-                {entry.totalPoints}<span className="text-xs ml-0.5">pt</span>
-              </div>
+          {(rankingData?.data ?? []).length === 0 ? (
+            <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
+              チームランキングを計算中...
             </div>
-          ))}
+          ) : (
+            (rankingData?.data ?? []).map((entry) => (
+              <div key={entry.team.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3">
+                <div className="w-8 text-center font-bold text-sm shrink-0" style={{ color: "var(--color-ink-500)" }}>
+                  {entry.rank}
+                </div>
+                <span className="text-2xl">{entry.team.emblemEmoji}</span>
+                <div className="flex-1">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{entry.team.name}</p>
+                </div>
+                <div className="font-bold text-lg" style={{ color: "var(--color-accent)" }}>
+                  {entry.totalPoints}<span className="text-xs ml-0.5">pt</span>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       )}
 
@@ -122,10 +143,80 @@ export function AdminTeamsScreen() {
   );
 }
 
+// ---- 未割り当てメンバーセクション ----
+function UnassignedMembersSection({
+  unassigned,
+  teams,
+}: {
+  unassigned: Array<{ id: string; name: string; emoji: string; bgColor: string }>;
+  teams: Team[];
+}) {
+  const qc = useQueryClient();
+  const [assignTeam, setAssignTeam] = useState<Record<string, string>>({});
+
+  const addMember = useMutation({
+    mutationFn: ({ teamId, memberId }: { teamId: string; memberId: string }) =>
+      api.post(`/admin/teams/${teamId}/members`, { memberId }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "teams"] }),
+  });
+
+  return (
+    <div className="mt-6">
+      <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>
+        ⚠️ チーム未割り当てのメンバー（{unassigned.length}名）
+      </h2>
+      <div className="space-y-2">
+        {unassigned.map((m) => (
+          <div key={m.id} className="card-paper rounded-2xl px-3 py-2.5 flex items-center gap-2">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-lg shrink-0 ${m.bgColor}`}>
+              {m.emoji}
+            </div>
+            <span className="flex-1 text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{m.name}</span>
+            <select
+              value={assignTeam[m.id] ?? ""}
+              onChange={(e) => setAssignTeam((prev) => ({ ...prev, [m.id]: e.target.value }))}
+              className="text-xs rounded-xl px-2 py-1.5 border"
+              style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-700)" }}
+            >
+              <option value="">チームを選択...</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>{t.emblemEmoji} {t.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => {
+                const teamId = assignTeam[m.id];
+                if (!teamId) return;
+                addMember.mutate({ teamId, memberId: m.id });
+              }}
+              disabled={!assignTeam[m.id] || addMember.isPending}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium text-white disabled:opacity-40"
+              style={{ background: "var(--color-brand)" }}
+            >
+              <UserPlus size={12} />
+              追加
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---- チームカード ----
 function TeamCard({ team, onDelete }: { team: Team; onDelete: () => void }) {
   const qc = useQueryClient();
   const [showMembers, setShowMembers] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(team.name);
+
+  const editTeam = useMutation({
+    mutationFn: ({ name }: { name: string }) => api.patch(`/admin/teams/${team.id}`, { name }),
+    onSuccess: () => {
+      setEditing(false);
+      qc.invalidateQueries({ queryKey: ["admin", "teams"] });
+    },
+  });
 
   const removeMember = useMutation({
     mutationFn: ({ memberId }: { memberId: string }) =>
@@ -143,8 +234,41 @@ function TeamCard({ team, onDelete }: { team: Team; onDelete: () => void }) {
     <div className="card-paper p-4">
       <div className="flex items-center gap-3 mb-2">
         <span className="text-3xl">{team.emblemEmoji}</span>
-        <div className="flex-1">
-          <p className="font-semibold" style={{ color: "var(--color-ink-800)" }}>{team.name}</p>
+        <div className="flex-1 min-w-0">
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="flex-1 px-2 py-1 rounded-xl border text-sm"
+                style={{ borderColor: "var(--color-brand)", outline: "none" }}
+                autoFocus
+                onKeyDown={(e) => { if (e.key === "Enter") editTeam.mutate({ name: editName.trim() }); if (e.key === "Escape") { setEditing(false); setEditName(team.name); }}}
+              />
+              <button
+                onClick={() => editTeam.mutate({ name: editName.trim() })}
+                disabled={!editName.trim() || editTeam.isPending}
+                className="px-2.5 py-1 rounded-xl text-xs font-medium text-white disabled:opacity-50"
+                style={{ background: "var(--color-brand)" }}
+              >保存</button>
+              <button
+                onClick={() => { setEditing(false); setEditName(team.name); }}
+                className="px-2.5 py-1 rounded-xl text-xs"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+              >取消</button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <p className="font-semibold" style={{ color: "var(--color-ink-800)" }}>{team.name}</p>
+              <button
+                onClick={() => { setEditing(true); setEditName(team.name); }}
+                className="p-1 rounded-lg hover:opacity-70"
+                title="チーム名を編集"
+              >
+                <Pencil size={12} style={{ color: "var(--color-ink-400)" }} />
+              </button>
+            </div>
+          )}
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{team.members.length}名</p>
         </div>
         <div className="flex gap-2">
@@ -273,7 +397,7 @@ function AutoAssignModal({ onClose }: { onClose: () => void }) {
     queryKey: ["admin", "members"],
     queryFn: () => api.get<MembersResponse>("/admin/members"),
   });
-  const activeMembers = (membersData?.data ?? []);
+  const activeMembers = (membersData?.data ?? []).filter((m) => m.status === "active");
   const teamCount = Math.ceil(activeMembers.length / teamSize);
 
   const assign = useMutation({

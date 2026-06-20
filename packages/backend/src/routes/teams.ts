@@ -1,7 +1,8 @@
 // =============================================================
 // チームルート（公開・認証必要）
-// GET /api/teams     — チーム一覧（自分の所属チーム含む）
-// GET /api/teams/:id — チーム詳細
+// GET /api/teams          — チーム一覧（自分の所属チーム含む・メンバーポイント付き）
+// GET /api/teams/ranking  — チームランキング ※ /:id より前に登録すること
+// GET /api/teams/:id      — チーム詳細
 // =============================================================
 import { Hono } from "hono";
 import { eq, sql } from "drizzle-orm";
@@ -21,10 +22,7 @@ teamRoutes.get("/", async (c) => {
   const viewerId  = (await resolveEffectiveMemberId(db, rawUserId, userType)) ?? rawUserId;
 
   const teams = await db.select().from(schema.teams).all();
-  const allTeamMembers = await db
-    .select()
-    .from(schema.teamMembers)
-    .all();
+  const allTeamMembers = await db.select().from(schema.teamMembers).all();
 
   const memberIds = [...new Set(allTeamMembers.map((tm) => tm.memberId))];
   const members = memberIds.length > 0
@@ -34,7 +32,26 @@ teamRoutes.get("/", async (c) => {
         skills: schema.members.skills,
       }).from(schema.members).all()
     : [];
-  const memberMap = new Map(members.map((m) => [m.id, { ...m, skills: JSON.parse(m.skills ?? "[]") }]));
+
+  // 各メンバーのポイント合計
+  const pointRows = memberIds.length > 0
+    ? await db
+        .select({
+          memberId: schema.pointTransactions.memberId,
+          total: sql<number>`sum(${schema.pointTransactions.delta})`.as("total"),
+        })
+        .from(schema.pointTransactions)
+        .where(sql`${schema.pointTransactions.delta} > 0`)
+        .groupBy(schema.pointTransactions.memberId)
+        .all()
+    : [];
+  const pointMap = new Map(pointRows.map((r) => [r.memberId, r.total ?? 0]));
+
+  const memberMap = new Map(members.map((m) => [m.id, {
+    ...m,
+    skills: JSON.parse(m.skills ?? "[]"),
+    points: pointMap.get(m.id) ?? 0,
+  }]));
 
   const result = teams.map((t) => {
     const tms = allTeamMembers.filter((tm) => tm.teamId === t.id);
@@ -60,7 +77,38 @@ teamRoutes.get("/", async (c) => {
   return c.json({ data: result });
 });
 
-// GET /api/teams/:id
+// GET /api/teams/ranking  ← /:id より前に登録（"ranking" が id として処理されるバグを防ぐ）
+teamRoutes.get("/ranking", async (c) => {
+  const db = createDb(c.env.DB);
+  const teams = await db.select().from(schema.teams).all();
+  const allTeamMembers = await db.select().from(schema.teamMembers).all();
+
+  const pointRows = await db
+    .select({
+      memberId: schema.pointTransactions.memberId,
+      total: sql<number>`sum(${schema.pointTransactions.delta})`.as("total"),
+    })
+    .from(schema.pointTransactions)
+    .where(sql`${schema.pointTransactions.delta} > 0`)
+    .groupBy(schema.pointTransactions.memberId)
+    .all();
+
+  const pointMap = new Map(pointRows.map((r) => [r.memberId, r.total ?? 0]));
+
+  const teamPoints = teams.map((t) => {
+    const tms = allTeamMembers.filter((tm) => tm.teamId === t.id);
+    const total = tms.reduce((sum, tm) => sum + (pointMap.get(tm.memberId) ?? 0), 0);
+    return { team: { id: t.id, name: t.name, emblemEmoji: t.emblemEmoji }, totalPoints: total };
+  });
+
+  teamPoints.sort((a, b) => b.totalPoints - a.totalPoints);
+
+  return c.json({
+    data: teamPoints.map((tp, i) => ({ rank: i + 1, ...tp })),
+  });
+});
+
+// GET /api/teams/:id  ← /ranking の後に登録
 teamRoutes.get("/:id", async (c) => {
   const db = createDb(c.env.DB);
   const team = await db.select().from(schema.teams).where(eq(schema.teams.id, c.req.param("id"))).get();
@@ -93,36 +141,5 @@ teamRoutes.get("/:id", async (c) => {
         member: memberMap.get(tm.memberId),
       })),
     },
-  });
-});
-
-// GET /api/teams/ranking
-teamRoutes.get("/ranking", async (c) => {
-  const db = createDb(c.env.DB);
-  const teams = await db.select().from(schema.teams).all();
-  const allTeamMembers = await db.select().from(schema.teamMembers).all();
-
-  const pointRows = await db
-    .select({
-      memberId: schema.pointTransactions.memberId,
-      total: sql<number>`sum(${schema.pointTransactions.delta})`.as("total"),
-    })
-    .from(schema.pointTransactions)
-    .where(sql`${schema.pointTransactions.delta} > 0`)
-    .groupBy(schema.pointTransactions.memberId)
-    .all();
-
-  const pointMap = new Map(pointRows.map((r) => [r.memberId, r.total ?? 0]));
-
-  const teamPoints = teams.map((t) => {
-    const tms = allTeamMembers.filter((tm) => tm.teamId === t.id);
-    const total = tms.reduce((sum, tm) => sum + (pointMap.get(tm.memberId) ?? 0), 0);
-    return { team: { id: t.id, name: t.name, emblemEmoji: t.emblemEmoji }, totalPoints: total };
-  });
-
-  teamPoints.sort((a, b) => b.totalPoints - a.totalPoints);
-
-  return c.json({
-    data: teamPoints.map((tp, i) => ({ rank: i + 1, ...tp })),
   });
 });
