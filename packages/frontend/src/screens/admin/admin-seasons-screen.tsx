@@ -136,16 +136,14 @@ type PointConfig = {
   pointRealCard: string;
   pointQuestNormal: string;
   pointQuestHard: string;
-  pointWelcomeQuestBonus: string;
 };
 
 function PointConfigFields({ pts, onChange }: { pts: PointConfig; onChange: (key: keyof PointConfig, v: string) => void }) {
   const fields: { key: keyof PointConfig; label: string }[] = [
-    { key: "pointOneOnOne",          label: "🤝 1to1完了" },
-    { key: "pointRealCard",          label: "🃏 リアルカード受け取り" },
-    { key: "pointQuestNormal",       label: "⚔️ 通常お題クリア" },
-    { key: "pointQuestHard",         label: "🔥 難題クリア" },
-    { key: "pointWelcomeQuestBonus", label: "🎉 歓迎クエストボーナス" },
+    { key: "pointOneOnOne",    label: "🤝 1to1完了" },
+    { key: "pointRealCard",    label: "🃏 リアルカード受け取り" },
+    { key: "pointQuestNormal", label: "⚔️ 通常お題クリア" },
+    { key: "pointQuestHard",   label: "🔥 難題クリア" },
   ];
   return (
     <div>
@@ -174,17 +172,16 @@ function PointConfigFields({ pts, onChange }: { pts: PointConfig; onChange: (key
 }
 
 function emptyPts(): PointConfig {
-  return { pointOneOnOne: "", pointRealCard: "", pointQuestNormal: "", pointQuestHard: "", pointWelcomeQuestBonus: "" };
+  return { pointOneOnOne: "", pointRealCard: "", pointQuestNormal: "", pointQuestHard: "" };
 }
 
 function ptsToBody(pts: PointConfig) {
   const parse = (v: string) => v.trim() === "" ? null : Number(v);
   return {
-    pointOneOnOne:          parse(pts.pointOneOnOne),
-    pointRealCard:          parse(pts.pointRealCard),
-    pointQuestNormal:       parse(pts.pointQuestNormal),
-    pointQuestHard:         parse(pts.pointQuestHard),
-    pointWelcomeQuestBonus: parse(pts.pointWelcomeQuestBonus),
+    pointOneOnOne:    parse(pts.pointOneOnOne),
+    pointRealCard:    parse(pts.pointRealCard),
+    pointQuestNormal: parse(pts.pointQuestNormal),
+    pointQuestHard:   parse(pts.pointQuestHard),
   };
 }
 
@@ -258,16 +255,15 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 }
 
 // ---- 編集フォーム ----
-function EditForm({ season, onDone }: { season: Season & { pointOneOnOne?: number | null; pointRealCard?: number | null; pointQuestNormal?: number | null; pointQuestHard?: number | null; pointWelcomeQuestBonus?: number | null }; onDone: () => void }) {
+function EditForm({ season, onDone }: { season: Season & { pointOneOnOne?: number | null; pointRealCard?: number | null; pointQuestNormal?: number | null; pointQuestHard?: number | null }; onDone: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState(season.name);
   const [theme, setTheme] = useState(season.theme);
   const [pts, setPts] = useState<PointConfig>({
-    pointOneOnOne:          season.pointOneOnOne          != null ? String(season.pointOneOnOne)          : "",
-    pointRealCard:          season.pointRealCard           != null ? String(season.pointRealCard)           : "",
-    pointQuestNormal:       season.pointQuestNormal        != null ? String(season.pointQuestNormal)        : "",
-    pointQuestHard:         season.pointQuestHard          != null ? String(season.pointQuestHard)          : "",
-    pointWelcomeQuestBonus: season.pointWelcomeQuestBonus  != null ? String(season.pointWelcomeQuestBonus)  : "",
+    pointOneOnOne:    season.pointOneOnOne    != null ? String(season.pointOneOnOne)    : "",
+    pointRealCard:    season.pointRealCard     != null ? String(season.pointRealCard)     : "",
+    pointQuestNormal: season.pointQuestNormal  != null ? String(season.pointQuestNormal)  : "",
+    pointQuestHard:   season.pointQuestHard    != null ? String(season.pointQuestHard)    : "",
   });
 
   const save = useMutation({
