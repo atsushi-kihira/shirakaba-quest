@@ -6,6 +6,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, QrCode } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { buildSkillDescription } from "@shared/types";
@@ -175,9 +176,14 @@ export function MemberDetailScreen() {
       {/* プロフィールカード */}
       <div className="card-paper rounded-3xl p-6 mb-4">
         <div className="flex items-start gap-4">
-          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-4xl shrink-0 ${member.bgColor}`}>
-            {member.emoji}
-          </div>
+          <MemberAvatar
+            memberId={member.id}
+            emoji={member.emoji}
+            bgColor={member.bgColor}
+            avatarImageKey={member.avatarImageKey}
+            size="xl"
+            rounded="rounded-2xl"
+          />
           <div className="flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-semibold" style={{ fontFamily: "var(--font-klee)" }}>

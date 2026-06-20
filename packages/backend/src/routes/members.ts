@@ -67,6 +67,7 @@ memberRoutes.get("/", async (c) => {
       skills: parseJson<Skill[]>(member.skills, []),
       connectionStatus: connStatus,
       hasCardImage: isUnlocked ? !!member.cardImageKey : false,
+      avatarImageKey: member.avatarImageKey ?? null,
       // 個人情報は1to1後のみ
       company:      isUnlocked ? member.company      : null,
       role:         isUnlocked ? member.role         : null,

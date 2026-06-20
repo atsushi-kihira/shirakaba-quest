@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Search, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { MemberAvatar } from "@/components/member-avatar";
 import type { PublicMember } from "@shared/types";
 
 type MembersResponse = { data: PublicMember[] };
@@ -103,11 +104,14 @@ function MemberCard({ member }: { member: PublicMember }) {
       className="card-paper rounded-2xl p-4 flex items-start gap-3 block transition hover:opacity-90 active:scale-[0.98]"
     >
       {/* アバター */}
-      <div
-        className={`w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0 ${member.bgColor}`}
-      >
-        {member.emoji}
-      </div>
+      <MemberAvatar
+        memberId={member.id}
+        emoji={member.emoji}
+        bgColor={member.bgColor}
+        avatarImageKey={member.avatarImageKey}
+        size="lg"
+        rounded="rounded-xl"
+      />
 
       {/* 情報 */}
       <div className="flex-1 min-w-0">

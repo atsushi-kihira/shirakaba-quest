@@ -7,6 +7,7 @@ import { Loader2, LogOut, QrCode, X, ChevronRight, Pencil, Check, Plus, Trash2, 
 import { useNavigate, Link } from "react-router-dom";
 import QRCode from "qrcode";
 import { api, API_BASE_URL } from "@/lib/api";
+import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { queryClient as globalQc } from "@/lib/query-client";
@@ -163,9 +164,14 @@ export function MypageScreen() {
           {/* プロフィールカード */}
           <div className="card-paper rounded-3xl p-5">
             <div className="flex items-center gap-4 mb-4">
-              <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-4xl shrink-0 ${member?.bgColor ?? user?.bgColor ?? "bg-amber-100"}`}>
-                {member?.emoji ?? user?.emoji ?? "🙂"}
-              </div>
+              <MemberAvatar
+                memberId={effectiveMemberId ?? user?.id ?? ""}
+                emoji={member?.emoji ?? user?.emoji ?? "🙂"}
+                bgColor={member?.bgColor ?? user?.bgColor ?? "bg-amber-100"}
+                avatarImageKey={(member as { avatarImageKey?: string | null } | null)?.avatarImageKey ?? user?.avatarImageKey}
+                size="xl"
+                rounded="rounded-2xl"
+              />
               <div className="flex-1 min-w-0">
                 <h2 className="text-xl font-semibold truncate" style={{ fontFamily: "var(--font-klee)" }}>
                   {member?.name ?? user?.name}
@@ -497,6 +503,7 @@ function EditModal({ member, onClose, onSaved }: {
     skills: (member.skills as Skill[]) ?? [],
   });
   const [error, setError] = useState("");
+  const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
   const avatarFileRef = useRef<HTMLInputElement>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const hasAvatar = !!member.avatarImageKey || !!avatarPreview;
@@ -504,7 +511,13 @@ function EditModal({ member, onClose, onSaved }: {
   const uploadAvatar = useMutation({
     mutationFn: (imageBase64: string) => api.post("/members/me/avatar", { imageBase64 }),
     onSuccess: () => {
+      setUploadStatus("success");
       qcEdit.invalidateQueries({ queryKey: ["member", member.id] });
+      qcEdit.invalidateQueries({ queryKey: ["me"] });
+    },
+    onError: () => {
+      setUploadStatus("error");
+      setAvatarPreview(null);
     },
   });
 
@@ -512,7 +525,9 @@ function EditModal({ member, onClose, onSaved }: {
     mutationFn: () => api.delete("/members/me/avatar"),
     onSuccess: () => {
       setAvatarPreview(null);
+      setUploadStatus("idle");
       qcEdit.invalidateQueries({ queryKey: ["member", member.id] });
+      qcEdit.invalidateQueries({ queryKey: ["me"] });
     },
   });
 
@@ -579,21 +594,40 @@ function EditModal({ member, onClose, onSaved }: {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
+                    setUploadStatus("idle");
                     const reader = new FileReader();
                     reader.onload = (ev) => {
-                      const b64 = ev.target?.result as string;
-                      setAvatarPreview(b64);
-                      uploadAvatar.mutate(b64);
+                      const original = ev.target?.result as string;
+                      const img = new Image();
+                      img.onload = () => {
+                        const ratio = Math.min(1, 160 / img.width, 160 / img.height);
+                        const w = Math.round(img.width * ratio);
+                        const h = Math.round(img.height * ratio);
+                        const canvas = document.createElement("canvas");
+                        canvas.width = w; canvas.height = h;
+                        canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+                        const resized = canvas.toDataURL("image/jpeg", 0.85);
+                        setAvatarPreview(resized);
+                        uploadAvatar.mutate(resized.split(",")[1]);
+                      };
+                      img.src = original;
                     };
                     reader.readAsDataURL(file);
+                    e.target.value = "";
                   }} />
                 <button type="button" onClick={() => avatarFileRef.current?.click()}
                   disabled={uploadAvatar.isPending}
                   className="flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-medium disabled:opacity-50"
                   style={{ background: "var(--color-brand)", color: "white" }}>
                   <Upload size={12} />
-                  {uploadAvatar.isPending ? "アップロード中..." : "写真をアップロード"}
+                  {uploadAvatar.isPending ? "アップロード中..." : "アバター画像をアップロード"}
                 </button>
+                {uploadStatus === "success" && (
+                  <p className="text-xs font-medium" style={{ color: "var(--color-success)" }}>✅ アップロード完了</p>
+                )}
+                {uploadStatus === "error" && (
+                  <p className="text-xs font-medium" style={{ color: "var(--color-brand)" }}>⚠️ アップロードに失敗しました</p>
+                )}
                 {hasAvatar && (
                   <button type="button" onClick={() => deleteAvatar.mutate()}
                     disabled={deleteAvatar.isPending}
