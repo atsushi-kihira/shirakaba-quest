@@ -83,7 +83,7 @@ app.get("/api/character-image", async (c) => {
   return new Response(buf, {
     headers: {
       "Content-Type": contentType,
-      "Cache-Control": "public, max-age=86400",
+      "Cache-Control": "public, max-age=60",
     },
   });
 });

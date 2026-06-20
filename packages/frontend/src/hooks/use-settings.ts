@@ -2,7 +2,7 @@
 // アプリ設定フック（公開エンドポイント、全ユーザー共通）
 // =============================================================
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, API_BASE_URL } from "@/lib/api";
 
 export type AppSettings = {
   appTitle: string;
@@ -21,7 +21,8 @@ type SettingsResponse = {
 };
 
 const DEFAULT_CHARACTER_URL = "/character-default.png";
-const CUSTOM_CHARACTER_URL  = "/api/character-image";
+// Workers の絶対 URL を使用（Pages の相対 /api は 404 になるため）
+const CUSTOM_CHARACTER_URL  = `${API_BASE_URL}/character-image`;
 
 const DEFAULTS: AppSettings = {
   appTitle: "白樺クエスト",

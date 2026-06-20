@@ -4,7 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, Upload, RotateCcw, ImageIcon } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, API_BASE_URL } from "@/lib/api";
 
 type AppSettings = {
   id: string;
@@ -51,6 +51,8 @@ export function AdminSettingsScreen() {
   const [characterPreview, setCharacterPreview] = useState<string | null>(null);
   const hasCustomCharacter = data?.data?.characterImageKey != null;
 
+  const [uploadTs, setUploadTs] = useState<number>(0);
+
   const uploadCharacter = useMutation({
     mutationFn: (imageBase64: string) =>
       api.post("/admin/app-settings/character", {
@@ -58,6 +60,7 @@ export function AdminSettingsScreen() {
         mimeType: imageBase64.startsWith("data:image/png") ? "image/png" : "image/jpeg",
       }),
     onSuccess: () => {
+      setUploadTs(Date.now());
       qc.invalidateQueries({ queryKey: ["admin", "app-settings"] });
       qc.invalidateQueries({ queryKey: ["settings"] });
     },
@@ -291,7 +294,7 @@ export function AdminSettingsScreen() {
             {characterPreview ? (
               <img src={characterPreview} alt="キャラクタープレビュー" className="w-full h-full object-contain" />
             ) : hasCustomCharacter ? (
-              <img src={`/api/character-image?t=${Date.now()}`} alt="現在のキャラクター" className="w-full h-full object-contain" />
+              <img src={`${API_BASE_URL}/character-image?t=${uploadTs || Date.now()}`} alt="現在のキャラクター" className="w-full h-full object-contain" />
             ) : (
               <img src="/character-default.png" alt="デフォルトキャラクター" className="w-full h-full object-contain" />
             )}
@@ -331,6 +334,11 @@ export function AdminSettingsScreen() {
             )}
             {uploadCharacter.isSuccess && (
               <p className="text-xs" style={{ color: "var(--color-success)" }}>✅ アップロード完了</p>
+            )}
+            {uploadCharacter.isError && (
+              <p className="text-xs" style={{ color: "var(--color-brand)" }}>
+                ❌ {uploadCharacter.error instanceof Error ? uploadCharacter.error.message : "アップロードに失敗しました"}
+              </p>
             )}
           </div>
         </div>
