@@ -14,7 +14,11 @@ import type { Season, EventCampaign } from "@shared/types";
 
 type MyRankResponse  = { data: { points: number; rank: number } };
 type ActiveSeasonResponse = { data: Season | null };
-type ActiveEvent = EventCampaign & { relatedMemberName?: string | null; relatedMemberEmoji?: string | null };
+type ActiveEvent = EventCampaign & {
+  relatedMemberName?: string | null;
+  relatedMemberEmoji?: string | null;
+  relatedMembers?: { id: string; name: string; emoji: string }[];
+};
 type ActiveEventsResponse = { data: ActiveEvent[] };
 type OnoSession = {
   id: string;
@@ -79,22 +83,19 @@ export function HomeScreen() {
   const specialWeek   = activeEvents.find((e) => e.type === "special_quest_week");
   const welcomeEvents = activeEvents.filter((e): e is ActiveEvent => e.type === "welcome_quest");
 
-  // 通知が必要なセッション
-  const needAction = sessions.filter((s) => {
-    if (s.status === "pending" && s.myRole === "responder") return true; // 承諾待ち
-    if (s.status === "accepted") {
-      const myDone = s.myRole === "requester" ? s.requesterCompletedAt : s.responderCompletedAt;
-      if (!myDone) return true; // 完了ボタン未押下
-    }
-    return false;
-  });
-
+  // 承諾待ちの申込（自分が受け手）
   const pendingApproval = sessions.filter((s) => s.status === "pending" && s.myRole === "responder");
+
+  // 相手が完了済みなのに自分がまだ押していないセッション（緊急度あり）
   const waitingComplete = sessions.filter((s) => {
     if (s.status !== "accepted") return false;
-    const myDone = s.myRole === "requester" ? s.requesterCompletedAt : s.responderCompletedAt;
-    return !myDone;
+    const myDone      = s.myRole === "requester" ? s.requesterCompletedAt : s.responderCompletedAt;
+    const partnerDone = s.myRole === "requester" ? s.responderCompletedAt : s.requesterCompletedAt;
+    return !myDone && !!partnerDone;
   });
+
+  // 通知が必要なセッション（承諾待ち or 相手完了済みで自分未完了）
+  const needAction = [...pendingApproval, ...waitingComplete];
 
   return (
     <div className="px-4 py-6 space-y-5 max-w-xl mx-auto lg:max-w-none pb-24">
@@ -168,20 +169,32 @@ export function HomeScreen() {
       {welcomeEvents.length > 0 && (
         <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.2)" }}>
           <p className="text-xs font-semibold mb-1" style={{ color: "var(--color-brand)" }}>🎉 新メンバー歓迎クエスト実施中！</p>
-          {welcomeEvents.map((ev) => (
-            <div key={ev.id} className="flex items-center gap-1 flex-wrap">
-              {ev.relatedMemberId ? (
-                <Link to={`/members/${ev.relatedMemberId}`} className="text-sm font-semibold underline underline-offset-2" style={{ color: "var(--color-brand)" }}>
-                  {ev.relatedMemberEmoji} {ev.relatedMemberName ?? ev.title}
-                </Link>
-              ) : (
-                <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>{ev.title}</span>
-              )}
-              {ev.relatedMemberId && (
-                <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>さんが仲間入り！</span>
-              )}
-            </div>
-          ))}
+          {welcomeEvents.map((ev) => {
+            const members = ev.relatedMembers && ev.relatedMembers.length > 0
+              ? ev.relatedMembers
+              : ev.relatedMemberId
+                ? [{ id: ev.relatedMemberId, name: ev.relatedMemberName ?? ev.title, emoji: ev.relatedMemberEmoji ?? "" }]
+                : [];
+            return (
+              <div key={ev.id} className="flex items-center gap-1 flex-wrap">
+                {members.length > 0 ? (
+                  <>
+                    {members.map((m, idx) => (
+                      <span key={m.id}>
+                        <Link to={`/members/${m.id}`} className="text-sm font-semibold underline underline-offset-2" style={{ color: "var(--color-brand)" }}>
+                          {m.emoji} {m.name}
+                        </Link>
+                        {idx < members.length - 1 && <span className="text-sm" style={{ color: "var(--color-ink-500)" }}>、</span>}
+                      </span>
+                    ))}
+                    <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>さんが仲間入り！</span>
+                  </>
+                ) : (
+                  <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>{ev.title}</span>
+                )}
+              </div>
+            );
+          })}
           <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>1to1完了で +1pt ボーナス！</p>
         </div>
       )}

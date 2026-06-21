@@ -58,6 +58,7 @@ eventRoutes.get("/active", async (c) => {
           relatedMemberName: firstMember?.name ?? null,
           relatedMemberEmoji: firstMember?.emoji ?? null,
           relatedMemberIds: ids,
+          relatedMembers: ids.map((id) => memberMap.get(id)).filter(Boolean) as { id: string; name: string; emoji: string }[],
         };
       }
       return base;

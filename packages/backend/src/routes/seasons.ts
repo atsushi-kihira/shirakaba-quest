@@ -76,14 +76,18 @@ seasonRoutes.get("/ranking", authMiddleware, async (c) => {
     .all();
 
   const memberMap = new Map(members.map((m) => [m.id, m]));
+  const pointMap = new Map(rows.filter((r) => memberMap.has(r.memberId)).map((r) => [r.memberId, Number(r.total ?? 0)]));
 
-  const result = rows
-    .filter((r) => memberMap.has(r.memberId))
-    .map((r, i) => ({
-      rank: i + 1,
-      member: memberMap.get(r.memberId)!,
-      points: r.total ?? 0,
-    }));
+  // ポイント0のアクティブメンバーも含めて全員をランキングに載せる
+  const ranked = members
+    .map((m) => ({ member: m, points: pointMap.get(m.id) ?? 0 }))
+    .sort((a, b) => b.points - a.points);
+
+  const result = ranked.map((r, i) => ({
+    rank: i + 1,
+    member: r.member,
+    points: r.points,
+  }));
 
   return c.json({
     data: result,
