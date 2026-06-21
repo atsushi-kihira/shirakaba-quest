@@ -115,7 +115,7 @@ adminQuestRoutes.post("/ai-generate", async (c) => {
   const { userPrompt } = await c.req.json<{ userPrompt?: string }>().catch(() => ({ userPrompt: undefined }));
 
   const usps = await db
-    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji, description: schema.usps.description })
     .from(schema.usps)
     .orderBy(schema.usps.sortOrder)
     .all();
@@ -155,7 +155,7 @@ adminQuestRoutes.post("/ai-bulk-generate", async (c) => {
   }
 
   const usps = await db
-    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji, description: schema.usps.description })
     .from(schema.usps)
     .orderBy(schema.usps.sortOrder)
     .all();
@@ -291,7 +291,7 @@ adminQuestRoutes.post("/regenerate-skills-preview", async (c) => {
   }
 
   const usps = await db
-    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji, description: schema.usps.description })
     .from(schema.usps)
     .orderBy(schema.usps.sortOrder)
     .all();
@@ -339,7 +339,7 @@ adminQuestRoutes.post("/:id/regenerate", async (c) => {
   if (!quest) return c.json({ error: { code: "not_found", message: "お題が見つかりません" } }, 404);
 
   const usps = await db
-    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji, description: schema.usps.description })
     .from(schema.usps)
     .orderBy(schema.usps.sortOrder)
     .all();
@@ -381,7 +381,7 @@ adminQuestRoutes.post("/:id/regenerate-skills", async (c) => {
   if (!quest) return c.json({ error: { code: "not_found", message: "お題が見つかりません" } }, 404);
 
   const usps = await db
-    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji, description: schema.usps.description })
     .from(schema.usps)
     .orderBy(schema.usps.sortOrder)
     .all();
