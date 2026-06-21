@@ -274,20 +274,21 @@ function Step1Scan({
   cameraRef: React.RefObject<HTMLInputElement | null>;
   galleryRef: React.RefObject<HTMLInputElement | null>;
   appTitle: string;
-  characterImageUrl: string;
+  characterImageUrl: string | null;
   onNext: () => void;
 }) {
   return (
     <div>
       {/* キャラクター画像 + アプリ名 */}
       <div className="flex flex-col items-center mb-5">
-        <img
-          src={characterImageUrl}
-          alt="キャラクター"
-          className="w-32 h-32 object-contain"
-          style={{ filter: "drop-shadow(0 4px 12px rgba(181,56,75,0.15))" }}
-          onError={(e) => { e.currentTarget.src = "/character-default.png"; }}
-        />
+        {characterImageUrl && (
+          <img
+            src={characterImageUrl}
+            alt="キャラクター"
+            className="w-32 h-32 object-contain"
+            style={{ filter: "drop-shadow(0 4px 12px rgba(181,56,75,0.15))" }}
+          />
+        )}
         <p
           className="text-xl font-semibold mt-2"
           style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}

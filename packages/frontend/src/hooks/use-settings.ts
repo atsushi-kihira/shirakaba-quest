@@ -12,17 +12,16 @@ export type AppSettings = {
   termUsp: string;
   termOneOnOne: string;
   characterImageKey: string | null;
-  /** 表示用URL（カスタム未設定時はデフォルト画像を指す） */
-  characterImageUrl: string;
+  /** カスタム画像のURL。未設定またはロード前は null（デフォルト画像へのフォールバックは行わない） */
+  characterImageUrl: string | null;
 };
 
 type SettingsResponse = {
   data: Omit<AppSettings, "characterImageUrl">;
 };
 
-const DEFAULT_CHARACTER_URL = "/character-default.png";
 // Workers の絶対 URL を使用（Pages の相対 /api は 404 になるため）
-const CUSTOM_CHARACTER_URL  = `${API_BASE_URL}/character-image`;
+const CUSTOM_CHARACTER_URL = `${API_BASE_URL}/character-image`;
 
 const DEFAULTS: AppSettings = {
   appTitle: "白樺クエスト",
@@ -32,7 +31,7 @@ const DEFAULTS: AppSettings = {
   termUsp: "USP",
   termOneOnOne: "1to1",
   characterImageKey: null,
-  characterImageUrl: DEFAULT_CHARACTER_URL,
+  characterImageUrl: null,
 };
 
 export function useSettings(): AppSettings {
@@ -44,6 +43,6 @@ export function useSettings(): AppSettings {
   if (!data?.data) return DEFAULTS;
   return {
     ...data.data,
-    characterImageUrl: data.data.characterImageKey ? CUSTOM_CHARACTER_URL : DEFAULT_CHARACTER_URL,
+    characterImageUrl: data.data.characterImageKey ? CUSTOM_CHARACTER_URL : null,
   };
 }

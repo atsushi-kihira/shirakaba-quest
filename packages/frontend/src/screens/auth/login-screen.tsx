@@ -150,16 +150,17 @@ export function LoginScreen() {
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center px-4 py-8" style={{ background: "var(--color-paper-100)" }}>
-      {/* キャラクター画像 */}
-      <div className="mb-2 relative">
-        <img
-          src={characterImageUrl}
-          alt="キャラクター"
-          className="w-52 h-52 object-contain drop-shadow-lg"
-          style={{ filter: "drop-shadow(0 4px 16px rgba(181,56,75,0.18))" }}
-          onError={(e) => { e.currentTarget.src = "/character-default.png"; }}
-        />
-      </div>
+      {/* キャラクター画像（カスタム設定時のみ表示） */}
+      {characterImageUrl && (
+        <div className="mb-2 relative">
+          <img
+            src={characterImageUrl}
+            alt="キャラクター"
+            className="w-52 h-52 object-contain drop-shadow-lg"
+            style={{ filter: "drop-shadow(0 4px 16px rgba(181,56,75,0.18))" }}
+          />
+        </div>
+      )}
 
       {/* ロゴ・タイトル */}
       <div className="mb-8 text-center">
