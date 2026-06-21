@@ -1,9 +1,11 @@
 // =============================================================
-// お題一覧 + 挑戦モーダル（ミッション強調・スキルスロット表示対応）
+// お題一覧 + 挑戦モーダル
+// カードはタイトル・ストーリー・ポイント・ボタンのみ表示
+// 「続きを読む」でミッション + 必要USP を展開
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, X, CheckCircle2, Trophy, Star, Target } from "lucide-react";
+import { Loader2, X, CheckCircle2, Trophy, Star, Target, ChevronDown, ChevronUp } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { QuestStory } from "@/lib/quest-story";
@@ -11,9 +13,12 @@ import type { PublicMember, Skill } from "@shared/types";
 
 const SLOT_NUMS = ["①", "②", "③", "④", "⑤"];
 
+type AnswerSkill = { name: string; emoji: string };
+
 type Quest = {
   id: string; title: string; story: string; mission: string; emoji: string;
   level: "normal" | "hard"; skillCount: number; required2x: number | null;
+  answerSkills: AnswerSkill[];
   reward: number; deadline: number | null; status: string; isSolved: boolean;
 };
 type TeamMember = {
@@ -56,7 +61,6 @@ export function QuestsScreen() {
 
   return (
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto">
-      {/* ヘッダー */}
       <div className="mb-4">
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
           📜 {termQuest}
@@ -66,7 +70,6 @@ export function QuestsScreen() {
         </p>
       </div>
 
-      {/* 達成状況サマリー */}
       {quests.length > 0 && (
         <div className="card-paper rounded-2xl px-4 py-3 mb-4 flex items-center gap-3">
           <Trophy size={20} style={{ color: "var(--color-accent)" }} />
@@ -74,7 +77,6 @@ export function QuestsScreen() {
             <span className="font-bold" style={{ color: "var(--color-accent)" }}>{solvedCount}</span>
             <span style={{ color: "var(--color-ink-500)" }}> / {quests.length} クリア</span>
           </span>
-          {/* フィルター */}
           <div className="ml-auto flex gap-1">
             {(["all", "unsolved", "solved"] as const).map((f) => (
               <button key={f} onClick={() => setFilter(f)}
@@ -123,13 +125,13 @@ function QuestCard({ quest, termUsp, onChallenge }: {
   quest: Quest; termUsp: string; onChallenge: () => void;
 }) {
   const isHard = quest.level === "hard";
-  const [storyExpanded, setStoryExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <div className="card-paper rounded-3xl overflow-hidden" style={{ opacity: quest.isSolved ? 0.78 : 1 }}>
-      {/* ヘッダー部 */}
-      <div className="p-5 pb-3">
-        <div className="flex items-start gap-3">
+      <div className="p-5">
+        {/* タイトル行 */}
+        <div className="flex items-start gap-3 mb-2">
           <span className="text-3xl shrink-0 mt-0.5">{quest.emoji}</span>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1.5">
@@ -148,64 +150,81 @@ function QuestCard({ quest, termUsp, onChallenge }: {
               )}
             </div>
 
-            {/* ストーリー */}
+            {/* ストーリー（常時2行） */}
             <QuestStory
               text={quest.story}
-              className={`text-sm leading-relaxed${storyExpanded ? "" : " line-clamp-2"}`}
+              className="text-sm leading-relaxed line-clamp-2"
               style={{ color: "var(--color-ink-600)" }}
             />
-            <button onClick={() => setStoryExpanded((v) => !v)}
-              className="text-xs mt-0.5" style={{ color: "var(--color-brand)" }}>
-              {storyExpanded ? "閉じる ▲" : "続きを読む ▼"}
+          </div>
+        </div>
+
+        {/* 展開エリア（ミッション + 必要USP） */}
+        {expanded && (
+          <div className="mt-3 space-y-3">
+            {/* ミッション */}
+            {quest.mission && (
+              <div className="px-3.5 py-2.5 rounded-2xl flex gap-2.5 items-start"
+                style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.18)" }}>
+                <Target size={15} className="shrink-0 mt-0.5" style={{ color: "var(--color-brand)" }} />
+                <div>
+                  <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--color-brand)" }}>🎯 ミッション</p>
+                  <p className="text-sm leading-relaxed" style={{ color: "var(--color-ink-700)" }}>{quest.mission}</p>
+                </div>
+              </div>
+            )}
+
+            {/* 必要USP */}
+            {quest.answerSkills.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>
+                  🧩 解決に必要な{termUsp}（{quest.skillCount}個）
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {quest.answerSkills.map((s, i) => (
+                    <span key={s.name}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold"
+                      style={{ background: "var(--color-paper-300)", color: "var(--color-ink-700)" }}>
+                      <span style={{ color: "var(--color-ink-400)" }}>{SLOT_NUMS[i]}</span>
+                      <span>{s.emoji}</span>
+                      <span>{s.name}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* フッター */}
+        <div className="flex items-center justify-between mt-3">
+          <div className="flex items-center gap-3">
+            {/* 続きを読む */}
+            <button onClick={() => setExpanded((v) => !v)}
+              className="flex items-center gap-0.5 text-xs font-medium transition"
+              style={{ color: "var(--color-brand)" }}>
+              {expanded
+                ? <><ChevronUp size={14} />閉じる</>
+                : <><ChevronDown size={14} />詳細を見る</>}
             </button>
+            <span className="font-bold text-sm" style={{ color: "var(--color-accent)" }}>
+              +{quest.reward}pt
+            </span>
+            {quest.deadline && (
+              <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+                📅 {new Date(quest.deadline * 1000).toLocaleDateString("ja-JP")}
+              </span>
+            )}
           </div>
+          <button onClick={onChallenge}
+            className="text-sm px-5 py-2 rounded-2xl font-medium transition active:opacity-80"
+            style={{
+              background: quest.isSolved ? "var(--color-paper-300)" : "var(--color-brand)",
+              color: quest.isSolved ? "var(--color-ink-600)" : "white",
+            }}>
+            {quest.isSolved ? "再挑戦" : "挑戦する ⚔️"}
+          </button>
         </div>
-      </div>
-
-      {/* ミッションブロック */}
-      {quest.mission && (
-        <div className="mx-4 mb-3 px-3.5 py-2.5 rounded-2xl flex gap-2.5 items-start"
-          style={{ background: "rgba(181,56,75,0.07)", border: "1px solid rgba(181,56,75,0.18)" }}>
-          <Target size={15} className="shrink-0 mt-0.5" style={{ color: "var(--color-brand)" }} />
-          <div>
-            <p className="text-xs font-semibold mb-0.5" style={{ color: "var(--color-brand)" }}>ミッション</p>
-            <p className="text-sm leading-relaxed" style={{ color: "var(--color-ink-700)" }}>{quest.mission}</p>
-          </div>
-        </div>
-      )}
-
-      {/* 必要スキルスロット */}
-      <div className="px-4 mb-3">
-        <p className="text-xs font-semibold mb-1.5" style={{ color: "var(--color-ink-500)" }}>
-          🧩 解決に必要な{termUsp}（{quest.skillCount}個）
-        </p>
-        <div className="flex gap-1.5 flex-wrap">
-          {Array.from({ length: quest.skillCount }, (_, i) => (
-            <div key={i} className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
-              style={{ background: "var(--color-paper-300)", color: "var(--color-ink-500)" }}>
-              <span>{SLOT_NUMS[i]}</span>
-              <span className="tracking-widest">？？？</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* フッター */}
-      <div className="px-4 pb-4 flex items-center justify-between">
-        <div className="flex items-center gap-3 text-xs" style={{ color: "var(--color-ink-500)" }}>
-          <span className="font-bold text-sm" style={{ color: "var(--color-accent)" }}>+{quest.reward}pt</span>
-          {quest.deadline && (
-            <span>📅 {new Date(quest.deadline * 1000).toLocaleDateString("ja-JP")}</span>
-          )}
-        </div>
-        <button onClick={onChallenge}
-          className="text-sm px-5 py-2 rounded-2xl font-medium transition active:opacity-80"
-          style={{
-            background: quest.isSolved ? "var(--color-paper-300)" : "var(--color-brand)",
-            color: quest.isSolved ? "var(--color-ink-600)" : "white",
-          }}>
-          {quest.isSolved ? `再挑戦` : "挑戦する ⚔️"}
-        </button>
       </div>
     </div>
   );
@@ -290,6 +309,9 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
   }).length;
   const bonusActive = isHard && required2x > 0 && realCount >= required2x;
 
+  // answerSkills を name → emoji のマップ
+  const answerEmojiMap = new Map(quest.answerSkills.map((s) => [s.name, s.emoji]));
+
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
       style={{ background: "rgba(26,20,16,0.5)" }}
@@ -327,9 +349,9 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
             </div>
           </details>
 
-          {/* ミッション（常時強調表示） */}
+          {/* ミッション（強調表示） */}
           {quest.mission && (
-            <div className="mb-4 px-3.5 py-3 rounded-2xl flex gap-2.5 items-start"
+            <div className="mb-3 px-3.5 py-3 rounded-2xl flex gap-2.5 items-start"
               style={{ background: "rgba(181,56,75,0.09)", border: "1.5px solid rgba(181,56,75,0.25)" }}>
               <Target size={16} className="shrink-0 mt-0.5" style={{ color: "var(--color-brand)" }} />
               <div>
@@ -341,11 +363,11 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
             </div>
           )}
 
-          {/* 報酬・ボーナス表示 */}
+          {/* 報酬 */}
           <div className="flex items-center gap-3 mb-4 text-sm">
             <span className="font-bold text-base" style={{ color: "var(--color-accent)" }}>
               +{bonusActive ? quest.reward * 2 : quest.reward}pt
-              {bonusActive && <span className="ml-1 text-xs font-normal" style={{ color: "var(--color-accent)" }}>✨ ×2ボーナス！</span>}
+              {bonusActive && <span className="ml-1 text-xs">✨ ×2ボーナス！</span>}
             </span>
             {quest.deadline && (
               <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>
@@ -365,7 +387,7 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
             <div className="flex gap-1.5 flex-wrap mb-3">
               {Array.from({ length: quest.skillCount }, (_, i) => {
                 const name = selected[i];
-                const skill = name ? availableSkills.find((a) => a.skill.name === name)?.skill : undefined;
+                const emoji = name ? (answerEmojiMap.get(name) ?? availableSkills.find((a) => a.skill.name === name)?.skill.emoji ?? "") : "";
                 const filled = Boolean(name);
                 return (
                   <div key={i}
@@ -377,7 +399,7 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
                     }}>
                     <span className="shrink-0">{SLOT_NUMS[i]}</span>
                     {filled
-                      ? <><span>{skill?.emoji ?? ""}</span><span className="truncate max-w-[4rem]">{name}</span></>
+                      ? <><span>{emoji}</span><span className="truncate max-w-[5rem]">{name}</span></>
                       : <span>？？？</span>
                     }
                   </div>
@@ -468,7 +490,7 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
                           </div>
                         </div>
                         {isSelected && (
-                          <span className="text-xs font-bold px-2 py-1 rounded-full"
+                          <span className="text-xs font-bold px-2 py-1 rounded-full shrink-0"
                             style={{ background: "var(--color-brand)", color: "white" }}>
                             {SLOT_NUMS[slotIndex]}
                           </span>

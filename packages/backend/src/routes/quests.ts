@@ -34,6 +34,7 @@ questRoutes.get("/", async (c) => {
       emoji: schema.quests.emoji,
       level: schema.quests.level,
       skillCount: schema.quests.skillCount,
+      answerSkills: schema.quests.answerSkills,  // 名前だけ公開（判定はサーバ側）
       required2x: schema.quests.required2x,
       reward: schema.quests.reward,
       status: schema.quests.status,
@@ -42,11 +43,17 @@ questRoutes.get("/", async (c) => {
       source: schema.quests.source,
       createdAt: schema.quests.createdAt,
       updatedAt: schema.quests.updatedAt,
-      // answerSkills は意図的に除外
     })
     .from(schema.quests)
     .where(eq(schema.quests.status, "published"))
     .all();
+
+  // USP マスター（絵文字取得用）
+  const allUsps = await db
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .from(schema.usps)
+    .all();
+  const uspEmojiMap = new Map(allUsps.map((u) => [u.name, u.emoji]));
 
   // 自分の正解済みクエストIDを取得
   const solvedAttempts = await db
@@ -60,7 +67,15 @@ questRoutes.get("/", async (c) => {
   const solvedSet = new Set(solvedAttempts.map((a) => a.questId));
 
   return c.json({
-    data: quests.map((q) => ({ ...q, isSolved: solvedSet.has(q.id) })),
+    data: quests.map((q) => {
+      const skillNames: string[] = JSON.parse(q.answerSkills ?? "[]");
+      return {
+        ...q,
+        // { name, emoji }[] に変換して返す
+        answerSkills: skillNames.map((name) => ({ name, emoji: uspEmojiMap.get(name) ?? "⭐" })),
+        isSolved: solvedSet.has(q.id),
+      };
+    }),
   });
 });
 
