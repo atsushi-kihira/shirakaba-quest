@@ -5,7 +5,7 @@
 // GET /api/teams/:id      — チーム詳細
 // =============================================================
 import { Hono } from "hono";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
@@ -77,11 +77,33 @@ teamRoutes.get("/", async (c) => {
   return c.json({ data: result });
 });
 
-// GET /api/teams/ranking  ← /:id より前に登録（"ranking" が id として処理されるバグを防ぐ）
+// GET /api/teams/ranking?scope=total|season  ← /:id より前に登録
 teamRoutes.get("/ranking", async (c) => {
   const db = createDb(c.env.DB);
+  const scope = (c.req.query("scope") ?? "total") as "total" | "season";
+
   const teams = await db.select().from(schema.teams).all();
   const allTeamMembers = await db.select().from(schema.teamMembers).all();
+
+  // シーズンスコープの場合は現在のアクティブシーズンの期間でフィルタ
+  let seasonFilter: ReturnType<typeof and> | undefined;
+  let activeSeason: { id: string; name: string; startsAt: number; endsAt: number | null } | undefined;
+  if (scope === "season") {
+    const s = await db
+      .select({ id: schema.seasons.id, name: schema.seasons.name, startsAt: schema.seasons.startsAt, endsAt: schema.seasons.endsAt })
+      .from(schema.seasons)
+      .where(eq(schema.seasons.isActive, 1))
+      .get();
+    if (s) {
+      activeSeason = s;
+      seasonFilter = s.endsAt
+        ? and(
+            sql`${schema.pointTransactions.createdAt} >= ${s.startsAt}`,
+            sql`${schema.pointTransactions.createdAt} <= ${s.endsAt}`
+          )
+        : sql`${schema.pointTransactions.createdAt} >= ${s.startsAt}`;
+    }
+  }
 
   const pointRows = await db
     .select({
@@ -89,11 +111,11 @@ teamRoutes.get("/ranking", async (c) => {
       total: sql<number>`sum(${schema.pointTransactions.delta})`.as("total"),
     })
     .from(schema.pointTransactions)
-    .where(sql`${schema.pointTransactions.delta} > 0`)
+    .where(seasonFilter ?? sql`1=1`)
     .groupBy(schema.pointTransactions.memberId)
     .all();
 
-  const pointMap = new Map(pointRows.map((r) => [r.memberId, r.total ?? 0]));
+  const pointMap = new Map(pointRows.map((r) => [r.memberId, Number(r.total ?? 0)]));
 
   const teamPoints = teams.map((t) => {
     const tms = allTeamMembers.filter((tm) => tm.teamId === t.id);
@@ -105,6 +127,7 @@ teamRoutes.get("/ranking", async (c) => {
 
   return c.json({
     data: teamPoints.map((tp, i) => ({ rank: i + 1, ...tp })),
+    season: activeSeason ?? null,
   });
 });
 

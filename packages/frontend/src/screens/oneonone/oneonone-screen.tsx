@@ -60,6 +60,14 @@ export function OneOnOneScreen() {
     },
   });
 
+  const uncompleteMutation = useMutation({
+    mutationFn: (id: string) => api.patch(`/oneonone/${id}/uncomplete`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
+      qc.invalidateQueries({ queryKey: ["ranking", "me"] });
+    },
+  });
+
   const sessions = data?.data ?? [];
   const myId = user?.id ?? "";
 
@@ -253,21 +261,38 @@ export function OneOnOneScreen() {
               {done.length === 0 ? (
                 <EmptyState icon="📋" message="完了した1to1はありません" sub="" />
               ) : (
-                done.map((s) => (
-                  <SessionCard key={s.id} session={s} myId={myId}>
-                    <div className="mt-2 flex items-center gap-1 text-xs">
-                      {s.status === "completed" ? (
-                        <><CheckCircle size={12} style={{ color: "var(--color-success)" }} />
-                          <span style={{ color: "var(--color-success)" }}>完了 — {s.completedAt ? new Date(s.completedAt * 1000).toLocaleDateString("ja-JP") : ""}</span>
-                        </>
-                      ) : (
-                        <><X size={12} style={{ color: "var(--color-ink-400)" }} />
-                          <span style={{ color: "var(--color-ink-400)" }}>辞退済み</span>
-                        </>
-                      )}
-                    </div>
-                  </SessionCard>
-                ))
+                done.map((s) => {
+                  const myCompletedAt = s.myRole === "requester" ? s.requesterCompletedAt : s.responderCompletedAt;
+                  return (
+                    <SessionCard key={s.id} session={s} myId={myId}>
+                      <div className="mt-2 space-y-2">
+                        {s.status === "completed" ? (
+                          <>
+                            <div className="flex items-center gap-1 text-xs">
+                              <CheckCircle size={12} style={{ color: "var(--color-success)" }} />
+                              <span style={{ color: "var(--color-success)" }}>完了 — {s.completedAt ? new Date(s.completedAt * 1000).toLocaleDateString("ja-JP") : ""}</span>
+                            </div>
+                            {myCompletedAt && (
+                              <button
+                                onClick={() => uncompleteMutation.mutate(s.id)}
+                                disabled={uncompleteMutation.isPending}
+                                className="w-full py-2 rounded-2xl text-xs font-medium transition disabled:opacity-50"
+                                style={{ background: "transparent", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}
+                              >
+                                完了を取り消す
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-1 text-xs">
+                            <X size={12} style={{ color: "var(--color-ink-400)" }} />
+                            <span style={{ color: "var(--color-ink-400)" }}>辞退済み</span>
+                          </div>
+                        )}
+                      </div>
+                    </SessionCard>
+                  );
+                })
               )}
             </div>
           )}

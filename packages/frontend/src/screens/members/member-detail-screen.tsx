@@ -14,7 +14,8 @@ import type { PublicMember, Skill, MemberBadge } from "@shared/types";
 
 type MemberResponse  = { data: PublicMember };
 type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
-type OnoListResponse = { data: Array<{ id: string; status: string; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null }> };
+type OnoSession = { id: string; status: string; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null };
+type OnoListResponse = { data: OnoSession[] };
 type RealCardResponse = { data: { alreadyRecorded: boolean; message: string } };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
@@ -102,6 +103,17 @@ export function MemberDetailScreen() {
     },
   });
 
+  // 完了取り消し
+  const uncompleteMutation = useMutation({
+    mutationFn: (sessionId: string) => api.patch(`/oneonone/${sessionId}/uncomplete`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
+      qc.invalidateQueries({ queryKey: ["ranking", "me"] });
+      showToast("完了を取り消しました", true);
+    },
+    onError: (e: Error) => showToast(e instanceof ApiError ? e.message : "エラーが発生しました", false),
+  });
+
   // リアルカード受け取り
   const realCardMutation = useMutation({
     mutationFn: () => api.post<RealCardResponse>(`/members/${id}/real-card`),
@@ -155,6 +167,11 @@ export function MemberDetailScreen() {
   const badge = STATUS_LABEL[connStatus] ?? STATUS_LABEL.none;
   // "self" も含めて none 以外なら解放済み
   const isUnlocked = connStatus !== "none";
+
+  // この相手との完了済みセッション一覧
+  const pastSessions = sessions.filter(
+    (s) => (s.requesterId === id || s.responderId === id) && s.status === "completed"
+  );
 
   // 自分がこのセッションで完了押下済みか
   const myRole = activeSession?.myRole;
@@ -280,15 +297,21 @@ export function MemberDetailScreen() {
         </div>
       )}
 
-      {/* 1to1 アクションボタン（自分のページ以外） */}
+      {/* 1to1 アクションブロック（自分のページ以外） */}
       {!isSelf && (
         <div className="card-paper rounded-3xl p-5">
           <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>
             🤝 1to1
           </h2>
 
-          {!activeSession && connStatus === "none" && (
+          {/* アクティブセッションがない → 申込ボタン */}
+          {!activeSession && (
             <>
+              {pastSessions.length > 0 && (
+                <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
+                  過去に {pastSessions.length} 回の1to1を実施済みです。何度でも申し込めます。
+                </p>
+              )}
               <label className="flex items-center gap-2 mb-3 text-sm cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
                 <input
                   type="checkbox"
@@ -312,6 +335,7 @@ export function MemberDetailScreen() {
             </>
           )}
 
+          {/* 申込中（相手待ち） */}
           {activeSession?.status === "pending" && myRole === "requester" && (
             <div className="rounded-xl p-3 text-sm flex items-center gap-2"
               style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
@@ -319,6 +343,7 @@ export function MemberDetailScreen() {
             </div>
           )}
 
+          {/* 完了ボタン */}
           {(activeSession?.status === "accepted" || activeSession?.status === "pending") && !alreadyCompleted && (
             <button
               onClick={() => handleComplete(activeSession.id)}
@@ -333,39 +358,73 @@ export function MemberDetailScreen() {
             </button>
           )}
 
+          {/* 完了押下済み（相手待ち）→ 取り消しボタン付き */}
           {activeSession && alreadyCompleted && (
-            <div className="rounded-xl p-3 text-sm flex items-center gap-2"
-              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-              <Clock size={16} /> あなたは完了済み。相手の確認を待っています
+            <div className="space-y-2">
+              <div className="rounded-xl p-3 text-sm flex items-center gap-2"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                <Clock size={16} /> あなたは完了済み。相手の確認を待っています
+              </div>
+              <button
+                onClick={() => uncompleteMutation.mutate(activeSession.id)}
+                disabled={uncompleteMutation.isPending}
+                className="w-full py-2 rounded-2xl text-xs font-medium transition disabled:opacity-50"
+                style={{ background: "transparent", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}
+              >
+                {uncompleteMutation.isPending ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                完了を取り消す
+              </button>
             </div>
           )}
 
-          {connStatus === "digital" && !activeSession && (
-            <div className="rounded-xl p-3 text-sm flex items-center gap-2"
-              style={{ background: "var(--color-paper-200)", color: "var(--color-success)" }}>
-              <CheckCircle2 size={16} /> 1to1済みです 🎉
+          {/* 過去の1to1履歴 */}
+          {pastSessions.length > 0 && !activeSession && (
+            <div className="mt-4 pt-4" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+              <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>📋 1to1履歴</p>
+              <div className="space-y-1.5">
+                {pastSessions.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between text-xs px-1">
+                    <span style={{ color: "var(--color-success)" }}>
+                      <CheckCircle2 size={12} className="inline mr-1" />
+                      完了
+                    </span>
+                    <span style={{ color: "var(--color-ink-400)" }}>
+                      {s.completedAt ? new Date(s.completedAt * 1000).toLocaleDateString("ja-JP") : ""}
+                    </span>
+                    <button
+                      onClick={() => uncompleteMutation.mutate(s.id)}
+                      disabled={uncompleteMutation.isPending}
+                      className="text-xs underline disabled:opacity-50"
+                      style={{ color: "var(--color-ink-400)" }}
+                    >
+                      取り消す
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           {/* リアルカード受け取りボタン */}
-          {(connStatus === "digital") && (
-            <button
-              onClick={() => realCardMutation.mutate()}
-              disabled={realCardMutation.isPending}
-              className="mt-3 w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition disabled:opacity-50"
-              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
-            >
-              {realCardMutation.isPending
-                ? <Loader2 size={16} className="animate-spin" />
-                : <QrCode size={16} />
-              }
-              🃏 リアルカードを受け取った (+1pt)
-            </button>
-          )}
-          {connStatus === "real" && (
-            <div className="mt-3 rounded-xl p-3 text-sm flex items-center gap-2"
-              style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
-              <CheckCircle2 size={16} /> リアルカード取得済み ✨
+          {(connStatus === "digital" || connStatus === "real") && (
+            <div className="mt-4 pt-4" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+              {connStatus === "digital" && (
+                <button
+                  onClick={() => realCardMutation.mutate()}
+                  disabled={realCardMutation.isPending}
+                  className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition disabled:opacity-50"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+                >
+                  {realCardMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <QrCode size={16} />}
+                  🃏 リアルカードを受け取った (+1pt)
+                </button>
+              )}
+              {connStatus === "real" && (
+                <div className="rounded-xl p-3 text-sm flex items-center gap-2"
+                  style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
+                  <CheckCircle2 size={16} /> リアルカード取得済み ✨
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -360,6 +360,61 @@ oneOnOneRoutes.patch("/:id/complete", async (c) => {
   return c.json({ data: { status: "waiting_partner", bothCompleted: false } });
 });
 
+// ---- PATCH /api/oneonone/:id/uncomplete ---- 完了を取り消す
+oneOnOneRoutes.patch("/:id/uncomplete", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+
+  const session = await db
+    .select()
+    .from(schema.oneOnOneSessions)
+    .where(eq(schema.oneOnOneSessions.id, sessionId))
+    .get();
+
+  if (!session) return c.json({ error: { code: "not_found", message: "セッションが見つかりません" } }, 404);
+  if (session.requesterId !== userId && session.responderId !== userId) {
+    return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
+  }
+
+  const isRequester = session.requesterId === userId;
+  const myCompletedAt = isRequester ? session.requesterCompletedAt : session.responderCompletedAt;
+
+  if (!myCompletedAt) {
+    return c.json({ error: { code: "not_completed", message: "まだ完了を記録していません" } }, 400);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const wasFullyCompleted = session.status === "completed";
+
+  // 自分の完了フラグをリセット
+  const updateData = isRequester
+    ? { requesterCompletedAt: null, status: "accepted" as const }
+    : { responderCompletedAt: null, status: "accepted" as const };
+
+  await db.update(schema.oneOnOneSessions)
+    .set(updateData)
+    .where(eq(schema.oneOnOneSessions.id, sessionId));
+
+  // 双方完了済み（completed）だった場合、両者のポイントを取り消す
+  if (wasFullyCompleted) {
+    const seasonPts = await getActiveSeasonPoints(db);
+    const delta = -seasonPts.oneOnOne;
+    for (const memberId of [session.requesterId, session.responderId]) {
+      await db.insert(schema.pointTransactions).values({
+        id: newId(),
+        memberId,
+        delta,
+        reason: "one_on_one_cancelled",
+        relatedId: sessionId,
+        createdAt: now,
+      });
+    }
+  }
+
+  return c.json({ data: { status: "accepted", pointsReversed: wasFullyCompleted } });
+});
+
 // ---- ユーティリティ ----
 async function ensureConnection(
   db: ReturnType<typeof createDb>,

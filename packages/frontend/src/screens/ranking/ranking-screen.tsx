@@ -1,5 +1,5 @@
 // =============================================================
-// ランキング画面
+// ランキング画面 — 個人/チーム × シーズン/累計
 // =============================================================
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -20,42 +20,69 @@ type RankingEntry = {
 type RankingResponse = { data: RankingEntry[] };
 type SeasonRankingResponse = { data: SeasonRankingEntry[]; season: Season | null };
 type ActiveSeasonResponse = { data: Season | null };
-type TeamRankingResponse = { data: TeamRankingEntry[] };
+type TeamRankingResponse = { data: TeamRankingEntry[]; season: Season | null };
 
 const RANK_MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 
 export function RankingScreen() {
   const me = useAuthStore((s) => s.user);
   const { termQuest } = useSettings();
-  const [tab, setTab] = useState<"overall" | "season" | "team">("overall");
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["ranking"],
+  // 個人 or チーム
+  const [view, setView] = useState<"individual" | "team">("individual");
+  // シーズン or 累計
+  const [scope, setScope] = useState<"season" | "total">("season");
+
+  // 個人・累計
+  const { data: totalData, isLoading: totalLoading } = useQuery({
+    queryKey: ["ranking", "individual", "total"],
     queryFn: () => api.get<RankingResponse>("/ranking"),
-    enabled: tab === "overall",
+    enabled: view === "individual" && scope === "total",
   });
 
+  // アクティブシーズン情報（シーズン表示で使う）
   const { data: activeSeason } = useQuery({
     queryKey: ["season"],
     queryFn: () => api.get<ActiveSeasonResponse>("/season"),
   });
 
-  const { data: seasonRankData, isLoading: seasonLoading } = useQuery({
-    queryKey: ["ranking", "season"],
+  // 個人・シーズン
+  const { data: seasonData, isLoading: seasonLoading } = useQuery({
+    queryKey: ["ranking", "individual", "season"],
     queryFn: () => api.get<SeasonRankingResponse>("/season/ranking"),
-    enabled: tab === "season",
+    enabled: view === "individual" && scope === "season",
   });
 
-  const { data: teamRankData, isLoading: teamLoading } = useQuery({
-    queryKey: ["teams", "ranking"],
-    queryFn: () => api.get<TeamRankingResponse>("/teams/ranking"),
-    enabled: tab === "team",
+  // チーム・累計
+  const { data: teamTotalData, isLoading: teamTotalLoading } = useQuery({
+    queryKey: ["ranking", "team", "total"],
+    queryFn: () => api.get<TeamRankingResponse>("/teams/ranking?scope=total"),
+    enabled: view === "team" && scope === "total",
   });
 
-  const entries = data?.data ?? [];
-  const seasonEntries = seasonRankData?.data ?? [];
-  const currentSeason = activeSeason?.data ?? null;
-  const teamEntries = teamRankData?.data ?? [];
+  // チーム・シーズン
+  const { data: teamSeasonData, isLoading: teamSeasonLoading } = useQuery({
+    queryKey: ["ranking", "team", "season"],
+    queryFn: () => api.get<TeamRankingResponse>("/teams/ranking?scope=season"),
+    enabled: view === "team" && scope === "season",
+  });
+
+  const currentSeason = activeSeason?.data ?? seasonData?.season ?? null;
+  const teamCurrentSeason = teamSeasonData?.season ?? null;
+
+  const isLoading =
+    (view === "individual" && scope === "total" && totalLoading) ||
+    (view === "individual" && scope === "season" && seasonLoading) ||
+    (view === "team" && scope === "total" && teamTotalLoading) ||
+    (view === "team" && scope === "season" && teamSeasonLoading);
+
+  const individualEntries = scope === "total"
+    ? (totalData?.data ?? [])
+    : (seasonData?.data ?? []);
+
+  const teamEntries = scope === "total"
+    ? (teamTotalData?.data ?? [])
+    : (teamSeasonData?.data ?? []);
 
   return (
     <div className="px-4 py-6 pb-24">
@@ -68,76 +95,88 @@ export function RankingScreen() {
         </p>
       </div>
 
-      {/* タブ */}
-      <div className="flex gap-2 mb-4">
+      {/* 第1段タブ: 個人 / チーム */}
+      <div className="flex gap-2 mb-3">
         <button
-          onClick={() => setTab("overall")}
+          onClick={() => setView("individual")}
           className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
           style={{
-            background: tab === "overall" ? "var(--color-brand)" : "var(--color-paper-200)",
-            color: tab === "overall" ? "white" : "var(--color-ink-600)",
+            background: view === "individual" ? "var(--color-brand)" : "var(--color-paper-200)",
+            color: view === "individual" ? "white" : "var(--color-ink-600)",
           }}
         >
-          🏆 総合
+          👤 個人
         </button>
         <button
-          onClick={() => setTab("season")}
+          onClick={() => setView("team")}
           className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
           style={{
-            background: tab === "season" ? "var(--color-brand)" : "var(--color-paper-200)",
-            color: tab === "season" ? "white" : "var(--color-ink-600)",
-          }}
-        >
-          🌸 シーズン
-        </button>
-        <button
-          onClick={() => setTab("team")}
-          className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
-          style={{
-            background: tab === "team" ? "var(--color-brand)" : "var(--color-paper-200)",
-            color: tab === "team" ? "white" : "var(--color-ink-600)",
+            background: view === "team" ? "var(--color-brand)" : "var(--color-paper-200)",
+            color: view === "team" ? "white" : "var(--color-ink-600)",
           }}
         >
           🦊 チーム
         </button>
       </div>
 
-      {/* シーズン情報 */}
-      {tab === "season" && currentSeason && (
-        <div className="mb-4 p-3 rounded-2xl text-sm"
-          style={{ background: "rgba(181,56,75,0.06)", border: "1px solid rgba(181,56,75,0.2)" }}>
-          <p className="font-semibold" style={{ color: "var(--color-brand)" }}>🌸 {currentSeason.name}</p>
-          {currentSeason.theme && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>{currentSeason.theme}</p>}
-          <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-            開始: {new Date(currentSeason.startsAt * 1000).toLocaleDateString("ja-JP")}
-          </p>
-        </div>
-      )}
-      {tab === "season" && !currentSeason && (
-        <div className="mb-4 p-3 rounded-2xl text-sm text-center" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
-          現在アクティブなシーズンはありません
-        </div>
-      )}
+      {/* 第2段タブ: シーズン / 累計 */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setScope("season")}
+          className="flex-1 py-1.5 rounded-xl text-xs font-medium transition"
+          style={{
+            background: scope === "season" ? "var(--color-accent)" : "var(--color-paper-200)",
+            color: scope === "season" ? "white" : "var(--color-ink-600)",
+          }}
+        >
+          🌸 シーズン
+        </button>
+        <button
+          onClick={() => setScope("total")}
+          className="flex-1 py-1.5 rounded-xl text-xs font-medium transition"
+          style={{
+            background: scope === "total" ? "var(--color-ink-600)" : "var(--color-paper-200)",
+            color: scope === "total" ? "white" : "var(--color-ink-600)",
+          }}
+        >
+          📊 累計
+        </button>
+      </div>
+
+      {/* シーズン情報バナー */}
+      {scope === "season" && (() => {
+        const s = view === "individual" ? currentSeason : teamCurrentSeason;
+        return s ? (
+          <div className="mb-4 p-3 rounded-2xl text-sm"
+            style={{ background: "rgba(181,56,75,0.06)", border: "1px solid rgba(181,56,75,0.2)" }}>
+            <p className="font-semibold" style={{ color: "var(--color-brand)" }}>🌸 {s.name}</p>
+            {s.theme && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>{s.theme}</p>}
+            <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+              開始: {new Date(s.startsAt * 1000).toLocaleDateString("ja-JP")}
+            </p>
+          </div>
+        ) : (
+          <div className="mb-4 p-3 rounded-2xl text-sm text-center"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+            現在アクティブなシーズンはありません
+          </div>
+        );
+      })()}
 
       {/* ローディング */}
-      {(tab === "overall" ? isLoading : tab === "season" ? seasonLoading : teamLoading) && (
+      {isLoading && (
         <div className="flex justify-center py-12">
           <Loader2 size={28} className="animate-spin" style={{ color: "var(--color-brand)" }} />
         </div>
       )}
 
-      {/* 総合ランキング */}
-      {tab === "overall" && !isLoading && (
-        <RankingList entries={entries} meId={me?.id} />
-      )}
-
-      {/* シーズンランキング */}
-      {tab === "season" && !seasonLoading && (
-        <RankingList entries={seasonEntries} meId={me?.id} />
+      {/* 個人ランキング */}
+      {view === "individual" && !isLoading && (
+        <IndividualRankingList entries={individualEntries} meId={me?.id} />
       )}
 
       {/* チームランキング */}
-      {tab === "team" && !teamLoading && (
+      {view === "team" && !isLoading && (
         <div className="space-y-2">
           {teamEntries.length === 0 ? (
             <div className="text-center py-12">
@@ -147,7 +186,10 @@ export function RankingScreen() {
             teamEntries.map((entry) => (
               <div key={entry.team.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3">
                 <div className="w-9 text-center shrink-0">
-                  <span className="font-bold text-sm" style={{ color: "var(--color-ink-400)" }}>{entry.rank}</span>
+                  {RANK_MEDAL[entry.rank]
+                    ? <span className="text-2xl">{RANK_MEDAL[entry.rank]}</span>
+                    : <span className="font-bold text-sm" style={{ color: "var(--color-ink-400)" }}>{entry.rank}</span>
+                  }
                 </div>
                 <span className="text-2xl">{entry.team.emblemEmoji}</span>
                 <div className="flex-1 min-w-0">
@@ -168,7 +210,7 @@ export function RankingScreen() {
   );
 }
 
-function RankingList({
+function IndividualRankingList({
   entries,
   meId,
 }: {
