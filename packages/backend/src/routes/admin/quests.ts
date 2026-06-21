@@ -3,7 +3,8 @@
 // GET    /api/admin/quests
 // GET    /api/admin/quests/export          — CSV エクスポート
 // POST   /api/admin/quests                 — 手動作成
-// POST   /api/admin/quests/ai-generate     — AI 生成
+// POST   /api/admin/quests/ai-generate     — AI 生成（1件）
+// POST   /api/admin/quests/ai-bulk-generate — AI 一括生成（複数件）
 // POST   /api/admin/quests/import          — CSV 一括インポート（追加）
 // POST   /api/admin/quests/regenerate-skills-preview
 // DELETE /api/admin/quests                 — 一括削除
@@ -17,7 +18,7 @@ import { Hono } from "hono";
 import { eq, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
-import { generateQuestWithAi, regenerateAnswerSkillsWithAi } from "../../services/ai-quest.ts";
+import { generateQuestWithAi, bulkGenerateQuestsWithAi, regenerateAnswerSkillsWithAi } from "../../services/ai-quest.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminQuestRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -133,6 +134,76 @@ adminQuestRoutes.post("/ai-generate", async (c) => {
   });
 
   return c.json({ data: draft });
+});
+
+// ---- POST /api/admin/quests/ai-bulk-generate ---- AI 一括生成
+adminQuestRoutes.post("/ai-bulk-generate", async (c) => {
+  const db = createDb(c.env.DB);
+  const adminId = c.get("userId");
+  const now = Math.floor(Date.now() / 1000);
+
+  const body = await c.req.json<{
+    items: { instruction: string }[];
+    additionalPrompt?: string;
+  }>().catch(() => ({ items: [] as { instruction: string }[], additionalPrompt: undefined }));
+
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    return c.json({ error: { code: "bad_request", message: "生成するお題の指示を入力してください" } }, 400);
+  }
+  if (body.items.length > 10) {
+    return c.json({ error: { code: "bad_request", message: "一度に生成できるお題は10件までです" } }, 400);
+  }
+
+  const usps = await db
+    .select({ name: schema.usps.name, emoji: schema.usps.emoji })
+    .from(schema.usps)
+    .orderBy(schema.usps.sortOrder)
+    .all();
+
+  if (usps.length === 0) {
+    return c.json(
+      { error: { code: "no_usps", message: "USPが登録されていません。先にUSP管理画面でUSPを登録してください。" } },
+      422
+    );
+  }
+
+  const drafts = await bulkGenerateQuestsWithAi({
+    usps,
+    items: body.items,
+    additionalPrompt: body.additionalPrompt,
+    apiKey: c.env.ANTHROPIC_API_KEY,
+    isDev: c.env.ENVIRONMENT === "development",
+  });
+
+  const created: { id: string; title: string; emoji: string }[] = [];
+
+  for (const draft of drafts) {
+    const id = newId();
+    const skillCount = draft.level === "hard" ? 5 : 3;
+
+    await db.insert(schema.quests).values({
+      id,
+      title: draft.title,
+      story: draft.story,
+      mission: draft.mission ?? "",
+      emoji: draft.emoji ?? "📋",
+      level: draft.level ?? "normal",
+      skillCount,
+      answerSkills: JSON.stringify(draft.answerSkills.slice(0, skillCount)),
+      reward: draft.reward ?? 5,
+      status: "draft",
+      deadline: null,
+      publishedAt: null,
+      source: "ai",
+      createdBy: adminId,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    created.push({ id, title: draft.title, emoji: draft.emoji ?? "📋" });
+  }
+
+  return c.json({ data: { created, count: created.length } }, 201);
 });
 
 // ---- POST /api/admin/quests/import ---- CSV 一括インポート（追加のみ）

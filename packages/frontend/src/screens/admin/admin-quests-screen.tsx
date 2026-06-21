@@ -7,7 +7,7 @@ import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Plus, Sparkles, Pencil, Trash2, Send, RefreshCw,
-  X, Wand2, CheckSquare, Square, Upload, Download,
+  X, Wand2, CheckSquare, Square, Upload, Download, Layers, Minus,
 } from "lucide-react";
 import { api, API_BASE_URL } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
@@ -121,6 +121,7 @@ export function AdminQuestsScreen() {
   const [showCreate, setShowCreate] = useState(false);
   const [editQuest, setEditQuest] = useState<AdminQuest | null>(null);
   const [aiModal, setAiModal] = useState(false);
+  const [bulkAiModal, setBulkAiModal] = useState(false);
   const [importModal, setImportModal] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -231,9 +232,14 @@ export function AdminQuestsScreen() {
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
                 <Upload size={14} />CSVインポート
               </button>
-              <button onClick={() => setAiModal(true)}
+              <button onClick={() => setBulkAiModal(true)}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-medium text-white"
                 style={{ background: "var(--color-accent)" }}>
+                <Layers size={15} />AI一括生成
+              </button>
+              <button onClick={() => setAiModal(true)}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-2xl text-sm font-medium"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
                 <Sparkles size={15} />AI生成
               </button>
               <button onClick={() => setShowCreate(true)}
@@ -300,6 +306,16 @@ export function AdminQuestsScreen() {
             </div>
           )}
         </>
+      )}
+
+      {bulkAiModal && (
+        <BulkAiGenerateModal
+          onClose={() => setBulkAiModal(false)}
+          onCreated={() => {
+            setBulkAiModal(false);
+            qc.invalidateQueries({ queryKey: ["admin", "quests"] });
+          }}
+        />
       )}
 
       {aiModal && (
@@ -1025,6 +1041,178 @@ function ImportModal({ usps, onClose, onImported }: { usps: Usp[]; onClose: () =
               {importMutation.isPending ? "インポート中..." : `${parsed.length}件をインポート`}
             </button>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------
+// AI 一括生成モーダル
+// -------------------------------------------------------
+function BulkAiGenerateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const { termQuest } = useSettings();
+  const [count, setCount] = useState(3);
+  const [items, setItems] = useState<{ instruction: string }[]>(
+    Array.from({ length: 3 }, () => ({ instruction: "" }))
+  );
+  const [additionalPrompt, setAdditionalPrompt] = useState("");
+  const [result, setResult] = useState<{ created: { id: string; title: string; emoji: string }[]; count: number } | null>(null);
+  const [error, setError] = useState("");
+
+  function handleCountChange(newCount: number) {
+    const clamped = Math.max(1, Math.min(10, newCount));
+    setCount(clamped);
+    setItems((prev) => {
+      if (clamped > prev.length) {
+        return [...prev, ...Array.from({ length: clamped - prev.length }, () => ({ instruction: "" }))];
+      }
+      return prev.slice(0, clamped);
+    });
+  }
+
+  function setInstruction(idx: number, value: string) {
+    setItems((prev) => prev.map((item, i) => (i === idx ? { instruction: value } : item)));
+  }
+
+  const generate = useMutation({
+    mutationFn: () =>
+      api.post<{ data: { created: { id: string; title: string; emoji: string }[]; count: number } }>(
+        "/admin/quests/ai-bulk-generate",
+        { items, additionalPrompt: additionalPrompt || undefined }
+      ),
+    onSuccess: (res) => { setResult(res.data); setError(""); },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  if (result) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+        style={{ background: "rgba(0,0,0,0.4)" }}>
+        <div className="card-paper w-full sm:max-w-lg max-h-[90dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-6">
+          <div className="text-center mb-5">
+            <div className="text-4xl mb-2">🎉</div>
+            <p className="font-semibold text-lg" style={{ fontFamily: "var(--font-klee)" }}>
+              {result.count}件の{termQuest}を下書き追加しました
+            </p>
+            <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>
+              お題管理の「下書き」から確認・公開できます
+            </p>
+          </div>
+          <div className="space-y-2 mb-5">
+            {result.created.map((q) => (
+              <div key={q.id} className="flex items-center gap-2 px-3 py-2 rounded-2xl"
+                style={{ background: "var(--color-paper-200)" }}>
+                <span className="text-lg">{q.emoji}</span>
+                <span className="text-sm font-medium" style={{ color: "var(--color-ink-700)" }}>{q.title}</span>
+                <span className="ml-auto text-xs px-2 py-0.5 rounded-full"
+                  style={{ background: "var(--color-paper-300)", color: "var(--color-ink-500)" }}>下書き</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={onCreated}
+            className="w-full py-3 rounded-2xl font-semibold text-sm text-white"
+            style={{ background: "var(--color-brand)" }}>
+            閉じる
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      style={{ background: "rgba(0,0,0,0.4)" }}>
+      <div className="card-paper w-full sm:max-w-lg max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-xl font-semibold" style={{ fontFamily: "var(--font-klee)" }}>
+            ✨ AI一括生成
+          </h2>
+          <button onClick={onClose} className="p-2 rounded-full hover:opacity-70"><X size={20} /></button>
+        </div>
+
+        {error && (
+          <div className="mb-4 p-3 rounded-2xl text-sm text-white" style={{ background: "var(--color-brand)" }}>
+            {error}
+          </div>
+        )}
+
+        {/* 件数設定 */}
+        <div className="mb-5">
+          <label className="block text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>
+            生成するお題の数
+          </label>
+          <div className="flex items-center gap-3">
+            <button onClick={() => handleCountChange(count - 1)} disabled={count <= 1}
+              className="w-9 h-9 rounded-full flex items-center justify-center font-bold disabled:opacity-30"
+              style={{ background: "var(--color-paper-300)", color: "var(--color-ink-700)" }}>
+              <Minus size={16} />
+            </button>
+            <span className="text-2xl font-bold w-8 text-center" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
+              {count}
+            </span>
+            <button onClick={() => handleCountChange(count + 1)} disabled={count >= 10}
+              className="w-9 h-9 rounded-full flex items-center justify-center font-bold disabled:opacity-30"
+              style={{ background: "var(--color-paper-300)", color: "var(--color-ink-700)" }}>
+              <Plus size={16} />
+            </button>
+            <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>件（最大10件）</span>
+          </div>
+        </div>
+
+        {/* 個別指示 */}
+        <div className="mb-5">
+          <label className="block text-sm font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>
+            各お題への指示（業種・分野・テーマなど）
+          </label>
+          <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
+            各枠に業種や課題のテーマを入力してください。空欄のままでもAIが自動で決めます。
+          </p>
+          <div className="space-y-2">
+            {items.map((item, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-sm font-semibold w-6 shrink-0 text-center"
+                  style={{ color: "var(--color-brand)" }}>{i + 1}.</span>
+                <input
+                  value={item.instruction}
+                  onChange={(e) => setInstruction(i, e.target.value)}
+                  placeholder={`例: IT・Web業、士業、飲食業、製造業…`}
+                  className="flex-1 px-3 py-2 rounded-xl border text-sm"
+                  style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 共通の追加指示 */}
+        <div className="mb-6">
+          <label className="block text-sm font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>
+            全体への追加指示（任意）
+          </label>
+          <textarea
+            value={additionalPrompt}
+            onChange={(e) => setAdditionalPrompt(e.target.value)}
+            placeholder="例: すべて中小企業の悩みにしてください"
+            rows={2}
+            className="w-full px-3 py-2 rounded-xl border text-sm resize-none"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+          />
+        </div>
+
+        <div className="flex gap-3">
+          <button onClick={onClose}
+            className="flex-1 py-3 rounded-2xl text-sm font-medium"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+            キャンセル
+          </button>
+          <button onClick={() => generate.mutate()} disabled={generate.isPending}
+            className="flex-1 py-3 rounded-2xl text-sm font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-50"
+            style={{ background: "var(--color-accent)" }}>
+            {generate.isPending
+              ? <><RefreshCw size={15} className="animate-spin" />{count}件を生成中...</>
+              : <><Layers size={15} />{count}件を一括生成</>}
+          </button>
         </div>
       </div>
     </div>
