@@ -80,6 +80,7 @@ export const quests = sqliteTable("quests", {
   id:                text("id").primaryKey(),
   title:             text("title").notNull(),
   story:             text("story").notNull(),
+  mission:           text("mission").notNull().default(""),
   emoji:             text("emoji").notNull().default("📋"),
   level:             text("level").notNull().default("normal"),
   skillCount:        integer("skill_count").notNull(),

@@ -5,6 +5,7 @@
 export type AiQuestDraft = {
   title: string;
   story: string;
+  mission: string;
   emoji: string;
   level: "normal" | "hard";
   skillCount: number;
@@ -20,11 +21,12 @@ const QUEST_SYSTEM_PROMPT = `あなたはBNI白樺チャプターの運営チー
 ルール:
 - 提供されるUSPリストの中から、解決に必要なものを必ずちょうど3個選んでanswerSkillsに設定すること
 - answerSkillsには必ずUSPリストに含まれている名前だけを使うこと（リスト外の名前は禁止）
-- ストーリーは2〜3文で、依頼人の困りごとが伝わるように書いてください
-- ストーリー文中で、answerSkillsに選んだUSP名が登場する箇所は、必ず "[[USP名]]" のように二重角括弧で囲んでください（例: "[[リスク判断力]]を活かして..."）。これによりアプリ上でそのUSPが強調表示されます
+- story（ストーリー）は2〜3文で、依頼人の困りごとや課題が伝わるように書いてください
+- mission（ミッション・対策）は1〜2文で、どのように解決するかの方針を書いてください
+- story文中で、answerSkillsに選んだUSP名が登場する箇所は、必ず "[[USP名]]" のように二重角括弧で囲んでください（例: "[[リスク判断力]]を活かして..."）。これによりアプリ上でそのUSPが強調表示されます
 - 二重角括弧の中にはUSPリストの名前のみを記載し、絵文字や装飾は含めないこと（正しい例: [[資金調達力]] / 誤った例: [[💰資金調達力]]）
 - 二重角括弧で囲むUSP名はUSPリストの名前と完全一致させること
-- ストーリー文中に [[USP名]] で登場させるUSPは、必ずanswerSkillsで選んだ3個と完全に一致させること（過不足なく、ちょうど3箇所）
+- story文中に [[USP名]] で登場させるUSPは、必ずanswerSkillsで選んだ3個と完全に一致させること（過不足なく、ちょうど3箇所）
 - 出力はJSONのみ（余分な説明不要）`;
 
 const SKILLS_SYSTEM_PROMPT = `あなたはBNI白樺チャプターの運営チームのアシスタントです。
@@ -50,6 +52,7 @@ ${uspList}
 {
   "title": "お題のタイトル",
   "story": "課題のストーリー（2〜3文。answerSkillsのUSP名は [[USP名]] のように囲むこと）",
+  "mission": "ミッション・対策（1〜2文）",
   "emoji": "絵文字1文字",
   "level": "normal",
   "skillCount": 3,
@@ -102,29 +105,29 @@ export async function generateQuestWithAi(opts: {
 
   const draft = JSON.parse(jsonMatch[0]) as AiQuestDraft;
 
-  // ストーリー文中で [[USP名]] と強調されているUSPを正解USPとしてそのまま採用する
-  // （AIが選んだanswerSkillsとストーリーの強調箇所がズレないようにするため、再検討はしない）
   const highlighted = extractHighlightedSkills(draft.story, usps);
-  draft.answerSkills = ensureThreeSkills(
+  draft.answerSkills = ensureNSkills(
     highlighted.length > 0 ? highlighted : draft.answerSkills,
-    usps
+    usps,
+    3
   );
   draft.skillCount = draft.answerSkills.length;
+  draft.mission = draft.mission ?? "";
 
   return draft;
 }
 
-/** USPリスト外の名前を除去し、不足分は未選択のUSPから補い、超過分は切り詰めて必ず3個にする */
-function ensureThreeSkills(answerSkills: string[], usps: UspItem[]): string[] {
+/** USPリスト外の名前を除去し、不足分は補い、必ずN個にする */
+function ensureNSkills(answerSkills: string[], usps: UspItem[], n: number): string[] {
   const uspNames = new Set(usps.map((u) => u.name));
   const filtered = [...new Set(answerSkills.filter((s) => uspNames.has(s)))];
 
-  if (filtered.length > 3) return filtered.slice(0, 3);
+  if (filtered.length > n) return filtered.slice(0, n);
 
-  if (filtered.length < 3) {
-    const remaining = usps.map((u) => u.name).filter((n) => !filtered.includes(n));
+  if (filtered.length < n) {
+    const remaining = usps.map((u) => u.name).filter((nm) => !filtered.includes(nm));
     const shuffled = [...remaining].sort(() => Math.random() - 0.5);
-    while (filtered.length < 3 && shuffled.length > 0) {
+    while (filtered.length < n && shuffled.length > 0) {
       filtered.push(shuffled.shift()!);
     }
   }
@@ -134,8 +137,6 @@ function ensureThreeSkills(answerSkills: string[], usps: UspItem[]): string[] {
 
 /**
  * ストーリー文中の `[[...]]` のうち、USPリストに存在するものを順番に抽出する。
- * AIが絵文字などをUSP名と一緒に括弧内へ入れてしまうことがあるため、
- * 完全一致だけでなく「USP名を含んでいるか」でも判定する。
  */
 function extractHighlightedSkills(story: string, usps: UspItem[]): string[] {
   const matches = [...story.matchAll(/\[\[([^[\]]+)\]\]/g)].map((m) => m[1].trim());
@@ -154,15 +155,15 @@ export async function regenerateAnswerSkillsWithAi(opts: {
   usps: UspItem[];
   questTitle: string;
   questStory: string;
+  targetCount?: number;
   apiKey: string;
   isDev: boolean;
 }): Promise<{ answerSkills: string[]; skillCount: number }> {
-  const { usps, questTitle, questStory, apiKey, isDev } = opts;
+  const { usps, questTitle, questStory, targetCount = 3, apiKey, isDev } = opts;
 
-  // ストーリー文中で [[USP名]] と強調されているものを最優先で正解USPにする
   const highlighted = extractHighlightedSkills(questStory, usps);
-  if (highlighted.length >= 3) {
-    const answerSkills = highlighted.slice(0, 3);
+  if (highlighted.length >= targetCount) {
+    const answerSkills = highlighted.slice(0, targetCount);
     return { answerSkills, skillCount: answerSkills.length };
   }
 
@@ -170,7 +171,7 @@ export async function regenerateAnswerSkillsWithAi(opts: {
     await new Promise((r) => setTimeout(r, 500));
     const remaining = usps.map((u) => u.name).filter((n) => !highlighted.includes(n));
     const shuffled = [...remaining].sort(() => Math.random() - 0.5);
-    const answerSkills = ensureThreeSkills([...highlighted, ...shuffled], usps);
+    const answerSkills = ensureNSkills([...highlighted, ...shuffled], usps, targetCount);
     return { answerSkills, skillCount: answerSkills.length };
   }
 
@@ -181,8 +182,7 @@ export async function regenerateAnswerSkillsWithAi(opts: {
 
   const result = JSON.parse(jsonMatch[0]) as { answerSkills: string[]; skillCount: number };
 
-  // ハイライト済みのUSPを優先しつつ、AIの提案で不足分を補う
-  result.answerSkills = ensureThreeSkills([...highlighted, ...result.answerSkills], usps);
+  result.answerSkills = ensureNSkills([...highlighted, ...result.answerSkills], usps, targetCount);
   result.skillCount = result.answerSkills.length;
 
   return result;
@@ -224,6 +224,7 @@ function mockQuestDraft(usps: UspItem[]): AiQuestDraft {
       `地元の老舗企業から相談が届きました。新しいサービスを始めたいのですが、` +
       `[[${answerSkills[0]}]]や[[${answerSkills[1]}]]、[[${answerSkills[2]}]]をどう活かしたらよいか途方に暮れています。` +
       `チームのスキルを組み合わせて道筋を示してあげましょう！`,
+    mission: "チームの多様なスキルを活かし、事業計画から実行支援まで総合的にサポートします。",
     emoji: "🚀",
     level: "normal",
     skillCount: 3,

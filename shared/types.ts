@@ -154,6 +154,7 @@ export type Quest = {
   id: string;
   title: string;
   story: string;
+  mission: string;
   emoji: string;
   level: QuestLevel;
   skillCount: number;

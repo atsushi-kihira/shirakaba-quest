@@ -441,7 +441,7 @@ function MemberSelector({
 }) {
   return (
     <div className="max-h-44 overflow-y-auto rounded-xl border divide-y"
-      style={{ borderColor: "var(--color-paper-300)", divideColor: "var(--color-paper-200)" }}>
+      style={{ borderColor: "var(--color-paper-300)" }}>
       {members.map((m) => {
         const checked = selected.includes(m.id);
         return (
