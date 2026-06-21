@@ -74,17 +74,22 @@ function buildBulkQuestPrompt(
     .map((item, i) => `${i + 1}. ${item.instruction || "BNIメンバーの業種に合った課題"}`)
     .join("\n");
 
-  return `${QUEST_SYSTEM_PROMPT}
+  return `あなたはBNI白樺チャプターの運営チームのアシスタントです。
+以下の${items.length}件のお題（クエスト）をまとめて生成してください。
+
+ルール:
+- 提供されるUSPリストの中から各お題の解決に必要なものをちょうど3個選んでanswerSkillsに設定すること
+- answerSkillsには必ずUSPリストに含まれている名前だけを使うこと
+- 各お題は異なる業種・シチュエーションになるようにすること
+- 出力はJSON配列のみ（説明文・マークダウン不要）
 
 # 利用可能なUSP一覧（answerSkillsはこの中からのみ選ぶこと）
 ${uspList}
 
-# 生成するお題と個別指示
-以下の${items.length}件のお題を一度に生成してください：
+# 生成する件数と各指示
 ${itemsList}
 
-# 各お題の出力形式
-\`\`\`json
+# 出力形式（JSON配列のみ、${items.length}件）
 [
   {
     "title": "タイトル（18文字以内）",
@@ -97,12 +102,10 @@ ${itemsList}
     "reward": 5
   }
 ]
-\`\`\`
 ${additionalPrompt ? `\n# 共通の追加指示\n${additionalPrompt}` : ""}
 
 # 必須制約
-${MANDATORY_CONSTRAINT}
-異なる業種・シチュエーションになるよう各お題の内容を変えること。`;
+${MANDATORY_CONSTRAINT}`;
 }
 
 function buildSkillsPrompt(usps: UspItem[], questTitle: string, questStory: string): string {
@@ -180,11 +183,11 @@ export async function bulkGenerateQuestsWithAi(opts: {
     2048 + items.length * 256  // 件数に応じてトークン上限を増やす
   );
 
-  // JSON配列を抽出（コードブロック内外どちらでも対応）
-  const jsonMatch = content.match(/\[[\s\S]*?\]/);
-  if (!jsonMatch) throw new Error("AI応答からJSON配列を抽出できませんでした");
+  // コードブロック内のJSONを優先して抽出し、なければブラケット深さで外側配列を特定
+  const jsonStr = extractOutermostArray(content);
+  if (!jsonStr) throw new Error("AI応答からJSON配列を抽出できませんでした");
 
-  const drafts = JSON.parse(jsonMatch[0]) as AiQuestDraft[];
+  const drafts = JSON.parse(jsonStr) as AiQuestDraft[];
 
   return drafts.map((draft) => {
     const highlighted = extractHighlightedSkills(draft.story, usps);
@@ -198,6 +201,28 @@ export async function bulkGenerateQuestsWithAi(opts: {
     draft.mission = draft.mission ?? "";
     return draft;
   });
+}
+
+/** AI応答から外側のJSON配列を抽出する（ネストした配列を誤マッチしない） */
+function extractOutermostArray(content: string): string | null {
+  // コードブロック内を優先
+  const codeBlock = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeBlock) {
+    const inner = codeBlock[1].trim();
+    if (inner.startsWith("[")) return inner;
+  }
+  // ブラケット深さを数えて外側の [ ... ] を抽出
+  const start = content.indexOf("[");
+  if (start === -1) return null;
+  let depth = 0;
+  for (let i = start; i < content.length; i++) {
+    if (content[i] === "[") depth++;
+    else if (content[i] === "]") {
+      depth--;
+      if (depth === 0) return content.slice(start, i + 1);
+    }
+  }
+  return null;
 }
 
 /** USPリスト外の名前を除去し、不足分は補い、必ずN個にする */
