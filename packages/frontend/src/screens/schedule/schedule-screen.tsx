@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { Loader2, Check, AlertCircle } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
+import { API_BASE_URL } from "@/lib/api";
 
 type Availability = "yes" | "maybe" | "no";
 type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null };
@@ -58,7 +59,7 @@ export function ScheduleScreen() {
 
   useEffect(() => {
     if (!token) return;
-    fetch(`/api/schedule/${token}`)
+    fetch(`${API_BASE_URL}/schedule/${token}`)
       .then((r) => r.json())
       .then((json) => {
         if (json.error) { setError(json.error.message); return; }
@@ -85,7 +86,7 @@ export function ScheduleScreen() {
     setSubmitError("");
     setSubmitting(true);
     try {
-      const r = await fetch(`/api/schedule/${token}/respond`, {
+      const r = await fetch(`${API_BASE_URL}/schedule/${token}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim(), answers }),

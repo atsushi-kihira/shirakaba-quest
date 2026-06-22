@@ -52,7 +52,7 @@ export function AppLayout() {
     { to: "/team",     icon: Shield,     label: "チーム",         mobileVisible: true  },
     { to: "/quests",   icon: ScrollText, label: settings.termQuest, mobileVisible: true },
     { to: "/ranking",  icon: Trophy,     label: "順位",           mobileVisible: true  },
-    { to: "/meetings", icon: Calendar,   label: "会議",           mobileVisible: false },
+    { to: "/meetings", icon: Calendar,   label: "ミーティング",   mobileVisible: false },
     { to: "/me",       icon: User,       label: "マイ",           mobileVisible: true  },
   ] as const;
 

@@ -32,6 +32,8 @@ type OnoListResponse  = { data: OnoSession[] };
 type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string; reward: number; skillCount: number; isSolved: boolean }> };
 type UpcomingMeeting  = { id: string; title: string; host: { name: string; emoji: string } | null; isHost: boolean; confirmedDate: { startsAt: number; endsAt: number | null } | null };
 type UpcomingMeetingsResponse = { data: UpcomingMeeting[] };
+type MeetingListItem  = { id: string; title: string; host: { id: string; name: string; emoji: string } | null; isHost: boolean; status: string; hasResponded: boolean };
+type MeetingsResponse = { data: MeetingListItem[] };
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
@@ -75,6 +77,13 @@ export function HomeScreen() {
     enabled: !!user,
   });
 
+  const { data: meetingsData } = useQuery({
+    queryKey: ["meetings"],
+    queryFn: () => api.get<MeetingsResponse>("/meetings"),
+    enabled: !!user,
+    staleTime: 30_000,
+  });
+
   type HistoryItem = { id: string; delta: number; reason: string; label: string; detail?: string; createdAt: number };
   const { data: historyData } = useQuery({
     queryKey: ["ranking", "history"],
@@ -87,6 +96,10 @@ export function HomeScreen() {
   const quests           = (questData?.data ?? []).filter((q) => !q.isSolved).slice(0, 2);
   const activeSeason     = seasonData?.data ?? null;
   const upcomingMeetings = upcomingMeetingsData?.data ?? [];
+  // 招待済みだが未回答のオープンミーティング（自分が主催者ではないもの）
+  const pendingMeetings  = (meetingsData?.data ?? []).filter(
+    (m) => m.status === "open" && !m.isHost && !m.hasResponded
+  );
   const activeEvents  = eventsData?.data ?? [];
   const featuredEvent = activeEvents.find((e) => e.type === "featured_member");
   const specialWeek   = activeEvents.find((e) => e.type === "special_quest_week");
@@ -355,6 +368,39 @@ export function HomeScreen() {
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>完了ボタンを押すと +1pt</p>
                 </div>
                 <ChevronRight size={16} style={{ color: "var(--color-success)" }} />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ミーティング招待通知（未回答） */}
+      {pendingMeetings.length > 0 && (
+        <section>
+          <h2 className="text-sm font-semibold mb-2" style={{ fontFamily: "var(--font-klee)", color: "#6B7DB3" }}>
+            📅 日程回答が届いています
+          </h2>
+          <div className="space-y-2">
+            {pendingMeetings.map((m) => (
+              <Link
+                key={m.id}
+                to={`/meetings/${m.id}`}
+                className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                style={{ borderLeft: "3px solid #6B7DB3" }}
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+                  style={{ background: "rgba(107,125,179,0.12)" }}>
+                  📅
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                    {m.title}
+                  </p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                    {m.host?.emoji} {m.host?.name}さんから日程調整の招待が届いています
+                  </p>
+                </div>
+                <ChevronRight size={16} style={{ color: "#6B7DB3" }} />
               </Link>
             ))}
           </div>
