@@ -238,6 +238,57 @@ export const memberBadges = sqliteTable(
   (t) => [uniqueIndex("uniq_member_badge").on(t.memberId, t.badgeId)]
 );
 
+// ---- ミーティング（日程調整）----
+
+export const meetings = sqliteTable("meetings", {
+  id:                   text("id").primaryKey(),
+  title:                text("title").notNull(),
+  description:          text("description"),
+  hostMemberId:         text("host_member_id").notNull(),
+  scope:                text("scope").notNull().default("all"), // 'all' | 'team' | 'selected'
+  teamId:               text("team_id"),
+  status:               text("status").notNull().default("open"), // 'open' | 'confirmed' | 'cancelled'
+  confirmedCandidateId: text("confirmed_candidate_id"),
+  deadline:             integer("deadline"),
+  createdAt:            integer("created_at").notNull(),
+  updatedAt:            integer("updated_at").notNull(),
+});
+
+export const meetingDateCandidates = sqliteTable("meeting_date_candidates", {
+  id:        text("id").primaryKey(),
+  meetingId: text("meeting_id").notNull(),
+  startsAt:  integer("starts_at").notNull(),
+  endsAt:    integer("ends_at"),
+  note:      text("note"),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
+export const meetingInvitees = sqliteTable("meeting_invitees", {
+  id:        text("id").primaryKey(),
+  meetingId: text("meeting_id").notNull(),
+  memberId:  text("member_id").notNull(),
+});
+
+export const meetingExternalInvitees = sqliteTable("meeting_external_invitees", {
+  id:        text("id").primaryKey(),
+  meetingId: text("meeting_id").notNull(),
+  name:      text("name").notNull().default(""),
+  email:     text("email"),
+  token:     text("token").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const meetingResponses = sqliteTable("meeting_responses", {
+  id:                 text("id").primaryKey(),
+  meetingId:          text("meeting_id").notNull(),
+  candidateId:        text("candidate_id").notNull(),
+  memberId:           text("member_id"),
+  externalInviteeId:  text("external_invitee_id"),
+  availability:       text("availability").notNull().default("yes"), // 'yes' | 'maybe' | 'no'
+  comment:            text("comment"),
+  respondedAt:        integer("responded_at").notNull(),
+});
+
 export const cardDesigns = sqliteTable("card_designs", {
   id:                   text("id").primaryKey().default("default"),
   frontFeatureLabel:    text("front_feature_label").notNull().default("USP・SKILLs"),

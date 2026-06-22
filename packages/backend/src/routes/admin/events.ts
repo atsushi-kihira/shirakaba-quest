@@ -80,7 +80,12 @@ adminEventRoutes.patch("/:id", async (c) => {
     relatedMemberIds?: string[];
     multiplier?: number | null;
     status?: string;
-  }>().catch(() => ({}));
+  }>().catch(() => ({} as {
+    title?: string; description?: string; type?: string;
+    startsAt?: number; endsAt?: number | null;
+    relatedMemberId?: string | null; relatedMemberIds?: string[];
+    multiplier?: number | null; status?: string;
+  }));
 
   const memberIdsUpdate = body.relatedMemberIds !== undefined ? {
     relatedMemberIds: body.relatedMemberIds.length > 0 ? JSON.stringify(body.relatedMemberIds) : null,

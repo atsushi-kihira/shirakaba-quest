@@ -15,6 +15,8 @@ import { eventRoutes } from "./routes/events.ts";
 import { teamRoutes } from "./routes/teams.ts";
 import { registerRoutes } from "./routes/register.ts";
 import { adminRoutes } from "./routes/admin/index.ts";
+import { meetingRoutes } from "./routes/meetings.ts";
+import { scheduleRoutes } from "./routes/schedule.ts";
 import { authMiddleware } from "./middleware/auth.ts";
 import { adminMiddleware } from "./middleware/auth.ts";
 import type { Env, Variables } from "./types.ts";
@@ -45,6 +47,8 @@ app.route("/api", badgeRoutes);
 app.route("/api/season", seasonRoutes);
 app.route("/api/events", eventRoutes);
 app.route("/api/teams", teamRoutes);
+app.route("/api/meetings", meetingRoutes);
+app.route("/api/schedule", scheduleRoutes);
 
 // ---- 公開アプリ設定（認証不要・全ユーザー対象） ----
 app.get("/api/settings", async (c) => {

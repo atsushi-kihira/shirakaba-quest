@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown } from "lucide-react";
+import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar } from "lucide-react";
 import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
@@ -30,6 +30,8 @@ type OnoSession = {
 };
 type OnoListResponse  = { data: OnoSession[] };
 type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string; reward: number; skillCount: number; isSolved: boolean }> };
+type UpcomingMeeting  = { id: string; title: string; host: { name: string; emoji: string } | null; isHost: boolean; confirmedDate: { startsAt: number; endsAt: number | null } | null };
+type UpcomingMeetingsResponse = { data: UpcomingMeeting[] };
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
@@ -67,6 +69,12 @@ export function HomeScreen() {
     enabled: !!user,
   });
 
+  const { data: upcomingMeetingsData } = useQuery({
+    queryKey: ["meetings", "upcoming"],
+    queryFn: () => api.get<UpcomingMeetingsResponse>("/meetings/upcoming"),
+    enabled: !!user,
+  });
+
   type HistoryItem = { id: string; delta: number; reason: string; label: string; detail?: string; createdAt: number };
   const { data: historyData } = useQuery({
     queryKey: ["ranking", "history"],
@@ -74,10 +82,11 @@ export function HomeScreen() {
     enabled: !!user && pointsExpanded,
   });
 
-  const rank          = rankData?.data;
-  const sessions      = onoData?.data ?? [];
-  const quests        = (questData?.data ?? []).filter((q) => !q.isSolved).slice(0, 2);
-  const activeSeason  = seasonData?.data ?? null;
+  const rank             = rankData?.data;
+  const sessions         = onoData?.data ?? [];
+  const quests           = (questData?.data ?? []).filter((q) => !q.isSolved).slice(0, 2);
+  const activeSeason     = seasonData?.data ?? null;
+  const upcomingMeetings = upcomingMeetingsData?.data ?? [];
   const activeEvents  = eventsData?.data ?? [];
   const featuredEvent = activeEvents.find((e) => e.type === "featured_member");
   const specialWeek   = activeEvents.find((e) => e.type === "special_quest_week");
@@ -352,6 +361,47 @@ export function HomeScreen() {
         </section>
       )}
 
+      {/* 近日ミーティング */}
+      {upcomingMeetings.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+              📅 近日のミーティング
+            </h2>
+            <Link to="/meetings" className="text-xs" style={{ color: "var(--color-brand)" }}>
+              すべて見る →
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {upcomingMeetings.slice(0, 3).map((m) => {
+              const d = m.confirmedDate ? new Date(m.confirmedDate.startsAt * 1000) : null;
+              const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
+              const isToday = d ? d.toDateString() === new Date().toDateString() : false;
+              const dateStr = d
+                ? `${d.getMonth()+1}/${d.getDate()}(${weekdays[d.getDay()]}) ${d.getHours().toString().padStart(2,"0")}:${d.getMinutes().toString().padStart(2,"0")}`
+                : "";
+              return (
+                <Link key={m.id} to={`/meetings/${m.id}`}
+                  className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                  style={isToday ? { borderLeft: "3px solid var(--color-accent)" } : {}}>
+                  <div className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-xl"
+                    style={{ background: isToday ? "rgba(212,160,59,0.15)" : "var(--color-paper-200)" }}>
+                    {isToday ? "🔔" : "📅"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{m.title}</p>
+                    <p className="text-xs" style={{ color: isToday ? "var(--color-accent)" : "var(--color-ink-400)" }}>
+                      {isToday ? "🔔 本日！" : ""}{dateStr}
+                    </p>
+                  </div>
+                  <ChevronRight size={16} style={{ color: "var(--color-ink-300)" }} />
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* 公開中のお題 */}
       {quests.length > 0 && (
         <section>
@@ -388,6 +438,7 @@ export function HomeScreen() {
           <QuickLink to="/quests"   icon={<ScrollText size={18} />} label={`${termQuest}に挑戦しよう`} sub="+5pt〜" color="var(--color-success)" />
           <QuickLink to="/team"     icon={<span className="text-base">🦊</span>} label="チームの活動を確認しよう" sub="" color="var(--color-accent)" />
           <QuickLink to="/ranking"  icon={<Trophy size={18} />}     label="ランキングをチェック"      sub=""       color="var(--color-accent)" />
+          <QuickLink to="/meetings" icon={<Calendar size={18} />}   label="ミーティングの日程調整"    sub=""       color="#6B7DB3" />
           <QuickLink to="/me"       icon={<QrCode size={18} />}     label="自分のQRを表示してカードを渡す" sub="🃏"  color="var(--color-ink-500)" />
         </div>
       </section>

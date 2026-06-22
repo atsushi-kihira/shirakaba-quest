@@ -14,6 +14,10 @@ import { MypageScreen } from "@/screens/mypage/mypage-screen";
 import { TeamScreen } from "@/screens/home/team-screen";
 import { OneOnOneScreen } from "@/screens/oneonone/oneonone-screen";
 import { ReceiveCardScreen } from "@/screens/cards/receive-card-screen";
+import { MeetingsScreen } from "@/screens/meetings/meetings-screen";
+import { MeetingNewScreen } from "@/screens/meetings/meeting-new-screen";
+import { MeetingDetailScreen } from "@/screens/meetings/meeting-detail-screen";
+import { ScheduleScreen } from "@/screens/schedule/schedule-screen";
 import { AdminLayout } from "@/screens/admin/admin-layout";
 import { AdminDashboardScreen } from "@/screens/admin/admin-dashboard-screen";
 import { AdminMembersScreen } from "@/screens/admin/admin-members-screen";
@@ -44,6 +48,9 @@ export default function App() {
             {/* リアルカード受け取り（ログイン必要だが AppLayout 外） */}
             <Route path="/receive-card/:memberId" element={<ReceiveCardScreen />} />
 
+            {/* 外部ゲスト向け日程回答（認証不要） */}
+            <Route path="/schedule/:token" element={<ScheduleScreen />} />
+
             {/* メンバー向け（要認証） */}
             <Route element={<AuthGuard />}>
               <Route element={<AppLayout />}>
@@ -55,6 +62,9 @@ export default function App() {
                 <Route path="me" element={<MypageScreen />} />
                 <Route path="team" element={<TeamScreen />} />
                 <Route path="oneonone" element={<OneOnOneScreen />} />
+                <Route path="meetings" element={<MeetingsScreen />} />
+                <Route path="meetings/new" element={<MeetingNewScreen />} />
+                <Route path="meetings/:id" element={<MeetingDetailScreen />} />
               </Route>
             </Route>
 
