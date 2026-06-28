@@ -157,6 +157,7 @@ eventRoutes.post("/instances", async (c) => {
     description?: string;
     startsAt?: number;
     endsAt?: number;
+    multiplier?: number;
   }>();
 
   const typeDef = await db.select().from(schema.eventTypeDefinitions)
@@ -184,7 +185,7 @@ eventRoutes.post("/instances", async (c) => {
     endsAt: body.endsAt ?? null,
     relatedMemberId: targetIds[0] ?? null,
     relatedMemberIds: targetIds.length > 0 ? JSON.stringify(targetIds) : null,
-    multiplier: null,
+    multiplier: (body.multiplier != null && body.multiplier > 0) ? body.multiplier : null,
     status: "active",
     createdByMemberId: memberId,
     createdAt: now,
@@ -218,6 +219,7 @@ eventRoutes.patch("/instances/:id", async (c) => {
     startsAt?: number;
     endsAt?: number | null;
     relatedMemberIds?: string[];
+    multiplier?: number | null;
   };
   const body = await c.req.json<PatchBody>().catch(() => ({} as PatchBody));
 
@@ -243,6 +245,9 @@ eventRoutes.patch("/instances/:id", async (c) => {
     ...(body.relatedMemberIds !== undefined && {
       relatedMemberId: body.relatedMemberIds[0] ?? null,
       relatedMemberIds: body.relatedMemberIds.length > 0 ? JSON.stringify(body.relatedMemberIds) : null,
+    }),
+    ...(body.multiplier !== undefined && {
+      multiplier: (body.multiplier != null && body.multiplier > 0) ? body.multiplier : null,
     }),
     updatedAt: now,
   }).where(eq(schema.eventCampaigns.id, id));

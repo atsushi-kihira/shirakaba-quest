@@ -107,6 +107,7 @@ function EditEventForm({
   const [selectedTypeDefId, setSelectedTypeDefId] = useState(event.eventTypeDefId ?? "");
   const [startsAt, setStartsAt] = useState(toDateInput(event.startsAt));
   const [endsAt, setEndsAt] = useState(toDateInput(event.endsAt));
+  const [multiplier, setMultiplier] = useState(event.multiplier ? String(event.multiplier) : "");
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>(event.relatedMemberIds ?? []);
   const [search, setSearch] = useState("");
 
@@ -210,6 +211,22 @@ function EditEventForm({
         </div>
       )}
 
+      {/* 加算ポイント */}
+      {resolvedTypeDef && resolvedTypeDef.pointValue > 0 && (
+        <div>
+          <p className="text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+            加算ポイント <span className="font-normal" style={{ color: "var(--color-ink-400)" }}>（任意・空欄=なし）</span>
+          </p>
+          <input
+            type="number" min={0} value={multiplier}
+            onChange={(e) => setMultiplier(e.target.value)}
+            placeholder="例: 3"
+            className="w-full px-3 py-1.5 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)" }}
+          />
+        </div>
+      )}
+
       <div className="flex gap-2 pt-1">
         <button onClick={onCancel}
           className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs"
@@ -224,6 +241,7 @@ function EditEventForm({
             endsAt: endsAt ? Math.floor(new Date(endsAt).getTime() / 1000) : null,
             ...(typeChanged && { typeDefId: selectedTypeDefId }),
             ...(needsTarget && { relatedMemberIds: selectedMemberIds }),
+            multiplier: multiplier ? Number(multiplier) : null,
           })}
           disabled={!canSave || isPending}
           className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs text-white disabled:opacity-50"
@@ -444,6 +462,7 @@ function CreateEventModal({
   const [description, setDescription] = useState("");
   const [startsAt, setStartsAt] = useState(todayStr());
   const [endsAt, setEndsAt] = useState("");
+  const [multiplier, setMultiplier] = useState("");
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
@@ -475,6 +494,7 @@ function CreateEventModal({
         startsAt: startsAt ? Math.floor(new Date(startsAt).getTime() / 1000) : undefined,
         endsAt: Math.floor(new Date(endsAt).getTime() / 1000),
         ...(needsTarget && { relatedMemberIds: selectedMemberIds }),
+        ...(typeDef.pointValue > 0 && multiplier && { multiplier: Number(multiplier) }),
       });
     },
     onSuccess,
@@ -549,6 +569,22 @@ function CreateEventModal({
               </div>
             </div>
           </div>
+
+          {/* 加算ポイント */}
+          {typeDef.pointValue > 0 && (
+            <div>
+              <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+                加算ポイント <span className="font-normal" style={{ color: "var(--color-ink-400)" }}>（任意・空欄=なし）</span>
+              </label>
+              <input
+                type="number" min={0} value={multiplier}
+                onChange={(e) => setMultiplier(e.target.value)}
+                placeholder="例: 3"
+                className="w-full px-3 py-2 rounded-xl border text-sm"
+                style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+              />
+            </div>
+          )}
 
           {/* 対象メンバー（複数選択） */}
           {needsTarget && (
