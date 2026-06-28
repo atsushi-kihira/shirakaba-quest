@@ -568,6 +568,16 @@ function TypeDefSection({
                   ミーティング連携
                 </span>
               )}
+              <span className="text-xs px-1.5 py-0.5 rounded-full"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+                {TRIGGER_LABELS[typeDef.triggerType] ?? typeDef.triggerType}
+              </span>
+              {typeDef.pointValue > 0 && (
+                <span className="text-xs px-1.5 py-0.5 rounded-full"
+                  style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-accent)" }}>
+                  ポイントあり
+                </span>
+              )}
               {!typeDef.isActive && (
                 <span className="text-xs px-1.5 py-0.5 rounded-full font-bold"
                   style={{ background: "var(--color-paper-300)", color: "var(--color-ink-400)" }}>無効</span>
