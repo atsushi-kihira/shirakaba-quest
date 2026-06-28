@@ -9,8 +9,10 @@ import { api } from "@/lib/api";
 
 type Team = { id: string; name: string; emblemEmoji: string };
 type Member = { id: string; name: string; emoji: string; bgColor: string };
+type MeetingTypeDef = { id: string; slug: string; name: string; emoji: string; pointValue: number };
 type TeamsResponse = { data: Team[] };
 type MembersResponse = { data: Member[] };
+type MeetingTypesResponse = { data: MeetingTypeDef[] };
 
 type Candidate = {
   date: string;  // YYYY-MM-DD
@@ -37,6 +39,8 @@ export function MeetingNewScreen() {
   const [teamId, setTeamId] = useState("");
   const [inviteeIds, setInviteeIds] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([emptyCandidate()]);
+  const [eventTypeDefId, setEventTypeDefId] = useState<string>("");
+  const [registrationDeadline, setRegistrationDeadline] = useState("");
   const [error, setError] = useState("");
 
   const { data: teamsData } = useQuery({
@@ -49,6 +53,11 @@ export function MeetingNewScreen() {
     queryKey: ["members"],
     queryFn: () => api.get<MembersResponse>("/members"),
     enabled: scope === "selected",
+  });
+
+  const { data: meetingTypesData } = useQuery({
+    queryKey: ["events", "meeting-types"],
+    queryFn: () => api.get<MeetingTypesResponse>("/events/meeting-types"),
   });
 
   const createMutation = useMutation({
@@ -92,6 +101,10 @@ export function MeetingNewScreen() {
       scope,
       teamId: scope === "team" ? teamId : undefined,
       inviteeIds: scope === "selected" ? inviteeIds : undefined,
+      eventTypeDefId: eventTypeDefId || undefined,
+      registrationDeadline: registrationDeadline
+        ? Math.floor(new Date(registrationDeadline).getTime() / 1000)
+        : undefined,
       candidates: validCandidates.map((c) => ({
         startsAt: toUnixTimestamp(c.date, c.time),
         endsAt: c.endTime ? toUnixTimestamp(c.date, c.endTime) : undefined,
@@ -115,6 +128,57 @@ export function MeetingNewScreen() {
       </div>
 
       <div className="space-y-5">
+        {/* イベント種別設定（先頭） */}
+        <div>
+          <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
+            🎯 イベント種別
+          </label>
+          <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>
+            ミーティング参加者にポイントを付与するイベントと連携できます
+          </p>
+          {!meetingTypesData ? (
+            <div className="flex justify-center py-3">
+              <Loader2 size={16} className="animate-spin" style={{ color: "var(--color-brand)" }} />
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {/* 「なし」オプション（デフォルト）*/}
+              <label
+                className="flex items-center gap-3 px-3 py-2.5 rounded-2xl cursor-pointer transition"
+                style={{
+                  background: eventTypeDefId === "" ? "rgba(90,140,92,0.1)" : "var(--color-paper-200)",
+                  border: eventTypeDefId === "" ? "1.5px solid rgba(90,140,92,0.3)" : "1.5px solid transparent",
+                }}
+              >
+                <input type="radio" name="eventTypeDefId" value="" checked={eventTypeDefId === ""} onChange={() => setEventTypeDefId("")} className="sr-only" />
+                <span className="text-base">—</span>
+                <p className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>イベント種別なし</p>
+                {eventTypeDefId === "" && <span className="ml-auto text-xs font-bold" style={{ color: "var(--color-success)" }}>✓</span>}
+              </label>
+              {(meetingTypesData.data ?? []).map((t) => (
+                <label
+                  key={t.id}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-2xl cursor-pointer transition"
+                  style={{
+                    background: eventTypeDefId === t.id ? "rgba(212,160,59,0.12)" : "var(--color-paper-200)",
+                    border: eventTypeDefId === t.id ? "1.5px solid rgba(212,160,59,0.4)" : "1.5px solid transparent",
+                  }}
+                >
+                  <input type="radio" name="eventTypeDefId" value={t.id} checked={eventTypeDefId === t.id} onChange={() => setEventTypeDefId(t.id)} className="sr-only" />
+                  <span className="text-base">{t.emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{t.name}</p>
+                    {t.pointValue > 0 && (
+                      <p className="text-xs" style={{ color: "var(--color-accent)" }}>出席者に +{t.pointValue}pt</p>
+                    )}
+                  </div>
+                  {eventTypeDefId === t.id && <span className="text-xs font-bold" style={{ color: "var(--color-accent)" }}>✓</span>}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* タイトル */}
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
@@ -277,6 +341,33 @@ export function MeetingNewScreen() {
               候補日を追加
             </button>
           </div>
+        </div>
+
+        {/* 募集期間（任意） */}
+        <div>
+          <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
+            募集締め切り日（任意）
+          </label>
+          <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>
+            設定しない場合、日程確定時にホーム画面からの募集表示が終了します
+          </p>
+          <input
+            type="date"
+            value={registrationDeadline}
+            onChange={(e) => setRegistrationDeadline(e.target.value)}
+            className="w-full px-4 py-3 rounded-2xl text-sm outline-none border transition"
+            style={{
+              background: "var(--color-paper-50)",
+              borderColor: "var(--color-paper-300)",
+              color: "var(--color-ink-900)",
+            }}
+          />
+          {registrationDeadline && (
+            <button type="button" onClick={() => setRegistrationDeadline("")}
+              className="mt-1 text-xs" style={{ color: "var(--color-ink-400)" }}>
+              クリア
+            </button>
+          )}
         </div>
 
         {/* エラー */}

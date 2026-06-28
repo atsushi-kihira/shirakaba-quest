@@ -9,7 +9,9 @@ import { adminUspRoutes } from "./usps.ts";
 import { adminBadgeRoutes } from "./badges.ts";
 import { adminSeasonRoutes } from "./seasons.ts";
 import { adminEventRoutes } from "./events.ts";
+import { adminEventTypeDefinitionRoutes } from "./event-type-definitions.ts";
 import { adminTeamRoutes } from "./teams.ts";
+import { adminMeetingRoutes } from "./meetings.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -22,7 +24,9 @@ adminRoutes.route("/usps", adminUspRoutes);
 adminRoutes.route("/badges", adminBadgeRoutes);
 adminRoutes.route("/seasons", adminSeasonRoutes);
 adminRoutes.route("/events", adminEventRoutes);
+adminRoutes.route("/event-type-definitions", adminEventTypeDefinitionRoutes);
 adminRoutes.route("/teams", adminTeamRoutes);
+adminRoutes.route("/meetings", adminMeetingRoutes);
 
 // ---- POST /api/admin/points/reset ----
 adminRoutes.post("/points/reset", async (c) => {
@@ -124,6 +128,7 @@ adminRoutes.patch("/app-settings", async (c) => {
   const body = await c.req.json<Partial<{
     appTitle: string; appLogo: string; appPointName: string;
     termQuest: string; termUsp: string; termOneOnOne: string;
+    timezone: string;
   }>>();
 
   const { eq } = await import("drizzle-orm");
@@ -135,6 +140,7 @@ adminRoutes.patch("/app-settings", async (c) => {
     ...(body.termQuest    !== undefined && { termQuest: body.termQuest }),
     ...(body.termUsp      !== undefined && { termUsp: body.termUsp }),
     ...(body.termOneOnOne !== undefined && { termOneOnOne: body.termOneOnOne }),
+    ...(body.timezone     !== undefined && { timezone: body.timezone }),
     updatedAt: now,
     updatedBy: adminId,
   }).where(eq(schema.cardDesigns.id, "default"));

@@ -5,6 +5,8 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle, PauseCircle, PlayCircle, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "@/lib/api";
+import { useSettings } from "@/hooks/use-settings";
+import { fmtDateISO } from "@/lib/date";
 import type { Skill } from "@shared/types";
 
 type AdminMember = {
@@ -33,6 +35,7 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
 
 export function AdminMembersScreen() {
   const qc = useQueryClient();
+  const { timezone: tz } = useSettings();
   const [filter, setFilter] = useState<"all" | "pending" | "active" | "suspended">("all");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -143,7 +146,7 @@ export function AdminMembersScreen() {
                       </div>
                     )}
                     <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-                      登録: {new Date(m.createdAt * 1000).toLocaleDateString("ja-JP")}
+                      登録: {fmtDateISO(m.createdAt, tz)}
                     </div>
                   </div>
 

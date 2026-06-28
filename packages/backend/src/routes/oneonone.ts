@@ -276,15 +276,23 @@ oneOnOneRoutes.patch("/:id/complete", async (c) => {
       });
     }
 
-    // welcome_quest ボーナス
+    // welcome_quest ボーナス（event_type_def_id 統一方式）
     try {
       const nowTs = now;
       const welcomeEvents = await db
-        .select()
+        .select({
+          id: schema.eventCampaigns.id,
+          relatedMemberId: schema.eventCampaigns.relatedMemberId,
+        })
         .from(schema.eventCampaigns)
+        .innerJoin(
+          schema.eventTypeDefinitions,
+          eq(schema.eventCampaigns.eventTypeDefId, schema.eventTypeDefinitions.id)
+        )
         .where(
           and(
-            eq(schema.eventCampaigns.type, "welcome_quest"),
+            eq(schema.eventTypeDefinitions.triggerType, "one_on_one"),
+            eq(schema.eventTypeDefinitions.rewardTarget, "partner_of_related"),
             eq(schema.eventCampaigns.status, "active"),
             sql`(${schema.eventCampaigns.endsAt} IS NULL OR ${schema.eventCampaigns.endsAt} >= ${nowTs})`
           )

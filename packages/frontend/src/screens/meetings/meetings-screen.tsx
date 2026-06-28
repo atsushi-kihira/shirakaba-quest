@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2, Plus, Calendar, CheckCircle, Clock, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useTimezone } from "@/hooks/use-timezone";
+import { fmtDateJP, fmtTime } from "@/lib/date";
 
 type MeetingItem = {
   id: string;
@@ -30,9 +32,11 @@ const SCOPE_LABEL: Record<string, string> = {
   selected: "指定メンバー",
 };
 
-function formatDate(ts: number): string {
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+function formatConfirmedDate(ts: number, endsAt: number | null, tz: string): string {
+  const date = fmtDateJP(ts, tz);
+  const startT = fmtTime(ts, tz);
+  if (endsAt) return `${date} ${startT}〜${fmtTime(endsAt, tz)}`;
+  return startT === "00:00" ? date : `${date} ${startT}`;
 }
 
 function StatusBadge({ status, hasResponded }: { status: string; hasResponded: boolean }) {
@@ -70,6 +74,7 @@ function StatusBadge({ status, hasResponded }: { status: string; hasResponded: b
 
 export function MeetingsScreen() {
   const user = useAuthStore((s) => s.user);
+  const tz = useTimezone();
 
   const { data, isLoading } = useQuery({
     queryKey: ["meetings"],
@@ -139,7 +144,7 @@ export function MeetingsScreen() {
 
                   {m.status === "confirmed" && m.confirmedDate ? (
                     <p className="text-sm font-medium mb-2" style={{ color: "var(--color-success)" }}>
-                      📅 {formatDate(m.confirmedDate.startsAt)}
+                      ✅ 確定: {formatConfirmedDate(m.confirmedDate.startsAt, m.confirmedDate.endsAt, tz)}
                     </p>
                   ) : (
                     <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>

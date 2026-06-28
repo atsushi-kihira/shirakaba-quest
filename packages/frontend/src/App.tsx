@@ -11,7 +11,7 @@ import { MemberDetailScreen } from "@/screens/members/member-detail-screen";
 import { QuestsScreen } from "@/screens/quests/quests-screen";
 import { RankingScreen } from "@/screens/ranking/ranking-screen";
 import { MypageScreen } from "@/screens/mypage/mypage-screen";
-import { TeamScreen } from "@/screens/home/team-screen";
+
 import { OneOnOneScreen } from "@/screens/oneonone/oneonone-screen";
 import { ReceiveCardScreen } from "@/screens/cards/receive-card-screen";
 import { MeetingsScreen } from "@/screens/meetings/meetings-screen";
@@ -26,8 +26,11 @@ import { AdminPointsScreen } from "@/screens/admin/admin-points-screen";
 import { AdminSettingsScreen } from "@/screens/admin/admin-settings-screen";
 import { AdminUspsScreen } from "@/screens/admin/admin-usps-screen";
 import { AdminSeasonsScreen } from "@/screens/admin/admin-seasons-screen";
-import { AdminEventsScreen } from "@/screens/admin/admin-events-screen";
+import { AdminEventTypesScreen } from "@/screens/admin/admin-event-types-screen";
+import { EventsScreen } from "@/screens/events/events-screen";
+import { EventDetailScreen } from "@/screens/events/event-detail-screen";
 import { AdminTeamsScreen } from "@/screens/admin/admin-teams-screen";
+import { AdminMeetingsScreen } from "@/screens/admin/admin-meetings-screen";
 import { useMe } from "@/hooks/use-me";
 
 function AppWithMe({ children }: { children: React.ReactNode }) {
@@ -60,7 +63,9 @@ export default function App() {
                 <Route path="quests" element={<QuestsScreen />} />
                 <Route path="ranking" element={<RankingScreen />} />
                 <Route path="me" element={<MypageScreen />} />
-                <Route path="team" element={<TeamScreen />} />
+                <Route path="team" element={<Navigate to="/members" replace />} />
+                <Route path="events" element={<EventsScreen />} />
+                <Route path="events/:id" element={<EventDetailScreen />} />
                 <Route path="oneonone" element={<OneOnOneScreen />} />
                 <Route path="meetings" element={<MeetingsScreen />} />
                 <Route path="meetings/new" element={<MeetingNewScreen />} />
@@ -76,8 +81,10 @@ export default function App() {
                 <Route path="usps" element={<AdminUspsScreen />} />
                 <Route path="quests" element={<AdminQuestsScreen />} />
                 <Route path="seasons" element={<AdminSeasonsScreen />} />
-                <Route path="events" element={<AdminEventsScreen />} />
+                <Route path="events" element={<Navigate to="/admin/event-types" replace />} />
+                <Route path="event-types" element={<AdminEventTypesScreen />} />
                 <Route path="teams" element={<AdminTeamsScreen />} />
+                <Route path="meetings" element={<AdminMeetingsScreen />} />
                 <Route path="points" element={<AdminPointsScreen />} />
                 <Route path="settings" element={<AdminSettingsScreen />} />
               </Route>

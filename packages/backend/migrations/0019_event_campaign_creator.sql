@@ -1,0 +1,2 @@
+-- event_campaigns に作成者メンバーIDを追加（本番DBには既に追加済みの可能性あり）
+-- ALTER TABLE event_campaigns ADD COLUMN created_by_member_id TEXT;

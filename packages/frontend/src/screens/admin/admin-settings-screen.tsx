@@ -14,6 +14,7 @@ type AppSettings = {
   termQuest: string;
   termUsp: string;
   termOneOnOne: string;
+  timezone: string;
   characterImageKey: string | null;
 };
 
@@ -24,7 +25,20 @@ type FormState = {
   termQuest: string;
   termUsp: string;
   termOneOnOne: string;
+  timezone: string;
 };
+
+const TIMEZONE_OPTIONS = [
+  { value: "Asia/Tokyo",     label: "🇯🇵 日本標準時 (UTC+9)" },
+  { value: "Asia/Seoul",     label: "🇰🇷 韓国標準時 (UTC+9)" },
+  { value: "Asia/Shanghai",  label: "🇨🇳 中国標準時 (UTC+8)" },
+  { value: "Asia/Singapore", label: "🇸🇬 シンガポール標準時 (UTC+8)" },
+  { value: "Europe/London",  label: "🇬🇧 グリニッジ標準時 (UTC+0)" },
+  { value: "Europe/Paris",   label: "🇫🇷 中央ヨーロッパ時間 (UTC+1)" },
+  { value: "America/New_York", label: "🇺🇸 東部標準時 (UTC-5)" },
+  { value: "America/Los_Angeles", label: "🇺🇸 太平洋標準時 (UTC-8)" },
+  { value: "UTC",            label: "🌐 協定世界時 (UTC)" },
+];
 
 const DEFAULTS: FormState = {
   appTitle: "白樺クエスト",
@@ -33,6 +47,7 @@ const DEFAULTS: FormState = {
   termQuest: "お題",
   termUsp: "USP",
   termOneOnOne: "1to1",
+  timezone: "Asia/Tokyo",
 };
 
 export function AdminSettingsScreen() {
@@ -96,6 +111,7 @@ export function AdminSettingsScreen() {
         termQuest:    data.data.termQuest    ?? DEFAULTS.termQuest,
         termUsp:      data.data.termUsp      ?? DEFAULTS.termUsp,
         termOneOnOne: data.data.termOneOnOne ?? DEFAULTS.termOneOnOne,
+        timezone:     data.data.timezone     ?? DEFAULTS.timezone,
       });
     }
   }, [data]);
@@ -273,6 +289,33 @@ export function AdminSettingsScreen() {
           <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>
             「{form.termUsp || "USP"}を {form.termQuest || "お題"}に組み合わせて、{form.termOneOnOne || "1to1"}でなかまのカードを集めよう！」
           </p>
+        </div>
+      </div>
+
+      {/* ---- タイムゾーン設定 ---- */}
+      <div className="card-paper p-6 space-y-4 mb-5">
+        <div>
+          <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+            🕐 タイムゾーン設定
+          </h2>
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            ミーティングの日時表示や管理画面に適用されるシステムのタイムゾーンです。
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+            システムタイムゾーン
+          </label>
+          <select
+            value={form.timezone}
+            onChange={(e) => set("timezone", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}
+          >
+            {TIMEZONE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
         </div>
       </div>
 

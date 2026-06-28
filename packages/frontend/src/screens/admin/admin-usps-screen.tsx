@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Pencil, Trash2, X, ChevronUp, ChevronDown, Download, Upload, Check, ChevronDown as CollapseIcon, GripVertical } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Usp, UspRequest } from "@shared/types";
+import { useSettings } from "@/hooks/use-settings";
 
 type UspForm = {
   name: string;
@@ -16,6 +17,7 @@ type UspForm = {
 const EMPTY_FORM: UspForm = { name: "", emoji: "⭐", description: "" };
 
 export function AdminUspsScreen() {
+  const { termQuest } = useSettings();
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [editUsp, setEditUsp] = useState<Usp | null>(null);
@@ -139,7 +141,7 @@ export function AdminUspsScreen() {
             ⭐ USP管理
           </h1>
           <p className="text-sm mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-            カードに表示される能力（USP）の一覧を管理します。お題の正解スキルはここから選ばれます。
+            カードに表示される能力（USP）の一覧を管理します。{termQuest}の正解スキルはここから選ばれます。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -352,7 +354,7 @@ export function AdminUspsScreen() {
               「{deleteConfirm.emoji} {deleteConfirm.name}」を削除しますか？
             </p>
             <p className="text-sm mb-4" style={{ color: "var(--color-ink-500)" }}>
-              このUSPを正解スキルに設定しているお題がある場合は、手動で修正が必要です。
+              このUSPを正解スキルに設定している{termQuest}がある場合は、手動で修正が必要です。
             </p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteConfirm(null)}

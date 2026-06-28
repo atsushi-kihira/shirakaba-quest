@@ -12,6 +12,7 @@ type AuthUser = {
   emoji: string;
   bgColor: string;
   avatarImageKey?: string | null;
+  timezone?: string | null;
 };
 
 type AuthStore = {

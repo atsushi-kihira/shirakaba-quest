@@ -1,9 +1,9 @@
 // =============================================================
 // 管理者イベントルート
-// GET    /api/admin/events
-// POST   /api/admin/events
-// PATCH  /api/admin/events/:id
-// DELETE /api/admin/events/:id  → status を "deleted" に設定（表示から非表示）
+// GET    /api/admin/events              — deleted を含む全件（typeDefId クエリで絞り込み可）
+// POST   /api/admin/events              — 管理者がインスタンス作成
+// PATCH  /api/admin/events/:id          — 更新（status='active' で再開も可）
+// DELETE /api/admin/events/:id          — status を "deleted" に
 // =============================================================
 import { Hono } from "hono";
 import { eq, sql } from "drizzle-orm";
@@ -13,24 +13,30 @@ import type { Env, Variables } from "../../types.ts";
 
 export const adminEventRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// GET /api/admin/events — deleted 以外を返す（active 先、ended 後）
+// GET /api/admin/events — 全ステータス（deleted 含む）を返す
 adminEventRoutes.get("/", async (c) => {
   const db = createDb(c.env.DB);
-  const events = await db
-    .select()
-    .from(schema.eventCampaigns)
-    .where(sql`${schema.eventCampaigns.status} != 'deleted'`)
-    .orderBy(sql`${schema.eventCampaigns.createdAt} DESC`)
-    .all();
+  const typeDefId = c.req.query("typeDefId");
+
+  const events = typeDefId
+    ? await db.select().from(schema.eventCampaigns)
+        .where(eq(schema.eventCampaigns.eventTypeDefId, typeDefId))
+        .orderBy(sql`${schema.eventCampaigns.createdAt} DESC`)
+        .all()
+    : await db.select().from(schema.eventCampaigns)
+        .orderBy(sql`${schema.eventCampaigns.createdAt} DESC`)
+        .all();
+
   return c.json({ data: events.map(toPublic) });
 });
 
-// POST /api/admin/events
+// POST /api/admin/events — typeDefId または type(slug) で種別を解決
 adminEventRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
   const now = Math.floor(Date.now() / 1000);
   const body = await c.req.json<{
-    type: string;
+    typeDefId?: string;
+    type?: string;
     title: string;
     description?: string;
     startsAt?: number;
@@ -38,18 +44,30 @@ adminEventRoutes.post("/", async (c) => {
     relatedMemberId?: string;
     relatedMemberIds?: string[];
     multiplier?: number;
+    pointAwardTiming?: string | null;
   }>();
 
   if (!body.title?.trim()) {
     return c.json({ error: { code: "invalid_input", message: "タイトルは必須です" } }, 400);
   }
 
-  const memberIds = body.relatedMemberIds ?? (body.relatedMemberId ? [body.relatedMemberId] : []);
+  // type def を解決: typeDefId 優先、なければ slug で検索
+  let typeDef = null;
+  if (body.typeDefId) {
+    typeDef = await db.select().from(schema.eventTypeDefinitions)
+      .where(eq(schema.eventTypeDefinitions.id, body.typeDefId)).get();
+  } else if (body.type) {
+    typeDef = await db.select().from(schema.eventTypeDefinitions)
+      .where(eq(schema.eventTypeDefinitions.slug, body.type)).get();
+  }
 
+  const memberIds = body.relatedMemberIds ?? (body.relatedMemberId ? [body.relatedMemberId] : []);
   const id = newId();
+
   await db.insert(schema.eventCampaigns).values({
     id,
-    type: body.type ?? "special_quest_week",
+    type: typeDef?.slug ?? body.type ?? "visitor_invite_quest",
+    eventTypeDefId: typeDef?.id ?? null,
     title: body.title.trim(),
     description: body.description?.trim() ?? "",
     startsAt: body.startsAt ?? now,
@@ -57,7 +75,9 @@ adminEventRoutes.post("/", async (c) => {
     relatedMemberId: memberIds[0] ?? null,
     relatedMemberIds: memberIds.length > 0 ? JSON.stringify(memberIds) : null,
     multiplier: body.multiplier ?? null,
+    pointAwardTiming: body.pointAwardTiming ?? null,
     status: "active",
+    createdByMemberId: null,
     createdAt: now,
     updatedAt: now,
   });
@@ -66,26 +86,33 @@ adminEventRoutes.post("/", async (c) => {
   return c.json({ data: toPublic(event!) }, 201);
 });
 
-// PATCH /api/admin/events/:id — 全フィールド更新対応
+// PATCH /api/admin/events/:id — status='active' で再開・typeDefId で種別変更も可
 adminEventRoutes.patch("/:id", async (c) => {
   const db = createDb(c.env.DB);
   const now = Math.floor(Date.now() / 1000);
-  const body = await c.req.json<{
+  type PatchEventBody = {
+    typeDefId?: string;
     title?: string;
     description?: string;
-    type?: string;
     startsAt?: number;
     endsAt?: number | null;
     relatedMemberId?: string | null;
     relatedMemberIds?: string[];
     multiplier?: number | null;
+    pointAwardTiming?: string | null;
     status?: string;
-  }>().catch(() => ({} as {
-    title?: string; description?: string; type?: string;
-    startsAt?: number; endsAt?: number | null;
-    relatedMemberId?: string | null; relatedMemberIds?: string[];
-    multiplier?: number | null; status?: string;
-  }));
+  };
+  const body = await c.req.json<PatchEventBody>().catch(() => ({} as PatchEventBody));
+
+  // 種別変更: typeDefId が指定された場合は type と event_type_def_id を両方更新
+  let typeUpdate: { type?: string; eventTypeDefId?: string | null } = {};
+  if (body.typeDefId !== undefined) {
+    const typeDef = await db.select().from(schema.eventTypeDefinitions)
+      .where(eq(schema.eventTypeDefinitions.id, body.typeDefId)).get();
+    if (typeDef) {
+      typeUpdate = { type: typeDef.slug, eventTypeDefId: typeDef.id };
+    }
+  }
 
   const memberIdsUpdate = body.relatedMemberIds !== undefined ? {
     relatedMemberIds: body.relatedMemberIds.length > 0 ? JSON.stringify(body.relatedMemberIds) : null,
@@ -93,13 +120,14 @@ adminEventRoutes.patch("/:id", async (c) => {
   } : {};
 
   await db.update(schema.eventCampaigns).set({
-    ...(body.title        !== undefined && { title: body.title.trim() }),
-    ...(body.description  !== undefined && { description: body.description.trim() }),
-    ...(body.type         !== undefined && { type: body.type }),
-    ...(body.startsAt     !== undefined && { startsAt: body.startsAt }),
-    ...(body.endsAt       !== undefined && { endsAt: body.endsAt }),
-    ...(body.multiplier   !== undefined && { multiplier: body.multiplier }),
-    ...(body.status       !== undefined && { status: body.status }),
+    ...typeUpdate,
+    ...(body.title       !== undefined && { title: body.title.trim() }),
+    ...(body.description !== undefined && { description: body.description.trim() }),
+    ...(body.startsAt    !== undefined && { startsAt: body.startsAt }),
+    ...(body.endsAt      !== undefined && { endsAt: body.endsAt }),
+    ...(body.multiplier        !== undefined && { multiplier: body.multiplier }),
+    ...(body.pointAwardTiming  !== undefined && { pointAwardTiming: body.pointAwardTiming }),
+    ...(body.status            !== undefined && { status: body.status }),
     ...memberIdsUpdate,
     updatedAt: now,
   }).where(eq(schema.eventCampaigns.id, c.req.param("id")));
@@ -107,15 +135,13 @@ adminEventRoutes.patch("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// DELETE /api/admin/events/:id — 表示上削除（status を "deleted" に）
+// DELETE /api/admin/events/:id — status を "deleted" に
 adminEventRoutes.delete("/:id", async (c) => {
   const db = createDb(c.env.DB);
   const now = Math.floor(Date.now() / 1000);
-
   await db.update(schema.eventCampaigns)
     .set({ status: "deleted", updatedAt: now })
     .where(eq(schema.eventCampaigns.id, c.req.param("id")));
-
   return c.json({ ok: true });
 });
 
@@ -124,6 +150,7 @@ function toPublic(e: typeof schema.eventCampaigns.$inferSelect) {
   return {
     id: e.id,
     type: e.type,
+    eventTypeDefId: e.eventTypeDefId ?? null,
     title: e.title,
     description: e.description,
     startsAt: e.startsAt,
@@ -131,7 +158,9 @@ function toPublic(e: typeof schema.eventCampaigns.$inferSelect) {
     relatedMemberId: e.relatedMemberId,
     relatedMemberIds: ids,
     multiplier: e.multiplier,
+    pointAwardTiming: e.pointAwardTiming ?? null,
     status: e.status,
+    createdByMemberId: e.createdByMemberId ?? null,
     createdAt: e.createdAt,
     updatedAt: e.updatedAt,
   };

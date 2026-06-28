@@ -5,11 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
+import { useSettings } from "@/hooks/use-settings";
 
 type Member = { id: string; status: string; name: string };
 type Quest = { id: string; status: string; title: string };
+type EventTypeDef = { id: string; isActive: number };
+type EventInstance = { id: string; status: string };
 
 export function AdminDashboardScreen() {
+  const { termQuest } = useSettings();
   const { data: membersData } = useQuery({
     queryKey: ["admin", "members"],
     queryFn: () => api.get<{ data: Member[] }>("/admin/members"),
@@ -20,13 +24,27 @@ export function AdminDashboardScreen() {
     queryFn: () => api.get<{ data: Quest[] }>("/admin/quests"),
   });
 
+  const { data: eventTypeDefsData } = useQuery({
+    queryKey: ["admin", "event-type-definitions"],
+    queryFn: () => api.get<{ data: EventTypeDef[] }>("/admin/event-type-definitions"),
+  });
+
+  const { data: eventInstancesData } = useQuery({
+    queryKey: ["admin", "events"],
+    queryFn: () => api.get<{ data: EventInstance[] }>("/admin/events"),
+  });
+
   const members = membersData?.data ?? [];
   const quests = questsData?.data ?? [];
+  const eventTypeDefs = eventTypeDefsData?.data ?? [];
+  const eventInstances = eventInstancesData?.data ?? [];
 
   const pendingCount  = members.filter((m) => m.status === "pending").length;
   const activeCount   = members.filter((m) => m.status === "active").length;
   const publishedQuests = quests.filter((q) => q.status === "published").length;
   const draftQuests   = quests.filter((q) => q.status === "draft").length;
+  const activeTypeDefsCount = eventTypeDefs.filter((t) => t.isActive).length;
+  const activeInstancesCount = eventInstances.filter((i) => i.status === "active").length;
 
   const cards = [
     {
@@ -41,10 +59,19 @@ export function AdminDashboardScreen() {
     {
       to: "/admin/quests",
       icon: "📜",
-      label: "お題管理",
+      label: `${termQuest}管理`,
       stats: [
         { label: "公開中", value: publishedQuests, urgent: false },
         { label: "下書き", value: draftQuests, urgent: false },
+      ],
+    },
+    {
+      to: "/admin/event-types",
+      icon: "📣",
+      label: "イベント管理",
+      stats: [
+        { label: "イベント種別", value: activeTypeDefsCount, urgent: false },
+        { label: "実施中", value: activeInstancesCount, urgent: false },
       ],
     },
     {

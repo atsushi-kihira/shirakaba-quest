@@ -1,0 +1,2 @@
+-- 候補日ごとに確定フラグを持たせることで複数日程の確定を可能にする（本番DBには既に追加済み）
+-- ALTER TABLE meeting_date_candidates ADD COLUMN is_confirmed INTEGER NOT NULL DEFAULT 0;

@@ -64,6 +64,7 @@ app.get("/api/settings", async (c) => {
       termUsp:           design?.termUsp           ?? "USP",
       termOneOnOne:      design?.termOneOnOne      ?? "1to1",
       characterImageKey: design?.characterImageKey ?? null,
+      timezone:          design?.timezone          ?? "Asia/Tokyo",
     },
   });
 });

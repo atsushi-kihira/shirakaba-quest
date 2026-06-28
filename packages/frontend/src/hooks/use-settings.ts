@@ -14,6 +14,7 @@ export type AppSettings = {
   characterImageKey: string | null;
   /** カスタム画像のURL。未設定またはロード前は null（デフォルト画像へのフォールバックは行わない） */
   characterImageUrl: string | null;
+  timezone: string;
 };
 
 type SettingsResponse = {
@@ -32,6 +33,7 @@ const DEFAULTS: AppSettings = {
   termOneOnOne: "1to1",
   characterImageKey: null,
   characterImageUrl: null,
+  timezone: "Asia/Tokyo",
 };
 
 export function useSettings(): AppSettings {
@@ -43,6 +45,7 @@ export function useSettings(): AppSettings {
   if (!data?.data) return DEFAULTS;
   return {
     ...data.data,
+    timezone: data.data.timezone ?? "Asia/Tokyo",
     characterImageUrl: data.data.characterImageKey ? CUSTOM_CHARACTER_URL : null,
   };
 }

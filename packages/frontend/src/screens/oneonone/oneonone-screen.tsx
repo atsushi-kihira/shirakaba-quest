@@ -8,6 +8,8 @@ import { Check, X, Clock, CheckCircle, Loader2, Users, Camera } from "lucide-rea
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useTimezone } from "@/hooks/use-timezone";
+import { fmtDateISO } from "@/lib/date";
 import { ImportCardModal } from "./import-card-modal";
 
 type Session = {
@@ -34,6 +36,7 @@ type SessionsResponse = { data: Session[] };
 export function OneOnOneScreen() {
   const qc = useQueryClient();
   const { user } = useAuthStore();
+  const tz = useTimezone();
   const [tab, setTab] = useState<"pending" | "active" | "done">("pending");
   const [showImport, setShowImport] = useState(false);
 
@@ -150,7 +153,7 @@ export function OneOnOneScreen() {
                     📬 受け取った申込
                   </h2>
                   {pendingReceived.map((s) => (
-                    <SessionCard key={s.id} session={s} myId={myId}>
+                    <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       <div className="flex gap-2 mt-3">
                         <button
                           onClick={() => rejectMutation.mutate(s.id)}
@@ -182,7 +185,7 @@ export function OneOnOneScreen() {
                     📤 送った申込（承諾待ち）
                   </h2>
                   {pendingSent.map((s) => (
-                    <SessionCard key={s.id} session={s} myId={myId}>
+                    <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       <div className="mt-2 flex items-center gap-1 text-xs" style={{ color: "var(--color-ink-400)" }}>
                         <Clock size={12} />
                         相手の承諾を待っています
@@ -208,7 +211,7 @@ export function OneOnOneScreen() {
                   const myCompleted = s.myRole === "requester" ? s.requesterCompletedAt : s.responderCompletedAt;
                   const partnerCompleted = s.myRole === "requester" ? s.responderCompletedAt : s.requesterCompletedAt;
                   return (
-                    <SessionCard key={s.id} session={s} myId={myId}>
+                    <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       <div className="mt-3 space-y-2">
                         {/* 自分の完了状態 */}
                         <div className="flex items-center gap-2 text-xs">
@@ -264,13 +267,13 @@ export function OneOnOneScreen() {
                 done.map((s) => {
                   const myCompletedAt = s.myRole === "requester" ? s.requesterCompletedAt : s.responderCompletedAt;
                   return (
-                    <SessionCard key={s.id} session={s} myId={myId}>
+                    <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       <div className="mt-2 space-y-2">
                         {s.status === "completed" ? (
                           <>
                             <div className="flex items-center gap-1 text-xs">
                               <CheckCircle size={12} style={{ color: "var(--color-success)" }} />
-                              <span style={{ color: "var(--color-success)" }}>完了 — {s.completedAt ? new Date(s.completedAt * 1000).toLocaleDateString("ja-JP") : ""}</span>
+                              <span style={{ color: "var(--color-success)" }}>完了 — {s.completedAt ? fmtDateISO(s.completedAt, tz) : ""}</span>
                             </div>
                             {myCompletedAt && (
                               <button
@@ -308,15 +311,14 @@ export function OneOnOneScreen() {
 }
 
 // ---- セッションカード ----
-function SessionCard({ session, children }: {
+function SessionCard({ session, tz, children }: {
   session: Session;
   myId?: string;
+  tz?: string;
   children?: React.ReactNode;
 }) {
   const partner = session.partner;
-  const requestedDate = new Date(session.requestedAt * 1000).toLocaleDateString("ja-JP", {
-    month: "numeric", day: "numeric",
-  });
+  const requestedDate = fmtDateISO(session.requestedAt, tz ?? "Asia/Tokyo").slice(5).replace("/", "/");
 
   return (
     <div className="card-paper rounded-3xl p-4">

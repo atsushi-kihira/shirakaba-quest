@@ -189,6 +189,7 @@ authRoutes.get("/me", authMiddleware, async (c) => {
         userType: "member",
         status: member.status,
         avatarImageKey: member.avatarImageKey ?? null,
+        timezone: (member as typeof member & { timezone?: string | null }).timezone ?? null,
       },
     });
   }

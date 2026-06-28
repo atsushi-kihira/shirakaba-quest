@@ -353,7 +353,30 @@ export type TeamRankingEntry = {
 // イベント
 // -------------------------------------------------------
 
-export type EventType = "special_quest_week" | "welcome_quest" | "featured_member" | "visitor_invite_quest";
+export type EventType = "welcome_quest" | "visitor_invite_quest" | "coffee_meeting";
+
+export type EventTypeTrigger = "one_on_one" | "meeting_attendance" | "display_only" | "on_action";
+export type EventTypeRewardTarget = "participant" | "partner_of_related" | "none";
+export type EventTypeCreatorRole = "admin" | "member";
+
+export type EventTypeDefinition = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  emoji: string;
+  triggerType: EventTypeTrigger;
+  pointValue: number;
+  rewardTarget: EventTypeRewardTarget;
+  requiresTargetMember: number;
+  creatorRole: EventTypeCreatorRole;
+  linksToMeeting: number;
+  isSystem: number;
+  isActive: number;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
 
 export type EventCampaign = {
   id: string;

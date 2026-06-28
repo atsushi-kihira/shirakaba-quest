@@ -8,6 +8,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, X, CheckCircle2, Trophy, Star, Target, ChevronDown, ChevronUp } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { useTimezone } from "@/hooks/use-timezone";
+import { fmtDateISO } from "@/lib/date";
 import { QuestStory } from "@/lib/quest-story";
 import type { PublicMember, Skill } from "@shared/types";
 
@@ -124,6 +126,7 @@ export function QuestsScreen() {
 function QuestCard({ quest, termUsp, onChallenge }: {
   quest: Quest; termUsp: string; onChallenge: () => void;
 }) {
+  const tz = useTimezone();
   const isHard = quest.level === "hard";
   const [expanded, setExpanded] = useState(false);
 
@@ -212,7 +215,7 @@ function QuestCard({ quest, termUsp, onChallenge }: {
             </span>
             {quest.deadline && (
               <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-                📅 {new Date(quest.deadline * 1000).toLocaleDateString("ja-JP")}
+                📅 {fmtDateISO(quest.deadline, tz)}
               </span>
             )}
           </div>
@@ -233,6 +236,7 @@ function QuestCard({ quest, termUsp, onChallenge }: {
 // ---- 挑戦モーダル ----
 function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: string; onClose: () => void }) {
   const qc = useQueryClient();
+  const tz = useTimezone();
   const [mode, setMode] = useState<"connections" | "team">("connections");
 
   const { data: membersData, isLoading: membersLoading } = useQuery({
@@ -371,15 +375,45 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
             </span>
             {quest.deadline && (
               <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-                📅 {new Date(quest.deadline * 1000).toLocaleDateString("ja-JP")}
+                📅 {fmtDateISO(quest.deadline, tz)}
               </span>
             )}
           </div>
 
+          {/* 解決に必要なUSP（ヒント表示） */}
+          {quest.answerSkills.length > 0 && (
+            <div className="mb-3 px-3.5 py-3 rounded-2xl"
+              style={{ background: "rgba(212,160,59,0.08)", border: "1px solid rgba(212,160,59,0.2)" }}>
+              <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-accent)" }}>
+                🧩 このクエストで必要な{termUsp}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {quest.answerSkills.map((s, i) => {
+                  const isSelected = selected.includes(s.name);
+                  return (
+                    <span key={s.name}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition"
+                      style={{
+                        background: isSelected ? "var(--color-brand)" : "var(--color-paper-300)",
+                        color: isSelected ? "white" : "var(--color-ink-700)",
+                      }}>
+                      <span style={{ color: isSelected ? "rgba(255,255,255,0.7)" : "var(--color-ink-400)" }}>
+                        {SLOT_NUMS[i]}
+                      </span>
+                      <span>{s.emoji}</span>
+                      <span>{s.name}</span>
+                      {isSelected && <span>✓</span>}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* スキルスロット（選択状況） */}
           <div className="mb-1">
             <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>
-              🧩 必要な{termUsp}を {quest.skillCount}個 選択してください
+              👆 下のリストからタップして選択してください
               <span className="ml-1.5 font-normal" style={{ color: "var(--color-ink-400)" }}>
                 ({selected.length}/{quest.skillCount})
               </span>

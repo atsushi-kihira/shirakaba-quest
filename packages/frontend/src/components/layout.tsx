@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Home, Users, ScrollText, Trophy, User, Shield, Calendar } from "lucide-react";
+import { Home, Users, ScrollText, Trophy, User, Calendar, Megaphone } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
@@ -49,10 +49,10 @@ export function AppLayout() {
   const NAV_ITEMS = [
     { to: "/",         icon: Home,       label: "ホーム",         mobileVisible: true  },
     { to: "/members",  icon: Users,      label: "なかま",         mobileVisible: true  },
-    { to: "/team",     icon: Shield,     label: "チーム",         mobileVisible: true  },
     { to: "/quests",   icon: ScrollText, label: settings.termQuest, mobileVisible: true },
-    { to: "/ranking",  icon: Trophy,     label: "順位",           mobileVisible: true  },
-    { to: "/meetings", icon: Calendar,   label: "ミーティング",   mobileVisible: false },
+    { to: "/meetings", icon: Calendar,   label: "ミーティング",   mobileVisible: true  },
+    { to: "/events",   icon: Megaphone,  label: "イベント",       mobileVisible: true  },
+    { to: "/ranking",  icon: Trophy,     label: "順位",           mobileVisible: false },
     { to: "/me",       icon: User,       label: "マイ",           mobileVisible: true  },
   ] as const;
 

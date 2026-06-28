@@ -25,6 +25,7 @@ export const members = sqliteTable("members", {
   customFields:        text("custom_fields").default("{}"),
   cardImageKey:        text("card_image_key"),
   avatarImageKey:      text("avatar_image_key"),
+  timezone:            text("timezone"),
   status:              text("status").notNull().default("pending"),
   approvedAt:          integer("approved_at"),
   createdAt:           integer("created_at").notNull(),
@@ -162,9 +163,32 @@ export const teamMembers = sqliteTable(
   (t) => [uniqueIndex("uniq_team_member").on(t.teamId, t.memberId)]
 );
 
+export const eventTypeDefinitions = sqliteTable("event_type_definitions", {
+  id:                   text("id").primaryKey(),
+  slug:                 text("slug").notNull(),
+  name:                 text("name").notNull(),
+  description:          text("description").notNull().default(""),
+  emoji:                text("emoji").notNull().default("🎉"),
+  triggerType:          text("trigger_type").notNull().default("display_only"),
+  // 'one_on_one' | 'meeting_attendance' | 'display_only'
+  pointValue:           integer("point_value").notNull().default(0),
+  rewardTarget:         text("reward_target").notNull().default("participant"),
+  // 'participant' | 'partner_of_related' | 'none'
+  requiresTargetMember: integer("requires_target_member").notNull().default(0),
+  creatorRole:          text("creator_role").notNull().default("admin"),
+  // 'admin' | 'member'
+  linksToMeeting:       integer("links_to_meeting").notNull().default(0),
+  isSystem:             integer("is_system").notNull().default(0),
+  isActive:             integer("is_active").notNull().default(1),
+  sortOrder:            integer("sort_order").notNull().default(0),
+  createdAt:            integer("created_at").notNull(),
+  updatedAt:            integer("updated_at").notNull(),
+});
+
 export const eventCampaigns = sqliteTable("event_campaigns", {
   id:              text("id").primaryKey(),
   type:            text("type").notNull(),
+  eventTypeDefId:  text("event_type_def_id"),
   title:           text("title").notNull(),
   description:     text("description").notNull().default(""),
   startsAt:        integer("starts_at").notNull(),
@@ -172,10 +196,23 @@ export const eventCampaigns = sqliteTable("event_campaigns", {
   relatedMemberId:  text("related_member_id"),
   relatedMemberIds: text("related_member_ids"),
   multiplier:       integer("multiplier"),
-  status:          text("status").notNull().default("active"),
-  createdAt:       integer("created_at").notNull(),
-  updatedAt:       integer("updated_at").notNull(),
+  pointAwardTiming: text("point_award_timing"),  // 'on_view' | 'on_complete' | null
+  status:             text("status").notNull().default("active"),
+  createdByMemberId:  text("created_by_member_id"),
+  createdAt:          integer("created_at").notNull(),
+  updatedAt:          integer("updated_at").notNull(),
 });
+
+export const eventParticipations = sqliteTable(
+  "event_participations",
+  {
+    id:              text("id").primaryKey(),
+    eventCampaignId: text("event_campaign_id").notNull(),
+    memberId:        text("member_id").notNull(),
+    createdAt:       integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("idx_event_part_unique").on(t.eventCampaignId, t.memberId)]
+);
 
 export const visitorInvites = sqliteTable("visitor_invites", {
   id:           text("id").primaryKey(),
@@ -248,19 +285,23 @@ export const meetings = sqliteTable("meetings", {
   scope:                text("scope").notNull().default("all"), // 'all' | 'team' | 'selected'
   teamId:               text("team_id"),
   status:               text("status").notNull().default("open"), // 'open' | 'confirmed' | 'cancelled'
-  confirmedCandidateId: text("confirmed_candidate_id"),
-  deadline:             integer("deadline"),
-  createdAt:            integer("created_at").notNull(),
-  updatedAt:            integer("updated_at").notNull(),
+  confirmedCandidateId:  text("confirmed_candidate_id"),
+  deadline:              integer("deadline"),
+  eventCampaignId:       text("event_campaign_id"),
+  eventTypeDefId:        text("event_type_def_id"),
+  registrationDeadline:  integer("registration_deadline"),
+  createdAt:             integer("created_at").notNull(),
+  updatedAt:             integer("updated_at").notNull(),
 });
 
 export const meetingDateCandidates = sqliteTable("meeting_date_candidates", {
-  id:        text("id").primaryKey(),
-  meetingId: text("meeting_id").notNull(),
-  startsAt:  integer("starts_at").notNull(),
-  endsAt:    integer("ends_at"),
-  note:      text("note"),
-  sortOrder: integer("sort_order").notNull().default(0),
+  id:          text("id").primaryKey(),
+  meetingId:   text("meeting_id").notNull(),
+  startsAt:    integer("starts_at").notNull(),
+  endsAt:      integer("ends_at"),
+  note:        text("note"),
+  sortOrder:   integer("sort_order").notNull().default(0),
+  isConfirmed: integer("is_confirmed").notNull().default(0),
 });
 
 export const meetingInvitees = sqliteTable("meeting_invitees", {
@@ -289,6 +330,25 @@ export const meetingResponses = sqliteTable("meeting_responses", {
   respondedAt:        integer("responded_at").notNull(),
 });
 
+export const meetingNotifications = sqliteTable("meeting_notifications", {
+  id:        text("id").primaryKey(),
+  meetingId: text("meeting_id").notNull(),
+  memberId:  text("member_id").notNull(),
+  type:      text("type").notNull(),  // 'confirmed' | 'details_updated' | 'invited'
+  message:   text("message"),
+  readAt:    integer("read_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const meetingAttendances = sqliteTable("meeting_attendances", {
+  id:            text("id").primaryKey(),
+  meetingId:     text("meeting_id").notNull(),
+  memberId:      text("member_id").notNull(),
+  status:        text("status").notNull(), // 'attended' | 'absent'
+  recordedAt:    integer("recorded_at").notNull(),
+  pointsAwarded: integer("points_awarded"),
+});
+
 export const cardDesigns = sqliteTable("card_designs", {
   id:                   text("id").primaryKey().default("default"),
   frontFeatureLabel:    text("front_feature_label").notNull().default("USP・SKILLs"),
@@ -303,6 +363,7 @@ export const cardDesigns = sqliteTable("card_designs", {
   termUsp:              text("term_usp").notNull().default("USP"),
   termOneOnOne:         text("term_one_on_one").notNull().default("1to1"),
   characterImageKey:    text("character_image_key"),
+  timezone:             text("timezone").notNull().default("Asia/Tokyo"),
   updatedAt:            integer("updated_at").notNull(),
   updatedBy:            text("updated_by").notNull(),
 });

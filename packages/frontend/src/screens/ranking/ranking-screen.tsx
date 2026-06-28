@@ -9,6 +9,8 @@ import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
+import { useTimezone } from "@/hooks/use-timezone";
+import { fmtDateISO } from "@/lib/date";
 import type { Season, SeasonRankingEntry, TeamRankingEntry } from "@shared/types";
 
 type RankingEntry = {
@@ -27,6 +29,7 @@ const RANK_MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
 export function RankingScreen() {
   const me = useAuthStore((s) => s.user);
   const { termQuest } = useSettings();
+  const tz = useTimezone();
 
   // 個人 or チーム
   const [view, setView] = useState<"individual" | "team">("individual");
@@ -152,7 +155,7 @@ export function RankingScreen() {
             <p className="font-semibold" style={{ color: "var(--color-brand)" }}>🌸 {s.name}</p>
             {s.theme && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>{s.theme}</p>}
             <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-              開始: {new Date(s.startsAt * 1000).toLocaleDateString("ja-JP")}
+              開始: {fmtDateISO(s.startsAt, tz)}
             </p>
           </div>
         ) : (

@@ -1,12 +1,13 @@
 // =============================================================
 // 外部ゲスト向け日程回答ルート（認証不要）
-// GET  /api/schedule/:token   — ミーティング情報取得
-// POST /api/schedule/:token/respond — 外部ゲスト回答
+// GET  /api/schedule/:token          — ミーティング情報取得
+// POST /api/schedule/:token/respond  — 外部ゲスト回答（メールアドレス必須、初回はブックマークURLをメール送信）
 // =============================================================
 import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { newId } from "../services/auth.ts";
+import { sendGuestResponseReceivedMail } from "../services/mailer.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -68,6 +69,7 @@ scheduleRoutes.get("/:token", async (c) => {
     data: {
       inviteeId: extInvitee.id,
       inviteeName: extInvitee.name,
+      inviteeEmail: extInvitee.email,
       meeting: {
         id: meeting.id,
         title: meeting.title,
@@ -110,13 +112,28 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
-  const body = await c.req.json<{ name?: string; answers: Record<string, Availability> }>();
+  const body = await c.req.json<{ name?: string; email?: string; answers: Record<string, Availability> }>();
 
-  // 名前を更新（初回のみ、または変更時）
+  // メールアドレスは必須
+  const emailInput = body.email?.trim();
+  if (!emailInput) {
+    return c.json({ error: { code: "invalid_input", message: "メールアドレスを入力してください" } }, 400);
+  }
+
+  const isFirstResponse = !extInvitee.email;
+
+  // 名前・メールを更新
+  const updateFields: { name?: string; email?: string } = {};
   if (body.name?.trim() && body.name.trim() !== extInvitee.name) {
+    updateFields.name = body.name.trim();
+  }
+  if (emailInput !== extInvitee.email) {
+    updateFields.email = emailInput;
+  }
+  if (Object.keys(updateFields).length > 0) {
     await db
       .update(schema.meetingExternalInvitees)
-      .set({ name: body.name.trim() })
+      .set(updateFields)
       .where(eq(schema.meetingExternalInvitees.id, extInvitee.id));
   }
 
@@ -142,5 +159,32 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     });
   }
 
-  return c.json({ ok: true });
+  // 初回回答時にブックマークURL付きメールを送信
+  if (isFirstResponse) {
+    const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+    const scheduleUrl = `${appUrl}/schedule/${token}`;
+    const guestName = updateFields.name ?? extInvitee.name ?? "ゲスト";
+    const isDev = c.env.ENVIRONMENT !== "production";
+
+    // ホスト名を取得
+    const hostMember = await db.select({ name: schema.members.name }).from(schema.members)
+      .where(eq(schema.members.id, meeting.hostMemberId)).get();
+    const hostName = hostMember?.name ?? "主催者";
+
+    sendGuestResponseReceivedMail({
+      to: emailInput,
+      guestName,
+      hostName,
+      meetingTitle: meeting.title,
+      scheduleUrl,
+      appTitle: "白樺クエスト",
+      apiKey: c.env.SENDGRID_API_KEY,
+      isDev,
+      fromEmail: c.env.SENDGRID_FROM_EMAIL,
+    }).catch(console.error);
+  }
+
+  const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+
+  return c.json({ ok: true, scheduleUrl: `${appUrl}/schedule/${token}` });
 });

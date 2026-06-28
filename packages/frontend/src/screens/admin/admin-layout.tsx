@@ -3,7 +3,7 @@
 // =============================================================
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 
 export function AdminLayout() {
@@ -15,8 +15,9 @@ export function AdminLayout() {
     { to: "/admin/usps",     icon: Star,            label: "USP管理",                 end: false },
     { to: "/admin/quests",   icon: ScrollText,      label: `${termQuest}管理`,        end: false },
     { to: "/admin/seasons",  icon: CalendarDays,    label: "シーズン",                end: false },
-    { to: "/admin/events",   icon: Megaphone,       label: "イベント",                end: false },
+    { to: "/admin/event-types", icon: Megaphone,     label: "イベント",                end: false },
     { to: "/admin/teams",    icon: UsersRound,      label: "チーム",                  end: false },
+    { to: "/admin/meetings", icon: Calendar,        label: "ミーティング",            end: false },
     { to: "/admin/points",   icon: RotateCcw,       label: "ポイントリセット",        end: false },
     { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
   ] as const;

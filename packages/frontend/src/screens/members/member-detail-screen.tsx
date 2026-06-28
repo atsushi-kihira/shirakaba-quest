@@ -9,6 +9,8 @@ import { api, ApiError } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
+import { useTimezone } from "@/hooks/use-timezone";
+import { fmtDateISO } from "@/lib/date";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill, MemberBadge } from "@shared/types";
 
@@ -35,6 +37,7 @@ export function MemberDetailScreen() {
   const qc = useQueryClient();
   const me = useAuthStore((s) => s.user);
   const { termUsp } = useSettings();
+  const tz = useTimezone();
 
   // isSelf はバックエンドの connectionStatus: "self" を使って判定
   // (管理者ログイン時も me.id が admin_id なので ID比較では不一致になるため)
@@ -389,7 +392,7 @@ export function MemberDetailScreen() {
                       完了
                     </span>
                     <span style={{ color: "var(--color-ink-400)" }}>
-                      {s.completedAt ? new Date(s.completedAt * 1000).toLocaleDateString("ja-JP") : ""}
+                      {s.completedAt ? fmtDateISO(s.completedAt, tz) : ""}
                     </span>
                     <button
                       onClick={() => uncompleteMutation.mutate(s.id)}
@@ -452,7 +455,7 @@ export function MemberDetailScreen() {
                   <div>
                     <p className="text-xs" style={{ color: "var(--color-ink-700)" }}>{item.label}</p>
                     <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-                      {new Date(item.createdAt * 1000).toLocaleDateString("ja-JP")}
+                      {fmtDateISO(item.createdAt, tz)}
                     </p>
                   </div>
                   <span className="text-sm font-bold shrink-0 ml-2" style={{ color: item.delta >= 0 ? "var(--color-accent)" : "var(--color-brand)" }}>

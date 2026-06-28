@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Play, StopCircle, Pencil, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Season } from "@shared/types";
+import { useSettings } from "@/hooks/use-settings";
 
 type SeasonsResponse = { data: Season[] };
 
@@ -139,11 +140,12 @@ type PointConfig = {
 };
 
 function PointConfigFields({ pts, onChange }: { pts: PointConfig; onChange: (key: keyof PointConfig, v: string) => void }) {
+  const { termQuest } = useSettings();
   const fields: { key: keyof PointConfig; label: string }[] = [
     { key: "pointOneOnOne",    label: "🤝 1to1完了" },
     { key: "pointRealCard",    label: "🃏 リアルカード受け取り" },
-    { key: "pointQuestNormal", label: "⚔️ 通常お題クリア" },
-    { key: "pointQuestHard",   label: "🔥 難題クリア" },
+    { key: "pointQuestNormal", label: `⚔️ 通常${termQuest}クリア` },
+    { key: "pointQuestHard",   label: `🔥 難${termQuest}クリア` },
   ];
   return (
     <div>

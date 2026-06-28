@@ -10,6 +10,8 @@ import { api, API_BASE_URL } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
+import { useTimezone } from "@/hooks/use-timezone";
+import { fmtDateTime } from "@/lib/date";
 import { queryClient as globalQc } from "@/lib/query-client";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
@@ -36,6 +38,7 @@ export function MypageScreen() {
   const qc = useQueryClient();
   const { user, clearAuth } = useAuthStore();
   const { termUsp } = useSettings();
+  const tz = useTimezone();
   const [tab, setTab] = useState<"profile" | "history">("profile");
   const [showQr, setShowQr] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -134,7 +137,7 @@ export function MypageScreen() {
   }
 
   return (
-    <div className="px-4 py-6 max-w-xl lg:max-w-3xl mx-auto">
+    <div className="px-4 py-6 pb-24 max-w-xl lg:max-w-3xl mx-auto">
       {/* ヘッダー */}
       <div className="mb-5 flex items-center justify-between">
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
@@ -392,7 +395,7 @@ export function MypageScreen() {
                           <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{item.label}</p>
                           {item.detail && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>{item.detail}</p>}
                           <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-                            {new Date(item.createdAt * 1000).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                            {fmtDateTime(item.createdAt, tz)}
                           </p>
                         </div>
                         <div className="text-base font-bold shrink-0"
@@ -481,16 +484,30 @@ function QrModal({ memberId, memberName, onClose }: { memberId: string; memberNa
 // ================================================================
 // プロフィール編集モーダル
 // ================================================================
+const TIMEZONE_OPTIONS = [
+  { value: "Asia/Tokyo",     label: "🇯🇵 日本標準時 (UTC+9)" },
+  { value: "Asia/Seoul",     label: "🇰🇷 韓国標準時 (UTC+9)" },
+  { value: "Asia/Shanghai",  label: "🇨🇳 中国標準時 (UTC+8)" },
+  { value: "Asia/Singapore", label: "🇸🇬 シンガポール標準時 (UTC+8)" },
+  { value: "Europe/London",  label: "🇬🇧 グリニッジ標準時 (UTC+0)" },
+  { value: "Europe/Paris",   label: "🇫🇷 中央ヨーロッパ時間 (UTC+1)" },
+  { value: "America/New_York", label: "🇺🇸 東部標準時 (UTC-5)" },
+  { value: "America/Los_Angeles", label: "🇺🇸 太平洋標準時 (UTC-8)" },
+  { value: "UTC",            label: "🌐 協定世界時 (UTC)" },
+];
+
 type EditForm = {
   name: string; furigana: string; emoji: string; bgColor: string;
   category: string; businessDescription: string; company: string; role: string;
   skills: Skill[];
+  timezone: string;
 };
 
 function EditModal({ member, onClose, onSaved }: {
   member: PublicMember; memberId?: string; onClose: () => void; onSaved: () => void;
 }) {
   const qcEdit = useQueryClient();
+  const { user: authUser } = useAuthStore();
   const [form, setForm] = useState<EditForm>({
     name: member.name ?? "",
     furigana: member.furigana ?? "",
@@ -501,6 +518,7 @@ function EditModal({ member, onClose, onSaved }: {
     company: member.company ?? "",
     role: member.role ?? "",
     skills: (member.skills as Skill[]) ?? [],
+    timezone: authUser?.timezone ?? "Asia/Tokyo",
   });
   const [error, setError] = useState("");
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
@@ -542,6 +560,7 @@ function EditModal({ member, onClose, onSaved }: {
       company: form.company,
       role: form.role,
       skills: form.skills,
+      timezone: form.timezone,
     }),
     onSuccess: onSaved,
     onError: (e: Error) => setError(e.message),
@@ -720,6 +739,24 @@ function EditModal({ member, onClose, onSaved }: {
             </div>
           </div>
         </div>
+
+          {/* タイムゾーン */}
+          <div>
+            <label className="block text-xs font-semibold mb-1" style={{ color: "var(--color-ink-500)" }}>🕐 タイムゾーン</label>
+            <select
+              value={form.timezone}
+              onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))}
+              className="w-full rounded-2xl border px-3"
+              style={{ fontSize: "15px", padding: "10px 12px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+            >
+              {TIMEZONE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+              日時の表示に使用するタイムゾーン（デフォルト: 日本標準時）
+            </p>
+          </div>
 
         <div className="flex gap-3 mt-6">
           <button onClick={onClose} className="flex-1 py-3 rounded-2xl text-sm font-medium"

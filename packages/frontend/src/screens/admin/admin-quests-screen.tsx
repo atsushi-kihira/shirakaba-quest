@@ -924,6 +924,7 @@ function DraftPreview({
 // CSV インポートモーダル
 // -------------------------------------------------------
 function ImportModal({ usps, onClose, onImported }: { usps: Usp[]; onClose: () => void; onImported: () => void }) {
+  const { termQuest } = useSettings();
   const fileRef = useRef<HTMLInputElement>(null);
   const [parsed, setParsed] = useState<ReturnType<typeof csvToImportPayload> | null>(null);
   const [parseError, setParseError] = useState("");
@@ -975,7 +976,7 @@ function ImportModal({ usps, onClose, onImported }: { usps: Usp[]; onClose: () =
           <p>• <b>level</b>: normal / hard</p>
           <p>• <b>usp1〜usp3</b>: ノーマルは必須（システム登録済みのUSP名）</p>
           <p>• <b>usp4〜usp5</b>: ハードのみ必須</p>
-          <p>• インポートしたお題はすべて「下書き」として追加されます</p>
+          <p>• インポートした{termQuest}はすべて「下書き」として追加されます</p>
         </div>
 
         <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden"
@@ -992,7 +993,7 @@ function ImportModal({ usps, onClose, onImported }: { usps: Usp[]; onClose: () =
         {parsed && !result && (
           <div className="mb-4 space-y-2">
             <p className="text-sm font-medium" style={{ color: "var(--color-ink-700)" }}>
-              {parsed.length} 件のお題が見つかりました
+              {parsed.length} 件の{termQuest}が見つかりました
             </p>
             {/* 事前バリデーション表示 */}
             {parsed.map((q, i) => {
@@ -1096,7 +1097,7 @@ function BulkAiGenerateModal({ onClose, onCreated }: { onClose: () => void; onCr
               {result.count}件の{termQuest}を下書き追加しました
             </p>
             <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>
-              お題管理の「下書き」から確認・公開できます
+              {termQuest}管理の「下書き」から確認・公開できます
             </p>
           </div>
           <div className="space-y-2 mb-5">
@@ -1140,7 +1141,7 @@ function BulkAiGenerateModal({ onClose, onCreated }: { onClose: () => void; onCr
         {/* 件数設定 */}
         <div className="mb-5">
           <label className="block text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>
-            生成するお題の数
+            生成する{termQuest}の数
           </label>
           <div className="flex items-center gap-3">
             <button onClick={() => handleCountChange(count - 1)} disabled={count <= 1}
@@ -1163,7 +1164,7 @@ function BulkAiGenerateModal({ onClose, onCreated }: { onClose: () => void; onCr
         {/* 個別指示 */}
         <div className="mb-5">
           <label className="block text-sm font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>
-            各お題への指示（業種・分野・テーマなど）
+            各{termQuest}への指示（業種・分野・テーマなど）
           </label>
           <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
             各枠に業種や課題のテーマを入力してください。空欄のままでもAIが自動で決めます。

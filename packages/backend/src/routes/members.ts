@@ -209,6 +209,7 @@ memberRoutes.patch("/me", async (c) => {
     linkedinUrl: string;
     instagramUrl: string;
     customFields: Record<string, string>;
+    timezone: string | null;
   }>>();
 
   const now = Math.floor(Date.now() / 1000);
@@ -233,6 +234,7 @@ memberRoutes.patch("/me", async (c) => {
       ...(body.linkedinUrl       !== undefined && { linkedinUrl: body.linkedinUrl }),
       ...(body.instagramUrl      !== undefined && { instagramUrl: body.instagramUrl }),
       ...(body.customFields      !== undefined && { customFields: JSON.stringify(body.customFields) }),
+      ...(body.timezone          !== undefined && { timezone: body.timezone }),
       updatedAt: now,
     })
     .where(eq(schema.members.id, userId));
