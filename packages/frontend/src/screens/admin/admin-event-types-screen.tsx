@@ -344,9 +344,9 @@ function EditInstanceForm({
         </div>
       </div>
       <div>
-        <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>ポイント倍率（任意）</p>
-        <input type="number" min={1} max={10} value={multiplier} onChange={(e) => setMultiplier(e.target.value)}
-          placeholder="空欄=倍率なし"
+        <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>加算ポイント（任意・空欄=なし）</p>
+        <input type="number" min={0} value={multiplier} onChange={(e) => setMultiplier(e.target.value)}
+          placeholder="例: 3"
           className="w-full px-2 py-1.5 rounded-xl border text-sm"
           style={{ borderColor: "var(--color-paper-300)" }} />
       </div>
@@ -461,9 +461,9 @@ function CreateInstanceForm({
         </div>
       </div>
       <div>
-        <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>ポイント倍率（任意）</p>
-        <input type="number" min={1} max={10} value={multiplier} onChange={(e) => setMultiplier(e.target.value)}
-          placeholder="例: 2"
+        <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>加算ポイント（任意・空欄=なし）</p>
+        <input type="number" min={0} value={multiplier} onChange={(e) => setMultiplier(e.target.value)}
+          placeholder="例: 3"
           className="w-full px-2 py-1.5 rounded-xl border text-sm"
           style={{ borderColor: "var(--color-paper-300)" }} />
       </div>
