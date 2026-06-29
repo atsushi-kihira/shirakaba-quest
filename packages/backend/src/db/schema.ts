@@ -349,6 +349,101 @@ export const meetingAttendances = sqliteTable("meeting_attendances", {
   pointsAwarded: integer("points_awarded"),
 });
 
+// ---- スケジューラー（1on1日程調整機能 Phase 1）----
+
+export const googleCredentials = sqliteTable("google_credentials", {
+  memberId:             text("member_id").primaryKey(),
+  googleAccountEmail:   text("google_account_email").notNull(),
+  primaryCalendarId:    text("primary_calendar_id").notNull(),
+  accessTokenEnc:       text("access_token_enc").notNull(),
+  refreshTokenEnc:      text("refresh_token_enc").notNull(),
+  accessTokenExpiresAt: text("access_token_expires_at").notNull(),
+  scopes:               text("scopes").notNull(),
+  connectedAt:          text("connected_at").notNull(),
+  lastRefreshedAt:      text("last_refreshed_at"),
+});
+
+export const memberSchedulingSettings = sqliteTable("member_scheduling_settings", {
+  memberId:           text("member_id").primaryKey(),
+  slug:               text("slug").notNull().unique(),
+  displayTitle:       text("display_title").notNull().default("1on1 ミーティング"),
+  description:        text("description"),
+  durationMinutes:    integer("duration_minutes").notNull().default(30),
+  bufferBeforeMinutes: integer("buffer_before_minutes").notNull().default(0),
+  bufferAfterMinutes: integer("buffer_after_minutes").notNull().default(10),
+  minNoticeMinutes:   integer("min_notice_minutes").notNull().default(1440),
+  maxAdvanceDays:     integer("max_advance_days").notNull().default(60),
+  dailyMaxBookings:   integer("daily_max_bookings"),
+  slotIntervalMinutes: integer("slot_interval_minutes").notNull().default(30),
+  locationNote:       text("location_note"),
+  isPublic:           integer("is_public").notNull().default(1),
+  createdAt:          text("created_at").notNull(),
+  updatedAt:          text("updated_at").notNull(),
+});
+
+export const availabilityRules = sqliteTable("availability_rules", {
+  id:             text("id").primaryKey(),
+  memberId:       text("member_id").notNull(),
+  dayOfWeek:      integer("day_of_week").notNull(),
+  startTimeLocal: text("start_time_local").notNull(),
+  endTimeLocal:   text("end_time_local").notNull(),
+  timezone:       text("timezone").notNull().default("Asia/Tokyo"),
+});
+
+export const availabilityOverrides = sqliteTable("availability_overrides", {
+  id:             text("id").primaryKey(),
+  memberId:       text("member_id").notNull(),
+  dateLocal:      text("date_local").notNull(),
+  isBlocked:      integer("is_blocked").notNull().default(0),
+  startTimeLocal: text("start_time_local"),
+  endTimeLocal:   text("end_time_local"),
+  note:           text("note"),
+});
+
+export const bookings = sqliteTable("bookings", {
+  id:                   text("id").primaryKey(),
+  hostMemberId:         text("host_member_id").notNull(),
+  guestMemberId:        text("guest_member_id"),
+  guestName:            text("guest_name").notNull(),
+  guestEmail:           text("guest_email").notNull(),
+  guestMessage:         text("guest_message"),
+  startAtUtc:           text("start_at_utc").notNull(),
+  endAtUtc:             text("end_at_utc").notNull(),
+  timezone:             text("timezone").notNull(),
+  status:               text("status").notNull().default("confirmed"),
+  cancellationReason:   text("cancellation_reason"),
+  cancellationToken:    text("cancellation_token").notNull(),
+  rescheduleToken:      text("reschedule_token").notNull(),
+  hostCalendarEventId:  text("host_calendar_event_id"),
+  conferenceType:       text("conference_type").notNull().default("manual"),
+  conferenceUrl:        text("conference_url"),
+  conferenceMetaJson:   text("conference_meta_json"),
+  oneOnOneSessionId:    text("one_on_one_session_id"),
+  source:               text("source").notNull().default("public"),
+  createdAt:            text("created_at").notNull(),
+  updatedAt:            text("updated_at").notNull(),
+});
+
+export const bookingEvents = sqliteTable("booking_events", {
+  id:          text("id").primaryKey(),
+  bookingId:   text("booking_id").notNull(),
+  eventType:   text("event_type").notNull(),
+  actorKind:   text("actor_kind").notNull(),
+  actorId:     text("actor_id"),
+  payloadJson: text("payload_json"),
+  occurredAt:  text("occurred_at").notNull(),
+});
+
+export const reminderJobs = sqliteTable("reminder_jobs", {
+  id:          text("id").primaryKey(),
+  bookingId:   text("booking_id").notNull(),
+  remindAtUtc: text("remind_at_utc").notNull(),
+  kind:        text("kind").notNull(),
+  recipient:   text("recipient").notNull(),
+  status:      text("status").notNull().default("scheduled"),
+  sentAt:      text("sent_at"),
+});
+
 export const cardDesigns = sqliteTable("card_designs", {
   id:                   text("id").primaryKey().default("default"),
   frontFeatureLabel:    text("front_feature_label").notNull().default("USP・SKILLs"),

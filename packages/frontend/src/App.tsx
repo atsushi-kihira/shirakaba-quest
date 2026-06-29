@@ -31,6 +31,14 @@ import { EventsScreen } from "@/screens/events/events-screen";
 import { EventDetailScreen } from "@/screens/events/event-detail-screen";
 import { AdminTeamsScreen } from "@/screens/admin/admin-teams-screen";
 import { AdminMeetingsScreen } from "@/screens/admin/admin-meetings-screen";
+import { SchedulerDashboardScreen } from "@/screens/scheduler/scheduler-dashboard-screen";
+import { SchedulerIntegrationsScreen } from "@/screens/scheduler/scheduler-integrations-screen";
+import { SchedulerSettingsScreen } from "@/screens/scheduler/scheduler-settings-screen";
+import { SchedulerBookingsScreen } from "@/screens/scheduler/scheduler-bookings-screen";
+import { SchedulerBookingDetailScreen } from "@/screens/scheduler/scheduler-booking-detail-screen";
+import { PublicBookingPage } from "@/screens/public-booking/public-booking-page";
+import { PublicBookingForm } from "@/screens/public-booking/public-booking-form";
+import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
 import { useMe } from "@/hooks/use-me";
 
 function AppWithMe({ children }: { children: React.ReactNode }) {
@@ -54,6 +62,11 @@ export default function App() {
             {/* 外部ゲスト向け日程回答（認証不要） */}
             <Route path="/schedule/:token" element={<ScheduleScreen />} />
 
+            {/* 1on1 スケジューラー公開予約ページ（認証不要） */}
+            <Route path="/book/confirmation/:token" element={<PublicBookingConfirmation />} />
+            <Route path="/book/:memberSlug/form" element={<PublicBookingForm />} />
+            <Route path="/book/:memberSlug" element={<PublicBookingPage />} />
+
             {/* メンバー向け（要認証） */}
             <Route element={<AuthGuard />}>
               <Route element={<AppLayout />}>
@@ -70,6 +83,12 @@ export default function App() {
                 <Route path="meetings" element={<MeetingsScreen />} />
                 <Route path="meetings/new" element={<MeetingNewScreen />} />
                 <Route path="meetings/:id" element={<MeetingDetailScreen />} />
+                {/* 1on1 スケジューラー（ホスト向け） */}
+                <Route path="scheduler" element={<SchedulerDashboardScreen />} />
+                <Route path="scheduler/integrations" element={<SchedulerIntegrationsScreen />} />
+                <Route path="scheduler/settings" element={<SchedulerSettingsScreen />} />
+                <Route path="scheduler/bookings" element={<SchedulerBookingsScreen />} />
+                <Route path="scheduler/bookings/:id" element={<SchedulerBookingDetailScreen />} />
               </Route>
             </Route>
 

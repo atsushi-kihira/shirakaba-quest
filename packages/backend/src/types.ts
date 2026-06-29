@@ -17,6 +17,11 @@ export type Env = {
   ANTHROPIC_API_KEY: string;
   GOOGLE_VISION_API_KEY: string;
   SESSION_SECRET: string;
+  // スケジューラー（Google OAuth）
+  GOOGLE_OAUTH_CLIENT_ID: string;
+  GOOGLE_OAUTH_CLIENT_SECRET: string;
+  SCHEDULER_TOKEN_KEY: string;  // base64 エンコードされた 32 バイトの AES-256 鍵
+  FRONTEND_URL: string;         // 公開 URL（例: https://shirakaba-quest.pages.dev）
 };
 
 // Hono のコンテキスト変数
