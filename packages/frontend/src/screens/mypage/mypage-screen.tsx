@@ -320,6 +320,17 @@ export function MypageScreen() {
               <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
             </Link>
           )}
+
+          {/* 日程調整リンク */}
+          <Link to="/scheduler"
+            className="card-paper rounded-3xl p-4 flex items-center gap-3 active:opacity-80 hover:opacity-90 transition block">
+            <span className="text-2xl">🗓️</span>
+            <div className="flex-1">
+              <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>日程調整</div>
+              <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>公開URLで予約を受け付ける</div>
+            </div>
+            <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
+          </Link>
         </div>
 
         {/* 右カラム: スキル / ポイント履歴タブ */}
