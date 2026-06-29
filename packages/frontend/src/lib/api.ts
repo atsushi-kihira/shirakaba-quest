@@ -20,7 +20,7 @@ type RequestOptions = {
   signal?: AbortSignal;
 };
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: RequestOptions = {}
 ): Promise<T> {

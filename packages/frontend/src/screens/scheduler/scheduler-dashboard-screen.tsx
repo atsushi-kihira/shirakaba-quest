@@ -1,7 +1,7 @@
 // SC-01 スケジューラーダッシュボード
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Link2, Settings, CalendarDays, CheckCircle2, Copy, ExternalLink, Loader2, Check } from "lucide-react";
+import { Link2, Settings, CalendarDays, CheckCircle2, Copy, ExternalLink, Check } from "lucide-react";
 import { useState } from "react";
 import { request } from "@/lib/api";
 

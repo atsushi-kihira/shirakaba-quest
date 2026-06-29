@@ -1,6 +1,6 @@
 // PB-01 公開予約ページ — 統合カレンダー型（認証不要）
-import { useState, useEffect } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { API_BASE_URL } from "@/lib/api";
@@ -65,7 +65,6 @@ async function fetchPublic<T>(path: string): Promise<T> {
 export function PublicBookingPage() {
   const { memberSlug } = useParams<{ memberSlug: string }>();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [weekStart, setWeekStart] = useState<Date>(startOfWeekSunday());
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
 

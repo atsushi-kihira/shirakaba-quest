@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Plus, Trash2, Loader2, ArrowLeft, Copy, Check } from "lucide-react";
+import { Save, Loader2, ArrowLeft, Copy, Check } from "lucide-react";
 import { request, ApiError } from "@/lib/api";
 
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];

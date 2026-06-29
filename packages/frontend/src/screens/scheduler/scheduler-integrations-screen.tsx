@@ -27,7 +27,7 @@ export function SchedulerIntegrationsScreen() {
   const startOAuth = useMutation({
     mutationFn: () =>
       request<{ data: { authUrl: string } }>("/scheduler/oauth/google/start"),
-    onSuccess: (res) => {
+    onSuccess: (res: { data: { authUrl: string } }) => {
       window.location.href = res.data.authUrl;
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : "エラーが発生しました"),

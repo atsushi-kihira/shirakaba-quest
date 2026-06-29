@@ -17,31 +17,12 @@ type Props = {
 };
 
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
-
-function formatDateJST(d: Date): string {
-  return new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    month: "numeric", day: "numeric", weekday: "short",
-  }).format(d);
-}
 
 function formatTimeJST(isoStr: string): string {
   return new Intl.DateTimeFormat("ja-JP", {
     timeZone: "Asia/Tokyo",
     hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(new Date(isoStr));
-}
-
-function getLocalDate(isoStr: string): Date {
-  const d = new Date(isoStr);
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  }).formatToParts(d);
-  const get = (t: string) => parseInt(parts.find((p) => p.type === t)!.value);
-  return new Date(Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") - 9, get("minute")));
 }
 
 function startOfWeekJST(date: Date): Date {
@@ -77,7 +58,8 @@ function toJSTHourMin(isoStr: string): { hour: number; min: number; dateKey: str
 }
 
 export default function UnifiedCalendarGrid({
-  mode,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  mode: _mode,
   availableSlots,
   selectedSlot,
   durationMinutes,

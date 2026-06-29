@@ -15,14 +15,6 @@ type Booking = {
   conferenceUrl: string | null;
 };
 
-function formatDate(utcStr: string) {
-  return new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric", month: "numeric", day: "numeric",
-    weekday: "short", hour: "2-digit", minute: "2-digit",
-  }).format(new Date(utcStr));
-}
-
 export function SchedulerBookingsScreen() {
   const navigate = useNavigate();
 

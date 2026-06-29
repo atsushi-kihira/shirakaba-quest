@@ -1,5 +1,5 @@
 // PB-03 予約完了・確認ページ
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Video, X } from "lucide-react";
 import { useState } from "react";
@@ -51,7 +51,6 @@ async function cancelBooking(token: string, reason?: string): Promise<void> {
 
 export function PublicBookingConfirmation() {
   const { token } = useParams<{ token: string }>();
-  const navigate = useNavigate();
   const location = useLocation();
   const locationState = (location.state ?? {}) as LocationState;
 
