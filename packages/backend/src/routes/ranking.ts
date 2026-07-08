@@ -138,6 +138,28 @@ rankingRoutes.get("/history", async (c) => {
     .map((t) => t.relatedId)
     .filter((id): id is string => !!id);
 
+  // event_participation は relatedId = eventCampaignId
+  const eventCampaignIds = txs
+    .filter((t) => t.reason === "event_participation")
+    .map((t) => t.relatedId)
+    .filter((id): id is string => !!id);
+  const eventCampaigns = eventCampaignIds.length > 0
+    ? await db.select({ id: schema.eventCampaigns.id, title: schema.eventCampaigns.title })
+        .from(schema.eventCampaigns).all()
+    : [];
+  const eventCampaignMap = new Map(eventCampaigns.map((e) => [e.id, e]));
+
+  // meeting_attendance は relatedId = meetingId
+  const meetingAttendanceIds = txs
+    .filter((t) => t.reason === "meeting_attendance")
+    .map((t) => t.relatedId)
+    .filter((id): id is string => !!id);
+  const attendedMeetings = meetingAttendanceIds.length > 0
+    ? await db.select({ id: schema.meetings.id, title: schema.meetings.title })
+        .from(schema.meetings).all()
+    : [];
+  const meetingMap = new Map(attendedMeetings.map((m) => [m.id, m]));
+
   // 1on1 パートナー + real card 相手 の member IDs を収集
   const partnerMemberIds = new Set<string>();
   for (const tx of txs) {
@@ -177,6 +199,8 @@ rankingRoutes.get("/history", async (c) => {
     quest_hard_solved:        "🔥 難題クリア",
     welcome_quest_bonus:      "🎉 歓迎クエストボーナス",
     visitor_invite_resolved:  "🙌 ゲスト招待達成",
+    event_participation:      "🎯 イベント参加",
+    meeting_attendance:       "📅 ミーティング出席",
     admin_reset:              "🔄 ポイントリセット",
     admin_adjust:             "✏️ 管理者調整",
   };
@@ -187,10 +211,16 @@ rankingRoutes.get("/history", async (c) => {
     const member = t.reason === "one_on_one_completed"
       ? sessionToMember.get(t.relatedId ?? "")
       : memberMap.get(t.relatedId ?? "");
+    const eventCampaign = eventCampaignMap.get(t.relatedId ?? "");
+    const attendedMeeting = meetingMap.get(t.relatedId ?? "");
     const detail = quest
       ? `${quest.emoji} ${quest.title}`
       : member
       ? `${member.emoji} ${member.name}`
+      : eventCampaign
+      ? eventCampaign.title
+      : attendedMeeting
+      ? attendedMeeting.title
       : undefined;
 
     return {

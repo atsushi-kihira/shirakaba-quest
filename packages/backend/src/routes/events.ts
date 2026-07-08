@@ -71,7 +71,7 @@ eventRoutes.get("/active", async (c) => {
     : [];
   const typeDefMap = new Map(typeDefs.map((t) => [t.id, t]));
 
-  // 現在ユーザーの参加済みイベントを取得
+  // 現在ユーザーの参加済みイベントを取得（1回限りイベント用）
   const eventIds = events.map((e) => e.id);
   const participations = eventIds.length > 0
     ? await db.select({ eventCampaignId: schema.eventParticipations.eventCampaignId })
@@ -84,11 +84,28 @@ eventRoutes.get("/active", async (c) => {
     : [];
   const participatedIds = new Set(participations.map((p) => p.eventCampaignId));
 
+  // 繰り返し可能イベントのアクション数を取得
+  const repeatEventIds = events.filter((e) => e.allowRepeat === 1).map((e) => e.id);
+  const actionLogs = repeatEventIds.length > 0
+    ? await db.select({ eventCampaignId: schema.eventActionLogs.eventCampaignId })
+        .from(schema.eventActionLogs)
+        .where(and(
+          inArray(schema.eventActionLogs.eventCampaignId, repeatEventIds),
+          eq(schema.eventActionLogs.memberId, memberId)
+        ))
+        .all()
+    : [];
+  const actionCountMap = new Map<string, number>();
+  for (const log of actionLogs) {
+    actionCountMap.set(log.eventCampaignId, (actionCountMap.get(log.eventCampaignId) ?? 0) + 1);
+  }
+
   return c.json({
     data: events.map((e) => {
       const base = toPublic(e);
       const ids = parseIds(e.relatedMemberIds) ?? (e.relatedMemberId ? [e.relatedMemberId] : []);
       const typeDef = e.eventTypeDefId ? typeDefMap.get(e.eventTypeDefId) : null;
+      const isRepeat = e.allowRepeat === 1;
       return {
         ...base,
         ...(typeDef && {
@@ -108,7 +125,8 @@ eventRoutes.get("/active", async (c) => {
         }),
         creatorName: e.createdByMemberId ? (memberMap.get(e.createdByMemberId)?.name ?? null) : null,
         creatorEmoji: e.createdByMemberId ? (memberMap.get(e.createdByMemberId)?.emoji ?? null) : null,
-        myParticipated: participatedIds.has(e.id),
+        myParticipated: isRepeat ? false : participatedIds.has(e.id),
+        myActionCount: isRepeat ? (actionCountMap.get(e.id) ?? 0) : null,
       };
     }),
   });
@@ -268,28 +286,39 @@ eventRoutes.post("/instances/:id/participate", async (c) => {
     return c.json({ error: { code: "not_found", message: "イベントが見つかりません" } }, 404);
   }
 
-  // 既に参加済みか確認
-  const existing = await db.select({ id: schema.eventParticipations.id })
-    .from(schema.eventParticipations)
-    .where(and(
-      eq(schema.eventParticipations.eventCampaignId, id),
-      eq(schema.eventParticipations.memberId, memberId)
-    ))
-    .get();
+  const isRepeat = event.allowRepeat === 1;
 
-  if (existing) {
-    return c.json({ ok: true, alreadyDone: true, pointsAwarded: 0 });
+  if (!isRepeat) {
+    // 1回限りイベント: eventParticipations で重複チェック
+    const existing = await db.select({ id: schema.eventParticipations.id })
+      .from(schema.eventParticipations)
+      .where(and(
+        eq(schema.eventParticipations.eventCampaignId, id),
+        eq(schema.eventParticipations.memberId, memberId)
+      ))
+      .get();
+
+    if (existing) {
+      return c.json({ ok: true, alreadyDone: true, pointsAwarded: 0 });
+    }
+
+    await db.insert(schema.eventParticipations).values({
+      id: newId(),
+      eventCampaignId: id,
+      memberId,
+      createdAt: now,
+    });
+  } else {
+    // 繰り返し可能イベント: eventActionLogs に追記
+    await db.insert(schema.eventActionLogs).values({
+      id: newId(),
+      eventCampaignId: id,
+      memberId,
+      createdAt: now,
+    });
   }
 
-  // 参加を記録
-  await db.insert(schema.eventParticipations).values({
-    id: newId(),
-    eventCampaignId: id,
-    memberId,
-    createdAt: now,
-  });
-
-  // インスタンスの加算ポイントを付与（multiplierを加算ポイントとして使用）
+  // ポイント付与
   let pointsAwarded = 0;
   const pointsToAward = event.multiplier ?? 0;
   if (pointsToAward > 0 && event.eventTypeDefId) {
@@ -339,12 +368,25 @@ eventRoutes.get("/instances/:id", async (c) => {
     .all();
   const memberMap = new Map(allMembers.map((m) => [m.id, m]));
 
-  const participation = await db.select({ id: schema.eventParticipations.id })
-    .from(schema.eventParticipations)
-    .where(and(
-      eq(schema.eventParticipations.eventCampaignId, id),
-      eq(schema.eventParticipations.memberId, memberId)
-    )).get();
+  const isRepeat = event.allowRepeat === 1;
+
+  const participation = isRepeat
+    ? null
+    : await db.select({ id: schema.eventParticipations.id })
+        .from(schema.eventParticipations)
+        .where(and(
+          eq(schema.eventParticipations.eventCampaignId, id),
+          eq(schema.eventParticipations.memberId, memberId)
+        )).get();
+
+  const actionLogs = isRepeat
+    ? await db.select({ id: schema.eventActionLogs.id })
+        .from(schema.eventActionLogs)
+        .where(and(
+          eq(schema.eventActionLogs.eventCampaignId, id),
+          eq(schema.eventActionLogs.memberId, memberId)
+        )).all()
+    : [];
 
   const creator = event.createdByMemberId ? memberMap.get(event.createdByMemberId) : null;
 
@@ -366,7 +408,8 @@ eventRoutes.get("/instances/:id", async (c) => {
       }),
       creatorName: creator?.name ?? null,
       creatorEmoji: creator?.emoji ?? null,
-      myParticipated: !!participation,
+      myParticipated: isRepeat ? false : !!participation,
+      myActionCount: isRepeat ? actionLogs.length : null,
     },
   });
 });
@@ -475,6 +518,7 @@ function toPublic(e: typeof schema.eventCampaigns.$inferSelect) {
     relatedMemberIds: parseIds(e.relatedMemberIds) ?? (e.relatedMemberId ? [e.relatedMemberId] : []),
     multiplier: e.multiplier,
     pointAwardTiming: e.pointAwardTiming ?? null,
+    allowRepeat: e.allowRepeat ?? 1,
     status: e.status,
     createdByMemberId: e.createdByMemberId ?? null,
     createdAt: e.createdAt,

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { request } from "@/lib/api";
 
 type GoogleStatus = { connected: boolean; googleAccountEmail: string | null };
+type ZoomStatus = { connected: boolean; zoomAccountEmail: string | null };
 type PublicUrl = { slug: string | null; publicUrl: string | null };
 type BookingSummary = { data: { id: string; guestName: string; startAtUtc: string; status: string }[] };
 
@@ -16,6 +17,11 @@ export function SchedulerDashboardScreen() {
   const { data: googleData } = useQuery<{ data: GoogleStatus }>({
     queryKey: ["scheduler", "google-status"],
     queryFn: () => request("/scheduler/oauth/google/status"),
+  });
+
+  const { data: zoomData } = useQuery<{ data: ZoomStatus }>({
+    queryKey: ["scheduler", "zoom-status"],
+    queryFn: () => request("/scheduler/oauth/zoom/status"),
   });
 
   const { data: publicUrlData } = useQuery<{ data: PublicUrl }>({
@@ -29,6 +35,7 @@ export function SchedulerDashboardScreen() {
   });
 
   const google = googleData?.data;
+  const zoom = zoomData?.data;
   const publicUrl = publicUrlData?.data.publicUrl;
   const upcomingBookings = bookingsData?.data?.slice(0, 3) ?? [];
 
@@ -110,12 +117,12 @@ export function SchedulerDashboardScreen() {
         >
           <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
             style={{ background: "white", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
-            📅
+            🔗
           </div>
           <div>
-            <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>Google連携</p>
-            <p className="text-sm font-bold" style={{ color: google?.connected ? "var(--color-success)" : "var(--color-ink-700)" }}>
-              {google?.connected ? "接続済み" : "未設定"}
+            <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>外部連携</p>
+            <p className="text-sm font-bold" style={{ color: (google?.connected || zoom?.connected) ? "var(--color-success)" : "var(--color-ink-700)" }}>
+              {[google?.connected && "Google", zoom?.connected && "Zoom"].filter(Boolean).join("・") || "未設定"}
             </p>
           </div>
         </div>
@@ -178,7 +185,7 @@ export function SchedulerDashboardScreen() {
       <div className="space-y-2">
         <h2 className="font-bold mb-3" style={{ color: "var(--color-ink-800)" }}>設定</h2>
         {[
-          { icon: <Link2 size={16} />, label: "Google連携", path: "/scheduler/integrations" },
+          { icon: <Link2 size={16} />, label: "外部サービス連携", path: "/scheduler/integrations" },
           { icon: <Settings size={16} />, label: "受付時間・基本設定", path: "/scheduler/settings" },
           { icon: <CalendarDays size={16} />, label: "予約一覧", path: "/scheduler/bookings" },
         ].map((item) => (

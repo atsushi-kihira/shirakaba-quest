@@ -72,6 +72,8 @@ export type Member = {
   instagramUrl?: string;
   customFields?: Record<string, string>;
 
+  characterKey?: string | null;  // ゲームカードのキャラクター
+
   status: MemberStatus;
   approvedAt: number | null; // Unix timestamp
   createdAt: number;
@@ -99,6 +101,7 @@ export type PublicMember = Omit<
   linkedinUrl: string | null;
   instagramUrl: string | null;
   customFields: Record<string, string> | null;
+  characterKey: string | null;
 };
 
 // -------------------------------------------------------
@@ -343,10 +346,17 @@ export type TeamMemberInfo = {
   member?: Pick<Member, "id" | "name" | "furigana" | "emoji" | "bgColor" | "category">;
 };
 
+export type TeamRankingMember = {
+  member: Pick<Member, "id" | "name" | "furigana" | "emoji" | "bgColor" | "category"> & { avatarImageKey?: string | null };
+  points: number;
+  isLeader: boolean;
+};
+
 export type TeamRankingEntry = {
   rank: number;
   team: Pick<Team, "id" | "name" | "emblemEmoji">;
   totalPoints: number;
+  members: TeamRankingMember[];
 };
 
 // -------------------------------------------------------

@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Trophy } from "lucide-react";
+import { Loader2, Trophy, ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
@@ -35,6 +35,8 @@ export function RankingScreen() {
   const [view, setView] = useState<"individual" | "team">("individual");
   // シーズン or 累計
   const [scope, setScope] = useState<"season" | "total">("season");
+  // 展開中のチームID
+  const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
 
   // 個人・累計
   const { data: totalData, isLoading: totalLoading } = useQuery({
@@ -186,26 +188,92 @@ export function RankingScreen() {
               <p style={{ color: "var(--color-ink-400)" }}>チームがまだありません</p>
             </div>
           ) : (
-            teamEntries.map((entry) => (
-              <div key={entry.team.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3">
-                <div className="w-9 text-center shrink-0">
-                  {RANK_MEDAL[entry.rank]
-                    ? <span className="text-2xl">{RANK_MEDAL[entry.rank]}</span>
-                    : <span className="font-bold text-sm" style={{ color: "var(--color-ink-400)" }}>{entry.rank}</span>
-                  }
+            teamEntries.map((entry) => {
+              const isExpanded = expandedTeamId === entry.team.id;
+              return (
+                <div key={entry.team.id} className="card-paper rounded-2xl overflow-hidden">
+                  {/* チーム行 */}
+                  <button
+                    className="w-full px-4 py-3 flex items-center gap-3 transition active:opacity-75"
+                    onClick={() => setExpandedTeamId(isExpanded ? null : entry.team.id)}
+                  >
+                    <div className="w-9 text-center shrink-0">
+                      {RANK_MEDAL[entry.rank]
+                        ? <span className="text-2xl">{RANK_MEDAL[entry.rank]}</span>
+                        : <span className="font-bold text-sm" style={{ color: "var(--color-ink-400)" }}>{entry.rank}</span>
+                      }
+                    </div>
+                    <span className="text-2xl">{entry.team.emblemEmoji}</span>
+                    <div className="flex-1 min-w-0 text-left">
+                      <span className="font-medium text-sm" style={{ color: "var(--color-ink-900)" }}>{entry.team.name}</span>
+                      <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{entry.members.length}名</p>
+                    </div>
+                    <div className="text-right shrink-0 mr-1">
+                      <div className="font-bold text-lg" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
+                        {entry.totalPoints}
+                      </div>
+                      <div className="text-xs" style={{ color: "var(--color-ink-400)" }}>pt</div>
+                    </div>
+                    {isExpanded
+                      ? <ChevronUp size={16} style={{ color: "var(--color-ink-400)" }} className="shrink-0" />
+                      : <ChevronDown size={16} style={{ color: "var(--color-ink-400)" }} className="shrink-0" />
+                    }
+                  </button>
+
+                  {/* メンバー一覧（展開時） */}
+                  {isExpanded && entry.members.length > 0 && (
+                    <div style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+                      {entry.members.map((m, idx) => (
+                        <Link
+                          key={m.member.id}
+                          to={`/members/${m.member.id}`}
+                          className="flex items-center gap-3 px-4 py-2.5 transition active:opacity-75"
+                          style={{
+                            borderTop: idx > 0 ? "1px solid var(--color-paper-200)" : undefined,
+                            background: "rgba(250,245,232,0.5)",
+                          }}
+                        >
+                          <div className="w-9 text-center shrink-0">
+                            <span className="text-xs font-medium" style={{ color: "var(--color-ink-400)" }}>{idx + 1}</span>
+                          </div>
+                          <MemberAvatar
+                            memberId={m.member.id}
+                            emoji={m.member.emoji}
+                            bgColor={m.member.bgColor}
+                            avatarImageKey={m.member.avatarImageKey}
+                            size="sm"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-medium" style={{ color: "var(--color-ink-900)" }}>{m.member.name}</span>
+                              {m.isLeader && (
+                                <span className="text-xs px-1 py-0.5 rounded font-medium"
+                                  style={{ background: "var(--color-accent)", color: "white", fontSize: "10px" }}>
+                                  リーダー
+                                </span>
+                              )}
+                              {m.member.id === me?.id && (
+                                <span className="text-xs px-1 py-0.5 rounded font-medium"
+                                  style={{ background: "var(--color-brand)", color: "white", fontSize: "10px" }}>
+                                  あなた
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{m.member.category}</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="font-bold text-sm" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
+                              {m.points}
+                            </span>
+                            <span className="text-xs ml-0.5" style={{ color: "var(--color-ink-400)" }}>pt</span>
+                          </div>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <span className="text-2xl">{entry.team.emblemEmoji}</span>
-                <div className="flex-1 min-w-0">
-                  <span className="font-medium text-sm" style={{ color: "var(--color-ink-900)" }}>{entry.team.name}</span>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="font-bold text-lg" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
-                    {entry.totalPoints}
-                  </div>
-                  <div className="text-xs" style={{ color: "var(--color-ink-400)" }}>pt</div>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

@@ -12,6 +12,9 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
+import { getFrontendUrl } from "../../services/frontendUrl.ts";
+import { getValidGoogleAccessToken } from "../../services/conferenceService.ts";
+import { fetchBusy } from "../../services/googleClient.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const schedulerSettingsRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -247,8 +250,39 @@ schedulerSettingsRoutes.get("/public-url", async (c) => {
     .where(eq(schema.memberSchedulingSettings.memberId, memberId))
     .get();
 
-  const frontendUrl = c.env.FRONTEND_URL ?? "https://shirakaba-quest.pages.dev";
+  const frontendUrl = getFrontendUrl(c.env);
   const url = settings ? `${frontendUrl}/book/${settings.slug}` : null;
 
   return c.json({ data: { slug: settings?.slug ?? null, publicUrl: url } });
+});
+
+// ---- 自分の空き状況（他メンバーの公開予約ページで参考表示するため）----
+
+schedulerSettingsRoutes.get("/busy", async (c) => {
+  const memberId = c.get("userId");
+  const db = createDb(c.env.DB);
+  const { from, to } = c.req.query();
+
+  if (!from || !to) {
+    return c.json({ error: { code: "invalid_input", message: "from, to を指定してください" } }, 400);
+  }
+
+  const googleCred = await getValidGoogleAccessToken(
+    db, memberId,
+    c.env.SCHEDULER_TOKEN_KEY,
+    c.env.GOOGLE_OAUTH_CLIENT_ID,
+    c.env.GOOGLE_OAUTH_CLIENT_SECRET
+  );
+
+  if (!googleCred) {
+    return c.json({ data: { connected: false, busy: [] } });
+  }
+
+  try {
+    const busy = await fetchBusy(googleCred.accessToken, googleCred.calendarId, from, to);
+    return c.json({ data: { connected: true, busy } });
+  } catch (e) {
+    console.error("[scheduler/me/busy] FreeBusy fetch failed:", e);
+    return c.json({ data: { connected: true, busy: [] } });
+  }
 });

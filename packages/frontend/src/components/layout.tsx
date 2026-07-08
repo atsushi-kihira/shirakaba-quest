@@ -47,7 +47,7 @@ export function AppLayout() {
   const settings = useSettings();
 
   const NAV_ITEMS = [
-    { to: "/",         icon: Home,       label: "ホーム",         mobileVisible: true  },
+    { to: "/home",     icon: Home,       label: "ホーム",         mobileVisible: true  },
     { to: "/members",  icon: Users,      label: "なかま",         mobileVisible: true  },
     { to: "/quests",   icon: ScrollText, label: settings.termQuest, mobileVisible: true },
     { to: "/meetings", icon: Calendar,   label: "ミーティング",   mobileVisible: true  },
@@ -68,7 +68,7 @@ export function AppLayout() {
           </span>
         </div>
         {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
-          <NavLink key={to} to={to} end={to === "/"}
+          <NavLink key={to} to={to} end={to === "/home"}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium transition relative ${isActive ? "text-white" : "hover:opacity-80"}`
             }
@@ -78,7 +78,7 @@ export function AppLayout() {
             })}>
             <Icon size={18} />
             {label}
-            {to === "/" && pendingCount > 0 && (
+            {to === "/home" && pendingCount > 0 && (
               <span className="absolute right-3 top-1/2 -translate-y-1/2 min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
                 style={{ background: "var(--color-brand)" }}>
                 {pendingCount}
@@ -96,7 +96,7 @@ export function AppLayout() {
       {/* モバイル: 下部タブバー */}
       <div className="tab-bar lg:hidden">
         {NAV_ITEMS.filter((item) => item.mobileVisible).map(({ to, icon: Icon, label }) => (
-          <NavLink key={to} to={to} end={to === "/"}
+          <NavLink key={to} to={to} end={to === "/home"}
             className={({ isActive }) =>
               `flex flex-col items-center gap-0.5 flex-1 px-1 py-1.5 rounded-xl transition text-xs relative ${isActive ? "font-medium" : ""}`
             }
@@ -104,7 +104,7 @@ export function AppLayout() {
             <div className="relative">
               <Icon size={20} />
               {/* ホームタブに通知バッジ */}
-              {to === "/" && pendingCount > 0 && (
+              {to === "/home" && pendingCount > 0 && (
                 <span className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] rounded-full text-white flex items-center justify-center px-0.5 font-bold"
                   style={{ background: "var(--color-brand)", fontSize: "9px" }}>
                   {pendingCount > 9 ? "9+" : pendingCount}

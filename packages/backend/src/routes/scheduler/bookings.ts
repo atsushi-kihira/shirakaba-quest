@@ -4,7 +4,7 @@
 // POST /api/scheduler/bookings/:id/cancel → ホストからキャンセル
 
 import { Hono } from "hono";
-import { eq, and, gte, lte, desc } from "drizzle-orm";
+import { eq, and, gte, lte, desc, or } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import { getValidGoogleAccessToken } from "../../services/conferenceService.ts";
@@ -13,6 +13,78 @@ import { sendCancellationMail } from "../../services/schedulerMailer.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const schedulerBookingsRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// ---- GET /api/scheduler/bookings/upcoming ----
+// ホストとしてもゲストとしても参加する直近の確定済み予約を返す
+schedulerBookingsRoutes.get("/upcoming", async (c) => {
+  const memberId = c.get("userId");
+  const db = createDb(c.env.DB);
+
+  const me = await db
+    .select({ email: schema.members.email, name: schema.members.name })
+    .from(schema.members)
+    .where(eq(schema.members.id, memberId))
+    .get();
+
+  const nowStr = new Date().toISOString();
+
+  // ホストとして入った予約 + ゲストとして入った予約（メールで照合）
+  const bookings = await db
+    .select()
+    .from(schema.bookings)
+    .where(
+      and(
+        eq(schema.bookings.status, "confirmed"),
+        gte(schema.bookings.startAtUtc, nowStr),
+        or(
+          eq(schema.bookings.hostMemberId, memberId),
+          ...(me?.email ? [eq(schema.bookings.guestEmail, me.email)] : []),
+        )
+      )
+    )
+    .orderBy(schema.bookings.startAtUtc)
+    .limit(10)
+    .all();
+
+  // ホスト情報を付加
+  const hostIds = [...new Set(bookings.map((b) => b.hostMemberId))];
+  const hosts = hostIds.length > 0
+    ? await db
+        .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji })
+        .from(schema.members)
+        .where(or(...hostIds.map((id) => eq(schema.members.id, id))))
+        .all()
+    : [];
+  const hostMap = new Map(hosts.map((h) => [h.id, h]));
+
+  const result = bookings.map((b) => ({
+    id: b.id,
+    startAtUtc: b.startAtUtc,
+    endAtUtc: b.endAtUtc,
+    conferenceType: b.conferenceType,
+    conferenceUrl: b.conferenceUrl,
+    cancellationToken: b.cancellationToken,
+    isHost: b.hostMemberId === memberId,
+    guestName: b.guestName,
+    host: hostMap.get(b.hostMemberId) ?? null,
+    displayTitle: null as string | null,
+  }));
+
+  // スケジューラー設定からタイトル取得
+  const settingsRows = hostIds.length > 0
+    ? await db
+        .select({ memberId: schema.memberSchedulingSettings.memberId, displayTitle: schema.memberSchedulingSettings.displayTitle })
+        .from(schema.memberSchedulingSettings)
+        .where(or(...hostIds.map((id) => eq(schema.memberSchedulingSettings.memberId, id))))
+        .all()
+    : [];
+  const settingsMap = new Map(settingsRows.map((s) => [s.memberId, s.displayTitle]));
+  for (const r of result) {
+    r.displayTitle = settingsMap.get(bookings.find((b) => b.id === r.id)!.hostMemberId) ?? null;
+  }
+
+  return c.json({ data: result });
+});
 
 // ---- GET /api/scheduler/bookings ----
 schedulerBookingsRoutes.get("/", async (c) => {

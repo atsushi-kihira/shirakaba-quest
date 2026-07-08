@@ -99,7 +99,13 @@ export function AdminTeamsScreen() {
           ) : (
             <div className="space-y-3">
               {teams.map((team) => (
-                <TeamCard key={team.id} team={team} onDelete={() => deleteTeam.mutate(team.id)} />
+                <TeamCard
+                  key={team.id}
+                  team={team}
+                  onDelete={() => deleteTeam.mutate(team.id)}
+                  allMembers={allMembers}
+                  teams={teams}
+                />
               ))}
             </div>
           )}
@@ -254,9 +260,20 @@ function UnassignedMembersSection({
 }
 
 // ---- チームカード ----
-function TeamCard({ team, onDelete }: { team: Team; onDelete: () => void }) {
+function TeamCard({
+  team,
+  onDelete,
+  allMembers,
+  teams,
+}: {
+  team: Team;
+  onDelete: () => void;
+  allMembers: Array<{ id: string; name: string; emoji: string; bgColor: string }>;
+  teams: Team[];
+}) {
   const qc = useQueryClient();
   const [showMembers, setShowMembers] = useState(false);
+  const [showAddMember, setShowAddMember] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(team.name);
 
@@ -373,8 +390,206 @@ function TeamCard({ team, onDelete }: { team: Team; onDelete: () => void }) {
               </div>
             </div>
           ))}
+          <button
+            onClick={() => setShowAddMember(true)}
+            className="flex items-center gap-1.5 w-full justify-center py-2 rounded-xl text-xs font-medium mt-1"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)", border: "1px dashed var(--color-paper-300)" }}
+          >
+            <UserPlus size={12} />
+            メンバーを追加 / 入れ替え
+          </button>
         </div>
       )}
+
+      {showAddMember && (
+        <AddMemberModal
+          team={team}
+          allMembers={allMembers}
+          teams={teams}
+          onClose={() => setShowAddMember(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---- メンバー追加モーダル（既存チームから移動対応）----
+function AddMemberModal({
+  team,
+  allMembers,
+  teams,
+  onClose,
+}: {
+  team: Team;
+  allMembers: Array<{ id: string; name: string; emoji: string; bgColor: string }>;
+  teams: Team[];
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [search, setSearch] = useState("");
+  const [pendingTransfer, setPendingTransfer] = useState<{
+    memberId: string;
+    memberName: string;
+    memberEmoji: string;
+    fromTeamId: string;
+    fromTeamName: string;
+  } | null>(null);
+
+  const addMember = useMutation({
+    mutationFn: async ({ memberId, fromTeamId }: { memberId: string; fromTeamId?: string }) => {
+      if (fromTeamId) {
+        await api.delete(`/admin/teams/${fromTeamId}/members/${memberId}`);
+      }
+      return api.post(`/admin/teams/${team.id}/members`, { memberId });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "teams"] });
+      onClose();
+    },
+  });
+
+  // メンバーIDごとの現在チームを引く
+  const memberTeamMap = new Map<string, Team>();
+  for (const t of teams) {
+    for (const tm of t.members) {
+      memberTeamMap.set(tm.memberId, t);
+    }
+  }
+
+  const inTeamIds = new Set(team.members.map((tm) => tm.memberId));
+
+  const filtered = allMembers.filter((m) =>
+    search === "" || m.name.includes(search)
+  );
+
+  const handleSelect = (m: { id: string; name: string; emoji: string }) => {
+    if (inTeamIds.has(m.id)) return;
+    const currentTeam = memberTeamMap.get(m.id);
+    if (currentTeam && currentTeam.id !== team.id) {
+      setPendingTransfer({
+        memberId: m.id,
+        memberName: m.name,
+        memberEmoji: m.emoji,
+        fromTeamId: currentTeam.id,
+        fromTeamName: currentTeam.name,
+      });
+    } else {
+      addMember.mutate({ memberId: m.id });
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.4)" }}
+      onClick={onClose}
+    >
+      <div className="card-paper p-5 w-full max-w-sm rounded-3xl" onClick={(e) => e.stopPropagation()}>
+        {pendingTransfer ? (
+          <>
+            <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+              🔄 チーム移動の確認
+            </h2>
+            <div className="rounded-2xl p-3 mb-4" style={{ background: "var(--color-paper-200)" }}>
+              <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+                <span className="font-medium">{pendingTransfer.memberEmoji} {pendingTransfer.memberName}</span> は現在
+                <span className="font-medium">「{pendingTransfer.fromTeamName}」</span>に所属しています。
+              </p>
+              <p className="text-sm mt-1" style={{ color: "var(--color-ink-700)" }}>
+                <span className="font-medium">「{team.emblemEmoji} {team.name}」</span>に移動しますか？
+              </p>
+            </div>
+            <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
+              元のチームから自動的に外されます
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPendingTransfer(null)}
+                className="flex-1 py-2.5 rounded-2xl text-sm"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+              >
+                戻る
+              </button>
+              <button
+                onClick={() => addMember.mutate({ memberId: pendingTransfer.memberId, fromTeamId: pendingTransfer.fromTeamId })}
+                disabled={addMember.isPending}
+                className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50"
+                style={{ background: "var(--color-brand)" }}
+              >
+                {addMember.isPending ? "移動中..." : "移動する"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+              {team.emblemEmoji} {team.name}にメンバーを追加
+            </h2>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="名前で絞り込み..."
+              className="w-full px-3 py-2 rounded-xl border text-sm mb-3"
+              style={{ borderColor: "var(--color-paper-300)", outline: "none" }}
+              autoFocus
+            />
+            <div className="space-y-1 max-h-64 overflow-y-auto">
+              {filtered.length === 0 && (
+                <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-400)" }}>
+                  該当するメンバーがいません
+                </p>
+              )}
+              {filtered.map((m) => {
+                const inThis = inTeamIds.has(m.id);
+                const currentTeam = memberTeamMap.get(m.id);
+                const inOther = currentTeam && currentTeam.id !== team.id;
+                return (
+                  <button
+                    key={m.id}
+                    disabled={inThis || addMember.isPending}
+                    onClick={() => handleSelect(m)}
+                    className="flex items-center gap-2 w-full px-2 py-2 rounded-xl text-left transition disabled:opacity-40"
+                    style={{
+                      background: inThis ? "var(--color-paper-200)" : "transparent",
+                      cursor: inThis ? "default" : "pointer",
+                    }}
+                  >
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-lg shrink-0 ${m.bgColor}`}>
+                      {m.emoji}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>
+                        {m.name}
+                      </p>
+                      {inThis && (
+                        <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>在籍中</p>
+                      )}
+                      {!inThis && inOther && (
+                        <p className="text-xs" style={{ color: "var(--color-accent-dk)" }}>
+                          {currentTeam.emblemEmoji} {currentTeam.name} から移動
+                        </p>
+                      )}
+                      {!inThis && !inOther && (
+                        <p className="text-xs" style={{ color: "var(--color-success)" }}>未所属</p>
+                      )}
+                    </div>
+                    {!inThis && (
+                      <UserPlus size={14} style={{ color: "var(--color-brand)", flexShrink: 0 }} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={onClose}
+              className="w-full mt-3 py-2 rounded-2xl text-sm"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+            >
+              キャンセル
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

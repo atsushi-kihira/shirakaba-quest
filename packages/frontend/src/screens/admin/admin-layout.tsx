@@ -3,7 +3,7 @@
 // =============================================================
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 
 export function AdminLayout() {
@@ -18,7 +18,9 @@ export function AdminLayout() {
     { to: "/admin/event-types", icon: Megaphone,     label: "イベント",                end: false },
     { to: "/admin/teams",    icon: UsersRound,      label: "チーム",                  end: false },
     { to: "/admin/meetings", icon: Calendar,        label: "ミーティング",            end: false },
+    { to: "/admin/card",      icon: CreditCard,      label: "カード作成",              end: false },
     { to: "/admin/points",   icon: RotateCcw,       label: "ポイントリセット",        end: false },
+    { to: "/admin/email-templates", icon: Mail,      label: "メール配信",              end: false },
     { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
   ] as const;
 
@@ -31,9 +33,9 @@ export function AdminLayout() {
   }, [appTitle]);
 
   return (
-    <div className="admin-theme flex min-h-dvh" style={{ background: "var(--color-paper-100)" }}>
+    <div className="admin-theme flex h-dvh overflow-hidden" style={{ background: "var(--color-paper-100)" }}>
       {/* PC: 左サイドバー — ダークスレート */}
-      <nav className="hidden lg:flex flex-col w-64 shrink-0 pt-6 px-4 gap-1"
+      <nav className="hidden lg:flex flex-col w-64 shrink-0 pt-6 px-4 gap-1 overflow-y-auto"
         style={{ background: "#0f172a" }}>
         {/* ヘッダー */}
         <div className="flex items-center gap-2 px-3 mb-6">
@@ -86,7 +88,7 @@ export function AdminLayout() {
       </nav>
 
       {/* メインコンテンツ */}
-      <main className="flex-1 main-with-tabbar max-w-4xl mx-auto w-full px-0 lg:px-8 lg:py-6">
+      <main className="flex-1 main-with-tabbar max-w-4xl mx-auto w-full px-0 lg:px-8 lg:py-6 overflow-y-auto">
         <Outlet />
       </main>
 

@@ -9,6 +9,17 @@ function formatDateJST(utcStr: string): string {
   }).format(new Date(utcStr));
 }
 
+function formatTimeJST(utcStr: string): string {
+  return new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit", minute: "2-digit",
+  }).format(new Date(utcStr));
+}
+
+function formatDateRangeJST(startUtc: string, endUtc: string): string {
+  return `${formatDateJST(startUtc)}〜${formatTimeJST(endUtc)}`;
+}
+
 function buildConferenceSection(
   conferenceType: string,
   conferenceUrl: string | null
@@ -17,6 +28,12 @@ function buildConferenceSection(
     return {
       text: `📹 Google Meet: ${conferenceUrl}`,
       html: `<p>📹 <strong>Google Meet:</strong> <a href="${conferenceUrl}">${conferenceUrl}</a></p>`,
+    };
+  }
+  if (conferenceType === "zoom" && conferenceUrl) {
+    return {
+      text: `📹 Zoom: ${conferenceUrl}`,
+      html: `<p>📹 <strong>Zoom:</strong> <a href="${conferenceUrl}">${conferenceUrl}</a></p>`,
     };
   }
   return {
@@ -46,7 +63,7 @@ export async function sendBookingConfirmationGuest(opts: {
 }): Promise<void> {
   const {
     to, guestName, hostName, displayTitle,
-    startAtUtc, conferenceType, conferenceUrl,
+    startAtUtc, endAtUtc, conferenceType, conferenceUrl,
     cancellationToken, frontendUrl, apiKey, fromEmail, isDev,
   } = opts;
 
@@ -56,9 +73,10 @@ export async function sendBookingConfirmationGuest(opts: {
   }
 
   const dateStr = formatDateJST(startAtUtc);
+  const dateRangeStr = formatDateRangeJST(startAtUtc, endAtUtc);
   const conf = buildConferenceSection(conferenceType, conferenceUrl);
-  const manageUrl = `${frontendUrl}/book/manage/${cancellationToken}`;
-  const subject = `【予約確定】${dateStr} ${hostName}さんとのミーティング`;
+  const manageUrl = `${frontendUrl}/book/confirmation/${cancellationToken}`;
+  const subject = `【予約確定】${dateRangeStr} ${hostName}さんとのミーティング`;
 
   await sendMail({
     to, apiKey, fromEmail,
@@ -68,7 +86,7 @@ export async function sendBookingConfirmationGuest(opts: {
       "",
       `${hostName}さんとの「${displayTitle}」の予約が確定しました。`,
       "",
-      `📅 日時：${dateStr}（日本時間）`,
+      `📅 日時：${dateRangeStr}（日本時間）`,
       conf.text,
       "",
       `予約の管理（キャンセル等）: ${manageUrl}`,
@@ -83,7 +101,7 @@ export async function sendBookingConfirmationGuest(opts: {
         </p>
         <div style="background:#FAF5E8;border:2px solid #5A8C5C;border-radius:16px;padding:20px;margin:16px 0;">
           <p style="color:#5A8C5C;font-size:20px;font-weight:bold;margin:0 0 8px;">✅ 予約確定</p>
-          <p style="font-size:18px;font-weight:bold;color:#1A1410;margin:0 0 12px;">📅 ${dateStr}</p>
+          <p style="font-size:18px;font-weight:bold;color:#1A1410;margin:0 0 12px;">📅 ${dateRangeStr}</p>
           ${conf.html}
         </div>
         <p style="color:#6B5E50;font-size:13px;margin-top:16px;">
@@ -104,6 +122,7 @@ export async function sendBookingNotificationHost(opts: {
   guestMessage: string | null;
   displayTitle: string;
   startAtUtc: string;
+  endAtUtc: string;
   conferenceType: string;
   conferenceUrl: string | null;
   frontendUrl: string;
@@ -114,7 +133,7 @@ export async function sendBookingNotificationHost(opts: {
 }): Promise<void> {
   const {
     to, hostName, guestName, guestEmail, guestMessage, displayTitle,
-    startAtUtc, conferenceType, conferenceUrl,
+    startAtUtc, endAtUtc, conferenceType, conferenceUrl,
     frontendUrl, bookingId, apiKey, fromEmail, isDev,
   } = opts;
 
@@ -123,10 +142,10 @@ export async function sendBookingNotificationHost(opts: {
     return;
   }
 
-  const dateStr = formatDateJST(startAtUtc);
+  const dateRangeStr = formatDateRangeJST(startAtUtc, endAtUtc);
   const conf = buildConferenceSection(conferenceType, conferenceUrl);
   const detailUrl = `${frontendUrl}/scheduler/bookings/${bookingId}`;
-  const subject = `【予約通知】${dateStr} ${guestName}さんが予約しました`;
+  const subject = `【予約通知】${dateRangeStr} ${guestName}さんが予約しました`;
 
   await sendMail({
     to, apiKey, fromEmail,
@@ -136,7 +155,7 @@ export async function sendBookingNotificationHost(opts: {
       "",
       `${guestName}さん（${guestEmail}）から「${displayTitle}」の予約が入りました。`,
       "",
-      `📅 日時：${dateStr}（日本時間）`,
+      `📅 日時：${dateRangeStr}（日本時間）`,
       conf.text,
       ...(guestMessage ? [`\n💬 メッセージ：${guestMessage}`] : []),
       "",
@@ -151,7 +170,7 @@ export async function sendBookingNotificationHost(opts: {
           「<strong>${displayTitle}</strong>」の予約が入りました。
         </p>
         <div style="background:#FAF5E8;border:2px solid #D4A03B;border-radius:16px;padding:20px;margin:16px 0;">
-          <p style="font-size:18px;font-weight:bold;color:#1A1410;margin:0 0 12px;">📅 ${dateStr}</p>
+          <p style="font-size:18px;font-weight:bold;color:#1A1410;margin:0 0 12px;">📅 ${dateRangeStr}</p>
           ${conf.html}
           ${guestMessage ? `<p style="color:#4A3E36;margin:12px 0 0;">💬 ${guestMessage}</p>` : ""}
         </div>

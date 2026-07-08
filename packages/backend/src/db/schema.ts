@@ -15,6 +15,7 @@ export const members = sqliteTable("members", {
   role:                text("role"),
   phone:               text("phone"),
   address:             text("address"),
+  characterKey:        text("character_key"),
   category:            text("category").notNull().default(""),
   businessDescription: text("business_description").notNull().default(""),
   skills:              text("skills").notNull().default("[]"),  // JSON
@@ -197,10 +198,19 @@ export const eventCampaigns = sqliteTable("event_campaigns", {
   relatedMemberIds: text("related_member_ids"),
   multiplier:       integer("multiplier"),
   pointAwardTiming: text("point_award_timing"),  // 'on_view' | 'on_complete' | null
+  allowRepeat:      integer("allow_repeat").notNull().default(1), // 1=何度でも実施可（デフォルト）、0=1度のみ
   status:             text("status").notNull().default("active"),
   createdByMemberId:  text("created_by_member_id"),
   createdAt:          integer("created_at").notNull(),
   updatedAt:          integer("updated_at").notNull(),
+});
+
+// 繰り返し実施イベントの実施ログ（eventParticipations は unique 制約があるため別テーブル）
+export const eventActionLogs = sqliteTable("event_action_logs", {
+  id:              text("id").primaryKey(),
+  eventCampaignId: text("event_campaign_id").notNull(),
+  memberId:        text("member_id").notNull(),
+  createdAt:       integer("created_at").notNull(),
 });
 
 export const eventParticipations = sqliteTable(
@@ -290,18 +300,24 @@ export const meetings = sqliteTable("meetings", {
   eventCampaignId:       text("event_campaign_id"),
   eventTypeDefId:        text("event_type_def_id"),
   registrationDeadline:  integer("registration_deadline"),
+  conferenceType:        text("conference_type").notNull().default("manual"),
+  conferenceUrl:         text("conference_url"),
+  conferenceMetaJson:    text("conference_meta_json"),
+  calendarEventId:       text("calendar_event_id"),
+  inviteToken:           text("invite_token"),
   createdAt:             integer("created_at").notNull(),
   updatedAt:             integer("updated_at").notNull(),
 });
 
 export const meetingDateCandidates = sqliteTable("meeting_date_candidates", {
-  id:          text("id").primaryKey(),
-  meetingId:   text("meeting_id").notNull(),
-  startsAt:    integer("starts_at").notNull(),
-  endsAt:      integer("ends_at"),
-  note:        text("note"),
-  sortOrder:   integer("sort_order").notNull().default(0),
-  isConfirmed: integer("is_confirmed").notNull().default(0),
+  id:            text("id").primaryKey(),
+  meetingId:     text("meeting_id").notNull(),
+  startsAt:      integer("starts_at").notNull(),
+  endsAt:        integer("ends_at"),
+  note:          text("note"),
+  sortOrder:     integer("sort_order").notNull().default(0),
+  isConfirmed:   integer("is_confirmed").notNull().default(0),
+  conferenceUrl: text("conference_url"),
 });
 
 export const meetingInvitees = sqliteTable("meeting_invitees", {
@@ -344,6 +360,7 @@ export const meetingAttendances = sqliteTable("meeting_attendances", {
   id:            text("id").primaryKey(),
   meetingId:     text("meeting_id").notNull(),
   memberId:      text("member_id").notNull(),
+  candidateId:   text("candidate_id"),    // 複数確定日程がある場合に参加する日を指定
   status:        text("status").notNull(), // 'attended' | 'absent'
   recordedAt:    integer("recorded_at").notNull(),
   pointsAwarded: integer("points_awarded"),
@@ -444,6 +461,18 @@ export const reminderJobs = sqliteTable("reminder_jobs", {
   sentAt:      text("sent_at"),
 });
 
+export const zoomCredentials = sqliteTable("zoom_credentials", {
+  memberId:             text("member_id").primaryKey(),
+  zoomAccountEmail:     text("zoom_account_email").notNull().default(""),
+  zoomUserId:           text("zoom_user_id").notNull().default(""),
+  accessTokenEnc:       text("access_token_enc").notNull(),
+  refreshTokenEnc:      text("refresh_token_enc").notNull(),
+  accessTokenExpiresAt: text("access_token_expires_at").notNull(),
+  scopes:               text("scopes").notNull().default(""),
+  connectedAt:          text("connected_at").notNull(),
+  lastRefreshedAt:      text("last_refreshed_at"),
+});
+
 export const cardDesigns = sqliteTable("card_designs", {
   id:                   text("id").primaryKey().default("default"),
   frontFeatureLabel:    text("front_feature_label").notNull().default("USP・SKILLs"),
@@ -453,12 +482,54 @@ export const cardDesigns = sqliteTable("card_designs", {
   appTitle:             text("app_title").notNull().default("白樺クエスト"),
   appLogo:              text("app_logo").notNull().default("🃏"),
   appPointName:         text("app_point_name").notNull().default("pt"),
-  // 用語カスタマイズ
   termQuest:            text("term_quest").notNull().default("お題"),
   termUsp:              text("term_usp").notNull().default("USP"),
   termOneOnOne:         text("term_one_on_one").notNull().default("1to1"),
   characterImageKey:    text("character_image_key"),
   timezone:             text("timezone").notNull().default("Asia/Tokyo"),
+  // カード作成設定
+  cardPrintEnabled:       integer("card_print_enabled").notNull().default(0),
+  cardPrintCompanyName:   text("card_print_company_name").notNull().default(""),
+  cardPrintCompanyUrl:    text("card_print_company_url").notNull().default(""),
+  cardPrintContactPerson: text("card_print_contact_person").notNull().default(""),
+  cardPrintContactEmail:  text("card_print_contact_email").notNull().default(""),
+  cardPrintContactPhone:  text("card_print_contact_phone").notNull().default(""),
+  cardPrintImageOnlyPrice: integer("card_print_image_only_price"),
+  cardPrintImageOnlyName: text("card_print_image_only_name").notNull().default("カードイメージデータ作成のみ"),
+  cardPrintPlans:         text("card_print_plans").notNull().default("[]"),
+  cardPrintThankYouMessage: text("card_print_thank_you_message").notNull().default("ご注文いただきありがとうございました。"),
+  systemFromEmail:      text("system_from_email"),              // メール送信元の既定アドレス
+  emailCommonHeader:    text("email_common_header"),            // 共通メールヘッダー（全テンプレートに付加）
+  emailCommonFooter:    text("email_common_footer"),            // 共通メールフッター（全テンプレートに付加）
   updatedAt:            integer("updated_at").notNull(),
   updatedBy:            text("updated_by").notNull(),
+});
+
+export const cardOrders = sqliteTable("card_orders", {
+  id:              text("id").primaryKey(),
+  memberId:        text("member_id").notNull(),
+  characterKey:    text("character_key").notNull(),
+  characterLabel:  text("character_label").notNull(),
+  photoKey:        text("photo_key"),
+  address:         text("address"),
+  phone:           text("phone"),
+  planName:        text("plan_name").notNull(),
+  planPrice:       integer("plan_price").notNull(),
+  memberSnapshot:  text("member_snapshot").notNull().default("{}"),
+  status:          text("status").notNull().default("pending"),
+  createdAt:       integer("created_at").notNull(),
+  updatedAt:       integer("updated_at").notNull(),
+});
+
+// メールテンプレート（管理者が管理画面からカスタマイズできる送信設定）
+export const emailTemplates = sqliteTable("email_templates", {
+  id:          text("id").primaryKey(),
+  emailKey:    text("email_key").notNull().unique(),
+  enabled:     integer("enabled").notNull().default(1),  // 0=送信しない
+  fromEmail:   text("from_email"),                       // null=システム既定を使用
+  subject:     text("subject").notNull(),
+  bodyHtml:             text("body_html").notNull(),
+  disableCommonHeader:  integer("disable_common_header").notNull().default(0),  // 1=共通ヘッダーを使わない
+  disableCommonFooter:  integer("disable_common_footer").notNull().default(0),  // 1=共通フッターを使わない
+  updatedAt:            integer("updated_at").notNull(),
 });

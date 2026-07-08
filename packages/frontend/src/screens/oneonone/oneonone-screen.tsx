@@ -4,7 +4,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, Clock, CheckCircle, Loader2, Users, Camera } from "lucide-react";
+import { Check, X, Clock, CheckCircle, Loader2, Users, Camera, Calendar } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
@@ -29,6 +29,7 @@ type Session = {
     bgColor: string;
     category: string;
   } | null;
+  requesterSchedulerUrl?: string | null;
 };
 
 type SessionsResponse = { data: Session[] };
@@ -154,6 +155,18 @@ export function OneOnOneScreen() {
                   </h2>
                   {pendingReceived.map((s) => (
                     <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
+                      {s.requesterSchedulerUrl && (
+                        <a
+                          href={s.requesterSchedulerUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-medium"
+                          style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)", border: "1px solid rgba(90,140,92,0.25)" }}
+                        >
+                          <Calendar size={14} />
+                          {s.partner?.name ?? "相手"}さんの予約ページで日程を選ぶ
+                        </a>
+                      )}
                       <div className="flex gap-2 mt-3">
                         <button
                           onClick={() => rejectMutation.mutate(s.id)}

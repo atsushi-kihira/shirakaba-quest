@@ -117,10 +117,40 @@ teamRoutes.get("/ranking", async (c) => {
 
   const pointMap = new Map(pointRows.map((r) => [r.memberId, Number(r.total ?? 0)]));
 
+  // チームに所属するメンバー情報を取得
+  const allMemberIds = [...new Set(allTeamMembers.map((tm) => tm.memberId))];
+  const memberRows = allMemberIds.length > 0
+    ? await db
+        .select({
+          id: schema.members.id,
+          name: schema.members.name,
+          furigana: schema.members.furigana,
+          emoji: schema.members.emoji,
+          bgColor: schema.members.bgColor,
+          category: schema.members.category,
+          avatarImageKey: schema.members.avatarImageKey,
+        })
+        .from(schema.members)
+        .all()
+    : [];
+  const memberMap = new Map(memberRows.map((m) => [m.id, m]));
+
   const teamPoints = teams.map((t) => {
     const tms = allTeamMembers.filter((tm) => tm.teamId === t.id);
+    const members = tms
+      .map((tm) => {
+        const m = memberMap.get(tm.memberId);
+        if (!m) return null;
+        return {
+          member: { id: m.id, name: m.name, furigana: m.furigana, emoji: m.emoji, bgColor: m.bgColor, category: m.category, avatarImageKey: m.avatarImageKey },
+          points: pointMap.get(tm.memberId) ?? 0,
+          isLeader: tm.isLeader === 1,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => b.points - a.points);
     const total = tms.reduce((sum, tm) => sum + (pointMap.get(tm.memberId) ?? 0), 0);
-    return { team: { id: t.id, name: t.name, emblemEmoji: t.emblemEmoji }, totalPoints: total };
+    return { team: { id: t.id, name: t.name, emblemEmoji: t.emblemEmoji }, totalPoints: total, members };
   });
 
   teamPoints.sort((a, b) => b.totalPoints - a.totalPoints);

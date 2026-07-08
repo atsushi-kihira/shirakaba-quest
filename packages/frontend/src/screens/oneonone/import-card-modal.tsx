@@ -34,11 +34,22 @@ type ScanResult = {
 
 type Step = "capture" | "scanning" | "select" | "confirm" | "done";
 
-type Props = {
-  onClose: () => void;
+type TargetMember = {
+  id: string;
+  name: string;
+  emoji: string;
+  bgColor: string;
+  category: string;
+  businessDescription?: string | null;
+  connectionStatus?: "none" | "digital" | "real";
 };
 
-export function ImportCardModal({ onClose }: Props) {
+type Props = {
+  onClose: () => void;
+  targetMember?: TargetMember;
+};
+
+export function ImportCardModal({ onClose, targetMember }: Props) {
   const qc = useQueryClient();
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -59,7 +70,22 @@ export function ImportCardModal({ onClose }: Props) {
       }),
     onSuccess: (res) => {
       setScanResult(res.data);
-      setStep("select");
+      if (targetMember) {
+        // 対象メンバーが決まっている場合は選択ステップをスキップ
+        setSelected({
+          id: targetMember.id,
+          name: targetMember.name,
+          furigana: "",
+          emoji: targetMember.emoji,
+          bgColor: targetMember.bgColor,
+          category: targetMember.category,
+          businessDescription: targetMember.businessDescription ?? "",
+          connectionStatus: targetMember.connectionStatus ?? "none",
+        });
+        setStep("confirm");
+      } else {
+        setStep("select");
+      }
     },
     onError: (e: Error) => {
       setError(e.message);
@@ -67,7 +93,7 @@ export function ImportCardModal({ onClose }: Props) {
     },
   });
 
-  // 1to1登録
+  // リアルカード登録（1to1完了 + リアルカード取得を同時に記録）
   const importMutation = useMutation({
     mutationFn: () => api.post<{ data: { alreadyRecorded: boolean; message: string } }>(
       `/members/${selected!.id}/import-card`
@@ -75,6 +101,8 @@ export function ImportCardModal({ onClose }: Props) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["oneonone"] });
       qc.invalidateQueries({ queryKey: ["members"] });
+      qc.invalidateQueries({ queryKey: ["member", selected!.id] });
+      qc.invalidateQueries({ queryKey: ["ranking", "me"] });
       setStep("done");
     },
     onError: (e: Error) => setError(e.message),
@@ -231,6 +259,27 @@ export function ImportCardModal({ onClose }: Props) {
                   >
                     🖼️ カメラロールから選ぶ
                   </button>
+                  {targetMember && (
+                    <button
+                      onClick={() => {
+                        setSelected({
+                          id: targetMember.id,
+                          name: targetMember.name,
+                          furigana: "",
+                          emoji: targetMember.emoji,
+                          bgColor: targetMember.bgColor,
+                          category: targetMember.category,
+                          businessDescription: targetMember.businessDescription ?? "",
+                          connectionStatus: targetMember.connectionStatus ?? "none",
+                        });
+                        setStep("confirm");
+                      }}
+                      className="w-full py-2.5 rounded-2xl text-xs flex items-center justify-center gap-1.5 active:opacity-70"
+                      style={{ color: "var(--color-ink-400)", borderTop: "1px solid var(--color-paper-300)", paddingTop: "12px" }}
+                    >
+                      写真なしで直接登録する
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -341,7 +390,7 @@ export function ImportCardModal({ onClose }: Props) {
           {step === "confirm" && selected && (
             <div>
               <p className="text-sm mb-4" style={{ color: "var(--color-ink-500)" }}>
-                以下のメンバーとの1to1を記録します。
+                以下のメンバーのリアルカードを受け取ったことを記録します。
               </p>
 
               {/* 選択されたメンバーカード */}
@@ -365,21 +414,32 @@ export function ImportCardModal({ onClose }: Props) {
               {/* 登録内容の説明 */}
               <div className="rounded-2xl p-3 mb-4 text-sm space-y-1.5"
                 style={{ background: "var(--color-paper-200)" }}>
-                <div className="flex items-center gap-2">
-                  <span style={{ color: "var(--color-success)" }}>✅</span>
-                  <span style={{ color: "var(--color-ink-700)" }}>{selected.name}さんのカードをデジタルで受け取る</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span style={{ color: "var(--color-accent)" }}>✨</span>
-                  <span style={{ color: "var(--color-ink-700)" }}>+1pt 獲得</span>
-                </div>
-                {selected.connectionStatus !== "none" && (
+                {selected.connectionStatus === "real" ? (
                   <div className="flex items-center gap-2">
                     <span>ℹ️</span>
-                    <span style={{ color: "var(--color-ink-500)" }}>
-                      すでに登録済みのため、ポイントは付与されません
-                    </span>
+                    <span style={{ color: "var(--color-ink-500)" }}>すでにリアルカード登録済みです（ポイント付与なし）</span>
                   </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span>🃏</span>
+                      <span style={{ color: "var(--color-ink-700)" }}>{selected.name}さんのリアルカードを受け取る</span>
+                    </div>
+                    {selected.connectionStatus !== "digital" && (
+                      <div className="flex items-center gap-2">
+                        <span>✅</span>
+                        <span style={{ color: "var(--color-ink-700)" }}>1to1完了として同時に記録する</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span style={{ color: "var(--color-accent)" }}>✨</span>
+                      <span style={{ color: "var(--color-ink-700)" }}>
+                        {selected.connectionStatus === "digital"
+                          ? "+1pt 獲得（リアルカード）"
+                          : "+2pt 獲得（1to1完了 + リアルカード）"}
+                      </span>
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -398,7 +458,7 @@ export function ImportCardModal({ onClose }: Props) {
                 {importMutation.isPending ? (
                   <><Loader2 size={16} className="animate-spin" />登録中...</>
                 ) : (
-                  <><Check size={16} />1to1を記録する</>
+                  <><Check size={16} />🃏 リアルカード登録を記録する</>
                 )}
               </button>
             </div>
@@ -412,10 +472,13 @@ export function ImportCardModal({ onClose }: Props) {
                 登録完了！
               </h3>
               <p className="text-sm mb-1" style={{ color: "var(--color-ink-600)" }}>
-                <strong>{selected?.name}</strong>さんとの1to1を記録しました。
+                <strong>{selected?.name}</strong>さんのリアルカードを受け取りました。
+              </p>
+              <p className="text-sm mb-1" style={{ color: "var(--color-ink-600)" }}>
+                1to1完了 + リアルカード取得済みとして記録されました。
               </p>
               <p className="text-sm mb-6" style={{ color: "var(--color-accent)" }}>
-                ✨ +1pt 獲得
+                ✨ ポイントを獲得しました
               </p>
               <button
                 onClick={onClose}

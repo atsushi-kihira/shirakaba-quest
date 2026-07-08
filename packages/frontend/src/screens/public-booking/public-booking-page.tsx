@@ -1,9 +1,10 @@
-// PB-01 公開予約ページ — 統合カレンダー型（認証不要）
+// PB-01 公開予約ページ — 統合カレンダー型（認証不要、メンバーはログインして自分の予定も確認可）
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, ChevronLeft, ChevronRight } from "lucide-react";
-import { API_BASE_URL } from "@/lib/api";
+import { Loader2, LogIn } from "lucide-react";
+import { API_BASE_URL, api } from "@/lib/api";
+import { useAuthStore } from "@/stores/auth-store";
 import UnifiedCalendarGrid, { type Slot } from "@/components/unified-calendar-grid";
 
 type MemberMeta = {
@@ -62,9 +63,13 @@ async function fetchPublic<T>(path: string): Promise<T> {
   return json.data;
 }
 
+type MyBusyResponse = { data: { connected: boolean; busy: { start: string; end: string }[] } };
+
 export function PublicBookingPage() {
   const { memberSlug } = useParams<{ memberSlug: string }>();
   const navigate = useNavigate();
+  const token = useAuthStore((s) => s.token);
+  const user = useAuthStore((s) => s.user);
   const [weekStart, setWeekStart] = useState<Date>(startOfWeekSunday());
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
 
@@ -84,6 +89,14 @@ export function PublicBookingPage() {
     enabled: !!memberSlug && !metaError,
   });
 
+  // ログイン中のメンバーは、自分の予定もカレンダーに参考表示する
+  const { data: myBusyData } = useQuery<MyBusyResponse>({
+    queryKey: ["scheduler", "my-busy", fromStr],
+    queryFn: () => api.get<MyBusyResponse>(`/scheduler/me/busy?from=${fromStr}&to=${toStr}`),
+    enabled: !!token,
+  });
+  const myBusyBlocks: Slot[] = (myBusyData?.data.busy ?? []).map((b) => ({ startUtc: b.start, endUtc: b.end }));
+
   const handleSlotClick = (slot: Slot) => {
     setSelectedSlot(slot);
   };
@@ -96,8 +109,6 @@ export function PublicBookingPage() {
     });
     navigate(`/book/${memberSlug}/form?${params.toString()}`);
   };
-
-  const isPrevDisabled = weekStart.getTime() <= startOfWeekSunday().getTime();
 
   if (metaLoading) {
     return (
@@ -155,60 +166,61 @@ export function PublicBookingPage() {
         </div>
       </div>
 
+      {/* ログイン誘導 / ログイン中バッジ */}
+      <div className="max-w-2xl mx-auto px-4 pt-4">
+        {token ? (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs"
+            style={{ background: "rgba(90,140,92,0.08)", color: "var(--color-success)" }}>
+            <LogIn size={13} />
+            {user?.name ?? "メンバー"}さんとしてログイン中
+            {myBusyBlocks.length > 0 && " ・あなたの予定をカレンダーに薄く表示しています"}
+          </div>
+        ) : (
+          <Link
+            to={`/login?redirect=${encodeURIComponent(`/book/${memberSlug}`)}`}
+            className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl text-xs"
+            style={{ background: "var(--color-paper-100)", color: "var(--color-ink-600)", border: "1px solid var(--color-paper-300)" }}
+          >
+            <span className="flex items-center gap-1.5">
+              <LogIn size={13} />
+              白樺クエストのメンバーの方はログインすると、自分の予定と見比べられます
+            </span>
+            <span className="font-medium shrink-0" style={{ color: "var(--color-brand)" }}>ログイン →</span>
+          </Link>
+        )}
+      </div>
+
       {/* カレンダー */}
       <div className="max-w-2xl mx-auto px-4 py-6">
         <div
           className="rounded-2xl p-4 mb-4"
           style={{ background: "white", border: "1px solid var(--color-paper-300)" }}
         >
-          {/* 週ナビゲーション */}
-          <div className="flex items-center justify-between mb-4">
-            <button
-              onClick={() => setWeekStart((w) => addDays(w, -7))}
-              disabled={isPrevDisabled}
-              className="p-2 rounded-xl disabled:opacity-30"
-              style={{ background: "var(--color-paper-100)" }}
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <span className="font-medium text-sm" style={{ color: "var(--color-ink-700)" }}>
-              {new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long" }).format(weekStart)}
-            </span>
-            <button
-              onClick={() => setWeekStart((w) => addDays(w, 7))}
-              className="p-2 rounded-xl"
-              style={{ background: "var(--color-paper-100)" }}
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
-
           {slotsLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="animate-spin" style={{ color: "var(--color-ink-400)" }} />
             </div>
-          ) : slots.length === 0 ? (
-            <div className="text-center py-12">
-              <p className="text-3xl mb-2">📅</p>
-              <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>
-                この週に予約可能な時間帯はありません
-              </p>
-              <button
-                onClick={() => setWeekStart((w) => addDays(w, 7))}
-                className="mt-3 text-sm font-medium"
-                style={{ color: "var(--color-brand)" }}
-              >
-                次の週を見る →
-              </button>
-            </div>
           ) : (
-            <UnifiedCalendarGrid
-              mode="public_guest"
-              availableSlots={slots}
-              selectedSlot={selectedSlot}
-              durationMinutes={durationMinutes}
-              onSlotClick={handleSlotClick}
-            />
+            <>
+              {slots.length === 0 && (
+                <div className="text-center py-6 mb-2">
+                  <p className="text-2xl mb-1">📅</p>
+                  <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>
+                    この週に予約可能な時間帯はありません
+                  </p>
+                </div>
+              )}
+              <UnifiedCalendarGrid
+                mode="public_guest"
+                availableSlots={slots}
+                selectedSlot={selectedSlot}
+                durationMinutes={durationMinutes}
+                onSlotClick={handleSlotClick}
+                myBusyBlocks={myBusyBlocks}
+                weekStart={weekStart}
+                onWeekChange={setWeekStart}
+              />
+            </>
           )}
         </div>
 

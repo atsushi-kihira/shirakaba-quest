@@ -43,11 +43,13 @@ type ActiveEvent = {
   creatorEmoji?: string | null;
 };
 
-type MemberOption = { id: string; name: string; emoji: string; bgColor: string };
+type MemberOption = { id: string; name: string; emoji: string; bgColor: string; connectionStatus?: string };
 type EventTypeDef = EventTypeDefinition & { slug: string };
 type ActiveEventsResponse = { data: ActiveEvent[] };
 type EventTypesResponse = { data: EventTypeDef[] };
 type MembersResponse = { data: MemberOption[] };
+type TeamForPicker = { id: string; name: string; emblemEmoji: string; isMine: boolean; members: { memberId: string }[] };
+type TeamsForPickerResponse = { data: TeamForPicker[] };
 
 // ---- ラベル ----
 const TRIGGER_LABELS: Record<string, string> = {
@@ -91,6 +93,163 @@ function TypeInfoPanel({ typeDef }: { typeDef: EventTypeDef }) {
   );
 }
 
+// ---- メンバーピッカー（タブ絞り込み＋全選択対応）----
+type FilterTab = "all" | "connected" | "not_connected" | "team";
+
+function MemberPickerWithTabs({
+  selectedIds,
+  onChange,
+}: {
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<FilterTab>("all");
+  const [search, setSearch] = useState("");
+
+  const { data: membersData, isLoading } = useQuery({
+    queryKey: ["members"],
+    queryFn: () => api.get<MembersResponse>("/members"),
+    staleTime: 60_000,
+  });
+
+  const { data: teamsData } = useQuery({
+    queryKey: ["teams"],
+    queryFn: () => api.get<TeamsForPickerResponse>("/teams"),
+    staleTime: 60_000,
+    enabled: activeTab === "team",
+  });
+
+  const allMembers = (membersData?.data ?? []).filter((m) => m.connectionStatus !== "self");
+
+  const myTeam = teamsData?.data.find((t) => t.isMine);
+  const myTeamIds = new Set(myTeam?.members.map((m) => m.memberId) ?? []);
+
+  const tabFiltered = (() => {
+    if (activeTab === "connected") return allMembers.filter((m) => m.connectionStatus === "digital" || m.connectionStatus === "real");
+    if (activeTab === "not_connected") return allMembers.filter((m) => m.connectionStatus === "none");
+    if (activeTab === "team") return allMembers.filter((m) => myTeamIds.has(m.id));
+    return allMembers;
+  })();
+
+  const filtered = search ? tabFiltered.filter((m) => m.name.includes(search)) : tabFiltered;
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((m) => selectedIds.includes(m.id));
+
+  function toggle(id: string) {
+    onChange(selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]);
+  }
+
+  function selectAll() {
+    onChange([...new Set([...selectedIds, ...filtered.map((m) => m.id)])]);
+  }
+
+  function deselectAll() {
+    const set = new Set(filtered.map((m) => m.id));
+    onChange(selectedIds.filter((id) => !set.has(id)));
+  }
+
+  const TABS: { key: FilterTab; label: string }[] = [
+    { key: "all", label: "全員" },
+    { key: "connected", label: "1to1済み" },
+    { key: "not_connected", label: "1to1未" },
+    { key: "team", label: "チーム" },
+  ];
+
+  const emptyMessage: Record<FilterTab, string> = {
+    all: "メンバーが見つかりません",
+    connected: "1to1が完了しているメンバーがいません",
+    not_connected: "1to1が未完了のメンバーがいません",
+    team: myTeam ? "該当するメンバーがいません" : "チームに所属していません",
+  };
+
+  return (
+    <div className="space-y-2">
+      {/* タブ */}
+      <div className="flex gap-1">
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => { setActiveTab(tab.key); setSearch(""); }}
+            className="flex-1 text-xs py-1.5 rounded-xl font-medium transition"
+            style={{
+              background: activeTab === tab.key ? "var(--color-brand)" : "var(--color-paper-300)",
+              color: activeTab === tab.key ? "white" : "var(--color-ink-600)",
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 絞り込み検索 + 全選択ボタン */}
+      <div className="flex gap-2">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="名前で絞り込む"
+          className="flex-1 px-3 py-1.5 rounded-xl border text-sm"
+          style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+        />
+        <button
+          onClick={allFilteredSelected ? deselectAll : selectAll}
+          disabled={filtered.length === 0}
+          className="px-3 py-1.5 rounded-xl text-xs font-medium shrink-0 transition disabled:opacity-40"
+          style={{
+            background: allFilteredSelected ? "rgba(181,56,75,0.12)" : "var(--color-paper-200)",
+            color: allFilteredSelected ? "var(--color-brand)" : "var(--color-ink-600)",
+            border: allFilteredSelected ? "1.5px solid rgba(181,56,75,0.3)" : "1.5px solid transparent",
+          }}
+        >
+          {allFilteredSelected ? "全解除" : "全選択"}
+        </button>
+      </div>
+
+      {/* 選択中カウント */}
+      {selectedIds.length > 0 && (
+        <p className="text-xs font-semibold" style={{ color: "var(--color-brand)" }}>
+          {selectedIds.length}名選択中
+        </p>
+      )}
+
+      {/* メンバーリスト */}
+      <div
+        className="max-h-48 overflow-y-auto space-y-1 rounded-xl p-2"
+        style={{ background: "var(--color-paper-200)" }}
+      >
+        {isLoading ? (
+          <div className="flex justify-center py-4">
+            <Loader2 size={18} className="animate-spin" style={{ color: "var(--color-brand)" }} />
+          </div>
+        ) : filtered.length === 0 ? (
+          <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-400)" }}>
+            {emptyMessage[activeTab]}
+          </p>
+        ) : (
+          filtered.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => toggle(m.id)}
+              className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition hover:opacity-80"
+              style={{
+                background: selectedIds.includes(m.id) ? "rgba(181,56,75,0.12)" : "transparent",
+                border: selectedIds.includes(m.id) ? "1.5px solid rgba(181,56,75,0.3)" : "1.5px solid transparent",
+              }}
+            >
+              <span className={`w-8 h-8 rounded-xl flex items-center justify-center text-lg shrink-0 ${m.bgColor}`}>
+                {m.emoji}
+              </span>
+              <span className="flex-1 text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>
+                {m.name}
+              </span>
+              {selectedIds.includes(m.id) && <Check size={14} style={{ color: "var(--color-brand)", flexShrink: 0 }} />}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- インライン編集フォーム ----
 function EditEventForm({
   event, typeDef, memberTypes, onSave, onCancel, isPending,
@@ -109,24 +268,10 @@ function EditEventForm({
   const [endsAt, setEndsAt] = useState(toDateInput(event.endsAt));
   const [multiplier, setMultiplier] = useState(event.multiplier ? String(event.multiplier) : "");
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>(event.relatedMemberIds ?? []);
-  const [search, setSearch] = useState("");
 
   const typeChanged = selectedTypeDefId !== (event.eventTypeDefId ?? "");
   const resolvedTypeDef = memberTypes.find((t) => t.id === selectedTypeDefId) ?? typeDef;
   const needsTarget = resolvedTypeDef?.requiresTargetMember === 1;
-
-  const { data: membersData } = useQuery({
-    queryKey: ["members"],
-    queryFn: () => api.get<MembersResponse>("/members"),
-    enabled: needsTarget,
-    staleTime: 60_000,
-  });
-  const allMembers = membersData?.data ?? [];
-  const filtered = allMembers.filter((m) => !search || m.name.includes(search) || m.emoji.includes(search));
-
-  function toggleMember(id: string) {
-    setSelectedMemberIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
-  }
 
   const canSave = title.trim() && endsAt;
 
@@ -181,33 +326,14 @@ function EditEventForm({
         </div>
       </div>
 
-      {/* 対象メンバー（複数選択） */}
+      {/* 対象メンバー（タブ絞り込み・全選択対応） */}
       {needsTarget && (
         <div>
-          <p className="text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+          <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-600)" }}>
             対象メンバー <span className="font-normal">（複数選択可）</span>
-            {selectedMemberIds.length > 0 && (
-              <span className="ml-1 font-bold" style={{ color: "var(--color-brand)" }}>{selectedMemberIds.length}名</span>
-            )}
+            <span style={{ color: "var(--color-brand)" }}> *</span>
           </p>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="名前で絞り込む"
-            className="w-full px-3 py-1.5 rounded-xl border text-sm mb-1"
-            style={{ borderColor: "var(--color-paper-300)" }} />
-          <div className="max-h-36 overflow-y-auto space-y-1 rounded-xl p-2"
-            style={{ background: "var(--color-paper-200)" }}>
-            {filtered.map((m) => (
-              <button key={m.id} onClick={() => toggleMember(m.id)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-xl text-left transition hover:opacity-80"
-                style={{
-                  background: selectedMemberIds.includes(m.id) ? "rgba(181,56,75,0.12)" : "transparent",
-                  border: selectedMemberIds.includes(m.id) ? "1.5px solid rgba(181,56,75,0.3)" : "1.5px solid transparent",
-                }}>
-                <span className={`w-7 h-7 rounded-lg flex items-center justify-center text-base ${m.bgColor}`}>{m.emoji}</span>
-                <span className="flex-1 text-sm" style={{ color: "var(--color-ink-800)" }}>{m.name}</span>
-                {selectedMemberIds.includes(m.id) && <Check size={13} style={{ color: "var(--color-brand)" }} />}
-              </button>
-            ))}
-          </div>
+          <MemberPickerWithTabs selectedIds={selectedMemberIds} onChange={setSelectedMemberIds} />
         </div>
       )}
 
@@ -464,24 +590,9 @@ function CreateEventModal({
   const [endsAt, setEndsAt] = useState("");
   const [multiplier, setMultiplier] = useState("");
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
   const [error, setError] = useState("");
 
   const needsTarget = typeDef.requiresTargetMember === 1;
-
-  const { data: membersData, isLoading: membersLoading } = useQuery({
-    queryKey: ["members"],
-    queryFn: () => api.get<MembersResponse>("/members"),
-    enabled: needsTarget,
-    staleTime: 60_000,
-  });
-
-  const allMembers = membersData?.data ?? [];
-  const filtered = allMembers.filter((m) => !search || m.name.includes(search) || m.emoji.includes(search));
-
-  function toggleMember(id: string) {
-    setSelectedMemberIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
-  }
 
   const create = useMutation({
     mutationFn: () => {
@@ -586,40 +697,14 @@ function CreateEventModal({
             </div>
           )}
 
-          {/* 対象メンバー（複数選択） */}
+          {/* 対象メンバー（タブ絞り込み・全選択対応） */}
           {needsTarget && (
             <div>
-              <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+              <label className="block text-xs font-medium mb-2" style={{ color: "var(--color-ink-600)" }}>
                 対象メンバー <span className="font-normal">（複数選択可）</span>
                 <span style={{ color: "var(--color-brand)" }}> *</span>
-                {selectedMemberIds.length > 0 && (
-                  <span className="ml-1 font-bold" style={{ color: "var(--color-brand)" }}>
-                    {selectedMemberIds.length}名選択中
-                  </span>
-                )}
               </label>
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="名前で絞り込む"
-                className="w-full px-3 py-2 rounded-xl border text-sm mb-2"
-                style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }} />
-              <div className="max-h-44 overflow-y-auto space-y-1 rounded-xl p-2"
-                style={{ background: "var(--color-paper-200)" }}>
-                {membersLoading ? (
-                  <div className="flex justify-center py-4">
-                    <Loader2 size={18} className="animate-spin" style={{ color: "var(--color-brand)" }} />
-                  </div>
-                ) : filtered.map((m) => (
-                  <button key={m.id} onClick={() => toggleMember(m.id)}
-                    className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition hover:opacity-80"
-                    style={{
-                      background: selectedMemberIds.includes(m.id) ? "rgba(181,56,75,0.12)" : "transparent",
-                      border: selectedMemberIds.includes(m.id) ? "1.5px solid rgba(181,56,75,0.3)" : "1.5px solid transparent",
-                    }}>
-                    <span className={`w-8 h-8 rounded-xl flex items-center justify-center text-lg ${m.bgColor}`}>{m.emoji}</span>
-                    <span className="flex-1 text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{m.name}</span>
-                    {selectedMemberIds.includes(m.id) && <Check size={14} style={{ color: "var(--color-brand)" }} />}
-                  </button>
-                ))}
-              </div>
+              <MemberPickerWithTabs selectedIds={selectedMemberIds} onChange={setSelectedMemberIds} />
             </div>
           )}
         </div>

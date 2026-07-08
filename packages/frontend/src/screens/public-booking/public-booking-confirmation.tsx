@@ -1,7 +1,7 @@
 // PB-03 予約完了・確認ページ
-import { useParams, useLocation } from "react-router-dom";
+import { useParams, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Video, X } from "lucide-react";
+import { Loader2, Video, X, Copy, Check, ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import { API_BASE_URL } from "@/lib/api";
 
@@ -52,6 +52,7 @@ async function cancelBooking(token: string, reason?: string): Promise<void> {
 export function PublicBookingConfirmation() {
   const { token } = useParams<{ token: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
   const locationState = (location.state ?? {}) as LocationState;
 
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -59,6 +60,14 @@ export function PublicBookingConfirmation() {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelPending, setCancelPending] = useState(false);
   const [cancelled, setCancelled] = useState(false);
+  const [urlCopied, setUrlCopied] = useState(false);
+
+  const handleCopyUrl = (url: string) => {
+    navigator.clipboard.writeText(url).then(() => {
+      setUrlCopied(true);
+      setTimeout(() => setUrlCopied(false), 2000);
+    });
+  };
 
   const { data: booking, isLoading } = useQuery<BookingDetail>({
     queryKey: ["public", "booking", token],
@@ -136,6 +145,16 @@ export function PublicBookingConfirmation() {
   return (
     <div className="min-h-screen" style={{ background: "var(--color-paper-50)" }}>
       <div className="max-w-lg mx-auto px-4 py-10">
+        {/* 戻るボタン */}
+        <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-1.5 text-sm mb-6"
+          style={{ color: "var(--color-ink-500)" }}
+        >
+          <ArrowLeft size={16} />
+          戻る
+        </button>
+
         {/* ヘッダー */}
         {isCancelled ? (
           <div className="text-center mb-8">
@@ -197,11 +216,25 @@ export function PublicBookingConfirmation() {
                   style={{ color: "var(--color-success)" }}
                 >
                   <Video size={16} />
-                  {display.conferenceType === "google_meet" ? "Google Meet で参加する" : "会議に参加する"}
+                  {display.conferenceType === "google_meet" ? "Google Meet で参加する" : display.conferenceType === "zoom" ? "Zoom で参加する" : "会議に参加する"}
                 </a>
-                <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
-                  ミーティング直前にこのリンクをクリックしてください
-                </p>
+                <div className="flex items-center gap-2 mt-2">
+                  <p className="text-xs flex-1 break-all" style={{ color: "var(--color-ink-400)" }}>
+                    {display.conferenceUrl}
+                  </p>
+                  <button
+                    onClick={() => handleCopyUrl(display.conferenceUrl!)}
+                    className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-xs border transition"
+                    style={{
+                      borderColor: urlCopied ? "var(--color-success)" : "var(--color-paper-300)",
+                      color: urlCopied ? "var(--color-success)" : "var(--color-ink-500)",
+                      background: "white",
+                    }}
+                  >
+                    {urlCopied ? <Check size={12} /> : <Copy size={12} />}
+                    {urlCopied ? "コピー済" : "コピー"}
+                  </button>
+                </div>
               </InfoItem>
             )}
 

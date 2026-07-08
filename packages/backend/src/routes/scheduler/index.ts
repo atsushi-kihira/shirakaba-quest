@@ -4,6 +4,7 @@
 
 import { Hono } from "hono";
 import { oauthGoogleRoutes } from "./oauth-google.ts";
+import { oauthZoomRoutes } from "./oauth-zoom.ts";
 import { schedulerSettingsRoutes } from "./settings.ts";
 import { publicBookingRoutes } from "./public.ts";
 import { schedulerBookingsRoutes } from "./bookings.ts";
@@ -12,16 +13,19 @@ import type { Env, Variables } from "../../types.ts";
 
 export const schedulerRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// ---- 認証不要パスへのミドルウェア適用（パス指定で明示的に除外）----
-// 公開エンドポイント: /public/* と /oauth/google/callback は認証スキップ
+// ---- 認証必須パスのミドルウェア設定 ----
 schedulerRoutes.use("/oauth/google/start", authMiddleware);
 schedulerRoutes.use("/oauth/google/disconnect", authMiddleware);
 schedulerRoutes.use("/oauth/google/status", authMiddleware);
+schedulerRoutes.use("/oauth/zoom/start", authMiddleware);
+schedulerRoutes.use("/oauth/zoom/disconnect", authMiddleware);
+schedulerRoutes.use("/oauth/zoom/status", authMiddleware);
 schedulerRoutes.use("/me/*", authMiddleware);
 schedulerRoutes.use("/bookings/*", authMiddleware);
 
 // ---- ルートのマウント ----
 schedulerRoutes.route("/oauth/google", oauthGoogleRoutes);  // callback は認証なし
+schedulerRoutes.route("/oauth/zoom", oauthZoomRoutes);       // callback は認証なし
 schedulerRoutes.route("/public", publicBookingRoutes);       // 認証なし
 schedulerRoutes.route("/me", schedulerSettingsRoutes);       // 認証必須
 schedulerRoutes.route("/bookings", schedulerBookingsRoutes); // 認証必須

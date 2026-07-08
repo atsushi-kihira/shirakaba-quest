@@ -45,6 +45,7 @@ adminEventRoutes.post("/", async (c) => {
     relatedMemberIds?: string[];
     multiplier?: number;
     pointAwardTiming?: string | null;
+    allowRepeat?: number;
   }>();
 
   if (!body.title?.trim()) {
@@ -76,6 +77,7 @@ adminEventRoutes.post("/", async (c) => {
     relatedMemberIds: memberIds.length > 0 ? JSON.stringify(memberIds) : null,
     multiplier: body.multiplier ?? null,
     pointAwardTiming: body.pointAwardTiming ?? null,
+    allowRepeat: body.allowRepeat !== undefined ? body.allowRepeat : 1,
     status: "active",
     createdByMemberId: null,
     createdAt: now,
@@ -100,6 +102,7 @@ adminEventRoutes.patch("/:id", async (c) => {
     relatedMemberIds?: string[];
     multiplier?: number | null;
     pointAwardTiming?: string | null;
+    allowRepeat?: number;
     status?: string;
   };
   const body = await c.req.json<PatchEventBody>().catch(() => ({} as PatchEventBody));
@@ -127,6 +130,7 @@ adminEventRoutes.patch("/:id", async (c) => {
     ...(body.endsAt      !== undefined && { endsAt: body.endsAt }),
     ...(body.multiplier        !== undefined && { multiplier: body.multiplier }),
     ...(body.pointAwardTiming  !== undefined && { pointAwardTiming: body.pointAwardTiming }),
+    ...(body.allowRepeat       !== undefined && { allowRepeat: body.allowRepeat }),
     ...(body.status            !== undefined && { status: body.status }),
     ...memberIdsUpdate,
     updatedAt: now,
@@ -159,6 +163,7 @@ function toPublic(e: typeof schema.eventCampaigns.$inferSelect) {
     relatedMemberIds: ids,
     multiplier: e.multiplier,
     pointAwardTiming: e.pointAwardTiming ?? null,
+    allowRepeat: e.allowRepeat ?? 1,
     status: e.status,
     createdByMemberId: e.createdByMemberId ?? null,
     createdAt: e.createdAt,

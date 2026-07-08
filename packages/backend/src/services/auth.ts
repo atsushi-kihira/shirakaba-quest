@@ -50,9 +50,13 @@ export async function storeOtp(opts: {
   const { kv, email, code } = opts;
   const hash = await sha256Hex(code);
   const key = `otp:${email}:${hash}`;
-  await kv.put(key, JSON.stringify({ email, storedAt: Date.now() }), {
-    expirationTtl: OTP_TTL_SECONDS,
-  });
+  // 新しいOTPを発行する際はブロックカウンターをリセットする
+  await Promise.all([
+    kv.put(key, JSON.stringify({ email, storedAt: Date.now() }), {
+      expirationTtl: OTP_TTL_SECONDS,
+    }),
+    kv.delete(`otp_block:${email}`),
+  ]);
 }
 
 export async function verifyAndConsumeOtp(opts: {

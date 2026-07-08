@@ -3,7 +3,7 @@
 // =============================================================
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Calendar, Check, Loader2 } from "lucide-react";
+import { ArrowLeft, Calendar, Check, Loader2, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -19,6 +19,7 @@ type EventDetail = {
   relatedMemberIds: string[];
   multiplier: number | null;
   pointAwardTiming: string | null;
+  allowRepeat: number;
   status: string;
   createdByMemberId: string | null;
   typeEmoji?: string | null;
@@ -29,6 +30,7 @@ type EventDetail = {
   relatedMembers?: { id: string; name: string; emoji: string }[];
   creatorName?: string | null;
   myParticipated: boolean;
+  myActionCount?: number | null;
 };
 
 function fmtDate(ts: number): string {
@@ -63,6 +65,14 @@ export function EventDetailScreen() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => api.patch(`/events/instances/${id}`, { status: "deleted" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["events", "active"] });
+      navigate("/events");
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="flex justify-center py-16">
@@ -88,9 +98,10 @@ export function EventDetailScreen() {
   }
 
   const effectivePointValue = ev.multiplier ?? 0;
-  const hasOnComplete = ev.triggerType === "on_action";
   const isOwner = ev.createdByMemberId === user?.id;
   const creatorLabel = isOwner ? "あなた" : (ev.creatorName ?? "管理者");
+  const isRepeat = ev.allowRepeat !== 0;
+  const actionCount = ev.myActionCount ?? 0;
 
   const relatedMembers =
     ev.relatedMembers && ev.relatedMembers.length > 0
@@ -98,6 +109,12 @@ export function EventDetailScreen() {
       : ev.relatedMemberId
         ? [{ id: ev.relatedMemberId, name: "---", emoji: "" }]
         : [];
+
+  const hasTargetMembers = relatedMembers.length > 0;
+  // 対象メンバーが指定されているイベントはアクションボタン非表示（1to1完了で自動付与）
+  const hasOnComplete = ev.triggerType === "on_action" && !hasTargetMembers;
+  // 繰り返し可イベントは何度でもボタンを表示
+  const canParticipateNow = hasOnComplete && (isRepeat ? true : !ev.myParticipated);
 
   return (
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto lg:max-w-none">
@@ -186,7 +203,7 @@ export function EventDetailScreen() {
         )}
 
         {/* ポイント情報 */}
-        {hasOnComplete && effectivePointValue > 0 && !ev.myParticipated && (
+        {hasOnComplete && effectivePointValue > 0 && canParticipateNow && (
           <div
             className="rounded-xl px-4 py-3"
             style={{
@@ -198,13 +215,13 @@ export function EventDetailScreen() {
               🏆 +{effectivePointValue}pt 獲得チャンス
             </p>
             <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-              下のボタンを押すとポイントが付与されます
+              {isRepeat ? "何度でも実施できます。ボタンを押すたびにポイントが付与されます" : "下のボタンを押すとポイントが付与されます"}
             </p>
           </div>
         )}
 
-        {/* 参加済みバッジ */}
-        {ev.myParticipated && (
+        {/* 参加済みバッジ（1回限りイベント） */}
+        {!isRepeat && ev.myParticipated && (
           <div
             className="rounded-xl px-4 py-3 flex items-center gap-2"
             style={{
@@ -218,10 +235,40 @@ export function EventDetailScreen() {
             </p>
           </div>
         )}
+
+        {/* 実施回数（繰り返し可イベント） */}
+        {isRepeat && actionCount > 0 && (
+          <div
+            className="rounded-xl px-4 py-3 flex items-center gap-2"
+            style={{
+              background: "rgba(90,140,92,0.1)",
+              border: "1px solid rgba(90,140,92,0.2)",
+            }}
+          >
+            <Check size={16} style={{ color: "var(--color-success)" }} />
+            <p className="text-sm font-medium" style={{ color: "var(--color-success)" }}>
+              {actionCount}回実施済み{effectivePointValue > 0 ? `（計+${effectivePointValue * actionCount}pt）` : ""}
+            </p>
+          </div>
+        )}
       </div>
 
+      {/* 対象メンバーありイベントの案内 */}
+      {hasTargetMembers && ev.triggerType !== "on_action" && (
+        <div className="mt-4 rounded-2xl p-4"
+          style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
+          <p className="text-sm font-medium mb-1" style={{ color: "var(--color-success)" }}>
+            🤝 対象メンバーと1to1を行うとポイントが付与されます
+          </p>
+          <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+            上の「対象メンバー」のリンクからプロフィールを開き、1to1を申し込んでください。
+            双方が完了ボタンを押した時点でポイントが自動的に付与されます。
+          </p>
+        </div>
+      )}
+
       {/* アクション実施ボタン */}
-      {hasOnComplete && !ev.myParticipated && (
+      {canParticipateNow && (
         <div className="mt-4">
           <button
             onClick={() => participate.mutate()}
@@ -236,6 +283,21 @@ export function EventDetailScreen() {
             ) : (
               "✅ アクションを実施する"
             )}
+          </button>
+        </div>
+      )}
+
+      {/* 削除ボタン（作成者のみ） */}
+      {isOwner && ev.status === "active" && (
+        <div className="mt-4">
+          <button
+            onClick={() => { if (window.confirm("このイベントを削除しますか？\n削除すると元に戻せません。")) deleteMutation.mutate(); }}
+            disabled={deleteMutation.isPending}
+            className="w-full py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+            style={{ background: "transparent", color: "var(--color-brand)", border: "1px solid rgba(181,56,75,0.3)" }}
+          >
+            {deleteMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            イベントを削除する
           </button>
         </div>
       )}

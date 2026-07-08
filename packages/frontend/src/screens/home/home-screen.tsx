@@ -2,8 +2,8 @@
 // ホーム画面
 // =============================================================
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar } from "lucide-react";
 import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
@@ -46,13 +46,35 @@ type MeetingNotification = { id: string; meetingId: string; type: string; messag
 type MeetingNotificationsResponse = { data: MeetingNotification[] };
 type PendingAttendance = { id: string; title: string; confirmedStartsAt: number };
 type PendingAttendanceResponse = { data: PendingAttendance[] };
+type UpcomingBooking = {
+  id: string;
+  startAtUtc: string;
+  endAtUtc: string;
+  conferenceType: string;
+  conferenceUrl: string | null;
+  cancellationToken: string;
+  isHost: boolean;
+  guestName: string;
+  host: { id: string; name: string; emoji: string } | null;
+  displayTitle: string | null;
+};
+type UpcomingBookingsResponse = { data: UpcomingBooking[] };
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
   const { termQuest, termUsp, appTitle } = useSettings();
   const tz = useTimezone();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
   const [seasonExpanded, setSeasonExpanded] = useState(false);
   const [pointsExpanded, setPointsExpanded] = useState(false);
+
+  function handleNotifClick(meetingId: string) {
+    api.post(`/meetings/${meetingId}/read-notifications`, {})
+      .then(() => qc.invalidateQueries({ queryKey: ["meetings", "notifications"] }))
+      .catch(() => {});
+    navigate(`/meetings/${meetingId}`);
+  }
 
   const { data: rankData } = useQuery({
     queryKey: ["ranking", "me"],
@@ -111,6 +133,13 @@ export function HomeScreen() {
     staleTime: 60_000,
   });
 
+  const { data: upcomingBookingsData } = useQuery({
+    queryKey: ["scheduler", "bookings", "upcoming"],
+    queryFn: () => api.get<UpcomingBookingsResponse>("/scheduler/bookings/upcoming"),
+    enabled: !!user,
+    staleTime: 60_000,
+  });
+
   type HistoryItem = { id: string; delta: number; reason: string; label: string; detail?: string; createdAt: number };
   const { data: historyData } = useQuery({
     queryKey: ["ranking", "history"],
@@ -125,6 +154,7 @@ export function HomeScreen() {
   const upcomingMeetings    = upcomingMeetingsData?.data ?? [];
   const meetingNotifications = meetingNotifsData?.data ?? [];
   const pendingAttendances = pendingAttendanceData?.data ?? [];
+  const upcomingBookings = upcomingBookingsData?.data ?? [];
   const nowSec = Math.floor(Date.now() / 1000);
   // 招待済みだが未回答のオープンミーティング（自分が主催者ではないもの）
   // registration_deadline が過ぎている場合は表示しない
@@ -376,28 +406,33 @@ export function HomeScreen() {
       {/* ミーティング確定・詳細更新通知 */}
       {meetingNotifications.length > 0 && (
         <section>
-          <h2 className="text-sm font-semibold mb-2" style={{ fontFamily: "var(--font-klee)", color: "#6B7DB3" }}>
-            🔔 ミーティングのお知らせ
-          </h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "#6B7DB3" }}>
+              🔔 ミーティングのお知らせ
+            </h2>
+            <Link to="/notifications" className="text-xs" style={{ color: "#6B7DB3" }}>
+              過去のお知らせ →
+            </Link>
+          </div>
           <div className="space-y-2">
             {meetingNotifications.slice(0, 3).map((n) => (
-              <Link
+              <button
                 key={n.id}
-                to={`/meetings/${n.meetingId}`}
-                className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                onClick={() => handleNotifClick(n.meetingId)}
+                className="w-full card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80 text-left"
                 style={{ borderLeft: "3px solid #6B7DB3" }}
               >
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
                   style={{ background: "rgba(107,125,179,0.12)" }}>
-                  {n.type === "confirmed" ? "✅" : "📝"}
+                  {n.type === "conference_url_set" ? "📹" : n.type === "confirmed" ? "✅" : n.type === "invited" ? "📨" : "📝"}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>
-                    {n.message ?? (n.type === "confirmed" ? "ミーティングの日程が確定しました" : "ミーティングに詳細が追加されました")}
+                    {n.message ?? (n.type === "conference_url_set" ? "会議URLが届きました" : n.type === "confirmed" ? "ミーティングの日程が確定しました" : n.type === "invited" ? "ミーティングに招待されました" : "ミーティングに詳細が追加されました")}
                   </p>
                 </div>
                 <ChevronRight size={16} style={{ color: "#6B7DB3" }} />
-              </Link>
+              </button>
             ))}
           </div>
         </section>
@@ -475,6 +510,62 @@ export function HomeScreen() {
         </section>
       )}
 
+      {/* 直近の1to1スケジュール予約 */}
+      {upcomingBookings.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+              🤝 直近の1to1予約
+            </h2>
+            <Link to="/scheduler/bookings" className="text-xs" style={{ color: "var(--color-brand)" }}>
+              すべて見る →
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {upcomingBookings.slice(0, 3).map((b) => {
+              const startDate = new Date(b.startAtUtc);
+              const endDate = new Date(b.endAtUtc);
+              const todayFlag = isToday(Math.floor(startDate.getTime() / 1000), tz);
+              const dateStr = new Intl.DateTimeFormat("ja-JP", {
+                timeZone: "Asia/Tokyo",
+                month: "long", day: "numeric", weekday: "short",
+                hour: "2-digit", minute: "2-digit",
+              }).format(startDate);
+              const endTimeStr = new Intl.DateTimeFormat("ja-JP", {
+                timeZone: "Asia/Tokyo",
+                hour: "2-digit", minute: "2-digit",
+              }).format(endDate);
+              const partnerName = b.isHost ? b.guestName : (b.host?.name ?? "相手");
+              const partnerEmoji = b.isHost ? "👤" : (b.host?.emoji ?? "👤");
+              return (
+                <a
+                  key={b.id}
+                  href={`/book/confirmation/${b.cancellationToken}`}
+                  className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                  style={todayFlag ? { borderLeft: "3px solid var(--color-accent)" } : { borderLeft: "3px solid var(--color-success)" }}
+                >
+                  <div
+                    className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-xl"
+                    style={{ background: todayFlag ? "rgba(212,160,59,0.15)" : "rgba(90,140,92,0.12)" }}
+                  >
+                    {todayFlag ? "🔔" : partnerEmoji}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                      {partnerName}さんとの1to1
+                    </p>
+                    <p className="text-xs" style={{ color: todayFlag ? "var(--color-accent)" : "var(--color-ink-400)" }}>
+                      {todayFlag ? "🔔 本日！" : ""}{dateStr}〜{endTimeStr}
+                    </p>
+                  </div>
+                  <ChevronRight size={16} style={{ color: "var(--color-success)" }} />
+                </a>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* ポイント */}
       <button
         onClick={() => setPointsExpanded((v) => !v)}
@@ -518,15 +609,22 @@ export function HomeScreen() {
             ) : historyData.data.length === 0 ? (
               <p className="text-xs text-center py-2" style={{ color: "var(--color-ink-400)" }}>まだポイント履歴がありません</p>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {historyData.data.slice(0, 5).map((item) => (
-                  <div key={item.id} className="flex items-center justify-between">
-                    <div className="min-w-0">
-                      <p className="text-xs" style={{ color: "var(--color-ink-700)" }}>{item.label}</p>
-                      {item.detail && <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{item.detail}</p>}
+                  <div key={item.id} className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium leading-snug" style={{ color: "var(--color-ink-700)" }}>{item.label}</p>
+                      {item.detail && (
+                        <p className="text-xs leading-snug" style={{ color: "var(--color-ink-500)" }}>{item.detail}</p>
+                      )}
+                      <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+                        {new Date(item.createdAt * 1000).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
+                        {" "}
+                        {new Date(item.createdAt * 1000).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })}
+                      </p>
                     </div>
                     <span
-                      className="text-sm font-bold shrink-0 ml-2"
+                      className="text-sm font-bold shrink-0"
                       style={{ color: item.delta >= 0 ? "var(--color-accent)" : "var(--color-brand)" }}
                     >
                       {item.delta >= 0 ? "+" : ""}{item.delta}pt

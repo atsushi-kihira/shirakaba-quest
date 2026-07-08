@@ -69,12 +69,8 @@ export function ScheduleScreen() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  function toggleAnswer(candidateId: string) {
-    setAnswers((prev) => {
-      const cur = prev[candidateId];
-      const next: Availability = cur === "yes" ? "maybe" : cur === "maybe" ? "no" : "yes";
-      return { ...prev, [candidateId]: next };
-    });
+  function setAnswer(candidateId: string, value: Availability) {
+    setAnswers((prev) => ({ ...prev, [candidateId]: value }));
   }
 
   async function handleSubmit() {
@@ -274,7 +270,7 @@ export function ScheduleScreen() {
                       {AVAIL_OPTIONS.map((o) => (
                         <button
                           key={o.value}
-                          onClick={() => meeting.status === "open" && toggleAnswer(cand.id)}
+                          onClick={() => meeting.status === "open" && setAnswer(cand.id, o.value)}
                           disabled={meeting.status !== "open"}
                           className="w-10 h-10 rounded-xl text-base font-bold transition"
                           style={{

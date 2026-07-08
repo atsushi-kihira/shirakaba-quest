@@ -71,12 +71,24 @@ adminMemberRoutes.patch("/:id/unsuspend", async (c) => {
 // ---- DELETE /api/admin/members/:id ----
 adminMemberRoutes.delete("/:id", async (c) => {
   const db = createDb(c.env.DB);
-  const now = Math.floor(Date.now() / 1000);
+  const id = c.req.param("id");
 
-  // ソフトデリート
-  await db.update(schema.members)
-    .set({ status: "deleted", updatedAt: now })
-    .where(eq(schema.members.id, c.req.param("id")));
+  const member = await db.select({ status: schema.members.status })
+    .from(schema.members)
+    .where(eq(schema.members.id, id))
+    .get();
+
+  if (!member) return c.json({ error: { code: "NOT_FOUND", message: "メンバーが見つかりません" } }, 404);
+
+  if (member.status === "pending") {
+    // 未承認の申請却下はハードデリートしてメールアドレスを解放する
+    await db.delete(schema.members).where(eq(schema.members.id, id));
+  } else {
+    const now = Math.floor(Date.now() / 1000);
+    await db.update(schema.members)
+      .set({ status: "deleted", updatedAt: now })
+      .where(eq(schema.members.id, id));
+  }
 
   return c.json({ ok: true });
 });

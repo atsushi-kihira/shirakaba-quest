@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { encryptToken, decryptToken } from "../../services/tokenCrypto.ts";
 import { refreshGoogleToken, fetchGoogleUserInfo } from "../../services/googleClient.ts";
+import { getFrontendUrl } from "../../services/frontendUrl.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const oauthGoogleRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -43,7 +44,7 @@ oauthGoogleRoutes.get("/start", async (c) => {
   );
 
   const redirectUri = `${new URL(c.req.url).origin}/api/scheduler/oauth/google/callback`;
-  const frontendUrl = c.env.FRONTEND_URL ?? "https://shirakaba-quest.pages.dev";
+  const frontendUrl = getFrontendUrl(c.env);
 
   const params = new URLSearchParams({
     client_id: c.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -66,7 +67,7 @@ oauthGoogleRoutes.get("/start", async (c) => {
 /** OAuth コールバック — 認証不要（index.ts で authMiddleware の前に登録） */
 oauthGoogleRoutes.get("/callback", async (c) => {
   const { code, state, error } = c.req.query();
-  const frontendUrl = c.env.FRONTEND_URL ?? "https://shirakaba-quest.pages.dev";
+  const frontendUrl = getFrontendUrl(c.env);
   const redirectBase = `${frontendUrl}/scheduler/integrations`;
 
   if (error || !code || !state) {

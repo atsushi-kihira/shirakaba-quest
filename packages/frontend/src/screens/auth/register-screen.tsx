@@ -7,10 +7,12 @@
 // =============================================================
 import { useState, useRef, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw, Plus, X } from "lucide-react";
+import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw, Plus, X, Upload } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { LogoOrbit } from "@/components/logo-orbit";
 import { useSettings } from "@/hooks/use-settings";
+import { CARD_CHARACTERS } from "@/screens/card-order/card-order-screen";
 import type { Usp } from "@shared/types";
 
 // ---- 型定義 ----
@@ -53,7 +55,7 @@ const AVATAR_EMOJIS = ["😊","😄","🤗","😎","🥰","🌟","💪","🎯","
 // ---- メインコンポーネント ----
 export function RegisterScreen() {
   const navigate = useNavigate();
-  const { appTitle, characterImageUrl } = useSettings();
+  const { appTitle, characterImageUrl, appLogo, isLoading: settingsLoading } = useSettings();
   const [step, setStep] = useState(1);
 
   // Step1
@@ -72,7 +74,7 @@ export function RegisterScreen() {
 
   // Step3: プロフィール
   const [profile, setProfile] = useState({
-    name: "", furigana: "", email: "",
+    name: "", furigana: "", nameRomaji: "", email: "",
     emoji: "😊", bgColor: "bg-rose-100",
     category: "", businessDescription: "",
     company: "", role: "",
@@ -100,16 +102,22 @@ export function RegisterScreen() {
     },
   });
 
+  const [registeredMemberId, setRegisteredMemberId] = useState<string | null>(null);
+
   // ---- 登録 mutation ----
   const submitMutation = useMutation({
     mutationFn: () =>
-      api.post("/register/submit", {
+      api.post<{ data: { id: string; message: string } }>("/register/submit", {
         ...profile,
+        romaji: profile.nameRomaji,
         skills: skills.filter((s) => s.name.trim()),
         cardImageBase64: frontImage ? frontImage.split(",")[1] : undefined,
         uspRequests: pendingUspRequests.length > 0 ? pendingUspRequests : undefined,
       }),
-    onSuccess: () => setStep(4),
+    onSuccess: (res) => {
+      setRegisteredMemberId(res.data?.id ?? null);
+      setStep(4);
+    },
   });
 
   // ---- ファイル選択ハンドラー ----
@@ -193,7 +201,9 @@ export function RegisterScreen() {
               cameraRef={cameraRef}
               galleryRef={galleryRef}
               appTitle={appTitle}
+              appLogo={appLogo}
               characterImageUrl={characterImageUrl}
+              settingsLoading={settingsLoading}
               onNext={() => setStep(2)}
             />
           )}
@@ -216,7 +226,12 @@ export function RegisterScreen() {
               error={submitMutation.error?.message}
             />
           )}
-          {step === 4 && <Step4Done />}
+          {step === 4 && (
+            <Step4Done
+              memberId={registeredMemberId}
+              memberInfo={{ ...profile, skills }}
+            />
+          )}
         </div>
       </div>
 
@@ -265,7 +280,7 @@ function StepDots({ current, total }: { current: number; total: number }) {
 // Step 1: カード撮影
 // ================================================================
 function Step1Scan({
-  frontImage, scanning, scanDone, scanError, cameraRef, galleryRef, appTitle, characterImageUrl, onNext,
+  frontImage, scanning, scanDone, scanError, cameraRef, galleryRef, appTitle, appLogo, characterImageUrl, settingsLoading, onNext,
 }: {
   frontImage: string | null;
   scanning: boolean;
@@ -274,23 +289,27 @@ function Step1Scan({
   cameraRef: React.RefObject<HTMLInputElement | null>;
   galleryRef: React.RefObject<HTMLInputElement | null>;
   appTitle: string;
+  appLogo: string;
   characterImageUrl: string | null;
+  settingsLoading: boolean;
   onNext: () => void;
 }) {
   return (
     <div>
       {/* キャラクター画像 + アプリ名 */}
       <div className="flex flex-col items-center mb-5">
-        {characterImageUrl && (
+        {characterImageUrl ? (
           <img
             src={characterImageUrl}
             alt="キャラクター"
             className="w-32 h-32 object-contain"
             style={{ filter: "drop-shadow(0 4px 12px rgba(181,56,75,0.15))" }}
           />
-        )}
+        ) : !settingsLoading ? (
+          <LogoOrbit logo={appLogo} />
+        ) : null}
         <p
-          className="text-xl font-semibold mt-2"
+          className="text-xl font-semibold"
           style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}
         >
           {appTitle}
@@ -839,6 +858,12 @@ function Step3Profile({
           placeholder="やまだ たろう"
         />
         <FormField
+          label="ローマ字（名刺カードに表示されます）"
+          value={profile.nameRomaji}
+          onChange={(v) => onUpdate("nameRomaji", v)}
+          placeholder="Taro Yamada"
+        />
+        <FormField
           label="メールアドレス *"
           value={profile.email}
           onChange={(v) => onUpdate("email", v)}
@@ -936,31 +961,497 @@ function FormField({
 }
 
 // ================================================================
-// Step 4: 完了
+// Step 4: 完了 + カード注文ウィザード（インライン・認証不要）
 // ================================================================
-function Step4Done() {
+type Plan = { name: string; price: number };
+type OrderStep = "celebrate" | "select-char" | "select-photo" | "select-info" | "select-plan" | "confirm" | "ordered";
+
+type MemberInfo = {
+  name: string; furigana?: string; nameRomaji?: string; email?: string;
+  company?: string; role?: string; category?: string; businessDescription?: string;
+  skills?: SkillForm[];
+};
+
+function CRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="text-7xl mb-6">🎉</div>
-      <h2
-        className="text-2xl font-semibold mb-3"
-        style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}
-      >
-        申請が完了しました！
+    <div className="flex items-start gap-3 py-1.5">
+      <span className="text-xs shrink-0 w-24" style={{ color: "var(--color-ink-400)" }}>{label}</span>
+      <span className="text-sm font-medium flex-1" style={{ color: "var(--color-ink-800)" }}>{value}</span>
+    </div>
+  );
+}
+
+function Step4Done({ memberId, memberInfo }: { memberId: string | null; memberInfo?: MemberInfo }) {
+  const [orderStep, setOrderStep] = useState<OrderStep>("celebrate");
+  const [selectedChar, setSelectedChar] = useState<(typeof CARD_CHARACTERS)[number] | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+  const [photoBase64, setPhotoBase64] = useState<string | null>(null);
+  const [address, setAddress] = useState("");
+  const [phone, setPhone] = useState("");
+  const [thankYouMessage, setThankYouMessage] = useState<string>("");
+  const photoCameraRef = useRef<HTMLInputElement>(null);
+  const photoGalleryRef = useRef<HTMLInputElement>(null);
+
+  const { data: settingsData } = useQuery({
+    queryKey: ["card-print-settings"],
+    queryFn: () => api.get<{ data: { enabled: boolean; imageOnlyPrice: number | null; imageOnlyName: string; plans: Plan[]; thankYouMessage: string; companyName: string } | null }>("/card-print-settings"),
+    retry: false,
+  });
+  const settings = settingsData?.data;
+  const cardEnabled = settings?.enabled ?? false;
+  const allPlans: Plan[] = [
+    ...(settings?.imageOnlyPrice != null ? [{ name: settings.imageOnlyName || "カードイメージデータ作成のみ", price: settings.imageOnlyPrice }] : []),
+    ...(settings?.plans ?? []),
+  ];
+
+  const handlePhotoChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhotoBase64(ev.target?.result as string);
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }, []);
+
+  const orderMutation = useMutation({
+    mutationFn: () =>
+      api.post<{ data: { id: string; thankYouMessage: string } }>("/register/card-order", {
+        memberId,
+        characterKey: selectedChar!.key,
+        characterLabel: `${selectedChar!.emoji} ${selectedChar!.label}`,
+        photoBase64: photoBase64 ? photoBase64.split(",")[1] : undefined,
+        address: address.trim() || undefined,
+        phone: phone.trim() || undefined,
+        planName: selectedPlan!.name,
+        planPrice: selectedPlan!.price,
+      }),
+    onSuccess: (res) => {
+      setThankYouMessage(res.data?.thankYouMessage ?? "ご注文ありがとうございました！");
+      setOrderStep("ordered");
+    },
+  });
+
+  // ---- 注文完了 ----
+  if (orderStep === "ordered") {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 text-center">
+        <div className="text-6xl mb-5">🃏✨</div>
+        <h2 className="text-xl font-semibold mb-3"
+          style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
+          注文が完了しました！
+        </h2>
+        <p className="text-sm mb-2" style={{ color: "var(--color-ink-600)" }}>
+          確認メールをお送りしました。
+        </p>
+        {thankYouMessage && (
+          <p className="text-sm mb-6 leading-relaxed" style={{ color: "var(--color-ink-500)" }}>
+            {thankYouMessage}
+          </p>
+        )}
+        <p className="text-xs mb-8" style={{ color: "var(--color-ink-400)" }}>
+          管理者の承認後にログインできるようになります。
+        </p>
+        <Link to="/login" className="px-10 py-4 rounded-2xl text-white font-semibold text-base active:opacity-80 transition"
+          style={{ background: "var(--color-brand)" }}>
+          ログイン画面へ
+        </Link>
+      </div>
+    );
+  }
+
+  // ---- 申請完了メッセージ ----
+  if (orderStep === "celebrate") {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 text-center">
+        <div className="text-7xl mb-6">🎉</div>
+        <h2 className="text-2xl font-semibold mb-3"
+          style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
+          申請が完了しました！
+        </h2>
+        <p className="text-base mb-2" style={{ color: "var(--color-ink-600)" }}>
+          管理者の承認をお待ちください。
+        </p>
+        <p className="text-sm mb-8" style={{ color: "var(--color-ink-400)" }}>
+          承認されるとログインできるようになります。
+        </p>
+        {cardEnabled && memberId && (
+          <div className="w-full rounded-3xl p-5 mb-6 text-left"
+            style={{ background: "rgba(181,56,75,0.06)", border: "1.5px solid rgba(181,56,75,0.2)" }}>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-2xl">🃏</span>
+              <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>
+                リアルカードを注文しませんか？
+              </p>
+            </div>
+            <p className="text-xs mb-4 leading-relaxed" style={{ color: "var(--color-ink-500)" }}>
+              今すぐリアルカードを注文できます！ゲームをより楽しむためにリアルカードの作成をお勧めします。
+            </p>
+            <button
+              type="button"
+              onClick={() => setOrderStep("select-char")}
+              className="w-full py-3 rounded-2xl text-white font-semibold text-sm active:opacity-80 transition mb-2"
+              style={{ background: "var(--color-brand)" }}
+            >
+              🃏 カードを注文する
+            </button>
+            <p className="text-xs text-center" style={{ color: "var(--color-ink-400)" }}>
+              ※ ログイン後のマイページからも申し込めます
+            </p>
+          </div>
+        )}
+        <Link to="/login"
+          className="w-full text-center px-6 py-4 rounded-2xl font-semibold text-base active:opacity-80 transition"
+          style={{
+            background: cardEnabled && memberId ? "var(--color-paper-300)" : "var(--color-brand)",
+            color: cardEnabled && memberId ? "var(--color-ink-600)" : "white",
+          }}>
+          {cardEnabled && memberId ? "カードを注文せずに今すぐログイン画面へ" : "ログイン画面へ"}
+        </Link>
+      </div>
+    );
+  }
+
+  // ---- キャラクター選択 ----
+  if (orderStep === "select-char") {
+    return (
+      <div>
+        <h2 className="text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          🃏 キャラクターを選んでください
+        </h2>
+        <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+          カードのキャラクターデザインを1つ選んでください。
+        </p>
+        <div className="grid grid-cols-1 gap-3 mb-6">
+          {CARD_CHARACTERS.map((c) => {
+            const isSelected = selectedChar?.key === c.key;
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => setSelectedChar(c)}
+                className="text-left p-4 rounded-3xl transition active:opacity-70"
+                style={{
+                  background: isSelected ? "rgba(181,56,75,0.08)" : "var(--color-paper-50)",
+                  border: isSelected ? "2px solid var(--color-brand)" : "1.5px solid var(--color-paper-300)",
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{c.emoji}</span>
+                  <div>
+                    <p className="font-semibold text-sm" style={{ color: isSelected ? "var(--color-brand)" : "var(--color-ink-800)" }}>
+                      {c.label}
+                    </p>
+                    <p className="text-xs mt-0.5 leading-snug" style={{ color: "var(--color-ink-500)" }}>
+                      {c.desc}
+                    </p>
+                  </div>
+                  {isSelected && <Check size={16} className="ml-auto shrink-0" style={{ color: "var(--color-brand)" }} />}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={() => { if (selectedChar) setOrderStep("select-photo"); }}
+          disabled={!selectedChar}
+          className="w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-40 transition"
+          style={{ background: "var(--color-brand)", minHeight: "52px" }}
+        >
+          次へ <ArrowRight size={18} />
+        </button>
+        <button type="button" onClick={() => setOrderStep("celebrate")}
+          className="mt-3 w-full py-2 text-sm" style={{ color: "var(--color-ink-400)" }}>
+          ← 戻る
+        </button>
+      </div>
+    );
+  }
+
+  // ---- 顔写真登録 ----
+  if (orderStep === "select-photo") {
+    return (
+      <div>
+        <h2 className="text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          📷 お顔の写真を登録してください
+        </h2>
+        <p className="text-xs mb-5" style={{ color: "var(--color-ink-500)" }}>
+          ご自身の顔写真または似顔絵・イラストをご提供ください（任意）。
+        </p>
+        <div
+          className="w-full rounded-3xl border-2 border-dashed flex flex-col items-center justify-center"
+          style={{
+            minHeight: photoBase64 ? "auto" : "160px",
+            borderColor: photoBase64 ? "var(--color-success)" : "var(--color-paper-300)",
+            background: "var(--color-paper-50)",
+          }}
+        >
+          {photoBase64 ? (
+            <div className="relative w-full">
+              <img src={photoBase64} alt="写真プレビュー" className="w-full object-contain max-h-56 rounded-3xl" />
+              <button
+                onClick={() => setPhotoBase64(null)}
+                className="absolute top-2 right-2 p-1.5 rounded-full"
+                style={{ background: "rgba(0,0,0,0.4)" }}
+              >
+                <X size={14} color="white" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-2 py-8">
+              <Camera size={36} style={{ color: "var(--color-paper-400)" }} />
+              <p className="text-sm" style={{ color: "var(--color-ink-400)" }}>写真は任意です</p>
+            </div>
+          )}
+        </div>
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={() => photoCameraRef.current?.click()}
+            className="flex-1 py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 active:opacity-80"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+          >
+            <Camera size={15} /> 撮影
+          </button>
+          <button
+            onClick={() => photoGalleryRef.current?.click()}
+            className="flex-1 py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 active:opacity-80"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+          >
+            <Upload size={15} /> 選択
+          </button>
+        </div>
+        <input ref={photoCameraRef} type="file" accept="image/*" capture="environment" className="sr-only" onChange={handlePhotoChange} />
+        <input ref={photoGalleryRef} type="file" accept="image/*" className="sr-only" onChange={handlePhotoChange} />
+        <button
+          type="button"
+          onClick={() => setOrderStep("select-info")}
+          className="mt-5 w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 transition"
+          style={{ background: "var(--color-brand)", minHeight: "52px" }}
+        >
+          {photoBase64 ? "次へ" : "写真なしで続ける"} <ArrowRight size={18} />
+        </button>
+        <button type="button" onClick={() => setOrderStep("select-char")}
+          className="mt-3 w-full py-2 text-sm" style={{ color: "var(--color-ink-400)" }}>
+          ← 戻る
+        </button>
+      </div>
+    );
+  }
+
+  // ---- カード追加情報（住所・電話） ----
+  if (orderStep === "select-info") {
+    return (
+      <div>
+        <h2 className="text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          📍 カードに載せる情報
+        </h2>
+        <p className="text-xs mb-5" style={{ color: "var(--color-ink-500)" }}>
+          名刺代わりに使う場合は住所・電話番号もご入力ください（任意）。
+        </p>
+        <div className="space-y-4 mb-6">
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>
+              会社住所（任意）
+            </label>
+            <input
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="〒123-4567 東京都..."
+              className="w-full rounded-2xl border px-4 py-3"
+              style={{ fontSize: "16px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-800)" }}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>
+              電話番号（任意）
+            </label>
+            <input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="03-1234-5678"
+              type="tel"
+              className="w-full rounded-2xl border px-4 py-3"
+              style={{ fontSize: "16px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-800)" }}
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOrderStep("select-plan")}
+          className="w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 transition"
+          style={{ background: "var(--color-brand)", minHeight: "52px" }}
+        >
+          次へ <ArrowRight size={18} />
+        </button>
+        <button type="button" onClick={() => setOrderStep("select-photo")}
+          className="mt-3 w-full py-2 text-sm" style={{ color: "var(--color-ink-400)" }}>
+          ← 戻る
+        </button>
+      </div>
+    );
+  }
+
+  // ---- プラン選択 ----
+  if (orderStep === "select-plan") {
+    return (
+      <div>
+        <h2 className="text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          💳 プランを選んでください
+        </h2>
+        <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+          ご希望の枚数・プランをお選びください。
+        </p>
+        {allPlans.length === 0 ? (
+          <div className="p-4 rounded-2xl text-sm text-center" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+            プランが設定されていません。管理者にお問い合わせください。
+          </div>
+        ) : (
+          <div className="space-y-3 mb-6">
+            {allPlans.map((p) => {
+              const isSelected = selectedPlan?.name === p.name;
+              return (
+                <button
+                  key={p.name}
+                  type="button"
+                  onClick={() => setSelectedPlan(p)}
+                  className="w-full text-left p-4 rounded-3xl transition active:opacity-70"
+                  style={{
+                    background: isSelected ? "rgba(181,56,75,0.08)" : "var(--color-paper-50)",
+                    border: isSelected ? "2px solid var(--color-brand)" : "1.5px solid var(--color-paper-300)",
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-sm" style={{ color: isSelected ? "var(--color-brand)" : "var(--color-ink-800)" }}>
+                      {p.name}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-base font-bold" style={{ color: isSelected ? "var(--color-brand)" : "var(--color-ink-700)" }}>
+                        ¥{p.price.toLocaleString()}
+                      </p>
+                      {isSelected && <Check size={16} style={{ color: "var(--color-brand)" }} />}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => { if (selectedPlan) setOrderStep("confirm"); }}
+          disabled={!selectedPlan}
+          className="w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-40 transition"
+          style={{ background: "var(--color-brand)", minHeight: "52px" }}
+        >
+          確認画面へ <ArrowRight size={18} />
+        </button>
+        <button type="button" onClick={() => setOrderStep("select-info")}
+          className="mt-3 w-full py-2 text-sm" style={{ color: "var(--color-ink-400)" }}>
+          ← 戻る
+        </button>
+      </div>
+    );
+  }
+
+  // ---- 確認 ----
+  return (
+    <div>
+      <h2 className="text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+        📋 注文内容の確認
       </h2>
-      <p className="text-base mb-2" style={{ color: "var(--color-ink-600)" }}>
-        管理者の承認をお待ちください。
+      <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+        以下の内容で注文します。内容をご確認ください。
       </p>
-      <p className="text-sm mb-10" style={{ color: "var(--color-ink-400)" }}>
-        承認されるとログインできるようになります。
-      </p>
-      <Link
-        to="/login"
-        className="px-10 py-4 rounded-2xl text-white font-semibold text-base active:opacity-80 transition"
-        style={{ background: "var(--color-brand)" }}
+
+      {/* 発注内容 */}
+      <div className="card-paper p-4 rounded-3xl mb-3">
+        <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-brand)" }}>🃏 注文内容</p>
+        <div className="divide-y" style={{ borderColor: "var(--color-paper-300)" }}>
+          <CRow label="キャラクター" value={`${selectedChar?.emoji ?? ""} ${selectedChar?.label ?? ""}`} />
+          <CRow label="写真" value={photoBase64 ? "提供あり ✅" : "なし"} />
+          <CRow label="プラン" value={selectedPlan?.name ?? ""} />
+          <CRow label="金額" value={`¥${selectedPlan?.price.toLocaleString() ?? ""}`} />
+        </div>
+      </div>
+
+      {/* プロフィール情報 */}
+      {memberInfo && (
+        <div className="card-paper p-4 rounded-3xl mb-3">
+          <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-brand)" }}>👤 プロフィール情報</p>
+          <div className="divide-y" style={{ borderColor: "var(--color-paper-300)" }}>
+            {memberInfo.name && <CRow label="氏名" value={memberInfo.name} />}
+            {memberInfo.furigana && <CRow label="ふりがな" value={memberInfo.furigana} />}
+            {memberInfo.nameRomaji && <CRow label="ローマ字" value={memberInfo.nameRomaji} />}
+            {memberInfo.email && <CRow label="メール" value={memberInfo.email} />}
+            {memberInfo.company && <CRow label="会社名" value={memberInfo.company} />}
+            {memberInfo.role && <CRow label="役職" value={memberInfo.role} />}
+            {memberInfo.category && <CRow label="職種" value={memberInfo.category} />}
+            {memberInfo.businessDescription && <CRow label="事業内容" value={memberInfo.businessDescription} />}
+          </div>
+        </div>
+      )}
+
+      {/* スキル */}
+      {memberInfo?.skills && memberInfo.skills.filter((s) => s.name).length > 0 && (
+        <div className="card-paper p-4 rounded-3xl mb-3">
+          <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-brand)" }}>✨ USP・スキル</p>
+          <div className="space-y-2">
+            {memberInfo.skills.filter((s) => s.name).map((s, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span className="text-base shrink-0">{s.emoji}</span>
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>{s.name}</p>
+                  {(s.issue || s.solution) && (
+                    <p className="text-xs mt-0.5 leading-snug" style={{ color: "var(--color-ink-500)" }}>
+                      {s.issue}{s.issue && s.solution ? s.connector : ""}{s.solution}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 住所・電話 */}
+      {(address || phone) && (
+        <div className="card-paper p-4 rounded-3xl mb-3">
+          <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-brand)" }}>📍 カード掲載情報</p>
+          <div className="divide-y" style={{ borderColor: "var(--color-paper-300)" }}>
+            {address && <CRow label="住所" value={address} />}
+            {phone && <CRow label="電話番号" value={phone} />}
+          </div>
+        </div>
+      )}
+
+      {orderMutation.isError && (
+        <div className="mb-4 p-3 rounded-2xl text-sm"
+          style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>
+          ⚠️ 注文に失敗しました。時間をおいて再度お試しください。
+        </div>
+      )}
+
+      {settings?.companyName && (
+        <p className="text-xs mb-4 text-center" style={{ color: "var(--color-ink-400)" }}>
+          注文後、{settings.companyName}にご注文情報が送られます。
+        </p>
+      )}
+
+      <button
+        type="button"
+        onClick={() => orderMutation.mutate()}
+        disabled={orderMutation.isPending}
+        className="w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50 transition"
+        style={{ background: "var(--color-brand)", minHeight: "52px" }}
       >
-        ログイン画面へ
-      </Link>
+        {orderMutation.isPending
+          ? <><Loader2 size={18} className="animate-spin" />送信中...</>
+          : <>🃏 この内容で注文する</>}
+      </button>
+      <button type="button" onClick={() => setOrderStep("select-plan")}
+        className="mt-3 w-full py-2 text-sm" style={{ color: "var(--color-ink-400)" }}>
+        ← 戻る
+      </button>
     </div>
   );
 }

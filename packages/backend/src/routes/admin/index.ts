@@ -12,6 +12,8 @@ import { adminEventRoutes } from "./events.ts";
 import { adminEventTypeDefinitionRoutes } from "./event-type-definitions.ts";
 import { adminTeamRoutes } from "./teams.ts";
 import { adminMeetingRoutes } from "./meetings.ts";
+import { adminCardPrintRoutes } from "./card-print.ts";
+import { adminEmailTemplateRoutes } from "./email-templates.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -27,6 +29,8 @@ adminRoutes.route("/events", adminEventRoutes);
 adminRoutes.route("/event-type-definitions", adminEventTypeDefinitionRoutes);
 adminRoutes.route("/teams", adminTeamRoutes);
 adminRoutes.route("/meetings", adminMeetingRoutes);
+adminRoutes.route("/card-print", adminCardPrintRoutes);
+adminRoutes.route("/email-templates", adminEmailTemplateRoutes);
 
 // ---- POST /api/admin/points/reset ----
 adminRoutes.post("/points/reset", async (c) => {
@@ -161,9 +165,15 @@ adminRoutes.post("/app-settings/character", async (c) => {
   }
 
   const base64 = body.imageBase64.includes(",") ? body.imageBase64.split(",")[1] : body.imageBase64;
-  const mimeType = body.mimeType ?? (body.imageBase64.startsWith("data:image/png") ? "image/png" : "image/jpeg");
-  const ext = mimeType === "image/png" ? "png" : "jpg";
+  const mimeType = body.mimeType ?? "image/jpeg";
+  const ext = mimeType === "image/png" ? "png" : mimeType === "image/gif" ? "gif" : "jpg";
   const key = `system/character-image.${ext}`;
+
+  // 拡張子が変わった場合に古い画像を削除
+  const existing = await db.select({ characterImageKey: schema.cardDesigns.characterImageKey }).from(schema.cardDesigns).get();
+  if (existing?.characterImageKey && existing.characterImageKey !== key) {
+    await c.env.R2.delete(existing.characterImageKey).catch(() => {});
+  }
 
   const binary = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
   await c.env.R2.put(key, binary, { httpMetadata: { contentType: mimeType } });
@@ -193,5 +203,68 @@ adminRoutes.delete("/app-settings/character", async (c) => {
     .set({ characterImageKey: null, updatedAt: now, updatedBy: adminId })
     .where(eq(schema.cardDesigns.id, "default"));
 
+  return c.json({ ok: true });
+});
+
+// ---- GET /api/admin/admins — 管理者一覧 ----
+adminRoutes.get("/admins", async (c) => {
+  const db = createDb(c.env.DB);
+  const admins = await db.select({
+    id: schema.admins.id,
+    email: schema.admins.email,
+    name: schema.admins.name,
+    role: schema.admins.role,
+    createdAt: schema.admins.createdAt,
+  }).from(schema.admins).all();
+  return c.json({ data: admins });
+});
+
+// ---- POST /api/admin/admins — 管理者追加 ----
+adminRoutes.post("/admins", async (c) => {
+  const db = createDb(c.env.DB);
+  const now = Math.floor(Date.now() / 1000);
+  const { eq } = await import("drizzle-orm");
+
+  const body = await c.req.json<{ email: string; name: string; role?: string }>().catch(() => null);
+  if (!body?.email || !body?.name) {
+    return c.json({ error: { code: "bad_request", message: "メールアドレスと名前は必須です" } }, 400);
+  }
+
+  const email = body.email.trim().toLowerCase();
+  const existing = await db.select({ id: schema.admins.id }).from(schema.admins).where(eq(schema.admins.email, email)).get();
+  if (existing) {
+    return c.json({ error: { code: "conflict", message: "このメールアドレスはすでに登録されています" } }, 409);
+  }
+
+  const id = newId();
+  await db.insert(schema.admins).values({
+    id,
+    email,
+    name: body.name.trim(),
+    role: body.role === "super_admin" ? "super_admin" : "admin",
+    createdAt: now,
+  });
+
+  return c.json({ data: { id, email, name: body.name.trim(), role: body.role ?? "admin", createdAt: now } });
+});
+
+// ---- DELETE /api/admin/admins/:id — 管理者削除 ----
+adminRoutes.delete("/admins/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const { eq } = await import("drizzle-orm");
+
+  const id = c.req.param("id");
+  const currentAdminId = c.get("userId");
+
+  if (id === currentAdminId) {
+    return c.json({ error: { code: "forbidden", message: "自分自身は削除できません" } }, 403);
+  }
+
+  const target = await db.select({ id: schema.admins.id }).from(schema.admins).where(eq(schema.admins.id, id)).get();
+  if (!target) {
+    return c.json({ error: { code: "not_found", message: "管理者が見つかりません" } }, 404);
+  }
+
+  await db.delete(schema.admins).where(eq(schema.admins.id, id));
   return c.json({ ok: true });
 });

@@ -15,7 +15,7 @@ import {
   createSession,
   deleteSession,
 } from "../services/auth.ts";
-import { sendOtpMail } from "../services/mailer.ts";
+import { MailService } from "../services/mailer.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { eq } from "drizzle-orm";
 import type { Env, Variables } from "../types.ts";
@@ -39,44 +39,49 @@ authRoutes.post("/request-otp", async (c) => {
   const db = createDb(c.env.DB);
   const found = await findUserByEmail(db, email.toLowerCase(), context ?? "member");
 
-  if (found) {
-    // メンバーの場合はアクティブか確認
-    if (found.userType === "member") {
-      const member = await db
-        .select({ status: schema.members.status })
-        .from(schema.members)
-        .where(eq(schema.members.id, found.id))
-        .get();
-
-      if (member?.status === "pending") {
-        console.log(`[OTP] Blocked: ${email} is pending`);
-        return c.json({
-          ok: false,
-          status: "pending",
-          message: "アカウントは管理者の承認待ちです。承認されるとログインできるようになります。",
-        });
-      }
-      if (member?.status === "suspended") {
-        return c.json({
-          ok: false,
-          status: "suspended",
-          message: "このアカウントは現在停止されています。管理者にお問い合わせください。",
-        });
-      }
-    }
-
-    const code = generateOtpCode();
-    await storeOtp({ kv: c.env.KV, email: email.toLowerCase(), code });
-    await sendOtpMail({
-      to: email,
-      code,
-      apiKey: c.env.SENDGRID_API_KEY,
-      isDev: c.env.ENVIRONMENT === "development",
-      fromEmail: c.env.SENDGRID_FROM_EMAIL,
-    });
+  if (!found) {
+    return c.json({
+      error: {
+        code: "email_not_registered",
+        message: "このメールアドレスは登録されていません。メールアドレスをご確認ください。",
+      },
+    }, 404);
   }
 
-  // 見つからなくても同じレスポンスを返す（ユーザー列挙防止）
+  // メンバーの場合はアクティブか確認
+  if (found.userType === "member") {
+    const member = await db
+      .select({ status: schema.members.status })
+      .from(schema.members)
+      .where(eq(schema.members.id, found.id))
+      .get();
+
+    if (member?.status === "pending") {
+      console.log(`[OTP] Blocked: ${email} is pending`);
+      return c.json({
+        ok: false,
+        status: "pending",
+        message: "アカウントは管理者の承認待ちです。承認されるとログインできるようになります。",
+      });
+    }
+    if (member?.status === "suspended") {
+      return c.json({
+        ok: false,
+        status: "suspended",
+        message: "このアカウントは現在停止されています。管理者にお問い合わせください。",
+      });
+    }
+  }
+
+  const code = generateOtpCode();
+  await storeOtp({ kv: c.env.KV, email: email.toLowerCase(), code });
+
+  const design = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
+  const appTitle = design?.appTitle ?? "白樺クエスト";
+
+  const mailer = new MailService(db, c.env);
+  await mailer.send("otp_login", email, { appTitle, otpCode: code });
+
   return c.json({ ok: true });
 });
 

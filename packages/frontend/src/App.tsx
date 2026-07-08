@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
-import { AuthGuard, AdminGuard } from "@/components/auth-guard";
+import { AuthGuard, AdminGuard, MemberAwareLayout } from "@/components/auth-guard";
 import { AppLayout } from "@/components/layout";
 import { LoginScreen } from "@/screens/auth/login-screen";
 import { RegisterScreen } from "@/screens/auth/register-screen";
@@ -18,12 +18,14 @@ import { MeetingsScreen } from "@/screens/meetings/meetings-screen";
 import { MeetingNewScreen } from "@/screens/meetings/meeting-new-screen";
 import { MeetingDetailScreen } from "@/screens/meetings/meeting-detail-screen";
 import { ScheduleScreen } from "@/screens/schedule/schedule-screen";
+import { ScheduleInviteScreen } from "@/screens/schedule/schedule-invite-screen";
 import { AdminLayout } from "@/screens/admin/admin-layout";
 import { AdminDashboardScreen } from "@/screens/admin/admin-dashboard-screen";
 import { AdminMembersScreen } from "@/screens/admin/admin-members-screen";
 import { AdminQuestsScreen } from "@/screens/admin/admin-quests-screen";
 import { AdminPointsScreen } from "@/screens/admin/admin-points-screen";
 import { AdminSettingsScreen } from "@/screens/admin/admin-settings-screen";
+import { AdminEmailTemplatesScreen } from "@/screens/admin/admin-email-templates-screen";
 import { AdminUspsScreen } from "@/screens/admin/admin-usps-screen";
 import { AdminSeasonsScreen } from "@/screens/admin/admin-seasons-screen";
 import { AdminEventTypesScreen } from "@/screens/admin/admin-event-types-screen";
@@ -31,6 +33,8 @@ import { EventsScreen } from "@/screens/events/events-screen";
 import { EventDetailScreen } from "@/screens/events/event-detail-screen";
 import { AdminTeamsScreen } from "@/screens/admin/admin-teams-screen";
 import { AdminMeetingsScreen } from "@/screens/admin/admin-meetings-screen";
+import { AdminCardSettingsScreen } from "@/screens/admin/admin-card-settings-screen";
+import { CardOrderScreen } from "@/screens/card-order/card-order-screen";
 import { SchedulerDashboardScreen } from "@/screens/scheduler/scheduler-dashboard-screen";
 import { SchedulerIntegrationsScreen } from "@/screens/scheduler/scheduler-integrations-screen";
 import { SchedulerSettingsScreen } from "@/screens/scheduler/scheduler-settings-screen";
@@ -39,6 +43,11 @@ import { SchedulerBookingDetailScreen } from "@/screens/scheduler/scheduler-book
 import { PublicBookingPage } from "@/screens/public-booking/public-booking-page";
 import { PublicBookingForm } from "@/screens/public-booking/public-booking-form";
 import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
+import { NotificationsScreen } from "@/screens/notifications/notifications-screen";
+import { PrivacyPolicyScreen } from "@/screens/privacy-policy-screen";
+import { LandingScreen } from "@/screens/site/landing-screen";
+import { FeaturesScreen } from "@/screens/site/features-screen";
+import { IntroductionScreen } from "@/screens/site/introduction-screen";
 import { useMe } from "@/hooks/use-me";
 
 function AppWithMe({ children }: { children: React.ReactNode }) {
@@ -52,7 +61,11 @@ export default function App() {
       <BrowserRouter>
         <AppWithMe>
           <Routes>
-            {/* 認証不要 */}
+            {/* サービスサイト（認証不要） */}
+            <Route path="/" element={<LandingScreen />} />
+            <Route path="/features" element={<FeaturesScreen />} />
+            <Route path="/introduction" element={<IntroductionScreen />} />
+            <Route path="/privacy" element={<PrivacyPolicyScreen />} />
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/register" element={<RegisterScreen />} />
 
@@ -60,17 +73,20 @@ export default function App() {
             <Route path="/receive-card/:memberId" element={<ReceiveCardScreen />} />
 
             {/* 外部ゲスト向け日程回答（認証不要） */}
+            <Route path="/schedule/invite/:inviteToken" element={<ScheduleInviteScreen />} />
             <Route path="/schedule/:token" element={<ScheduleScreen />} />
 
-            {/* 1on1 スケジューラー公開予約ページ（認証不要） */}
-            <Route path="/book/confirmation/:token" element={<PublicBookingConfirmation />} />
-            <Route path="/book/:memberSlug/form" element={<PublicBookingForm />} />
-            <Route path="/book/:memberSlug" element={<PublicBookingPage />} />
+            {/* 1on1 スケジューラー公開予約ページ（ログイン済みはナビ付き、未ログインはスタンドアロン） */}
+            <Route element={<MemberAwareLayout />}>
+              <Route path="/book/confirmation/:token" element={<PublicBookingConfirmation />} />
+              <Route path="/book/:memberSlug/form" element={<PublicBookingForm />} />
+              <Route path="/book/:memberSlug" element={<PublicBookingPage />} />
+            </Route>
 
             {/* メンバー向け（要認証） */}
             <Route element={<AuthGuard />}>
               <Route element={<AppLayout />}>
-                <Route index element={<HomeScreen />} />
+                <Route path="home" element={<HomeScreen />} />
                 <Route path="members" element={<MembersScreen />} />
                 <Route path="members/:id" element={<MemberDetailScreen />} />
                 <Route path="quests" element={<QuestsScreen />} />
@@ -89,6 +105,8 @@ export default function App() {
                 <Route path="scheduler/settings" element={<SchedulerSettingsScreen />} />
                 <Route path="scheduler/bookings" element={<SchedulerBookingsScreen />} />
                 <Route path="scheduler/bookings/:id" element={<SchedulerBookingDetailScreen />} />
+                <Route path="notifications" element={<NotificationsScreen />} />
+                <Route path="card-order" element={<CardOrderScreen />} />
               </Route>
             </Route>
 
@@ -104,12 +122,14 @@ export default function App() {
                 <Route path="event-types" element={<AdminEventTypesScreen />} />
                 <Route path="teams" element={<AdminTeamsScreen />} />
                 <Route path="meetings" element={<AdminMeetingsScreen />} />
+                <Route path="card" element={<AdminCardSettingsScreen />} />
                 <Route path="points" element={<AdminPointsScreen />} />
+                <Route path="email-templates" element={<AdminEmailTemplatesScreen />} />
                 <Route path="settings" element={<AdminSettingsScreen />} />
               </Route>
             </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>
         </AppWithMe>
       </BrowserRouter>

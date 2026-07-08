@@ -4,7 +4,8 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, QrCode } from "lucide-react";
+import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, Camera } from "lucide-react";
+import { ImportCardModal } from "@/screens/oneonone/import-card-modal";
 import { api, ApiError } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
@@ -16,12 +17,12 @@ import type { PublicMember, Skill, MemberBadge } from "@shared/types";
 
 type MemberResponse  = { data: PublicMember };
 type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
-type OnoSession = { id: string; status: string; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null };
+type OnoSession = { id: string; status: "pending" | "accepted" | "completed" | "rejected" | "cancelled"; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null; requesterSchedulerUrl?: string | null };
 type OnoListResponse = { data: OnoSession[] };
-type RealCardResponse = { data: { alreadyRecorded: boolean; message: string } };
+type MySchedulerSettings = { data: { slug: string; isPublic: number } | null };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
-type HistoryItem = { id: string; delta: number; label: string; createdAt: number };
+type HistoryItem = { id: string; delta: number; label: string; detail?: string; createdAt: number };
 type MemberHistoryResponse = { data: { totalPoints: number; history: HistoryItem[] } };
 
 const STATUS_LABEL: Record<string, { label: string; emoji: string; className: string }> = {
@@ -90,11 +91,22 @@ export function MemberDetailScreen() {
   );
 
   // 申込
-  const [notifyByEmail, setNotifyByEmail] = useState(false);
+  const [notifyByEmail, setNotifyByEmail] = useState(true);
   const requestMutation = useMutation({
     mutationFn: () => api.post<OnoResponse>("/oneonone", { responderId: id, notifyByEmail }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["oneonone"] }),
   });
+
+  // 自分の公開スケジュールURL（申込ボタン押下後に画面表示するため）
+  const { data: mySchedulerData } = useQuery({
+    queryKey: ["scheduler", "my-settings"],
+    queryFn: () => api.get<MySchedulerSettings>("/scheduler/me/settings"),
+  });
+  const mySchedulerSettings = mySchedulerData?.data;
+  const mySchedulerUrl = mySchedulerSettings?.isPublic && mySchedulerSettings.slug
+    ? `${window.location.origin}/book/${mySchedulerSettings.slug}`
+    : null;
+  const [copiedSchedulerUrl, setCopiedSchedulerUrl] = useState(false);
 
   // 完了押下
   const completeMutation = useMutation({
@@ -117,18 +129,29 @@ export function MemberDetailScreen() {
     onError: (e: Error) => showToast(e instanceof ApiError ? e.message : "エラーが発生しました", false),
   });
 
-  // リアルカード受け取り
-  const realCardMutation = useMutation({
-    mutationFn: () => api.post<RealCardResponse>(`/members/${id}/real-card`),
-    onSuccess: (res) => {
-      showToast(res.data.message, true);
-      qc.invalidateQueries({ queryKey: ["member", id] });
-      qc.invalidateQueries({ queryKey: ["ranking", "me"] });
+  // キャンセル
+  const cancelMutation = useMutation({
+    mutationFn: (sessionId: string) => api.patch(`/oneonone/${sessionId}/cancel`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
+      showToast("1to1をキャンセルしました", true);
     },
-    onError: (e: Error) => showToast(e.message, false),
+    onError: (e: Error) => showToast(e instanceof ApiError ? e.message : "エラーが発生しました", false),
   });
 
+  // 記録削除
+  const deleteMutation = useMutation({
+    mutationFn: (sessionId: string) => api.delete(`/oneonone/${sessionId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
+      showToast("記録を削除しました", true);
+    },
+    onError: (e: Error) => showToast(e instanceof ApiError ? e.message : "エラーが発生しました", false),
+  });
+
+
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [showImportCard, setShowImportCard] = useState(false);
 
   async function handleRequest() {
     try {
@@ -171,9 +194,11 @@ export function MemberDetailScreen() {
   // "self" も含めて none 以外なら解放済み
   const isUnlocked = connStatus !== "none";
 
-  // この相手との完了済みセッション一覧
+  // この相手との完了・キャンセル・拒否済みセッション一覧
   const pastSessions = sessions.filter(
-    (s) => (s.requesterId === id || s.responderId === id) && s.status === "completed"
+    (s) =>
+      (s.requesterId === id || s.responderId === id) &&
+      (s.status === "completed" || s.status === "cancelled" || s.status === "rejected")
   );
 
   // 自分がこのセッションで完了押下済みか
@@ -307,6 +332,25 @@ export function MemberDetailScreen() {
             🤝 1to1
           </h2>
 
+          {/* リアルカードを持っている → カード画像から直接登録（申し込み不要） */}
+          {connStatus !== "real" && (
+            <button
+              onClick={() => setShowImportCard(true)}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition mb-3"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)", border: "1.5px solid var(--color-paper-300)" }}
+            >
+              <Camera size={16} />
+              🃏 カード画像から登録する（リアルカード交換済みの場合）
+            </button>
+          )}
+
+          {connStatus === "real" && (
+            <div className="rounded-xl p-3 mb-3 text-sm flex items-center gap-2"
+              style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
+              <CheckCircle2 size={16} /> リアルカード取得済み ✨
+            </div>
+          )}
+
           {/* アクティブセッションがない → 申込ボタン */}
           {!activeSession && (
             <>
@@ -340,9 +384,54 @@ export function MemberDetailScreen() {
 
           {/* 申込中（相手待ち） */}
           {activeSession?.status === "pending" && myRole === "requester" && (
-            <div className="rounded-xl p-3 text-sm flex items-center gap-2"
-              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-              <Clock size={16} /> 相手の承諾を待っています...
+            <div className="space-y-2">
+              <div className="rounded-xl p-3 text-sm flex items-center gap-2"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                <Clock size={16} /> 相手の承諾を待っています...
+              </div>
+
+              {/* 自分の公開スケジュールURL（メールが届きにくい場合の代替共有用） */}
+              {mySchedulerUrl ? (
+                <div className="rounded-xl p-3" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
+                  <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-success)" }}>
+                    📅 あなたの予約URL（{member.name}さんに直接共有できます）
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="text-xs flex-1 truncate px-2 py-1.5 rounded-lg"
+                      style={{ background: "white", color: "var(--color-ink-700)" }}>
+                      {mySchedulerUrl}
+                    </code>
+                    <button
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(mySchedulerUrl);
+                        setCopiedSchedulerUrl(true);
+                        setTimeout(() => setCopiedSchedulerUrl(false), 2000);
+                      }}
+                      className="text-xs px-2.5 py-1.5 rounded-lg font-medium flex-shrink-0"
+                      style={{ background: "var(--color-success)", color: "white" }}
+                    >
+                      {copiedSchedulerUrl ? "コピー済み" : "コピー"}
+                    </button>
+                  </div>
+                  <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
+                    メールが届きにくい場合は、このURLをLINEなどで直接送ってください
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl p-3 text-xs" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-500)" }}>
+                  💡 スケジュール調整設定を公開すると、ここに予約URLが表示され{member.name}さんに直接共有できます（マイページ → スケジュール調整設定）
+                </div>
+              )}
+
+              <button
+                onClick={() => cancelMutation.mutate(activeSession.id)}
+                disabled={cancelMutation.isPending}
+                className="w-full py-2 rounded-2xl text-xs font-medium disabled:opacity-50"
+                style={{ background: "transparent", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}
+              >
+                {cancelMutation.isPending ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                申込をキャンセルする
+              </button>
             </div>
           )}
 
@@ -358,6 +447,19 @@ export function MemberDetailScreen() {
                 ? <><Loader2 size={16} className="animate-spin" /> 記録中...</>
                 : <><CheckCircle2 size={16} /> 1to1完了！</>
               }
+            </button>
+          )}
+
+          {/* 承諾済みでキャンセル可 */}
+          {activeSession?.status === "accepted" && !alreadyCompleted && (
+            <button
+              onClick={() => cancelMutation.mutate(activeSession.id)}
+              disabled={cancelMutation.isPending}
+              className="w-full mt-2 py-2 rounded-2xl text-xs font-medium disabled:opacity-50"
+              style={{ background: "transparent", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}
+            >
+              {cancelMutation.isPending ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+              この1to1をキャンセルする
             </button>
           )}
 
@@ -386,50 +488,45 @@ export function MemberDetailScreen() {
               <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>📋 1to1履歴</p>
               <div className="space-y-1.5">
                 {pastSessions.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between text-xs px-1">
-                    <span style={{ color: "var(--color-success)" }}>
-                      <CheckCircle2 size={12} className="inline mr-1" />
-                      完了
-                    </span>
-                    <span style={{ color: "var(--color-ink-400)" }}>
+                  <div key={s.id} className="flex items-center justify-between text-xs px-1 gap-2">
+                    {s.status === "completed" ? (
+                      <span style={{ color: "var(--color-success)" }}>
+                        <CheckCircle2 size={12} className="inline mr-1" />完了
+                      </span>
+                    ) : s.status === "cancelled" ? (
+                      <span style={{ color: "var(--color-ink-400)" }}>キャンセル</span>
+                    ) : (
+                      <span style={{ color: "var(--color-ink-400)" }}>辞退</span>
+                    )}
+                    <span className="flex-1 text-right" style={{ color: "var(--color-ink-400)" }}>
                       {s.completedAt ? fmtDateISO(s.completedAt, tz) : ""}
                     </span>
-                    <button
-                      onClick={() => uncompleteMutation.mutate(s.id)}
-                      disabled={uncompleteMutation.isPending}
-                      className="text-xs underline disabled:opacity-50"
-                      style={{ color: "var(--color-ink-400)" }}
-                    >
-                      取り消す
-                    </button>
+                    <div className="flex gap-2 shrink-0">
+                      {s.status === "completed" && (
+                        <button
+                          onClick={() => uncompleteMutation.mutate(s.id)}
+                          disabled={uncompleteMutation.isPending}
+                          className="text-xs underline disabled:opacity-50"
+                          style={{ color: "var(--color-ink-400)" }}
+                        >
+                          取り消す
+                        </button>
+                      )}
+                      <button
+                        onClick={() => deleteMutation.mutate(s.id)}
+                        disabled={deleteMutation.isPending}
+                        className="text-xs underline disabled:opacity-50"
+                        style={{ color: "var(--color-ink-400)" }}
+                      >
+                        削除
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* リアルカード受け取りボタン */}
-          {(connStatus === "digital" || connStatus === "real") && (
-            <div className="mt-4 pt-4" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
-              {connStatus === "digital" && (
-                <button
-                  onClick={() => realCardMutation.mutate()}
-                  disabled={realCardMutation.isPending}
-                  className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition disabled:opacity-50"
-                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
-                >
-                  {realCardMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <QrCode size={16} />}
-                  🃏 リアルカードを受け取った (+1pt)
-                </button>
-              )}
-              {connStatus === "real" && (
-                <div className="rounded-xl p-3 text-sm flex items-center gap-2"
-                  style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
-                  <CheckCircle2 size={16} /> リアルカード取得済み ✨
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
 
@@ -451,10 +548,13 @@ export function MemberDetailScreen() {
           ) : (
             <div className="space-y-1.5">
               {memberHistoryData.data.history.map((item) => (
-                <div key={item.id} className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs" style={{ color: "var(--color-ink-700)" }}>{item.label}</p>
-                    <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+                <div key={item.id} className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-medium leading-snug" style={{ color: "var(--color-ink-700)" }}>{item.label}</p>
+                    {item.detail && (
+                      <p className="text-xs leading-snug" style={{ color: "var(--color-ink-500)" }}>{item.detail}</p>
+                    )}
+                    <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
                       {fmtDateISO(item.createdAt, tz)}
                     </p>
                   </div>
@@ -481,6 +581,27 @@ export function MemberDetailScreen() {
         >
           {toast.msg}
         </div>
+      )}
+
+      {/* カード画像から登録モーダル */}
+      {showImportCard && (
+        <ImportCardModal
+          onClose={() => {
+            setShowImportCard(false);
+            qc.invalidateQueries({ queryKey: ["member", id] });
+          }}
+          targetMember={{
+            id: member.id,
+            name: member.name,
+            emoji: member.emoji,
+            bgColor: member.bgColor,
+            category: member.category ?? "",
+            businessDescription: member.businessDescription,
+            connectionStatus: connStatus === "self" || connStatus === "none" || connStatus === "digital" || connStatus === "real"
+              ? (connStatus as "none" | "digital" | "real")
+              : "none",
+          }}
+        />
       )}
     </div>
   );

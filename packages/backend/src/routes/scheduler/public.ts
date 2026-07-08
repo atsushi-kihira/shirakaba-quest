@@ -12,11 +12,36 @@ import { newId } from "../../services/auth.ts";
 import { fetchBusy } from "../../services/googleClient.ts";
 import { calculateSlots } from "../../services/slotCalculator.ts";
 import { createConference, getValidGoogleAccessToken, getAvailableConferenceTypes } from "../../services/conferenceService.ts";
-import { sendBookingConfirmationGuest, sendBookingNotificationHost, sendCancellationMail } from "../../services/schedulerMailer.ts";
+import { sendCancellationMail } from "../../services/schedulerMailer.ts";
+import { MailService } from "../../services/mailer.ts";
 import { deleteCalendarEvent } from "../../services/googleClient.ts";
+import { getFrontendUrl } from "../../services/frontendUrl.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const publicBookingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+function formatBookingDateRange(startUtc: string, endUtc: string, tz = "Asia/Tokyo"): string {
+  const fmt = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: tz,
+    year: "numeric", month: "long", day: "numeric",
+    weekday: "short", hour: "2-digit", minute: "2-digit",
+  });
+  const startStr = fmt.format(new Date(startUtc));
+  const endTime = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: tz, hour: "2-digit", minute: "2-digit",
+  }).format(new Date(endUtc));
+  return `${startStr}〜${endTime}`;
+}
+
+function buildConferenceText(conferenceType: string, conferenceUrl: string | null): string {
+  if (conferenceType === "google_meet" && conferenceUrl) {
+    return `📹 Google Meet: ${conferenceUrl}`;
+  }
+  if (conferenceType === "zoom" && conferenceUrl) {
+    return `📹 Zoom: ${conferenceUrl}`;
+  }
+  return "📹 会議URLは主催者から別途ご連絡します。";
+}
 
 function generateToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -272,8 +297,15 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
   const now = new Date().toISOString();
   const timezone = body.timezone ?? "Asia/Tokyo";
   const requestedType = body.conferenceType ?? "google_meet";
-  const isDev = c.env.ENVIRONMENT === "development";
-  const frontendUrl = c.env.FRONTEND_URL ?? "https://shirakaba-quest.pages.dev";
+  const frontendUrl = getFrontendUrl(c.env);
+
+  // ゲストがメンバーの場合は guestMemberId を設定
+  const guestMemberRecord = await db
+    .select({ id: schema.members.id })
+    .from(schema.members)
+    .where(eq(schema.members.email, body.guestEmail))
+    .get();
+  const guestMemberId = guestMemberRecord?.id ?? null;
 
   // 会議 URL 発行 + Calendar 登録
   const conferenceResult = await createConference({
@@ -293,12 +325,14 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
     guestEmail: body.guestEmail,
     clientId: c.env.GOOGLE_OAUTH_CLIENT_ID,
     clientSecret: c.env.GOOGLE_OAUTH_CLIENT_SECRET,
+    zoomClientId: c.env.ZOOM_CLIENT_ID,
+    zoomClientSecret: c.env.ZOOM_CLIENT_SECRET,
   });
 
   await db.insert(schema.bookings).values({
     id: bookingId,
     hostMemberId: settings.memberId,
-    guestMemberId: null,
+    guestMemberId,
     guestName: body.guestName,
     guestEmail: body.guestEmail,
     guestMessage: body.guestMessage ?? null,
@@ -330,39 +364,36 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
     occurredAt: now,
   });
 
-  // 確認メール送信
+  // メール送信用変数を準備
+  const appTitleBook = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
+  const dateRange = formatBookingDateRange(body.startUtc, body.endUtc, timezone);
+  const conferenceInfo = buildConferenceText(conferenceResult.conferenceType, conferenceResult.conferenceUrl);
+  const cancellationUrl = `${frontendUrl}/book/confirmation/${cancellationToken}`;
+  const bookingUrl = `${frontendUrl}/scheduler/bookings/${bookingId}`;
+  const guestMessageBlock = body.guestMessage ? `💬 メッセージ：${body.guestMessage}` : "";
+
+  const mailerBook = new MailService(db, c.env);
   await Promise.allSettled([
-    sendBookingConfirmationGuest({
-      to: body.guestEmail,
+    mailerBook.send("scheduler_booking_guest", body.guestEmail, {
+      appTitle: appTitleBook,
       guestName: body.guestName,
       hostName: member.name,
       displayTitle: settings.displayTitle,
-      startAtUtc: body.startUtc,
-      endAtUtc: body.endUtc,
-      conferenceType: conferenceResult.conferenceType,
-      conferenceUrl: conferenceResult.conferenceUrl,
-      cancellationToken,
-      frontendUrl,
-      apiKey: c.env.SENDGRID_API_KEY,
-      fromEmail: c.env.SENDGRID_FROM_EMAIL,
-      isDev,
+      dateRange,
+      conferenceInfo,
+      cancellationUrl,
     }),
-    sendBookingNotificationHost({
-      to: member.email,
+    ...(member.email ? [mailerBook.send("scheduler_booking_host", member.email, {
+      appTitle: appTitleBook,
       hostName: member.name,
       guestName: body.guestName,
       guestEmail: body.guestEmail,
-      guestMessage: body.guestMessage ?? null,
       displayTitle: settings.displayTitle,
-      startAtUtc: body.startUtc,
-      conferenceType: conferenceResult.conferenceType,
-      conferenceUrl: conferenceResult.conferenceUrl,
-      frontendUrl,
-      bookingId,
-      apiKey: c.env.SENDGRID_API_KEY,
-      fromEmail: c.env.SENDGRID_FROM_EMAIL,
-      isDev,
-    }),
+      dateRange,
+      conferenceInfo,
+      guestMessageBlock,
+      bookingUrl,
+    })] : []),
   ]);
 
   return c.json({

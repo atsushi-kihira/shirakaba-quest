@@ -36,16 +36,17 @@ const DEFAULTS: AppSettings = {
   timezone: "Asia/Tokyo",
 };
 
-export function useSettings(): AppSettings {
-  const { data } = useQuery({
+export function useSettings(): AppSettings & { isLoading: boolean } {
+  const { data, isLoading } = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.get<SettingsResponse>("/settings"),
     staleTime: 5 * 60 * 1000,
   });
-  if (!data?.data) return DEFAULTS;
+  if (!data?.data) return { ...DEFAULTS, isLoading };
   return {
     ...data.data,
     timezone: data.data.timezone ?? "Asia/Tokyo",
     characterImageUrl: data.data.characterImageKey ? CUSTOM_CHARACTER_URL : null,
+    isLoading,
   };
 }

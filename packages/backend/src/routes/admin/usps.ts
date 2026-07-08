@@ -11,7 +11,7 @@ import { Hono } from "hono";
 import { eq, desc } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
-import { sendUspRequestResultMail } from "../../services/mailer.ts";
+import { MailService } from "../../services/mailer.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminUspRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -214,17 +214,16 @@ adminUspRoutes.post("/requests/:id/approve", async (c) => {
 
   // 申請者へメール通知
   const appDesign = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
-  sendUspRequestResultMail({
-    to: req.requesterEmail,
+  const appTitleUsp = appDesign?.appTitle ?? "白樺クエスト";
+  new MailService(db, c.env).send("usp_request_result", req.requesterEmail, {
+    appTitle: appTitleUsp,
     requesterName: req.requesterName,
+    uspEmoji: req.emoji,
     uspName: req.uspName,
-    emoji: req.emoji,
-    approved: true,
-    reviewNote,
-    appTitle: appDesign?.appTitle ?? "白樺クエスト",
-    apiKey: c.env.SENDGRID_API_KEY,
-    isDev,
-    fromEmail: c.env.SENDGRID_FROM_EMAIL,
+    resultLabel: "✅ 承認されました！",
+    resultColor: "#5A8C5C",
+    reviewNote: reviewNote ?? "",
+    resultMessage: "ログインしてUSPを選択してください。",
   }).catch((e) => console.error("[usp-approve-mail]", e));
 
   return c.json({ ok: true });
@@ -250,18 +249,16 @@ adminUspRoutes.post("/requests/:id/reject", async (c) => {
     reviewedAt: now,
   }).where(eq(schema.uspRequests.id, reqId));
 
-  const appDesign = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
-  sendUspRequestResultMail({
-    to: req.requesterEmail,
+  const appDesign2 = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
+  new MailService(db, c.env).send("usp_request_result", req.requesterEmail, {
+    appTitle: appDesign2?.appTitle ?? "白樺クエスト",
     requesterName: req.requesterName,
+    uspEmoji: req.emoji,
     uspName: req.uspName,
-    emoji: req.emoji,
-    approved: false,
-    reviewNote,
-    appTitle: appDesign?.appTitle ?? "白樺クエスト",
-    apiKey: c.env.SENDGRID_API_KEY,
-    isDev,
-    fromEmail: c.env.SENDGRID_FROM_EMAIL,
+    resultLabel: "❌ 今回は見送りとなりました",
+    resultColor: "#B5384B",
+    reviewNote: reviewNote ?? "",
+    resultMessage: "ご不明な点は運営チームにお問い合わせください。",
   }).catch((e) => console.error("[usp-reject-mail]", e));
 
   return c.json({ ok: true });

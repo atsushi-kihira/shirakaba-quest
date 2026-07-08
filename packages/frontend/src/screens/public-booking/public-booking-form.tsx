@@ -4,6 +4,7 @@ import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, ArrowLeft, Video, User, Mail, MessageSquare } from "lucide-react";
 import { API_BASE_URL } from "@/lib/api";
+import { useAuthStore } from "@/stores/auth-store";
 
 type MemberMeta = {
   memberName: string;
@@ -40,9 +41,10 @@ export function PublicBookingForm() {
   const [searchParams] = useSearchParams();
   const slotUtc = searchParams.get("slot");
   const endUtc = searchParams.get("end");
+  const loggedInUser = useAuthStore((s) => s.user);
 
-  const [guestName, setGuestName] = useState("");
-  const [guestEmail, setGuestEmail] = useState("");
+  const [guestName, setGuestName] = useState(loggedInUser?.name ?? "");
+  const [guestEmail, setGuestEmail] = useState(loggedInUser?.email ?? "");
   const [guestMessage, setGuestMessage] = useState("");
   const [conferenceType, setConferenceType] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

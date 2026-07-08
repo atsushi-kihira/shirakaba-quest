@@ -1,12 +1,13 @@
 // =============================================================
 // ログイン画面 — パスワードレス OTP
 // =============================================================
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Mail, Sparkles, ArrowLeft, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
+import { LogoOrbit } from "@/components/logo-orbit";
 import type { PublicMember } from "@shared/types";
 
 type Step = "email" | "otp";
@@ -21,7 +22,7 @@ export function LoginScreen() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
-  const { characterImageUrl, appTitle } = useSettings();
+  const { characterImageUrl, appTitle, appLogo, isLoading: settingsLoading } = useSettings();
 
   // /admin からのリダイレクト時は管理者ログインモード
   const redirectTo = searchParams.get("redirect") ?? null;
@@ -33,6 +34,7 @@ export function LoginScreen() {
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
 
   // ---- Step1: メールアドレス送信 ----
   async function handleEmailSubmit(e: React.FormEvent) {
@@ -50,6 +52,7 @@ export function LoginScreen() {
         setError(res.message);
         return;
       }
+      setOtpSentAt(Date.now());
       setStep("otp");
     } catch (err) {
       if (err instanceof ApiError) {
@@ -60,6 +63,13 @@ export function LoginScreen() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  function handleOtpExpired() {
+    setStep("email");
+    setOtp("");
+    setOtpSentAt(null);
+    setError("認証コードの有効期限が切れました。もう一度メールアドレスを入力してください。");
   }
 
   // ---- Step2: OTPコード検証 ----
@@ -82,7 +92,7 @@ export function LoginScreen() {
         bgColor: res.user.bgColor,
       });
       // redirect パラメータがあればそこへ、なければ種別に応じてデフォルト遷移
-      navigate(redirectTo ?? (res.userType === "admin" ? "/admin" : "/"));
+      navigate(redirectTo ?? (res.userType === "admin" ? "/admin" : "/home"));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError("コードが正しくないか、有効期限が切れています。もう一度お試しください。");
@@ -138,7 +148,9 @@ export function LoginScreen() {
               otp={otp}
               onChange={setOtp}
               onSubmit={handleOtpSubmit}
-              onBack={() => { setStep("email"); setOtp(""); setError(null); }}
+              onBack={() => { setStep("email"); setOtp(""); setOtpSentAt(null); setError(null); }}
+              onExpired={handleOtpExpired}
+              otpSentAt={otpSentAt}
               isLoading={isLoading}
               error={error}
             />
@@ -164,6 +176,7 @@ export function LoginScreen() {
 
       {/* ロゴ・タイトル */}
       <div className="mb-8 text-center">
+        {!settingsLoading && !characterImageUrl && <LogoOrbit logo={appLogo} />}
         <h1 className="text-3xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
           {appTitle}
         </h1>
@@ -205,7 +218,9 @@ export function LoginScreen() {
             otp={otp}
             onChange={setOtp}
             onSubmit={handleOtpSubmit}
-            onBack={() => { setStep("email"); setOtp(""); setError(null); }}
+            onBack={() => { setStep("email"); setOtp(""); setOtpSentAt(null); setError(null); }}
+            onExpired={handleOtpExpired}
+            otpSentAt={otpSentAt}
             isLoading={isLoading}
             error={error}
           />
@@ -287,7 +302,28 @@ function AdminEmailStep({ email, onChange, onSubmit, isLoading, error }: EmailSt
 }
 
 // ---- 管理者向け OTP 入力ステップ（ダークテーマ） ----
-function AdminOtpStep({ email, otp, onChange, onSubmit, onBack, isLoading, error }: OtpStepProps) {
+function AdminOtpStep({ email, otp, onChange, onSubmit, onBack, onExpired, otpSentAt, isLoading, error }: OtpStepProps) {
+  const [timeLeft, setTimeLeft] = useState<number>(() => {
+    if (!otpSentAt) return OTP_TTL_MS / 1000;
+    return Math.max(0, Math.round((OTP_TTL_MS - (Date.now() - otpSentAt)) / 1000));
+  });
+
+  useEffect(() => {
+    if (timeLeft <= 0) { onExpired(); return; }
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) { clearInterval(timer); onExpired(); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const minutes = Math.floor(timeLeft / 60);
+  const seconds = timeLeft % 60;
+  const isExpiringSoon = timeLeft <= 60;
+
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-5">
       <div>
@@ -320,8 +356,9 @@ function AdminOtpStep({ email, otp, onChange, onSubmit, onBack, isLoading, error
             fontFamily: "monospace",
           }}
         />
-        <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.3)" }}>
-          ※ コードの有効期限は10分です
+        <p className="mt-1.5 text-xs text-center font-medium"
+          style={{ color: isExpiringSoon ? "#fca5a5" : "rgba(255,255,255,0.3)" }}>
+          {isExpiringSoon ? "⏰" : "🕐"} 有効期限まで残り {minutes}:{String(seconds).padStart(2, "0")}
         </p>
       </div>
 
@@ -430,11 +467,43 @@ type OtpStepProps = {
   onChange: (v: string) => void;
   onSubmit: (e: React.FormEvent) => void;
   onBack: () => void;
+  onExpired: () => void;
+  otpSentAt: number | null;
   isLoading: boolean;
   error: string | null;
 };
 
-function OtpStep({ email, otp, onChange, onSubmit, onBack, isLoading, error }: OtpStepProps) {
+const OTP_TTL_MS = 600_000; // 10分
+
+function OtpStep({ email, otp, onChange, onSubmit, onBack, onExpired, otpSentAt, isLoading, error }: OtpStepProps) {
+  const [timeLeft, setTimeLeft] = useState<number>(() => {
+    if (!otpSentAt) return OTP_TTL_MS / 1000;
+    return Math.max(0, Math.round((OTP_TTL_MS - (Date.now() - otpSentAt)) / 1000));
+  });
+
+  useEffect(() => {
+    if (timeLeft <= 0) {
+      onExpired();
+      return;
+    }
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          onExpired();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const minutes = Math.floor(timeLeft / 60);
+  const seconds = timeLeft % 60;
+  const isExpiringSoon = timeLeft <= 60;
+
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-5">
       <div className="text-center">
@@ -469,8 +538,9 @@ function OtpStep({ email, otp, onChange, onSubmit, onBack, isLoading, error }: O
             fontFamily: "monospace",
           }}
         />
-        <p className="mt-1 text-xs" style={{ color: "var(--color-ink-400)" }}>
-          ※ コードの有効期限は10分です
+        <p className="mt-1.5 text-xs text-center font-medium"
+          style={{ color: isExpiringSoon ? "#b91c1c" : "var(--color-ink-400)" }}>
+          {isExpiringSoon ? "⏰" : "🕐"} 有効期限まで残り {minutes}:{String(seconds).padStart(2, "0")}
         </p>
       </div>
 

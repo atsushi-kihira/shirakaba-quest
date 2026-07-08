@@ -1,19 +1,23 @@
 // =============================================================
 // 1to1 ルート
-// GET  /api/oneonone              → 自分の1to1セッション一覧
-// POST /api/oneonone              → 申込
-// PATCH /api/oneonone/:id/accept  → 承諾
-// PATCH /api/oneonone/:id/reject  → 拒否
-// PATCH /api/oneonone/:id/complete → 完了押下（双方で確定）
+// GET    /api/oneonone                → 自分の1to1セッション一覧
+// POST   /api/oneonone                → 申込
+// PATCH  /api/oneonone/:id/accept     → 承諾
+// PATCH  /api/oneonone/:id/reject     → 拒否
+// PATCH  /api/oneonone/:id/cancel     → キャンセル（申込者: pending/accepted、承諾者: accepted）
+// PATCH  /api/oneonone/:id/complete   → 完了押下（双方で確定）
+// PATCH  /api/oneonone/:id/uncomplete → 完了取り消し
+// DELETE /api/oneonone/:id            → 記録削除（completed/rejected/cancelled）
 // =============================================================
 import { Hono } from "hono";
-import { eq, or, and, sql } from "drizzle-orm";
+import { eq, or, and, sql, inArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
-import { sendOneOnOneRequestMail } from "../services/mailer.ts";
+import { MailService } from "../services/mailer.ts";
 import { checkAndAwardBadges } from "../services/badge.ts";
 import { getActiveSeasonPoints } from "../services/season-points.ts";
+import { getFrontendUrl } from "../services/frontendUrl.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -55,12 +59,37 @@ oneOnOneRoutes.get("/", async (c) => {
 
   const memberMap = new Map(members.map((m) => [m.id, m]));
 
+  // pending/accepted セッションの申込者（requester）の公開スケジュールURLをまとめて取得
+  const requesterIds = [...new Set(
+    sessions
+      .filter((s) => s.status === "pending" || s.status === "accepted")
+      .map((s) => s.requesterId)
+  )];
+  const schedulerRows = requesterIds.length > 0
+    ? await db
+        .select({
+          memberId: schema.memberSchedulingSettings.memberId,
+          slug: schema.memberSchedulingSettings.slug,
+          isPublic: schema.memberSchedulingSettings.isPublic,
+        })
+        .from(schema.memberSchedulingSettings)
+        .where(inArray(schema.memberSchedulingSettings.memberId, requesterIds))
+        .all()
+    : [];
+  const frontendUrl = getFrontendUrl(c.env);
+  const schedulerUrlMap = new Map(
+    schedulerRows
+      .filter((r) => r.isPublic && r.slug)
+      .map((r) => [r.memberId, `${frontendUrl}/book/${r.slug}`])
+  );
+
   const result = sessions.map((s) => {
     const partnerId = s.requesterId === userId ? s.responderId : s.requesterId;
     return {
       ...s,
       partner: memberMap.get(partnerId) ?? null,
       myRole: s.requesterId === userId ? "requester" : "responder",
+      requesterSchedulerUrl: schedulerUrlMap.get(s.requesterId) ?? null,
     };
   });
 
@@ -139,14 +168,25 @@ oneOnOneRoutes.post("/", async (c) => {
 
       const design = await db.select().from(schema.cardDesigns).get();
 
-      await sendOneOnOneRequestMail({
-        to: responder.email,
+      // 申込者のスケジューラー公開URLを取得（設定済みの場合は候補日リンクをメールに含める）
+      const schedulerSettings = await db
+        .select({ slug: schema.memberSchedulingSettings.slug, isPublic: schema.memberSchedulingSettings.isPublic })
+        .from(schema.memberSchedulingSettings)
+        .where(eq(schema.memberSchedulingSettings.memberId, requesterId))
+        .get();
+      const frontendUrl = getFrontendUrl(c.env);
+      const schedulerUrl = schedulerSettings?.isPublic && schedulerSettings.slug
+        ? `${frontendUrl}/book/${schedulerSettings.slug}`
+        : null;
+
+      const schedulerHtml = schedulerUrl
+        ? `<p style="margin-top:16px;padding:12px 16px;background:#F0FBF0;border-radius:8px;">📅 <strong>日程を予約する</strong><br><a href="${schedulerUrl}" style="color:#5A8C5C;word-break:break-all;">${schedulerUrl}</a></p>`
+        : "";
+      await new MailService(db, c.env).send("oneonone_request", responder.email, {
+        appTitle: design?.appTitle ?? "白樺クエスト",
         responderName: responder.name,
         requesterName: requester?.name ?? "メンバー",
-        appTitle: design?.appTitle ?? "白樺クエスト",
-        apiKey: c.env.SENDGRID_API_KEY,
-        isDev: c.env.ENVIRONMENT === "development",
-        fromEmail: c.env.SENDGRID_FROM_EMAIL,
+        schedulerBlock: schedulerHtml,
       });
     } catch (err) {
       console.error("[oneonone] 通知メール送信失敗", err);
@@ -421,6 +461,68 @@ oneOnOneRoutes.patch("/:id/uncomplete", async (c) => {
   }
 
   return c.json({ data: { status: "accepted", pointsReversed: wasFullyCompleted } });
+});
+
+// ---- PATCH /api/oneonone/:id/cancel ----
+oneOnOneRoutes.patch("/:id/cancel", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+
+  const session = await db
+    .select()
+    .from(schema.oneOnOneSessions)
+    .where(eq(schema.oneOnOneSessions.id, sessionId))
+    .get();
+
+  if (!session) return c.json({ error: { code: "not_found", message: "セッションが見つかりません" } }, 404);
+  if (session.requesterId !== userId && session.responderId !== userId) {
+    return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
+  }
+
+  const isRequester = session.requesterId === userId;
+  const canCancel = isRequester
+    ? (session.status === "pending" || session.status === "accepted")
+    : session.status === "accepted";
+
+  if (!canCancel) {
+    return c.json({ error: { code: "invalid_status", message: "キャンセルできない状態です" } }, 400);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  await db.update(schema.oneOnOneSessions)
+    .set({ status: "cancelled", respondedAt: now })
+    .where(eq(schema.oneOnOneSessions.id, sessionId));
+
+  return c.json({ data: { status: "cancelled" } });
+});
+
+// ---- DELETE /api/oneonone/:id ----
+oneOnOneRoutes.delete("/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+  const sessionId = c.req.param("id");
+
+  const session = await db
+    .select()
+    .from(schema.oneOnOneSessions)
+    .where(eq(schema.oneOnOneSessions.id, sessionId))
+    .get();
+
+  if (!session) return c.json({ error: { code: "not_found", message: "セッションが見つかりません" } }, 404);
+  if (session.requesterId !== userId && session.responderId !== userId) {
+    return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
+  }
+
+  const deletable = ["completed", "rejected", "cancelled"];
+  if (!deletable.includes(session.status)) {
+    return c.json({ error: { code: "invalid_status", message: "削除できない状態です（進行中の1to1はキャンセルしてから削除してください）" } }, 400);
+  }
+
+  await db.delete(schema.oneOnOneSessions)
+    .where(eq(schema.oneOnOneSessions.id, sessionId));
+
+  return c.json({ data: { deleted: true } });
 });
 
 // ---- ユーティリティ ----

@@ -18,6 +18,7 @@ import { adminRoutes } from "./routes/admin/index.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { scheduleRoutes } from "./routes/schedule.ts";
 import { schedulerRoutes } from "./routes/scheduler/index.ts";
+import { cardOrderRoutes } from "./routes/card-orders.ts";
 import { authMiddleware } from "./middleware/auth.ts";
 import { adminMiddleware } from "./middleware/auth.ts";
 import type { Env, Variables } from "./types.ts";
@@ -102,6 +103,10 @@ app.get("/api/usps", async (c) => {
   const usps = await db.select().from(schema.usps).orderBy(schema.usps.sortOrder).all();
   return c.json({ data: usps });
 });
+// カード発注設定は公開（認証不要）、発注自体は認証必須
+app.use("/api/card-orders/*", authMiddleware);
+app.route("/api", cardOrderRoutes);
+
 // 管理者ルートは index.ts 側でミドルウェアを適用
 app.use("/api/admin/*", authMiddleware, adminMiddleware);
 app.route("/api/admin", adminRoutes);

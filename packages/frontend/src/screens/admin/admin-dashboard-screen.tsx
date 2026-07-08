@@ -11,6 +11,8 @@ type Member = { id: string; status: string; name: string };
 type Quest = { id: string; status: string; title: string };
 type EventTypeDef = { id: string; isActive: number };
 type EventInstance = { id: string; status: string };
+type UspRequest = { id: string; status: string };
+type CardOrder = { id: string; status: string };
 
 export function AdminDashboardScreen() {
   const { termQuest } = useSettings();
@@ -34,10 +36,21 @@ export function AdminDashboardScreen() {
     queryFn: () => api.get<{ data: EventInstance[] }>("/admin/events"),
   });
 
+  const { data: uspRequestsData } = useQuery({
+    queryKey: ["admin", "usp-requests"],
+    queryFn: () => api.get<{ data: UspRequest[] }>("/admin/usps/requests"),
+  });
+
+  const { data: cardOrdersData } = useQuery({
+    queryKey: ["admin", "card-print-orders"],
+    queryFn: () => api.get<{ data: CardOrder[] }>("/admin/card-print/orders"),
+  });
+
   const members = membersData?.data ?? [];
   const quests = questsData?.data ?? [];
   const eventTypeDefs = eventTypeDefsData?.data ?? [];
   const eventInstances = eventInstancesData?.data ?? [];
+  const uspRequests = uspRequestsData?.data ?? [];
 
   const pendingCount  = members.filter((m) => m.status === "pending").length;
   const activeCount   = members.filter((m) => m.status === "active").length;
@@ -45,6 +58,11 @@ export function AdminDashboardScreen() {
   const draftQuests   = quests.filter((q) => q.status === "draft").length;
   const activeTypeDefsCount = eventTypeDefs.filter((t) => t.isActive).length;
   const activeInstancesCount = eventInstances.filter((i) => i.status === "active").length;
+  const uspPendingCount = uspRequests.filter((r) => r.status === "pending").length;
+  const uspTotalCount = uspRequests.filter((r) => r.status === "approved").length;
+  const cardOrders = cardOrdersData?.data ?? [];
+  const cardOrderPendingCount = cardOrders.filter((o) => o.status === "pending").length;
+  const cardOrderTotalCount = cardOrders.length;
 
   const cards = [
     {
@@ -54,6 +72,15 @@ export function AdminDashboardScreen() {
       stats: [
         { label: "承認待ち", value: pendingCount, urgent: pendingCount > 0 },
         { label: "アクティブ", value: activeCount, urgent: false },
+      ],
+    },
+    {
+      to: "/admin/usps",
+      icon: "⭐",
+      label: "USP管理",
+      stats: [
+        { label: "申請承認待ち", value: uspPendingCount, urgent: uspPendingCount > 0 },
+        { label: "承認済み", value: uspTotalCount, urgent: false },
       ],
     },
     {
@@ -72,6 +99,15 @@ export function AdminDashboardScreen() {
       stats: [
         { label: "イベント種別", value: activeTypeDefsCount, urgent: false },
         { label: "実施中", value: activeInstancesCount, urgent: false },
+      ],
+    },
+    {
+      to: "/admin/card",
+      icon: "🃏",
+      label: "カード作成",
+      stats: [
+        { label: "新規発注", value: cardOrderPendingCount, urgent: cardOrderPendingCount > 0 },
+        { label: "累計発注", value: cardOrderTotalCount, urgent: false },
       ],
     },
     {
@@ -135,9 +171,12 @@ export function AdminDashboardScreen() {
         ))}
       </div>
 
-      <div className="mt-6 card-paper p-4">
+      <div className="mt-6 card-paper p-4 space-y-1">
         <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>
           💡 新しいメンバーが登録申請したときは「メンバー管理」から承認してください。
+        </p>
+        <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>
+          ⭐ メンバーが新しいUSPを申請したときは「USP管理」から承認・却下できます。
         </p>
       </div>
     </div>

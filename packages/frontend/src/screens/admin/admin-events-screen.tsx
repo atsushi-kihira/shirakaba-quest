@@ -21,15 +21,18 @@ type Instance = {
   relatedMemberIds: string[];
   multiplier: number | null;
   pointAwardTiming: string | null;
+  allowRepeat: number;
   status: "active" | "ended" | "deleted";
   createdByMemberId: string | null;
   createdAt: number;
 };
 
-type Member = { id: string; name: string; emoji: string; status: string };
+type Member = { id: string; name: string; emoji: string; bgColor?: string; status: string };
 type TypeDefsResponse = { data: EventTypeDefinition[] };
 type InstancesResponse = { data: Instance[] };
 type MembersResponse = { data: Member[] };
+type TeamForPicker = { id: string; name: string; emblemEmoji: string; members: { memberId: string }[] };
+type TeamsForPickerResponse = { data: TeamForPicker[] };
 
 function toDateInput(ts: number | null | undefined): string {
   if (!ts) return "";
@@ -38,6 +41,154 @@ function toDateInput(ts: number | null | undefined): string {
 
 function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString("ja-JP");
+}
+
+// ---- 管理者用メンバーピッカー（全員 / チーム タブ＋全選択）----
+function AdminMemberPickerWithTabs({
+  members,
+  selectedIds,
+  onChange,
+}: {
+  members: Member[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<"all" | "team">("all");
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+  const [search, setSearch] = useState("");
+
+  const { data: teamsData } = useQuery({
+    queryKey: ["admin", "teams"],
+    queryFn: () => api.get<TeamsForPickerResponse>("/admin/teams"),
+    staleTime: 60_000,
+    enabled: activeTab === "team",
+  });
+
+  const activeMembers = members.filter((m) => m.status === "active");
+  const teams = teamsData?.data ?? [];
+
+  const teamFiltered = (() => {
+    if (activeTab !== "team") return activeMembers;
+    if (!selectedTeamId) return activeMembers;
+    const t = teams.find((t) => t.id === selectedTeamId);
+    if (!t) return [];
+    const ids = new Set(t.members.map((m) => m.memberId));
+    return activeMembers.filter((m) => ids.has(m.id));
+  })();
+
+  const filtered = search ? teamFiltered.filter((m) => m.name.includes(search)) : teamFiltered;
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((m) => selectedIds.includes(m.id));
+
+  function toggle(id: string) {
+    onChange(selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]);
+  }
+
+  function selectAll() {
+    onChange([...new Set([...selectedIds, ...filtered.map((m) => m.id)])]);
+  }
+
+  function deselectAll() {
+    const set = new Set(filtered.map((m) => m.id));
+    onChange(selectedIds.filter((id) => !set.has(id)));
+  }
+
+  return (
+    <div className="space-y-2">
+      {/* タブ */}
+      <div className="flex gap-1">
+        {(["all", "team"] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => { setActiveTab(tab); setSearch(""); setSelectedTeamId(""); }}
+            className="flex-1 text-xs py-1.5 rounded-xl font-medium transition"
+            style={{
+              background: activeTab === tab ? "var(--color-brand)" : "var(--color-paper-300)",
+              color: activeTab === tab ? "white" : "var(--color-ink-600)",
+            }}
+          >
+            {tab === "all" ? "全員" : "チームで絞り込む"}
+          </button>
+        ))}
+      </div>
+
+      {/* チームセレクター */}
+      {activeTab === "team" && (
+        <select
+          value={selectedTeamId}
+          onChange={(e) => setSelectedTeamId(e.target.value)}
+          className="w-full px-3 py-2 rounded-xl border text-sm"
+          style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+        >
+          <option value="">— チームを選択 —</option>
+          {teams.map((t) => (
+            <option key={t.id} value={t.id}>{t.emblemEmoji} {t.name}</option>
+          ))}
+        </select>
+      )}
+
+      {/* 絞り込み検索 + 全選択 */}
+      <div className="flex gap-2">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="名前で絞り込む"
+          className="flex-1 px-3 py-1.5 rounded-xl border text-sm"
+          style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+        />
+        <button
+          onClick={allFilteredSelected ? deselectAll : selectAll}
+          disabled={filtered.length === 0}
+          className="px-3 py-1.5 rounded-xl text-xs font-medium shrink-0 transition disabled:opacity-40"
+          style={{
+            background: allFilteredSelected ? "rgba(181,56,75,0.12)" : "var(--color-paper-200)",
+            color: allFilteredSelected ? "var(--color-brand)" : "var(--color-ink-600)",
+            border: allFilteredSelected ? "1.5px solid rgba(181,56,75,0.3)" : "1.5px solid transparent",
+          }}
+        >
+          {allFilteredSelected ? "全解除" : "全選択"}
+        </button>
+      </div>
+
+      {/* 選択中カウント */}
+      {selectedIds.length > 0 && (
+        <p className="text-xs font-semibold" style={{ color: "var(--color-brand)" }}>
+          {selectedIds.length}名選択中
+        </p>
+      )}
+
+      {/* メンバーリスト */}
+      <div
+        className="max-h-44 overflow-y-auto space-y-1 rounded-xl p-2"
+        style={{ background: "var(--color-paper-200)" }}
+      >
+        {filtered.length === 0 ? (
+          <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-400)" }}>
+            {activeTab === "team" && !selectedTeamId ? "チームを選択してください" : "メンバーが見つかりません"}
+          </p>
+        ) : (
+          filtered.map((m) => (
+            <label
+              key={m.id}
+              className="flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded-lg hover:opacity-80 transition"
+              style={{ background: selectedIds.includes(m.id) ? "rgba(181,56,75,0.1)" : "transparent" }}
+            >
+              <input
+                type="checkbox"
+                checked={selectedIds.includes(m.id)}
+                onChange={() => toggle(m.id)}
+                className="sr-only"
+              />
+              <span className="text-sm">{m.emoji} {m.name}</span>
+              {selectedIds.includes(m.id) && (
+                <Check size={12} className="ml-auto" style={{ color: "var(--color-brand)" }} />
+              )}
+            </label>
+          ))
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ---- 種別ごとのセクション ----
@@ -363,6 +514,13 @@ function InstanceCard({
               +{inst.multiplier}pt
             </span>
           )}
+          <span className="text-xs px-1.5 py-0.5 rounded-full"
+            style={{
+              background: inst.allowRepeat === 0 ? "var(--color-paper-300)" : "rgba(90,140,92,0.12)",
+              color: inst.allowRepeat === 0 ? "var(--color-ink-500)" : "var(--color-success)",
+            }}>
+            {inst.allowRepeat === 0 ? "1回限り" : "繰り返し可"}
+          </span>
         </div>
         {inst.description && (
           <p className="text-xs mt-0.5 truncate" style={{ color: "var(--color-ink-500)" }}>{inst.description}</p>
@@ -438,15 +596,11 @@ function EditInstanceForm({
   const [endsAt, setEndsAt] = useState(toDateInput(instance.endsAt));
   const [multiplier, setMultiplier] = useState(instance.multiplier ? String(instance.multiplier) : "");
   const [selectedIds, setSelectedIds] = useState<string[]>(instance.relatedMemberIds);
+  const [allowRepeat, setAllowRepeat] = useState(instance.allowRepeat !== 0);
 
-  const activeMembers = members.filter((m) => m.status === "active");
   const currentTypeDef = allTypeDefs.find((t) => t.id === selectedTypeDefId) ?? typeDef;
   const needsTarget = currentTypeDef.requiresTargetMember === 1;
   const typeChanged = selectedTypeDefId !== (instance.eventTypeDefId ?? typeDef.id);
-
-  function toggleMember(id: string) {
-    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
-  }
 
   return (
     <div className="mt-2 p-3 rounded-2xl space-y-2 border-2" style={{ borderColor: "var(--color-brand)", background: "var(--color-paper-50)" }}>
@@ -476,17 +630,9 @@ function EditInstanceForm({
         className="w-full px-3 py-2 rounded-xl border text-sm resize-y"
         style={{ borderColor: "var(--color-paper-300)" }} />
       {needsTarget && (
-        <div className="max-h-40 overflow-y-auto space-y-1 rounded-xl p-2"
-          style={{ background: "var(--color-paper-200)" }}>
-          <p className="text-xs font-medium mb-1" style={{ color: "var(--color-ink-500)" }}>対象メンバー</p>
-          {activeMembers.map((m) => (
-            <label key={m.id} className="flex items-center gap-2 cursor-pointer px-2 py-1 rounded-lg hover:opacity-80"
-              style={{ background: selectedIds.includes(m.id) ? "rgba(181,56,75,0.1)" : "transparent" }}>
-              <input type="checkbox" checked={selectedIds.includes(m.id)} onChange={() => toggleMember(m.id)} className="sr-only" />
-              <span>{m.emoji} {m.name}</span>
-              {selectedIds.includes(m.id) && <Check size={12} className="ml-auto" style={{ color: "var(--color-brand)" }} />}
-            </label>
-          ))}
+        <div>
+          <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>対象メンバー</p>
+          <AdminMemberPickerWithTabs members={members} selectedIds={selectedIds} onChange={setSelectedIds} />
         </div>
       )}
       <div className="grid grid-cols-2 gap-2">
@@ -512,6 +658,17 @@ function EditInstanceForm({
             style={{ borderColor: "var(--color-paper-300)" }} />
         </div>
       )}
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={allowRepeat}
+          onChange={(e) => setAllowRepeat(e.target.checked)}
+          className="w-4 h-4 rounded"
+        />
+        <span className="text-xs" style={{ color: "var(--color-ink-700)" }}>
+          何度でも実施可（繰り返し可）
+        </span>
+      </label>
       <div className="flex gap-2 pt-1">
         <button onClick={onCancel} className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs"
           style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
@@ -526,6 +683,7 @@ function EditInstanceForm({
             endsAt: endsAt ? Math.floor(new Date(endsAt).getTime() / 1000) : null,
             multiplier: multiplier ? Number(multiplier) : null,
             relatedMemberIds: needsTarget ? selectedIds : undefined,
+            allowRepeat: allowRepeat ? 1 : 0,
           })}
           disabled={!title.trim() || isPending}
           className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs text-white disabled:opacity-50"
@@ -553,8 +711,8 @@ function CreateInstanceForm({
   const [endsAt, setEndsAt] = useState("");
   const [multiplier, setMultiplier] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [allowRepeat, setAllowRepeat] = useState(true);
 
-  const activeMembers = members.filter((m) => m.status === "active");
   const needsTarget = typeDef.requiresTargetMember === 1;
 
   const create = useMutation({
@@ -566,6 +724,7 @@ function CreateInstanceForm({
       endsAt: endsAt ? Math.floor(new Date(endsAt).getTime() / 1000) : undefined,
       relatedMemberIds: selectedIds.length > 0 ? selectedIds : undefined,
       multiplier: multiplier ? Number(multiplier) : undefined,
+      allowRepeat: allowRepeat ? 1 : 0,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "events"] });
@@ -573,10 +732,6 @@ function CreateInstanceForm({
       onDone();
     },
   });
-
-  function toggleMember(id: string) {
-    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
-  }
 
   return (
     <div className="mt-3 p-4 rounded-2xl space-y-3 border-2" style={{ borderColor: "rgba(181,56,75,0.3)", background: "var(--color-paper-50)" }}>
@@ -591,18 +746,8 @@ function CreateInstanceForm({
         style={{ borderColor: "var(--color-paper-300)" }} />
       {needsTarget && (
         <div>
-          <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-500)" }}>対象メンバー</p>
-          <div className="max-h-44 overflow-y-auto space-y-1 rounded-xl p-2"
-            style={{ background: "var(--color-paper-200)" }}>
-            {activeMembers.map((m) => (
-              <label key={m.id} className="flex items-center gap-2 cursor-pointer px-2 py-1.5 rounded-lg hover:opacity-80"
-                style={{ background: selectedIds.includes(m.id) ? "rgba(181,56,75,0.1)" : "transparent" }}>
-                <input type="checkbox" checked={selectedIds.includes(m.id)} onChange={() => toggleMember(m.id)} className="sr-only" />
-                <span className="text-sm">{m.emoji} {m.name}</span>
-                {selectedIds.includes(m.id) && <Check size={13} className="ml-auto" style={{ color: "var(--color-brand)" }} />}
-              </label>
-            ))}
-          </div>
+          <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>対象メンバー</p>
+          <AdminMemberPickerWithTabs members={members} selectedIds={selectedIds} onChange={setSelectedIds} />
         </div>
       )}
       <div className="grid grid-cols-2 gap-2">
@@ -628,6 +773,17 @@ function CreateInstanceForm({
             style={{ borderColor: "var(--color-paper-300)" }} />
         </div>
       )}
+      <label className="flex items-center gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={allowRepeat}
+          onChange={(e) => setAllowRepeat(e.target.checked)}
+          className="w-4 h-4 rounded"
+        />
+        <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+          何度でも実施可（繰り返し可）
+        </span>
+      </label>
       <div className="flex gap-2">
         <button onClick={onCancel} className="flex items-center gap-1 px-3 py-2 rounded-2xl text-sm"
           style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>

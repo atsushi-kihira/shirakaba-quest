@@ -22,6 +22,9 @@ export type Env = {
   GOOGLE_OAUTH_CLIENT_SECRET: string;
   SCHEDULER_TOKEN_KEY: string;  // base64 エンコードされた 32 バイトの AES-256 鍵
   FRONTEND_URL: string;         // 公開 URL（例: https://shirakaba-quest.pages.dev）
+  // Zoom OAuth
+  ZOOM_CLIENT_ID: string;
+  ZOOM_CLIENT_SECRET: string;
 };
 
 // Hono のコンテキスト変数

@@ -2,7 +2,7 @@
 // mode='public_guest': 予約可能スロットのみ表示
 // mode='member_to_member': 自分の予定 + 相手の busy + 双方空き（Phase 2）
 
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 export type Slot = { startUtc: string; endUtc: string };
@@ -14,6 +14,11 @@ type Props = {
   selectedSlot: Slot | null;
   durationMinutes: number;
   onSlotClick: (slot: Slot) => void;
+  /** ログイン中のメンバーが自分の予定を参考表示する場合に渡す（busy ブロック） */
+  myBusyBlocks?: Slot[];
+  /** 表示中の週の開始日（呼び出し元が管理し、データ取得範囲と同期させる） */
+  weekStart: Date;
+  onWeekChange: (weekStart: Date) => void;
 };
 
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
@@ -64,9 +69,10 @@ export default function UnifiedCalendarGrid({
   selectedSlot,
   durationMinutes,
   onSlotClick,
+  myBusyBlocks,
+  weekStart,
+  onWeekChange,
 }: Props) {
-  const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekJST(new Date()));
-
   const days = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => {
       const d = new Date(weekStart.getTime() + i * 86400_000);
@@ -91,6 +97,18 @@ export default function UnifiedCalendarGrid({
     return map;
   }, [availableSlots]);
 
+  // 自分の busy ブロックを dateKey → ブロック[] にグルーピング
+  const myBusyByDate = useMemo(() => {
+    const map = new Map<string, Slot[]>();
+    for (const block of myBusyBlocks ?? []) {
+      const { dateKey } = toJSTHourMin(block.startUtc);
+      const arr = map.get(dateKey) ?? [];
+      arr.push(block);
+      map.set(dateKey, arr);
+    }
+    return map;
+  }, [myBusyBlocks]);
+
   // 表示する時間帯を算出（スロットがある時間帯のみ）
   const visibleHours = useMemo(() => {
     const hoursWithSlots = new Set<number>();
@@ -111,19 +129,55 @@ export default function UnifiedCalendarGrid({
   const totalMinutesVisible = visibleHours.length * 60;
   const gridHeight = visibleHours.length * cellHeightPx;
 
-  const prevWeek = () => setWeekStart((w) => new Date(w.getTime() - 7 * 86400_000));
-  const nextWeek = () => setWeekStart((w) => new Date(w.getTime() + 7 * 86400_000));
-  const todayWeek = () => setWeekStart(startOfWeekJST(new Date()));
+  // スロット同士の最短間隔（分）を算出し、表示ボックスの高さがそれを超えて
+  // 隣のスロットと重ならないようにする（例: 60分枠を30分間隔で並べる場合）
+  const minIntervalMinutes = useMemo(() => {
+    const startsByDate = new Map<string, number[]>();
+    for (const slot of availableSlots) {
+      const { hour, min: startMin, dateKey } = toJSTHourMin(slot.startUtc);
+      const arr = startsByDate.get(dateKey) ?? [];
+      arr.push(hour * 60 + startMin);
+      startsByDate.set(dateKey, arr);
+    }
+    let minGap = Infinity;
+    for (const starts of startsByDate.values()) {
+      const sorted = [...starts].sort((a, b) => a - b);
+      for (let i = 1; i < sorted.length; i++) {
+        const gap = sorted[i] - sorted[i - 1];
+        if (gap > 0 && gap < minGap) minGap = gap;
+      }
+    }
+    return Number.isFinite(minGap) ? minGap : durationMinutes;
+  }, [availableSlots, durationMinutes]);
+
+  const prevWeek = () => onWeekChange(new Date(weekStart.getTime() - 7 * 86400_000));
+  const nextWeek = () => onWeekChange(new Date(weekStart.getTime() + 7 * 86400_000));
+  const todayWeek = () => onWeekChange(startOfWeekJST(new Date()));
 
   const isPast = weekStart.getTime() < startOfWeekJST(new Date()).getTime();
 
   // スロットの位置を計算
-  function slotStyle(slot: Slot): React.CSSProperties {
+  // 開始間隔が枠の長さより短い場合（例: 60分枠を30分間隔で並べる）は
+  // 未選択時はボックスの高さを間隔以下に抑え、隣のスロットと重ならないようにする。
+  // 選択中のスロットだけは実際の所要時間（durationMinutes）どおりの高さで表示し、
+  // 見た目と実際に確保される時間が食い違わないようにする。
+  function slotStyle(slot: Slot, selected: boolean): React.CSSProperties {
     const { hour, min } = toJSTHourMin(slot.startUtc);
     const topMinutes = (hour - (visibleHours[0] ?? 9)) * 60 + min;
     const top = (topMinutes / totalMinutesVisible) * gridHeight;
-    const height = (durationMinutes / totalMinutesVisible) * gridHeight;
-    return { top: `${top}px`, height: `${Math.max(height, 20)}px` };
+    const displayMinutes = selected ? durationMinutes : Math.min(durationMinutes, minIntervalMinutes);
+    const height = (displayMinutes / totalMinutesVisible) * gridHeight;
+    return { top: `${top}px`, height: `${Math.max(height - 2, 18)}px`, zIndex: selected ? 10 : 1 };
+  }
+
+  // busy ブロックの位置を計算（開始・終了時刻が任意）
+  function blockStyle(block: Slot): React.CSSProperties {
+    const start = toJSTHourMin(block.startUtc);
+    const topMinutes = (start.hour - (visibleHours[0] ?? 9)) * 60 + start.min;
+    const durationMin = Math.max(0, (new Date(block.endUtc).getTime() - new Date(block.startUtc).getTime()) / 60_000);
+    const top = (topMinutes / totalMinutesVisible) * gridHeight;
+    const height = (durationMin / totalMinutesVisible) * gridHeight;
+    return { top: `${top}px`, height: `${Math.max(height, 12)}px` };
   }
 
   const isSelected = (slot: Slot) =>
@@ -217,6 +271,7 @@ export default function UnifiedCalendarGrid({
             {/* 日別カラム */}
             {days.map(({ dateKey }) => {
               const daySlots = slotsByDate.get(dateKey) ?? [];
+              const dayBusyBlocks = myBusyByDate.get(dateKey) ?? [];
               return (
                 <div
                   key={dateKey}
@@ -236,6 +291,19 @@ export default function UnifiedCalendarGrid({
                     />
                   ))}
 
+                  {/* 自分の予定（参考表示） */}
+                  {dayBusyBlocks.map((block, i) => (
+                    <div
+                      key={`busy-${i}`}
+                      className="absolute left-0.5 right-0.5 rounded pointer-events-none"
+                      style={{
+                        ...blockStyle(block),
+                        background: "repeating-linear-gradient(45deg, rgba(181,56,75,0.12), rgba(181,56,75,0.12) 4px, rgba(181,56,75,0.2) 4px, rgba(181,56,75,0.2) 8px)",
+                        border: "1px solid rgba(181,56,75,0.3)",
+                      }}
+                    />
+                  ))}
+
                   {/* 予約可能スロット */}
                   {daySlots.map((slot) => {
                     const selected = isSelected(slot);
@@ -245,7 +313,7 @@ export default function UnifiedCalendarGrid({
                         onClick={() => onSlotClick(slot)}
                         className="absolute left-0.5 right-0.5 rounded text-xs font-medium transition-all overflow-hidden"
                         style={{
-                          ...slotStyle(slot),
+                          ...slotStyle(slot, selected),
                           background: selected
                             ? "var(--color-success)"
                             : "rgba(90,140,92,0.15)",
@@ -256,7 +324,9 @@ export default function UnifiedCalendarGrid({
                         }}
                       >
                         <span className="block px-1 truncate">
-                          {formatTimeJST(slot.startUtc)}
+                          {selected
+                            ? `${formatTimeJST(slot.startUtc)}〜${formatTimeJST(slot.endUtc)}`
+                            : formatTimeJST(slot.startUtc)}
                         </span>
                       </button>
                     );
@@ -281,6 +351,18 @@ export default function UnifiedCalendarGrid({
           <div className="w-4 h-4 rounded" style={{ background: "var(--color-success)" }} />
           <span>選択中</span>
         </div>
+        {myBusyBlocks && myBusyBlocks.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <div
+              className="w-4 h-4 rounded"
+              style={{
+                background: "repeating-linear-gradient(45deg, rgba(181,56,75,0.12), rgba(181,56,75,0.12) 4px, rgba(181,56,75,0.2) 4px, rgba(181,56,75,0.2) 8px)",
+                border: "1px solid rgba(181,56,75,0.3)",
+              }}
+            />
+            <span>あなたの予定</span>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -108,6 +108,7 @@ memberRoutes.get("/", async (c) => {
       linkedinUrl:  isUnlocked ? member.linkedinUrl  : null,
       instagramUrl: isUnlocked ? member.instagramUrl : null,
       customFields: isUnlocked ? parseJson(member.customFields, {}) : null,
+      characterKey: member.characterKey ?? null,
     };
   });
 
@@ -177,6 +178,7 @@ memberRoutes.get("/:id", async (c) => {
       linkedinUrl:  isUnlocked ? member.linkedinUrl  : null,
       instagramUrl: isUnlocked ? member.instagramUrl : null,
       customFields: isUnlocked ? parseJson(member.customFields, {}) : null,
+      characterKey: member.characterKey ?? null,
     },
   });
 });
@@ -201,6 +203,7 @@ memberRoutes.patch("/me", async (c) => {
     role: string;
     phone: string;
     address: string;
+    characterKey: string | null;
     category: string;
     businessDescription: string;
     skills: Skill[];
@@ -226,6 +229,7 @@ memberRoutes.patch("/me", async (c) => {
       ...(body.role              !== undefined && { role: body.role }),
       ...(body.phone             !== undefined && { phone: body.phone }),
       ...(body.address           !== undefined && { address: body.address }),
+      ...(body.characterKey      !== undefined && { characterKey: body.characterKey }),
       ...(body.category          !== undefined && { category: body.category }),
       ...(body.businessDescription !== undefined && { businessDescription: body.businessDescription }),
       ...(body.skills            !== undefined && { skills: JSON.stringify(body.skills) }),
@@ -661,37 +665,64 @@ memberRoutes.post("/:id/import-card", async (c) => {
       .get();
   }
 
-  // すでに digital 以上の場合は重複登録しない
-  if (conn?.status === "digital" || conn?.status === "real") {
+  // すでにリアルカード登録済みの場合は重複登録しない
+  if (conn?.status === "real") {
     return c.json({
       data: {
         alreadyRecorded: true,
-        message: `${target.name}さんとはすでに1to1記録があります`,
+        message: `${target.name}さんとはすでにリアルカード登録済みです`,
       },
     });
   }
 
-  // Connection を digital に更新（1to1完了扱い）
-  await db
-    .update(schema.connections)
-    .set({ status: "digital", oneOnOneCompletedAt: now })
-    .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)));
+  const isAlreadyDigital = conn?.status === "digital";
 
   const seasonPtsImport = await getActiveSeasonPoints(db);
+
+  // Connection をリアルカード取得済みに更新（1to1完了 + リアルカード取得を同時に記録）
+  await db
+    .update(schema.connections)
+    .set({
+      status: "real",
+      oneOnOneCompletedAt: isAlreadyDigital ? (conn!.oneOnOneCompletedAt ?? now) : now,
+      realCardReceivedAt: now,
+    })
+    .where(and(eq(schema.connections.fromMemberId, myId), eq(schema.connections.toMemberId, targetId)));
+
+  let totalDelta = seasonPtsImport.realCard;
+
+  if (!isAlreadyDigital) {
+    // 1to1ポイントをまだ付与していない場合のみ付与
+    await db.insert(schema.pointTransactions).values({
+      id: newId(),
+      memberId: myId,
+      delta: seasonPtsImport.oneOnOne,
+      reason: "one_on_one_completed",
+      relatedId: targetId,
+      createdAt: now,
+    });
+    totalDelta += seasonPtsImport.oneOnOne;
+  }
+
+  // リアルカード取得ポイント付与
   await db.insert(schema.pointTransactions).values({
     id: newId(),
     memberId: myId,
-    delta: seasonPtsImport.oneOnOne,
-    reason: "one_on_one_completed",
+    delta: seasonPtsImport.realCard,
+    reason: "real_card_exchanged",
     relatedId: targetId,
     createdAt: now,
   });
 
-  console.log(`[IMPORT CARD] ${myId} registered 1to1 with ${targetId} via card image`);
+  await checkAndAwardBadges(db, myId, schema);
+
+  console.log(`[IMPORT CARD] ${myId} registered real card + 1to1 with ${targetId} via card image`);
   return c.json({
     data: {
       alreadyRecorded: false,
-      message: `${target.name}さんとの1to1を記録しました！ +1pt`,
+      message: isAlreadyDigital
+        ? `${target.name}さんのリアルカードを受け取りました！ +${seasonPtsImport.realCard}pt`
+        : `${target.name}さんとの1to1完了 + リアルカード受け取りを記録しました！ +${totalDelta}pt`,
     },
   });
 });
@@ -708,7 +739,13 @@ memberRoutes.get("/:id/history", async (c) => {
       .from(schema.pointTransactions)
       .where(eq(schema.pointTransactions.memberId, targetId))
       .get() as Promise<{ total: number | null } | undefined>,
-    db.select({ id: schema.pointTransactions.id, delta: schema.pointTransactions.delta, reason: schema.pointTransactions.reason, createdAt: schema.pointTransactions.createdAt })
+    db.select({
+      id: schema.pointTransactions.id,
+      delta: schema.pointTransactions.delta,
+      reason: schema.pointTransactions.reason,
+      relatedId: schema.pointTransactions.relatedId,
+      createdAt: schema.pointTransactions.createdAt,
+    })
       .from(schema.pointTransactions)
       .where(eq(schema.pointTransactions.memberId, targetId))
       .orderBy(desc(schema.pointTransactions.createdAt))
@@ -724,19 +761,107 @@ memberRoutes.get("/:id/history", async (c) => {
     quest_hard_solved:       "🔥 難題クリア",
     welcome_quest_bonus:     "🎉 歓迎クエストボーナス",
     visitor_invite_resolved: "🙌 ゲスト招待達成",
+    event_participation:     "🎯 イベント参加",
+    meeting_attendance:      "📅 ミーティング出席",
     admin_reset:             "🔄 ポイントリセット",
     admin_adjust:            "✏️ 管理者調整",
   };
 
+  // クエスト名を解決
+  const questIds = txs
+    .filter((t) => t.reason === "quest_normal_solved" || t.reason === "quest_hard_solved")
+    .map((t) => t.relatedId).filter((id): id is string => !!id);
+  const quests = questIds.length > 0
+    ? await db.select({ id: schema.quests.id, title: schema.quests.title, emoji: schema.quests.emoji })
+        .from(schema.quests).all()
+    : [];
+  const questMap = new Map(quests.map((q) => [q.id, q]));
+
+  // 1on1 パートナーを解決
+  const sessionIds = txs
+    .filter((t) => t.reason === "one_on_one_completed")
+    .map((t) => t.relatedId).filter((id): id is string => !!id);
+  const sessions = sessionIds.length > 0
+    ? await db.select({ id: schema.oneOnOneSessions.id, requesterId: schema.oneOnOneSessions.requesterId, responderId: schema.oneOnOneSessions.responderId })
+        .from(schema.oneOnOneSessions).all()
+    : [];
+  const sessionMap = new Map(sessions.map((s) => [s.id, s]));
+
+  // リアルカード相手を解決
+  const realCardMemberIds = txs
+    .filter((t) => t.reason === "real_card_exchanged")
+    .map((t) => t.relatedId).filter((id): id is string => !!id);
+
+  // イベントキャンペーン名を解決
+  const eventCampaignIds = txs
+    .filter((t) => t.reason === "event_participation")
+    .map((t) => t.relatedId).filter((id): id is string => !!id);
+  const eventCampaigns = eventCampaignIds.length > 0
+    ? await db.select({ id: schema.eventCampaigns.id, title: schema.eventCampaigns.title })
+        .from(schema.eventCampaigns).all()
+    : [];
+  const eventCampaignMap = new Map(eventCampaigns.map((e) => [e.id, e]));
+
+  // ミーティング名を解決
+  const meetingIds = txs
+    .filter((t) => t.reason === "meeting_attendance")
+    .map((t) => t.relatedId).filter((id): id is string => !!id);
+  const attendedMeetings = meetingIds.length > 0
+    ? await db.select({ id: schema.meetings.id, title: schema.meetings.title })
+        .from(schema.meetings).all()
+    : [];
+  const meetingMap = new Map(attendedMeetings.map((m) => [m.id, m]));
+
+  // 関連メンバー名を解決（1on1 パートナー + リアルカード相手）
+  const partnerMemberIds = new Set<string>();
+  for (const tx of txs) {
+    if (tx.reason === "one_on_one_completed" && tx.relatedId) {
+      const s = sessionMap.get(tx.relatedId);
+      if (s) partnerMemberIds.add(s.requesterId === targetId ? s.responderId : s.requesterId);
+    }
+  }
+  for (const id of realCardMemberIds) partnerMemberIds.add(id);
+
+  const relatedMembers = partnerMemberIds.size > 0
+    ? await db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji })
+        .from(schema.members).all()
+    : [];
+  const memberMap = new Map(relatedMembers.map((m) => [m.id, m]));
+
+  const sessionToMember = new Map<string, typeof relatedMembers[number]>();
+  for (const tx of txs) {
+    if (tx.reason === "one_on_one_completed" && tx.relatedId) {
+      const s = sessionMap.get(tx.relatedId);
+      if (s) {
+        const partnerId = s.requesterId === targetId ? s.responderId : s.requesterId;
+        const m = memberMap.get(partnerId);
+        if (m) sessionToMember.set(tx.relatedId, m);
+      }
+    }
+  }
+
   return c.json({
     data: {
       totalPoints: Number(totalRow?.total ?? 0),
-      history: txs.map((t) => ({
-        id: t.id,
-        delta: t.delta,
-        label: REASON_LABEL[t.reason] ?? t.reason,
-        createdAt: t.createdAt,
-      })),
+      history: txs.map((t) => {
+        const label = REASON_LABEL[t.reason] ?? t.reason;
+        const quest = questMap.get(t.relatedId ?? "");
+        const member = t.reason === "one_on_one_completed"
+          ? sessionToMember.get(t.relatedId ?? "")
+          : memberMap.get(t.relatedId ?? "");
+        const eventCampaign = eventCampaignMap.get(t.relatedId ?? "");
+        const attendedMeeting = meetingMap.get(t.relatedId ?? "");
+        const detail = quest
+          ? `${quest.emoji} ${quest.title}`
+          : member
+          ? `${member.emoji} ${member.name}`
+          : eventCampaign
+          ? eventCampaign.title
+          : attendedMeeting
+          ? attendedMeeting.title
+          : undefined;
+        return { id: t.id, delta: t.delta, label, detail, createdAt: t.createdAt };
+      }),
     },
   });
 });

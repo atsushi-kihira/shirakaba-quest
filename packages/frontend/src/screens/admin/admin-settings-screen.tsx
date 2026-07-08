@@ -3,8 +3,9 @@
 // =============================================================
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Upload, RotateCcw, ImageIcon } from "lucide-react";
+import { Save, Upload, RotateCcw, ImageIcon, Trash2, Plus, Loader2 } from "lucide-react";
 import { api, API_BASE_URL } from "@/lib/api";
+import { useAuthStore } from "@/stores/auth-store";
 
 type AppSettings = {
   id: string;
@@ -50,8 +51,17 @@ const DEFAULTS: FormState = {
   timezone: "Asia/Tokyo",
 };
 
+type AdminUser = {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  createdAt: number;
+};
+
 export function AdminSettingsScreen() {
   const qc = useQueryClient();
+  const { user } = useAuthStore();
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "app-settings"],
@@ -72,7 +82,7 @@ export function AdminSettingsScreen() {
     mutationFn: (imageBase64: string) =>
       api.post("/admin/app-settings/character", {
         imageBase64,
-        mimeType: imageBase64.startsWith("data:image/png") ? "image/png" : "image/jpeg",
+        mimeType: imageBase64.startsWith("data:image/gif") ? "image/gif" : imageBase64.startsWith("data:image/png") ? "image/png" : "image/jpeg",
       }),
     onSuccess: () => {
       setUploadTs(Date.now());
@@ -326,7 +336,7 @@ export function AdminSettingsScreen() {
             🧙 トップキャラクター画像
           </h2>
           <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
-            ログイン画面などに大きく表示されるキャラクター画像。PNG・JPEGに対応。
+            ログイン画面などに大きく表示されるキャラクター画像。GIFファイル（アニメーションGIF含む）・PNG・JPEGに対応。
           </p>
         </div>
 
@@ -346,7 +356,7 @@ export function AdminSettingsScreen() {
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/png,image/jpeg"
+              accept="image/png,image/jpeg,image/gif"
               className="hidden"
               onChange={handleFileSelect}
             />
@@ -396,6 +406,189 @@ export function AdminSettingsScreen() {
         <Save size={16} />
         {save.isPending ? "保存中..." : "設定を保存する"}
       </button>
+
+      {/* ---- 管理者ユーザー管理 ---- */}
+      <AdminUsersSection currentAdminId={user?.id ?? ""} qc={qc} />
+    </div>
+  );
+}
+
+// ================================================================
+// 管理者ユーザー管理セクション
+// ================================================================
+function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc: ReturnType<typeof useQueryClient> }) {
+  const [showForm, setShowForm] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newRole, setNewRole] = useState<"admin" | "super_admin">("admin");
+  const [formError, setFormError] = useState("");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin", "admins"],
+    queryFn: () => api.get<{ data: AdminUser[] }>("/admin/admins"),
+  });
+  const admins = data?.data ?? [];
+
+  const addMutation = useMutation({
+    mutationFn: () => api.post("/admin/admins", { email: newEmail.trim(), name: newName.trim(), role: newRole }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "admins"] });
+      setNewEmail("");
+      setNewName("");
+      setNewRole("admin");
+      setShowForm(false);
+      setFormError("");
+    },
+    onError: (e: Error) => setFormError(e.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/admin/admins/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "admins"] }),
+  });
+
+  const ROLE_LABELS: Record<string, string> = {
+    admin: "管理者",
+    super_admin: "スーパー管理者",
+  };
+
+  return (
+    <div className="card-paper p-6 space-y-4 mt-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+            👮 管理者ユーザー
+          </h2>
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            管理ダッシュボードにログインできるアカウントを管理します。
+          </p>
+        </div>
+        <button
+          onClick={() => { setShowForm((v) => !v); setFormError(""); }}
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl font-medium transition hover:opacity-80"
+          style={{ background: "var(--color-brand)", color: "white" }}
+        >
+          <Plus size={13} />
+          追加
+        </button>
+      </div>
+
+      {/* 追加フォーム */}
+      {showForm && (
+        <div className="p-4 rounded-2xl space-y-3" style={{ background: "var(--color-paper-200)" }}>
+          <p className="text-xs font-semibold" style={{ color: "var(--color-ink-700)" }}>新しい管理者を追加</p>
+          {formError && (
+            <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>
+              ⚠️ {formError}
+            </p>
+          )}
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>氏名 *</label>
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="山田 太郎"
+              className="w-full px-3 py-2 rounded-xl border text-sm"
+              style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)", fontSize: "16px" }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス *</label>
+            <input
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+              placeholder="admin@example.com"
+              type="email"
+              className="w-full px-3 py-2 rounded-xl border text-sm"
+              style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)", fontSize: "16px" }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>権限</label>
+            <select
+              value={newRole}
+              onChange={(e) => setNewRole(e.target.value as "admin" | "super_admin")}
+              className="w-full px-3 py-2 rounded-xl border text-sm"
+              style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}
+            >
+              <option value="admin">管理者</option>
+              <option value="super_admin">スーパー管理者</option>
+            </select>
+          </div>
+          <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+            ※ 登録後、そのメールアドレスでOTPログインが可能になります。
+          </p>
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => { setShowForm(false); setFormError(""); }}
+              className="flex-1 py-2 rounded-xl text-sm"
+              style={{ background: "var(--color-paper-300)", color: "var(--color-ink-600)" }}
+            >
+              キャンセル
+            </button>
+            <button
+              onClick={() => addMutation.mutate()}
+              disabled={!newEmail.trim() || !newName.trim() || addMutation.isPending}
+              className="flex-1 py-2 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
+              style={{ background: "var(--color-brand)" }}
+            >
+              {addMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+              追加する
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 管理者一覧 */}
+      {isLoading ? (
+        <div className="flex justify-center py-4">
+          <Loader2 size={20} className="animate-spin" style={{ color: "var(--color-brand)" }} />
+        </div>
+      ) : admins.length === 0 ? (
+        <p className="text-sm text-center py-4" style={{ color: "var(--color-ink-400)" }}>管理者が登録されていません</p>
+      ) : (
+        <div className="space-y-2">
+          {admins.map((admin) => (
+            <div key={admin.id} className="flex items-center gap-3 py-2.5 px-3 rounded-2xl"
+              style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{admin.name}</p>
+                  <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
+                    style={{
+                      background: admin.role === "super_admin" ? "rgba(181,56,75,0.1)" : "var(--color-paper-200)",
+                      color: admin.role === "super_admin" ? "var(--color-brand)" : "var(--color-ink-500)",
+                    }}>
+                    {ROLE_LABELS[admin.role] ?? admin.role}
+                  </span>
+                  {admin.id === currentAdminId && (
+                    <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
+                      style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
+                      あなた
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs mt-0.5 truncate" style={{ color: "var(--color-ink-400)" }}>{admin.email}</p>
+              </div>
+              {admin.id !== currentAdminId && (
+                <button
+                  onClick={() => {
+                    if (window.confirm(`「${admin.name}」を管理者から削除しますか？`)) {
+                      deleteMutation.mutate(admin.id);
+                    }
+                  }}
+                  disabled={deleteMutation.isPending}
+                  className="p-1.5 rounded-lg transition hover:opacity-70 disabled:opacity-40 shrink-0"
+                  style={{ color: "var(--color-brand)" }}
+                  title="削除"
+                >
+                  <Trash2 size={15} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
