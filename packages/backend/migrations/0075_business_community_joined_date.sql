@@ -1,0 +1,1 @@
+ALTER TABLE members RENAME COLUMN business_community_joined_month TO business_community_joined_date;

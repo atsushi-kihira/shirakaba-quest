@@ -1,0 +1,2 @@
+-- processing状態のまま進捗が無くなった行を再取得できるようにするための、生成着手時刻の記録
+ALTER TABLE external_contacts ADD COLUMN business_summary_claimed_at integer;
