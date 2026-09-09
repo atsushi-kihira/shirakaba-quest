@@ -4,13 +4,13 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar, X, Handshake, Sparkles, MessageSquarePlus } from "lucide-react";
+import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar, X, Handshake, Sparkles, MessageSquarePlus, Lock } from "lucide-react";
 import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { AddContactFromBookingModal } from "@/components/add-contact-from-booking-modal";
 import { InfoTooltip } from "@/components/info-tooltip";
-import { useAuthStore } from "@/stores/auth-store";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateShort, fmtTime, isToday } from "@/lib/date";
@@ -89,6 +89,7 @@ type GuestFollowupsResponse = { data: GuestFollowup[] };
 
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
+  const approved = isApprovedMember(user);
   const { termQuest, termUsp, appTitle, termExternalGuest, termEnishi, termBusinessCommunity } = useSettings();
   const tz = useTimezone();
   const navigate = useNavigate();
@@ -331,7 +332,7 @@ export function HomeScreen() {
 
   // プロフィール補完の入力促し（後から必須にした項目・登録が推奨される項目）。
   // 各項目は「未入力・未登録」の場合のみ表示し、ホーム画面の一番先頭に並べる。
-  type ProfilePromptItem = { key: string; message: string; linkTo: string };
+  type ProfilePromptItem = { key: string; message: string; linkTo: string; restricted?: boolean };
   const profilePromptItems: ProfilePromptItem[] = [];
   if (user && !user.businessCommunityJoinedDate) {
     profilePromptItems.push({
@@ -345,6 +346,7 @@ export function HomeScreen() {
       key: "enishi",
       message: "🥚🪙 金の卵・金のガチョウを登録しましょう",
       linkTo: "/enishi/register",
+      restricted: true,
     });
   }
   if (externalContactsData && externalContactsData.data.length === 0) {
@@ -352,26 +354,53 @@ export function HomeScreen() {
       key: "contacts",
       message: "📇 外部人脈を登録しましょう",
       linkTo: "/members?tab=contacts",
+      restricted: true,
     });
   }
 
   return (
     <div className="px-4 py-6 space-y-5 max-w-xl mx-auto lg:max-w-none pb-24">
 
+      {/* 承認待ち（ゲスト）向けのご案内 */}
+      {!approved && (
+        <div className="px-4 py-3 rounded-2xl" style={{ background: "rgba(212,160,59,0.12)", border: "1px solid rgba(212,160,59,0.35)" }}>
+          <p className="text-sm font-semibold mb-1" style={{ color: "var(--color-ink-800)" }}>
+            👋 {appTitle} ゲストユーザー
+          </p>
+          <p className="text-xs" style={{ color: "var(--color-ink-600)" }}>
+            {appTitle}のメンバーとなるには管理者による承認が必要です。承認されれば、すべての機能が利用できるようになります。今しばらくお待ちください。
+          </p>
+        </div>
+      )}
+
       {/* プロフィール補完の入力促し */}
       {profilePromptItems.length > 0 && (
         <div className="space-y-2">
-          {profilePromptItems.map((item) => (
-            <Link key={item.key} to={item.linkTo}
-              className="flex items-center justify-between gap-3 px-4 py-3 rounded-2xl transition active:opacity-80"
-              style={{ background: "rgba(212,160,59,0.12)", border: "1px solid rgba(212,160,59,0.35)" }}
-            >
-              <p className="text-sm font-medium flex-1" style={{ color: "var(--color-ink-800)" }}>{item.message}</p>
-              <span className="flex items-center gap-0.5 text-xs font-medium shrink-0" style={{ color: "var(--color-brand)" }}>
-                入力する <ChevronRight size={14} />
-              </span>
-            </Link>
-          ))}
+          {profilePromptItems.map((item) => {
+            if (item.restricted && !approved) {
+              return (
+                <div key={item.key}
+                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-2xl opacity-50 cursor-not-allowed"
+                  style={{ background: "rgba(212,160,59,0.12)", border: "1px solid rgba(212,160,59,0.35)" }}
+                  title="承認されると利用できます"
+                >
+                  <p className="text-sm font-medium flex-1" style={{ color: "var(--color-ink-800)" }}>{item.message}</p>
+                  <Lock size={14} style={{ color: "var(--color-ink-500)" }} />
+                </div>
+              );
+            }
+            return (
+              <Link key={item.key} to={item.linkTo}
+                className="flex items-center justify-between gap-3 px-4 py-3 rounded-2xl transition active:opacity-80"
+                style={{ background: "rgba(212,160,59,0.12)", border: "1px solid rgba(212,160,59,0.35)" }}
+              >
+                <p className="text-sm font-medium flex-1" style={{ color: "var(--color-ink-800)" }}>{item.message}</p>
+                <span className="flex items-center gap-0.5 text-xs font-medium shrink-0" style={{ color: "var(--color-brand)" }}>
+                  入力する <ChevronRight size={14} />
+                </span>
+              </Link>
+            );
+          })}
         </div>
       )}
 
@@ -910,6 +939,16 @@ export function HomeScreen() {
       )}
 
       {/* ポイント */}
+      {!approved ? (
+        <div className="card-paper rounded-3xl p-5 opacity-50">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">⭐️</span>
+            <span className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>現在のポイント</span>
+            <Lock size={14} className="ml-auto" style={{ color: "var(--color-ink-400)" }} />
+          </div>
+          <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>承認されると表示されます</p>
+        </div>
+      ) : (
       <button
         onClick={() => setPointsExpanded((v) => !v)}
         className="w-full text-left card-paper rounded-3xl p-5 transition active:opacity-80"
@@ -979,9 +1018,10 @@ export function HomeScreen() {
           </div>
         )}
       </button>
+      )}
 
-      {/* 公開中のお題 */}
-      {quests.length > 0 && (
+      {/* 公開中のお題（承認済みメンバーのみ） */}
+      {approved && quests.length > 0 && (
         <section>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
@@ -1013,17 +1053,17 @@ export function HomeScreen() {
         </h2>
         <div className="grid grid-cols-1 gap-2">
           <QuickLink to="/members"  icon={<Users size={18} />}      label="なかまを探して1to1しよう" sub="+1pt"  color="var(--color-brand)"
-            description="気になるメンバーを探して1to1を申し込みましょう" />
+            description="気になるメンバーを探して1to1を申し込みましょう" disabled={!approved} />
           <QuickLink to="/collab"   icon={<Handshake size={18} />}  label="協働の様子を確認しよう"    sub=""       color="var(--color-success)"
-            description="パワーチームや協働マップの最新状況をチェックできます" />
-          <QuickLink to="/enishi"   icon={<Sparkles size={18} />}   label={`${termEnishi}をさがそう`}  sub="New!"   color="var(--color-accent)"
-            description={`AIがあなたの人脈から、新しい${termEnishi}の候補を見つけます`} />
+            description="パワーチームや協働マップの最新状況をチェックできます" disabled={!approved} />
+          <QuickLink to="/enishi"   icon={<Sparkles size={18} />}   label={`${termEnishi}をさがそう`}  sub=""       color="var(--color-accent)"
+            description={`AIがあなたの人脈から、新しい${termEnishi}の候補を見つけます`} disabled={!approved} />
           <QuickLink to="/quests"   icon={<ScrollText size={18} />} label={`${termQuest}に挑戦しよう`} sub="+5pt〜" color="var(--color-success)"
-            description={`${termUsp}を組み合わせて${termQuest}を解き、ポイントを獲得しましょう`} />
+            description={`${termUsp}を組み合わせて${termQuest}を解き、ポイントを獲得しましょう`} disabled={!approved} />
           <QuickLink to="/team"     icon={<span className="text-base">🦊</span>} label="ギルドの活動を確認しよう" sub="" color="var(--color-accent)"
-            description="所属ギルド（チーム）の最近の動きを確認できます" />
+            description="所属ギルド（チーム）の最近の動きを確認できます" disabled={!approved} />
           <QuickLink to="/ranking"  icon={<Trophy size={18} />}     label="ランキングをチェック"      sub=""       color="var(--color-accent)"
-            description="チャプター内でのあなたの順位を確認できます" />
+            description="チャプター内でのあなたの順位を確認できます" disabled={!approved} />
           <QuickLink to="/meetings" icon={<Calendar size={18} />}   label="ミーティングの日程調整"    sub=""       color="#6B7DB3"
             description="1to1やミーティングの申し込み・日程調整はこちらから" />
           <QuickLink to="/me"       icon={<QrCode size={18} />}     label="自分のQRを表示してカードを渡す" sub="🃏"  color="var(--color-ink-500)"
@@ -1088,7 +1128,24 @@ export function HomeScreen() {
   );
 }
 
-function QuickLink({ to, icon, label, sub, color, description }: { to: string; icon: React.ReactNode; label: string; sub: string; color: string; description: string }) {
+function QuickLink({ to, icon, label, sub, color, description, disabled }: { to: string; icon: React.ReactNode; label: string; sub: string; color: string; description: string; disabled?: boolean }) {
+  if (disabled) {
+    return (
+      <div
+        className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 cursor-not-allowed"
+        style={{ opacity: 0.5 }}
+        title="承認されると利用できます">
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+          style={{ background: color + "20", color }}>
+          {icon}
+        </div>
+        <span className="flex-1 min-w-0 text-sm font-medium truncate" style={{ color: "var(--color-ink-700)" }}>
+          {label}
+        </span>
+        <Lock size={14} style={{ color: "var(--color-ink-400)" }} />
+      </div>
+    );
+  }
   return (
     <Link to={to}
       className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80 active:scale-[0.98]">

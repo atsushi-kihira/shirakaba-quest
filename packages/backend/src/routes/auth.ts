@@ -57,14 +57,7 @@ authRoutes.post("/request-otp", async (c) => {
       .where(eq(schema.members.id, found.id))
       .get();
 
-    if (member?.status === "pending") {
-      console.log(`[OTP] Blocked: ${email} is pending`);
-      return c.json({
-        ok: false,
-        status: "pending",
-        message: "アカウントは管理者の承認待ちです。承認されるとログインできるようになります。",
-      });
-    }
+    // pending（承認待ち）は、承認前でも限定機能のゲストとしてログインできるようにする（フロント側でUIを制限）
     if (member?.status === "on_leave") {
       return c.json({
         ok: false,

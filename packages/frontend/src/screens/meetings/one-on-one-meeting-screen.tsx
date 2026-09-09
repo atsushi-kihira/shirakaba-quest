@@ -6,9 +6,10 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, Handshake, Loader2, Search, Check, X, Settings } from "lucide-react";
+import { ChevronLeft, Handshake, Loader2, Search, Check, X, Settings, Lock } from "lucide-react";
 import { api, request } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { GoogleNotConnectedWarning } from "@/components/google-not-connected-warning";
 import { AutoSchedulerShareLinkPanel, useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { InProgressOneOnOneSection, OneOnOneHistorySection } from "./_oneonone-sections";
@@ -22,10 +23,14 @@ export function OneOnOneMeetingScreen() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { termExternalGuest } = useSettings();
+  const approved = isApprovedMember(useAuthStore((s) => s.user));
   const [searchParams, setSearchParams] = useSearchParams();
-  const [mode, setModeState] = useState<"member" | "guest">(searchParams.get("mode") === "guest" ? "guest" : "member");
+  const [mode, setModeState] = useState<"member" | "guest">(
+    !approved || searchParams.get("mode") === "guest" ? "guest" : "member"
+  );
 
   function setMode(next: "member" | "guest") {
+    if (next === "member" && !approved) return;
     setModeState(next);
     setSearchParams(next === "guest" ? { mode: "guest" } : {}, { replace: true });
   }
@@ -45,13 +50,16 @@ export function OneOnOneMeetingScreen() {
       <div className="grid grid-cols-2 gap-2 mb-5">
         <button
           onClick={() => setMode("member")}
-          className="py-2.5 rounded-2xl text-sm font-medium transition"
+          disabled={!approved}
+          className="py-2.5 rounded-2xl text-sm font-medium transition flex items-center justify-center gap-1.5"
           style={{
             background: mode === "member" ? "var(--color-brand)" : "var(--color-paper-200)",
-            color: mode === "member" ? "white" : "var(--color-ink-600)",
+            color: !approved ? "var(--color-ink-300)" : mode === "member" ? "white" : "var(--color-ink-600)",
+            cursor: !approved ? "not-allowed" : "pointer",
           }}
         >
           メンバーに申し込む
+          {!approved && <Lock size={12} />}
         </button>
         <button
           onClick={() => setMode("guest")}

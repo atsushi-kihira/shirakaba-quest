@@ -18,7 +18,19 @@ type AuthUser = {
   isPilot2?: boolean;
   personalTheme?: string | null;
   businessCommunityJoinedDate?: string | null;
+  /** メンバーの承認状態（"pending" | "active" | "on_leave" | "deleted"）。管理者には設定されない。 */
+  status?: string | null;
 };
+
+/**
+ * メンバーがすべての機能を利用できる「承認済み」状態かどうか。
+ * 管理者は常にtrue。メンバーは status==="active" のときのみtrue（承認待ちの間はゲスト扱い）。
+ */
+export function isApprovedMember(user: AuthUser | null): boolean {
+  if (!user) return false;
+  if (user.userType === "admin") return true;
+  return user.status === "active";
+}
 
 type AuthStore = {
   token: string | null;

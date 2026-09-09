@@ -3,12 +3,12 @@
 // =============================================================
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, LogOut, QrCode, X, ChevronRight, Pencil, Check, Plus, Trash2, Camera, RefreshCw, Upload, RotateCcw, CreditCard } from "lucide-react";
+import { Loader2, LogOut, QrCode, X, ChevronRight, Pencil, Check, Plus, Trash2, Camera, RefreshCw, Upload, RotateCcw, CreditCard, Lock } from "lucide-react";
 import { useNavigate, Link } from "react-router-dom";
 import QRCode from "qrcode";
 import { api, API_BASE_URL } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
-import { useAuthStore } from "@/stores/auth-store";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
 import { usePushNotifications } from "@/hooks/use-push";
@@ -42,6 +42,7 @@ export function MypageScreen() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user, clearAuth } = useAuthStore();
+  const approved = isApprovedMember(user);
   const { termUsp } = useSettings();
   const tz = useTimezone();
   const push = usePushNotifications();
@@ -79,7 +80,7 @@ export function MypageScreen() {
   const { data: historyData } = useQuery({
     queryKey: ["points-history"],
     queryFn: () => api.get<HistoryResponse>("/ranking/history"),
-    enabled: tab === "history" && !isAdmin,
+    enabled: tab === "history" && !isAdmin && approved,
   });
 
   const { data: badgesData } = useQuery({
@@ -359,7 +360,16 @@ export function MypageScreen() {
         {/* ===== 右カラム: ポイント + バッジ + 1to1 + USP/履歴タブ ===== */}
         <div className="space-y-4">
           {/* ポイント */}
-          {!isAdmin && rank && (
+          {!isAdmin && !approved && (
+            <div className="card-paper rounded-3xl p-5 opacity-50">
+              <div className="flex items-center gap-2 mb-1">
+                <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>⭐ ポイント</h2>
+                <Lock size={14} style={{ color: "var(--color-ink-400)" }} />
+              </div>
+              <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>承認されると表示されます</p>
+            </div>
+          )}
+          {!isAdmin && approved && rank && (
             <div className="card-paper rounded-3xl p-5">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>⭐ ポイント</h2>
@@ -380,7 +390,7 @@ export function MypageScreen() {
           )}
 
           {/* バッジ */}
-          {!isAdmin && badgesData && badgesData.data.length > 0 && (
+          {!isAdmin && approved && badgesData && badgesData.data.length > 0 && (
             <div className="card-paper rounded-3xl p-5">
               <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🏅 獲得バッジ</h2>
               <div className="flex flex-wrap gap-2">
@@ -414,16 +424,22 @@ export function MypageScreen() {
               {/* タブ（管理者の場合はタブ切替なし・スキルのみ直接表示） */}
               {!isAdmin && (
                 <div className="flex gap-2 mb-4">
-                  {(["profile", "history"] as const).map((t) => (
-                    <button key={t} onClick={() => setTab(t)}
-                      className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
-                      style={{
-                        background: tab === t ? "var(--color-brand)" : "var(--color-paper-200)",
-                        color: tab === t ? "white" : "var(--color-ink-600)",
-                      }}>
-                      {{ profile: `✨ ${termUsp}`, history: "📊 履歴" }[t]}
-                    </button>
-                  ))}
+                  {(["profile", "history"] as const).map((t) => {
+                    const locked = t === "history" && !approved;
+                    return (
+                      <button key={t} onClick={() => !locked && setTab(t)}
+                        disabled={locked}
+                        className="flex-1 py-2 rounded-2xl text-sm font-medium transition flex items-center justify-center gap-1"
+                        style={{
+                          background: tab === t && !locked ? "var(--color-brand)" : "var(--color-paper-200)",
+                          color: tab === t && !locked ? "white" : locked ? "var(--color-ink-300)" : "var(--color-ink-600)",
+                          cursor: locked ? "not-allowed" : "pointer",
+                        }}>
+                        {{ profile: `✨ ${termUsp}`, history: "📊 履歴" }[t]}
+                        {locked && <Lock size={12} />}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
 
@@ -461,7 +477,7 @@ export function MypageScreen() {
               )}
 
               {/* ポイント履歴タブ */}
-              {tab === "history" && (
+              {tab === "history" && approved && (
                 <div className="card-paper rounded-3xl p-5">
                   <h2 className="text-base font-semibold mb-4" style={{ fontFamily: "var(--font-klee)" }}>📊 ポイント履歴</h2>
                   {!historyData ? (
@@ -498,7 +514,16 @@ export function MypageScreen() {
           )}
 
           {/* 金の卵・金のガチョウ */}
-          {!isAdmin && (
+          {!isAdmin && !approved && (
+            <div className="card-paper rounded-3xl p-5 opacity-50">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>🥚 金の卵・🪙 金のガチョウ</h2>
+                <Lock size={14} style={{ color: "var(--color-ink-400)" }} />
+              </div>
+              <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>承認されると利用できます</p>
+            </div>
+          )}
+          {!isAdmin && approved && (
             <div className="card-paper rounded-3xl p-5">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>🥚 金の卵・🪙 金のガチョウ</h2>

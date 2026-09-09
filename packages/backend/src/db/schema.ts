@@ -339,6 +339,15 @@ export const enishiIntroducedContacts = sqliteTable("enishi_introduced_contacts"
   createdAt:   integer("created_at").notNull(),
 });
 
+// 手入力でのメンバー登録時、プロフィール入力後にメールアドレスの所有確認を行うためのトークン
+export const emailVerifications = sqliteTable("email_verifications", {
+  token:      text("token").primaryKey(),
+  email:      text("email").notNull(),
+  verifiedAt: integer("verified_at"),
+  expiresAt:  integer("expires_at").notNull(),
+  createdAt:  integer("created_at").notNull(),
+});
+
 export const authSessions = sqliteTable("auth_sessions", {
   id:        text("id").primaryKey(),
   userId:    text("user_id").notNull(),

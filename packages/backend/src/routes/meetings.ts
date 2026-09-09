@@ -29,7 +29,7 @@ import { eq, inArray, and, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
-import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
+import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import {
   getAvailableConferenceTypes,
@@ -60,6 +60,9 @@ meetingRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  if (!(await isMemberApproved(db, memberId))) {
+    return c.json({ error: { code: "not_approved", message: "承認されるまでは複数人のミーティング作成はご利用いただけません" } }, 403);
+  }
   const now = Math.floor(Date.now() / 1000);
 
   const body = await c.req.json<{

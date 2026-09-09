@@ -79,6 +79,29 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
       { key: "loginUrl", label: "ログインURL", example: "https://shirakaba-quest.pages.dev" },
     ],
   },
+  {
+    emailKey: "register_email_verify",
+    label: "登録時メールアドレス確認",
+    category: "auth",
+    triggerDescription: "アカウント登録（手入力）でプロフィール入力後、メールアドレス確認のために送信",
+    enabled: true,
+    subject: "【{{appTitle}}】メールアドレスのご確認",
+    bodyText: `{{appTitle}} へのご登録ありがとうございます。
+
+以下のリンクをクリックして、メールアドレスの確認を完了してください。
+
+{{verifyUrl}}
+
+※ このリンクの有効期限は24時間です。
+※ ご自身で登録した覚えがない場合は、このメールを無視してください。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "verifyUrl", label: "確認用URL", example: "https://shirakaba-quest.pages.dev/register/verify?token=xxxx" },
+    ],
+  },
 
   // ============================================================
   // USP

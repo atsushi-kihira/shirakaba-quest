@@ -48,6 +48,7 @@ export function useMe() {
         isPilot2: u.isPilot2 ?? false,
         personalTheme: u.personalTheme ?? null,
         businessCommunityJoinedDate: u.businessCommunityJoinedDate ?? null,
+        status: u.status ?? null,
       });
     }
     if (query.error) {

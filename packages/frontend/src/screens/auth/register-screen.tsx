@@ -6,9 +6,9 @@
 // Step 4: 金の卵・金のガチョウ（任意）
 // Step 5: 完了
 // =============================================================
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw, Plus, X, Upload } from "lucide-react";
+import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw, Plus, X, Upload, Mail } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { LogoOrbit } from "@/components/logo-orbit";
@@ -36,6 +36,7 @@ type CardOcrResult = {
   memberName?: string;
   skills: SkillOcr[];
   rawText: string;
+  cardMatched?: boolean;
 };
 
 type SkillForm = SkillOcr;
@@ -63,6 +64,7 @@ export function RegisterScreen() {
   // Step1
   const [frontImage, setFrontImage]   = useState<string | null>(null);
   const [ocrDone, setOcrDone]         = useState(false);
+  const [cardMismatch, setCardMismatch] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
@@ -86,12 +88,61 @@ export function RegisterScreen() {
   const [goldenEggDesc, setGoldenEggDesc] = useState("");
   const [goldenGooseDesc, setGoldenGooseDesc] = useState("");
 
+  // 実際にカードを読み取れた場合は、カード保有の確認が取れているためメール確認を省略する
+  const cardScanVerified = ocrDone && !cardMismatch;
+
+  // Step3: メールアドレス確認（手入力登録時のみ）
+  const [awaitingVerification, setAwaitingVerification] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [verificationToken, setVerificationToken] = useState<string | null>(null);
+
+  const requestVerificationMutation = useMutation({
+    mutationFn: () =>
+      api.post<{ data: { token: string } }>("/register/request-email-verification", { email: profile.email.trim() }),
+    onSuccess: (res) => {
+      setVerificationToken(res.data.token);
+      setAwaitingVerification(true);
+    },
+  });
+
+  const { data: verificationStatus } = useQuery({
+    queryKey: ["register", "email-verification-status", verificationToken],
+    queryFn: () => api.get<{ data: { verified: boolean; expired: boolean } }>(
+      `/register/email-verification-status?token=${verificationToken}`
+    ),
+    enabled: awaitingVerification && !!verificationToken,
+    refetchInterval: 3000,
+  });
+
+  useEffect(() => {
+    if (verificationStatus?.data.verified) {
+      setEmailVerified(true);
+      setAwaitingVerification(false);
+      setStep(4);
+    }
+  }, [verificationStatus]);
+
+  function handleStep3Next() {
+    if (cardScanVerified || emailVerified) {
+      setStep(4);
+      return;
+    }
+    requestVerificationMutation.mutate();
+  }
+
   // ---- OCR mutation ----
   const ocrMutation = useMutation({
     mutationFn: (imageBase64: string) =>
       api.post<{ data: CardOcrResult }>("/register/scan-card", { imageBase64, side: "front" }),
     onSuccess: (res) => {
       const d = res.data;
+      if (d.cardMatched === false) {
+        // 白樺クエストカードのレイアウトとして認識できなかった場合は自動入力せず、手入力に誘導する
+        setCardMismatch(true);
+        setOcrDone(true);
+        return;
+      }
+      setCardMismatch(false);
       // 名前を自動補完
       if (d.memberName) {
         setProfile((p) => ({ ...p, name: d.memberName ?? p.name }));
@@ -118,6 +169,7 @@ export function RegisterScreen() {
         romaji: profile.nameRomaji,
         skills: skills.filter((s) => s.name.trim()),
         cardImageBase64: frontImage ? frontImage.split(",")[1] : undefined,
+        cardScanVerified,
         uspRequests: pendingUspRequests.length > 0 ? pendingUspRequests : undefined,
         goldenEggs: goldenEggDesc.trim() ? [{ description: goldenEggDesc.trim() }] : undefined,
         goldenGeese: goldenGooseDesc.trim() ? [{ description: goldenGooseDesc.trim() }] : undefined,
@@ -137,6 +189,7 @@ export function RegisterScreen() {
       const dataUrl = ev.target?.result as string;
       setFrontImage(dataUrl);
       setOcrDone(false);
+      setCardMismatch(false);
       ocrMutation.mutate(dataUrl.split(",")[1]);
     };
     reader.readAsDataURL(file);
@@ -206,6 +259,7 @@ export function RegisterScreen() {
               scanning={ocrMutation.isPending}
               scanDone={ocrDone}
               scanError={ocrMutation.isError}
+              cardMismatch={cardMismatch}
               cameraRef={cameraRef}
               galleryRef={galleryRef}
               appTitle={appTitle}
@@ -225,12 +279,22 @@ export function RegisterScreen() {
               onNext={() => setStep(3)}
             />
           )}
-          {step === 3 && (
+          {step === 3 && awaitingVerification && (
+            <Step3AwaitingVerification
+              email={profile.email}
+              onResend={() => requestVerificationMutation.mutate()}
+              resending={requestVerificationMutation.isPending}
+              onBack={() => setAwaitingVerification(false)}
+            />
+          )}
+          {step === 3 && !awaitingVerification && (
             <Step3Profile
               profile={profile}
               onUpdate={(field, value) => setProfile((p) => ({ ...p, [field]: value }))}
-              onNext={() => setStep(4)}
+              onNext={handleStep3Next}
               termBusinessCommunity={termBusinessCommunity}
+              requestingVerification={requestVerificationMutation.isPending}
+              verificationError={requestVerificationMutation.error?.message}
             />
           )}
           {step === 4 && (
@@ -298,12 +362,13 @@ function StepDots({ current, total }: { current: number; total: number }) {
 // Step 1: カード撮影
 // ================================================================
 function Step1Scan({
-  frontImage, scanning, scanDone, scanError, cameraRef, galleryRef, appTitle, appLogo, characterImageUrl, settingsLoading, onNext,
+  frontImage, scanning, scanDone, scanError, cardMismatch, cameraRef, galleryRef, appTitle, appLogo, characterImageUrl, settingsLoading, onNext,
 }: {
   frontImage: string | null;
   scanning: boolean;
   scanDone: boolean;
   scanError: boolean;
+  cardMismatch: boolean;
   cameraRef: React.RefObject<HTMLInputElement | null>;
   galleryRef: React.RefObject<HTMLInputElement | null>;
   appTitle: string;
@@ -351,7 +416,7 @@ function Step1Scan({
         className="w-full rounded-3xl overflow-hidden border-2 border-dashed active:opacity-80 transition relative"
         style={{
           minHeight: frontImage ? "auto" : "220px",
-          borderColor: scanDone ? "var(--color-success)" : "var(--color-paper-300)",
+          borderColor: cardMismatch ? "var(--color-brand)" : scanDone ? "var(--color-success)" : "var(--color-paper-300)",
           background: "var(--color-paper-50)",
         }}
         onClick={() => cameraRef.current?.click()}
@@ -380,7 +445,7 @@ function Step1Scan({
               </div>
             )}
             {/* オーバーレイ：完了 */}
-            {scanDone && !scanning && (
+            {scanDone && !scanning && !cardMismatch && (
               <div
                 className="absolute inset-0 flex flex-col items-center justify-center gap-2"
                 style={{ background: "rgba(90,140,92,0.15)" }}
@@ -393,6 +458,17 @@ function Step1Scan({
                 </div>
                 <p className="text-sm font-semibold" style={{ color: "var(--color-success)" }}>
                   読み取り完了！
+                </p>
+              </div>
+            )}
+            {/* オーバーレイ：カード不一致 */}
+            {scanDone && !scanning && cardMismatch && (
+              <div
+                className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center"
+                style={{ background: "rgba(181,56,75,0.12)" }}
+              >
+                <p className="text-sm font-semibold" style={{ color: "var(--color-brand)" }}>
+                  {appTitle}カードとして認識できませんでした
                 </p>
               </div>
             )}
@@ -438,6 +514,11 @@ function Step1Scan({
           ⚠️ 読み取りに失敗しました。次のステップで手入力できます。
         </div>
       )}
+      {cardMismatch && !scanError && (
+        <div className="mt-3 p-3 rounded-2xl text-sm" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>
+          ⚠️ 撮影された画像が、{appTitle}カードのレイアウトとして読み取れませんでした。一般的な名刺などは自動読み取りの対象外です。お手数ですが、次のステップでスキル情報を手入力してください。
+        </div>
+      )}
 
       {/* ナビゲーションボタン */}
       <div className="mt-6 flex flex-col gap-3">
@@ -448,7 +529,7 @@ function Step1Scan({
           className="w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50 transition"
           style={{ background: "var(--color-brand)", minHeight: "52px" }}
         >
-          {scanDone ? "確認する" : "手入力で続ける"}
+          {scanDone && !cardMismatch ? "確認する" : "手入力で続ける"}
           <ArrowRight size={18} />
         </button>
         <Link
@@ -582,6 +663,7 @@ function Step2Skills({
                   key={skill.name}
                   skill={skill}
                   onUpdate={(field, value) => onUpdate(idx, field, value)}
+                  onRemove={() => onSkillsChange(skills.filter((s) => s.name !== skill.name))}
                 />
               );
             })}
@@ -709,10 +791,11 @@ function Step2Skills({
 
 // ---- スキルカード（詳細入力枠） ----
 function SkillCard({
-  skill, onUpdate,
+  skill, onUpdate, onRemove,
 }: {
   skill: SkillForm;
   onUpdate: (field: keyof SkillForm, value: string) => void;
+  onRemove: () => void;
 }) {
   return (
     <div className="card-paper p-4 rounded-3xl"
@@ -720,9 +803,18 @@ function SkillCard({
       {/* ヘッダー: USP名・絵文字 */}
       <div className="flex items-center gap-2 mb-3">
         <span className="text-2xl">{skill.emoji}</span>
-        <span className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>
+        <span className="font-semibold text-sm flex-1" style={{ color: "var(--color-ink-800)" }}>
           {skill.name}
         </span>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="shrink-0 p-1 rounded-full active:opacity-60"
+          style={{ color: "var(--color-ink-400)" }}
+          title="このUSPの選択を解除する"
+        >
+          <X size={14} />
+        </button>
       </div>
 
       {/* 課題シーン */}
@@ -787,12 +879,14 @@ function SkillCard({
 // Step 3: プロフィール
 // ================================================================
 function Step3Profile({
-  profile, onUpdate, onNext, termBusinessCommunity,
+  profile, onUpdate, onNext, termBusinessCommunity, requestingVerification, verificationError,
 }: {
   profile: Record<string, string>;
   onUpdate: (field: string, value: string) => void;
   onNext: () => void;
   termBusinessCommunity: string;
+  requestingVerification?: boolean;
+  verificationError?: string;
 }) {
   const canSubmit = profile.name.trim() && profile.email.trim() && profile.businessCommunityJoinedDate.trim();
 
@@ -924,14 +1018,76 @@ function Step3Profile({
         </div>
       </div>
 
+      {verificationError && (
+        <div className="mt-3 p-3 rounded-2xl text-sm" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>
+          ⚠️ {verificationError}
+        </div>
+      )}
+
       <button
         type="button"
         onClick={onNext}
-        disabled={!canSubmit}
+        disabled={!canSubmit || requestingVerification}
         className="mt-6 w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50 transition"
         style={{ background: "var(--color-brand)", minHeight: "52px" }}
       >
-        次へ <ArrowRight size={18} />
+        {requestingVerification ? <Loader2 size={18} className="animate-spin" /> : <>次へ <ArrowRight size={18} /></>}
+      </button>
+    </div>
+  );
+}
+
+// ================================================================
+// Step 3.5: メールアドレス確認待ち（手入力登録のみ）
+// ================================================================
+function Step3AwaitingVerification({
+  email, onResend, resending, onBack,
+}: {
+  email: string;
+  onResend: () => void;
+  resending: boolean;
+  onBack: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center text-center pt-10">
+      <div
+        className="w-16 h-16 rounded-full flex items-center justify-center mb-5"
+        style={{ background: "rgba(181,56,75,0.1)" }}
+      >
+        <Mail size={28} style={{ color: "var(--color-brand)" }} />
+      </div>
+      <h2 className="text-xl font-semibold mb-2" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+        確認メールを送信しました
+      </h2>
+      <p className="text-sm mb-1" style={{ color: "var(--color-ink-500)" }}>
+        <strong style={{ color: "var(--color-ink-800)" }}>{email}</strong> 宛に
+      </p>
+      <p className="text-sm mb-6" style={{ color: "var(--color-ink-500)" }}>
+        確認メールを送信しました。メール内のリンクをクリックすると、<br />
+        このまま自動的に登録を続けられます。
+      </p>
+
+      <div className="flex items-center gap-2 mb-6" style={{ color: "var(--color-ink-400)" }}>
+        <Loader2 size={16} className="animate-spin" />
+        <span className="text-xs">確認をお待ちしています...</span>
+      </div>
+
+      <button
+        type="button"
+        onClick={onResend}
+        disabled={resending}
+        className="w-full py-3 rounded-2xl text-sm font-medium active:opacity-70 disabled:opacity-50 transition mb-3"
+        style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+      >
+        {resending ? "再送信中..." : "確認メールを再送する"}
+      </button>
+      <button
+        type="button"
+        onClick={onBack}
+        className="text-sm py-2"
+        style={{ color: "var(--color-ink-400)" }}
+      >
+        ← メールアドレスを修正する
       </button>
     </div>
   );

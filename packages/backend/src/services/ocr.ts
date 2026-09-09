@@ -22,6 +22,9 @@ export type CardOcrResult = {
   address?: string;
   // 生テキスト（確認・デバッグ用）
   rawText: string;
+  // 表面のみ: 読み取った内容が白樺クエストカード（USP/SKILLsが3件、課題→解決の構造を持つカード）の
+  // レイアウトに見えるかどうか。false の場合、呼び出し元は骨組みの自動入力をせず手入力に誘導する。
+  cardMatched?: boolean;
 };
 
 // -------------------------------------------------------
@@ -70,21 +73,31 @@ export async function parseCardWithClaude(opts: {
   rawText: string;
   side: "front" | "back";
   apiKey: string;
+  cardLabel?: string; // 表面カードのタイトル文言（組織ごとにカスタマイズ可。例:「USP・SKILLs」）
 }): Promise<Omit<CardOcrResult, "rawText">> {
   const { rawText, side, apiKey } = opts;
+  const cardLabel = opts.cardLabel?.trim() || "USP・SKILLs";
 
   const prompt = side === "front"
-    ? `以下はBNI名刺カード表面のOCR結果です。
-カード表面には「名前」と「スキル（1〜3個）」が書かれています。
-各スキルには「スキル名」「絵文字」「課題シーン」「解決内容」が含まれます。
+    ? `以下は、あるカードの表面をOCRで読み取ったテキストです。
+このアプリの正規のカード表面は「${cardLabel}」という見出しのもとに、名前と1〜3個の
+「スキル（各スキルには スキル名・絵文字・課題シーン・解決内容 の組が書かれている）」が
+記載された、専用レイアウトのカードです。単なる一般的な名刺（会社名・役職・電話番号・
+メールアドレスなど連絡先中心の情報しかないもの）や、無関係な書類・写真とは明確に区別してください。
 
 OCRテキスト:
 """
 ${rawText}
 """
 
-以下のJSON形式で構造化して返してください。コードブロック不要、JSONのみ。
+まず、このテキストが上記の専用カード表面（名前＋課題→解決の構造を持つスキルの記載）に
+一致するかどうかを判定してください。一般的な名刺・書類・その他の文書にしか見えない場合は
+matched を false にし、skills は空配列にしてください（memberNameだけ読み取れても matched は
+trueにしないでください。課題→解決の構造を持つスキル記載が最低1つ必要です）。
+
+以下のJSON形式で返してください。コードブロック不要、JSONのみ。
 {
+  "matched": true,
   "memberName": "山田 太郎",
   "skills": [
     {
@@ -98,7 +111,7 @@ ${rawText}
 }
 
 注意:
-- スキルが見つからない場合は空配列 []
+- matched が false の場合、skills は必ず空配列 []
 - 絵文字が読み取れない場合は "💡" をデフォルトにする
 - 課題・解決が一文になっている場合は適切に分割する`
     : `以下はBNI名刺カード裏面のOCR結果です。
@@ -146,7 +159,12 @@ ${rawText}
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("Claude応答からJSONを抽出できませんでした");
 
-  return JSON.parse(jsonMatch[0]);
+  const parsed = JSON.parse(jsonMatch[0]);
+  if (side === "front") {
+    const { matched, ...rest } = parsed as { matched?: boolean } & Record<string, unknown>;
+    return { ...rest, cardMatched: matched !== false } as Omit<CardOcrResult, "rawText">;
+  }
+  return parsed;
 }
 
 // -------------------------------------------------------
@@ -158,8 +176,9 @@ export async function scanCard(opts: {
   visionApiKey: string;
   anthropicApiKey: string;
   isDev: boolean;
+  cardLabel?: string;
 }): Promise<CardOcrResult> {
-  const { imageBase64, side, visionApiKey, anthropicApiKey, isDev } = opts;
+  const { imageBase64, side, visionApiKey, anthropicApiKey, isDev, cardLabel } = opts;
 
   // 開発環境: モックデータを返す
   if (isDev) {
@@ -192,7 +211,7 @@ export async function scanCard(opts: {
   });
 
   if (!rawText.trim()) {
-    return { rawText: "", skills: [] };
+    return { rawText: "", skills: [], cardMatched: side === "front" ? false : undefined };
   }
 
   // Step2: Claude で構造化
@@ -200,6 +219,7 @@ export async function scanCard(opts: {
     rawText,
     side,
     apiKey: anthropicApiKey,
+    cardLabel,
   });
 
   return {

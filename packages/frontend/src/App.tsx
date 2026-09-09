@@ -1,10 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "@/lib/query-client";
-import { AuthGuard, AdminGuard, MemberAwareLayout } from "@/components/auth-guard";
+import { AuthGuard, AdminGuard, MemberAwareLayout, ApprovedMemberGuard } from "@/components/auth-guard";
 import { AppLayout } from "@/components/layout";
 import { LoginScreen } from "@/screens/auth/login-screen";
 import { RegisterScreen } from "@/screens/auth/register-screen";
+import { RegisterVerifyScreen } from "@/screens/auth/register-verify-screen";
 import { HomeScreen } from "@/screens/home/home-screen";
 import { MembersScreen } from "@/screens/members/members-screen";
 import { MemberDetailScreen } from "@/screens/members/member-detail-screen";
@@ -90,6 +91,7 @@ export default function App() {
             <Route path="/zoom-integration" element={<ZoomIntegrationDocsScreen />} />
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/register" element={<RegisterScreen />} />
+            <Route path="/register/verify" element={<RegisterVerifyScreen />} />
 
             {/* リアルカード受け取り（ログイン必要だが AppLayout 外） */}
             <Route path="/receive-card/:memberId" element={<ReceiveCardScreen />} />
@@ -112,15 +114,17 @@ export default function App() {
             <Route element={<AuthGuard />}>
               <Route element={<AppLayout />}>
                 <Route path="home" element={<HomeScreen />} />
-                <Route path="members" element={<MembersScreen />} />
-                <Route path="members/:id" element={<MemberDetailScreen />} />
-                <Route path="quests" element={<QuestsScreen />} />
-                <Route path="collab" element={<CollabScreen />} />
-                <Route path="enishi" element={<EnishiSearchScreen />} />
-                <Route path="enishi/register" element={<EnishiRegisterScreen />} />
-                <Route path="enishi/history" element={<EnishiHistoryScreen />} />
-                <Route path="enishi/history/:id" element={<EnishiHistoryDetailScreen />} />
-                <Route path="ranking" element={<RankingScreen />} />
+                <Route element={<ApprovedMemberGuard />}>
+                  <Route path="members" element={<MembersScreen />} />
+                  <Route path="members/:id" element={<MemberDetailScreen />} />
+                  <Route path="quests" element={<QuestsScreen />} />
+                  <Route path="collab" element={<CollabScreen />} />
+                  <Route path="enishi" element={<EnishiSearchScreen />} />
+                  <Route path="enishi/register" element={<EnishiRegisterScreen />} />
+                  <Route path="enishi/history" element={<EnishiHistoryScreen />} />
+                  <Route path="enishi/history/:id" element={<EnishiHistoryDetailScreen />} />
+                  <Route path="ranking" element={<RankingScreen />} />
+                </Route>
                 <Route path="me" element={<MypageScreen />} />
                 <Route path="me/theme" element={<MypageThemeScreen />} />
                 <Route path="team" element={<Navigate to="/members" replace />} />
@@ -129,11 +133,13 @@ export default function App() {
                 <Route path="oneonone" element={<OneOnOneScreen />} />
                 <Route path="oneonone/:sessionId" element={<OneOnOneSessionDetailScreen />} />
                 <Route path="meetings" element={<MeetingsScreen />} />
-                <Route path="meetings/new" element={<MeetingNewScreen />} />
                 <Route path="meetings/one-on-one" element={<OneOnOneMeetingScreen />} />
-                <Route path="meetings/series/new" element={<MeetingSeriesNewScreen />} />
-                <Route path="meetings/series/:id" element={<MeetingSeriesDetailScreen />} />
-                <Route path="meetings/:id" element={<MeetingDetailScreen />} />
+                <Route element={<ApprovedMemberGuard />}>
+                  <Route path="meetings/new" element={<MeetingNewScreen />} />
+                  <Route path="meetings/series/new" element={<MeetingSeriesNewScreen />} />
+                  <Route path="meetings/series/:id" element={<MeetingSeriesDetailScreen />} />
+                  <Route path="meetings/:id" element={<MeetingDetailScreen />} />
+                </Route>
                 {/* 1on1 スケジューラー（ホスト向け） */}
                 <Route path="scheduler" element={<SchedulerDashboardScreen />} />
                 <Route path="scheduler/integrations" element={<SchedulerIntegrationsScreen />} />

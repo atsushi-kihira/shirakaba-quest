@@ -35,3 +35,13 @@ export async function resolveEffectiveMemberId(
 
   return member?.id ?? null;
 }
+
+/**
+ * 承認待ち（pending）のゲストメンバーは限定機能のみ利用できる。
+ * このメンバーが status="active"（承認済み）かどうかを返す（見つからない場合はfalse）。
+ */
+export async function isMemberApproved(db: Db, memberId: string): Promise<boolean> {
+  const member = await db.select({ status: schema.members.status }).from(schema.members)
+    .where(eq(schema.members.id, memberId)).get();
+  return member?.status === "active";
+}

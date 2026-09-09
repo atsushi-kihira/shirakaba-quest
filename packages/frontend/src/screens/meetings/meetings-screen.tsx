@@ -6,7 +6,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, Calendar, CheckCircle, Clock, XCircle, Handshake, ChevronRight, ChevronDown, Bell, ClipboardList, X, Lock, Flag, FileCheck } from "lucide-react";
 import { api } from "@/lib/api";
-import { useAuthStore } from "@/stores/auth-store";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateJP, fmtTime, fmtDateShort } from "@/lib/date";
 import { useMeetingAlerts } from "@/hooks/use-meeting-alerts";
@@ -99,7 +99,8 @@ function StatusBadge({ m, hasUnreadNotification, nowSec }: { m: MeetingItem; has
 type Tab = "regular" | "oneonone";
 
 export function MeetingsScreen() {
-  const [tab, setTab] = useState<Tab>("regular");
+  const approved = isApprovedMember(useAuthStore((s) => s.user));
+  const [tab, setTab] = useState<Tab>(approved ? "regular" : "oneonone");
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const oneOnOneData = useOneOnOneSessions();
   const pendingExternal = usePendingExternalOneOnOneCount();
@@ -129,31 +130,37 @@ export function MeetingsScreen() {
 
       {/* タブ: 通常ミーティング / 1to1ミーティング */}
       <div className="flex gap-2 mb-5">
-        {TABS.map(({ key, label, count }) => (
+        {TABS.map(({ key, label, count }) => {
+          const locked = key === "regular" && !approved;
+          return (
           <button
             key={key}
-            onClick={() => setTab(key)}
+            onClick={() => !locked && setTab(key)}
+            disabled={locked}
             className="flex-1 py-2.5 rounded-2xl text-sm font-medium transition relative flex items-center justify-center gap-1.5"
             style={{
-              background: tab === key ? "var(--color-brand)" : "var(--color-paper-200)",
-              color: tab === key ? "white" : "var(--color-ink-600)",
+              background: tab === key && !locked ? "var(--color-brand)" : "var(--color-paper-200)",
+              color: tab === key && !locked ? "white" : locked ? "var(--color-ink-300)" : "var(--color-ink-600)",
+              cursor: locked ? "not-allowed" : "pointer",
             }}
           >
             {key === "oneonone" && <Handshake size={14} />}
             {label}
-            {count > 0 && (
+            {locked && <Lock size={12} />}
+            {!locked && count > 0 && (
               <span className="min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
                 style={{ background: tab === key ? "var(--color-accent)" : "var(--color-brand)" }}>
                 {count > 9 ? "9+" : count}
               </span>
             )}
           </button>
-        ))}
+          );
+        })}
       </div>
 
-      {tab === "regular" ? <RegularMeetingsTab /> : <OneOnOneMeetingsTab />}
+      {tab === "regular" && approved ? <RegularMeetingsTab /> : <OneOnOneMeetingsTab />}
 
-      {showCreateMenu && <CreateMenuModal onClose={() => setShowCreateMenu(false)} />}
+      {showCreateMenu && <CreateMenuModal onClose={() => setShowCreateMenu(false)} approved={approved} />}
     </div>
   );
 }
@@ -161,7 +168,7 @@ export function MeetingsScreen() {
 // ================================================================
 // 新規作成メニュー（1to1 / 複数人ミーティングの選択）
 // ================================================================
-function CreateMenuModal({ onClose }: { onClose: () => void }) {
+function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved: boolean }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }} onClick={onClose}>
       <div className="card-paper w-full max-w-sm rounded-t-3xl sm:rounded-3xl p-6 pb-10 sm:pb-6" onClick={(e) => e.stopPropagation()}>
@@ -186,34 +193,63 @@ function CreateMenuModal({ onClose }: { onClose: () => void }) {
             </div>
             <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
           </Link>
-          <Link
-            to="/meetings/new"
-            className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
-            style={{ background: "var(--color-paper-200)" }}
-          >
-            <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(212,160,59,0.15)" }}>
-              📅
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>複数人のミーティングを作成する</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>候補日を出して複数人で日程調整する</p>
-            </div>
-            <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
-          </Link>
-          <Link
-            to="/meetings/series/new"
-            className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
-            style={{ background: "var(--color-paper-200)" }}
-          >
-            <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(90,140,92,0.12)" }}>
-              🔁
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>定例会を立てる</p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>毎週・隔週・毎月の繰り返し予定をまとめて調整する</p>
-            </div>
-            <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
-          </Link>
+          {approved ? (
+            <>
+              <Link
+                to="/meetings/new"
+                className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
+                style={{ background: "var(--color-paper-200)" }}
+              >
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(212,160,59,0.15)" }}>
+                  📅
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>複数人のミーティングを作成する</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>候補日を出して複数人で日程調整する</p>
+                </div>
+                <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
+              </Link>
+              <Link
+                to="/meetings/series/new"
+                className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
+                style={{ background: "var(--color-paper-200)" }}
+              >
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(90,140,92,0.12)" }}>
+                  🔁
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>定例会を立てる</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>毎週・隔週・毎月の繰り返し予定をまとめて調整する</p>
+                </div>
+                <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
+              </Link>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-3 p-4 rounded-2xl opacity-50 cursor-not-allowed" style={{ background: "var(--color-paper-200)" }}
+                title="承認されると利用できます">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(212,160,59,0.15)" }}>
+                  📅
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>複数人のミーティングを作成する</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>候補日を出して複数人で日程調整する</p>
+                </div>
+                <Lock size={16} style={{ color: "var(--color-ink-400)" }} />
+              </div>
+              <div className="flex items-center gap-3 p-4 rounded-2xl opacity-50 cursor-not-allowed" style={{ background: "var(--color-paper-200)" }}
+                title="承認されると利用できます">
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(90,140,92,0.12)" }}>
+                  🔁
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>定例会を立てる</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>毎週・隔週・毎月の繰り返し予定をまとめて調整する</p>
+                </div>
+                <Lock size={16} style={{ color: "var(--color-ink-400)" }} />
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -4,13 +4,17 @@
 // =============================================================
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Home, Users, ScrollText, Trophy, User, Calendar, Handshake, Sparkles } from "lucide-react";
+import { Home, Users, ScrollText, Trophy, User, Calendar, Handshake, Sparkles, Lock } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { useOneOnOneSessions, filterActionableOneOnOne, filterInFlightOneOnOneForBadge } from "@/hooks/use-oneonone-status";
 import { useMeetingAlerts } from "@/hooks/use-meeting-alerts";
 import { useCollabAlerts, useCollabReactionNotificationCount } from "@/hooks/use-collab-alerts";
 import { useGuestFollowups, usePendingExternalOneOnOneCount } from "@/hooks/use-guest-followups";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
+
+// 承認待ち（ゲスト）状態のメンバーには使わせない画面（ナビ自体を非活性表示にする）
+const GUEST_RESTRICTED_PATHS = new Set(["/members", "/collab", "/enishi", "/quests", "/ranking"]);
 
 /** アプリ設定からタイトルを取得して <title> に反映するフック（公開エンドポイント使用） */
 function useAppTitle() {
@@ -48,6 +52,7 @@ export function AppLayout() {
   const meetingPendingCount = useMeetingPendingCount();
   const collabAlerts = useCollabAlerts();
   const settings = useSettings();
+  const approved = isApprovedMember(useAuthStore((s) => s.user));
 
   const BADGE_COUNTS: Record<string, number> = {
     "/home": pendingCount,
@@ -56,11 +61,7 @@ export function AppLayout() {
   };
 
   // 一般公開したばかりの機能・新機能に一時的に表示するお知らせバッジ（数値バッジがある場合はそちらを優先）
-  const TEXT_BADGES: Record<string, string> = {
-    "/members": "Update!",
-    "/collab": "New!",
-    "/enishi": "New!",
-  };
+  const TEXT_BADGES: Record<string, string> = {};
 
   const NAV_ITEMS = [
     { to: "/home",     icon: Home,       label: "ホーム",         mobileVisible: true,
@@ -92,7 +93,21 @@ export function AppLayout() {
             {settings.appTitle}
           </span>
         </div>
-        {NAV_ITEMS.map(({ to, icon: Icon, label, description }) => (
+        {NAV_ITEMS.map(({ to, icon: Icon, label, description }) => {
+          const restricted = !approved && GUEST_RESTRICTED_PATHS.has(to);
+          if (restricted) {
+            return (
+              <div key={to}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium relative cursor-not-allowed"
+                style={{ color: "var(--color-ink-300)" }}
+                title="承認されると利用できます">
+                <Icon size={18} />
+                {label}
+                <Lock size={13} className="ml-auto" />
+              </div>
+            );
+          }
+          return (
           <NavLink key={to} to={to} end={to === "/home"}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium transition relative ${isActive ? "text-white" : "hover:opacity-80"}`
@@ -116,7 +131,8 @@ export function AppLayout() {
               </span>
             ) : null}
           </NavLink>
-        ))}
+          );
+        })}
       </nav>
 
       {/* メインコンテンツ */}
@@ -126,7 +142,23 @@ export function AppLayout() {
 
       {/* モバイル: 下部タブバー */}
       <div className="tab-bar lg:hidden">
-        {NAV_ITEMS.filter((item) => item.mobileVisible).map(({ to, icon: Icon, label, description }) => (
+        {NAV_ITEMS.filter((item) => item.mobileVisible).map(({ to, icon: Icon, label, description }) => {
+          const restricted = !approved && GUEST_RESTRICTED_PATHS.has(to);
+          if (restricted) {
+            return (
+              <div key={to}
+                className="flex flex-col items-center gap-0.5 flex-1 px-1 py-1.5 rounded-xl text-xs cursor-not-allowed"
+                style={{ color: "var(--color-ink-300)" }}
+                title="承認されると利用できます">
+                <div className="relative">
+                  <Icon size={20} />
+                  <Lock size={10} className="absolute -top-1 -right-1.5" />
+                </div>
+                <span>{label}</span>
+              </div>
+            );
+          }
+          return (
           <NavLink key={to} to={to} end={to === "/home"}
             className={({ isActive }) =>
               `flex flex-col items-center gap-0.5 flex-1 px-1 py-1.5 rounded-xl transition text-xs relative ${isActive ? "font-medium" : ""}`
@@ -153,7 +185,8 @@ export function AppLayout() {
               <InfoTooltip text={description} placement="above" />
             </span>
           </NavLink>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -19,7 +19,7 @@ import { checkAndAwardBadges } from "../services/badge.ts";
 import { getActiveSeasonPoints } from "../services/season-points.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { getActiveShareLink, ensureActiveShareLink } from "../services/schedulerShareToken.ts";
-import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
+import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { touchCollaborationLink } from "../services/collab-link.ts";
 import { generateRawToken } from "../services/auth.ts";
 import { createConference, getAvailableConferenceTypes } from "../services/conferenceService.ts";
@@ -349,6 +349,9 @@ oneOnOneRoutes.post("/", async (c) => {
   if (!requesterId) {
     return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないため1to1を申し込めません" } }, 403);
   }
+  if (!(await isMemberApproved(db, requesterId))) {
+    return c.json({ error: { code: "not_approved", message: "承認されるまではメンバーへの1to1申し込みはご利用いただけません" } }, 403);
+  }
   const body = await c.req.json<{
     responderId: string;
     title?: string;
@@ -452,6 +455,9 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
   const requesterId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!requesterId) {
     return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないため1to1を申し込めません" } }, 403);
+  }
+  if (!(await isMemberApproved(db, requesterId))) {
+    return c.json({ error: { code: "not_approved", message: "承認されるまではメンバーへの1to1申し込みはご利用いただけません" } }, 403);
   }
 
   const body = await c.req.json<{

@@ -1,6 +1,6 @@
 // 認証ガード — 未ログイン時はログイン画面へリダイレクト
 import { Navigate, Outlet } from "react-router-dom";
-import { useAuthStore } from "@/stores/auth-store";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { AppLayout } from "@/components/layout";
 
 export function AuthGuard() {
@@ -22,5 +22,13 @@ export function AdminGuard() {
 export function MemberAwareLayout() {
   const token = useAuthStore((s) => s.token);
   if (token) return <AppLayout />;
+  return <Outlet />;
+}
+
+// 承認待ち（ゲスト）のメンバーはアクセスできない画面用のガード。
+// ナビ側では非活性表示にしているが、URL直打ちで来た場合の保険としてホームへ戻す。
+export function ApprovedMemberGuard() {
+  const user = useAuthStore((s) => s.user);
+  if (!isApprovedMember(user)) return <Navigate to="/home" replace />;
   return <Outlet />;
 }
