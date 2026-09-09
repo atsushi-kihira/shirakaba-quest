@@ -11,6 +11,12 @@ export function SiteFooter() {
             style={{ color: "var(--color-ink-600)" }}>ネットワーク向け導入案内</NavLink>
           <NavLink to="/privacy" className="text-sm transition hover:opacity-70"
             style={{ color: "var(--color-brand)" }}>プライバシーポリシー</NavLink>
+          <NavLink to="/terms" className="text-sm transition hover:opacity-70"
+            style={{ color: "var(--color-brand)" }}>利用規約</NavLink>
+          <NavLink to="/support" className="text-sm transition hover:opacity-70"
+            style={{ color: "var(--color-brand)" }}>サポート</NavLink>
+          <NavLink to="/zoom-integration" className="text-sm transition hover:opacity-70"
+            style={{ color: "var(--color-brand)" }}>Zoom連携ガイド</NavLink>
         </nav>
 
         <div className="flex flex-wrap gap-x-6 gap-y-1 justify-center mb-4 text-xs"

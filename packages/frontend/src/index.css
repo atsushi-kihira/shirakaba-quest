@@ -4,8 +4,8 @@
    白樺クエスト — グローバルスタイル
    =================================================== */
 
-/* Google Fonts: Klee One + Zen Maru Gothic */
-@import url("https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Zen+Maru+Gothic:wght@400;500;700&display=swap");
+/* Google Fonts: UIテーマ（8種）で使う書体一式 */
+@import url("https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Zen+Maru+Gothic:wght@400;500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=Noto+Sans+JP:wght@400;500;700&family=Shippori+Mincho:wght@400;500;600;800&display=swap");
 
 /* デザイントークン */
 @theme {
@@ -59,40 +59,348 @@ p {
   min-height: 100dvh;
 }
 
-/* 紙質感カード */
+/* カード（UIテーマごとに --card-* トークンで質感を切り替える。既定値は現行の紙質感） */
 .card-paper {
-  background: linear-gradient(135deg, var(--color-paper-50) 0%, var(--color-paper-200) 100%);
-  border: 1px solid var(--color-paper-300);
-  box-shadow:
+  --card-bg: linear-gradient(135deg, var(--color-paper-50) 0%, var(--color-paper-200) 100%);
+  --card-border-w: 1px;
+  --card-shadow:
     0 1px 3px rgba(58, 46, 38, 0.08),
     0 4px 12px rgba(58, 46, 38, 0.06),
     inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  background: var(--card-bg);
+  border: var(--card-border-w) solid var(--color-paper-300);
+  box-shadow: var(--card-shadow);
 }
 
-/* メインコンテンツ: モバイルはタブバー分の下余白を確保（safe-area対応） */
-.main-with-tabbar {
-  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 16px);
-}
-@media (min-width: 1024px) {
+/*
+ * .main-with-tabbar と .tab-bar は Tailwind の @layer utilities より
+ * 「弱い」レイヤーに置く。素のCSSとして書くとレイヤー無しになり、
+ * どんなに詳細度やソース順で負けていてもレイヤー付きの Tailwind ユーティリティ
+ * （lg:hidden や lg:py-6 など）に常に勝ってしまい、PC幅でも
+ * タブバーが消えない／余白が付かない、という不具合の原因になっていた。
+ * @layer components に入れることで、lg: などのレスポンシブ指定が
+ * 正しく上書きできるようにする。
+ */
+@layer components {
+  /* メインコンテンツ: モバイルはタブバー分の下余白を確保（safe-area対応） */
   .main-with-tabbar {
-    padding-bottom: 0;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 16px);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  @media (min-width: 1024px) {
+    .main-with-tabbar {
+      padding-bottom: 0;
+      /*
+       * 左サイドバー（w-60 = 240px）の右側の残り領域だけで中央寄せすると、
+       * コンテンツの中心がサイドバー幅の半分（120px）だけ画面全体の中心より
+       * 右にずれて見えてしまう。画面全体（100vw）を基準に中央寄せされる位置を
+       * 計算し直すことで、サイドバーを含めた画面全体の中央に見えるようにする。
+       * 残り領域がコンテンツ幅より狭い場合は 0 にクランプし、サイドバーに
+       * めり込まないようにする（max-w-4xl = 896px の半分 = 448px）。
+       */
+      margin-left: max(0px, calc(50vw - 448px - var(--sidebar-w, 240px)));
+      margin-right: auto;
+    }
+  }
+
+  /* タブバー（モバイル） */
+  .tab-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--color-paper-50);
+    border-top: 1px solid var(--color-paper-300);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    z-index: 40;
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(64px + env(safe-area-inset-bottom));
   }
 }
 
-/* タブバー（モバイル） */
-.tab-bar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: var(--color-paper-50);
-  border-top: 1px solid var(--color-paper-300);
-  display: flex;
-  align-items: center;
-  justify-content: space-around;
-  z-index: 40;
-  padding-bottom: env(safe-area-inset-bottom);
-  height: calc(64px + env(safe-area-inset-bottom));
+/* ======================================================
+   UIテーマ（一般ユーザー向け画面・アプリ設定から選択）
+   色だけでなく、書体・カードの質感・角丸・余白の密度まで含めて
+   8種類の「見た目のスタイル」を切り替えられるようにしたもの。
+   デフォルトは現在のプレイフル調（.theme-playful は @theme の値と同一）。
+   ====================================================== */
+
+/* プレイフル（現行）: 紙質感・手書き見出し・大きめの角丸。従来の theme-gold と同一 */
+.theme-playful {
+  --color-paper-50: #fffbf0;
+  --color-paper-100: #faf5e8;
+  --color-paper-200: #f4e3bd;
+  --color-paper-300: #d9c9b0;
+  --color-paper-400: #c9b493;
+
+  --color-ink-900: #1a1410;
+  --color-ink-800: #3a2e26;
+  --color-ink-700: #4a3e36;
+  --color-ink-600: #6b5949;
+  --color-ink-500: #9b8b7a;
+  --color-ink-400: #b5a797;
+
+  --color-brand: #b5384b;
+  --color-brand-dk: #8b2937;
+  --color-accent: #d4a03b;
+  --color-accent-dk: #a87a22;
+  --color-success: #5a8c5c;
+  --color-success-dk: #3f6b41;
+}
+
+/*
+ * のびのび大アイコン: 色・書体・カード形状はプレイフルのまま、
+ * 余白（--spacing）を広げてアイコン・アバターの円やタップ領域を大きくする。
+ * Tailwind v4 は幅・高さ・余白・間隔のユーティリティが共通の --spacing を基準にしているため、
+ * ここを広げるだけでアイコン周りの円・タップ領域がアプリ全体で大きくなる
+ * （本文の文字サイズは --text-* とは別トークンのため変わらない）。
+ * 絵文字そのものの文字サイズだけを個別に拡大するには、絵文字を独立した
+ * クラスで囲むコンポーネント側の対応が別途必要（現状は未対応）。
+ */
+.theme-big {
+  --color-paper-50: #fffbf0;
+  --color-paper-100: #faf5e8;
+  --color-paper-200: #f4e3bd;
+  --color-paper-300: #d9c9b0;
+  --color-paper-400: #c9b493;
+
+  --color-ink-900: #1a1410;
+  --color-ink-800: #3a2e26;
+  --color-ink-700: #4a3e36;
+  --color-ink-600: #6b5949;
+  --color-ink-500: #9b8b7a;
+  --color-ink-400: #b5a797;
+
+  --color-brand: #b5384b;
+  --color-brand-dk: #8b2937;
+  --color-accent: #d4a03b;
+  --color-accent-dk: #a87a22;
+  --color-success: #5a8c5c;
+  --color-success-dk: #3f6b41;
+
+  --spacing: 0.29rem;
+}
+
+/* モダン・パステル: 紙質感をやめ、フラットな色面と大きめの角丸で今どきの軽さを出す */
+.theme-pastel {
+  --color-paper-50: #ffffff;
+  --color-paper-100: #f5f3fb;
+  --color-paper-200: #eee9fb;
+  --color-paper-300: #d9d0f0;
+  --color-paper-400: #b7a8de;
+
+  --color-ink-900: #201a3a;
+  --color-ink-800: #322a52;
+  --color-ink-700: #473d6b;
+  --color-ink-600: #5f5486;
+  --color-ink-500: #8a81ab;
+  --color-ink-400: #b0a8cc;
+
+  --color-brand: #e14d84;
+  --color-brand-dk: #b83668;
+  --color-accent: #f5a623;
+  --color-accent-dk: #c9840f;
+  --color-success: #16a97a;
+  --color-success-dk: #0f7d59;
+
+  --font-klee: "Zen Maru Gothic", sans-serif;
+
+  --radius-lg: 0.75rem;
+  --radius-xl: 1.1rem;
+  --radius-2xl: 1.4rem;
+  --radius-3xl: 1.8rem;
+}
+.theme-pastel .card-paper {
+  --card-bg: var(--color-paper-50);
+  --card-shadow: 0 10px 24px -14px rgba(110, 90, 190, 0.35);
+}
+
+/* シンプル・フラット: 紙質感と絵文字寄りの装飾を外した、落ち着いた業務ツール寄りの見た目 */
+.theme-flat {
+  --color-paper-50: #ffffff;
+  --color-paper-100: #f8f6f2;
+  --color-paper-200: #f1ede4;
+  --color-paper-300: #e7e2d8;
+  --color-paper-400: #c9c1af;
+
+  --color-ink-900: #211d17;
+  --color-ink-800: #322c23;
+  --color-ink-700: #48412f;
+  --color-ink-600: #675e49;
+  --color-ink-500: #837a68;
+  --color-ink-400: #a89f8c;
+
+  --color-brand: #b5384b;
+  --color-brand-dk: #8b2937;
+  --color-accent: #b8842a;
+  --color-accent-dk: #91681c;
+  --color-success: #457a56;
+  --color-success-dk: #33593f;
+
+  --font-klee: "Zen Kaku Gothic New", sans-serif;
+  --font-zen: "Noto Sans JP", sans-serif;
+
+  --radius-lg: 0.45rem;
+  --radius-xl: 0.6rem;
+  --radius-2xl: 0.75rem;
+  --radius-3xl: 0.9rem;
+}
+.theme-flat .card-paper {
+  --card-bg: var(--color-paper-50);
+  --card-shadow: 0 1px 2px rgba(30, 25, 18, 0.05);
+}
+
+/* データ密度重視: 余白を絞り、青系アクセントで分析ツールのような印象にする */
+.theme-dense {
+  --color-paper-50: #ffffff;
+  --color-paper-100: #f2f4f7;
+  --color-paper-200: #eef1f5;
+  --color-paper-300: #dee2e8;
+  --color-paper-400: #b8c0cc;
+
+  --color-ink-900: #12161d;
+  --color-ink-800: #232833;
+  --color-ink-700: #454c59;
+  --color-ink-600: #575f6c;
+  --color-ink-500: #6b7280;
+  --color-ink-400: #9aa1ad;
+
+  --color-brand: #2f5fd0;
+  --color-brand-dk: #24499f;
+  --color-accent: #b9770e;
+  --color-accent-dk: #92590a;
+  --color-success: #1f8a5c;
+  --color-success-dk: #176842;
+
+  --font-klee: "Zen Kaku Gothic New", sans-serif;
+  --font-zen: "Noto Sans JP", sans-serif;
+
+  --radius-lg: 0.35rem;
+  --radius-xl: 0.4rem;
+  --radius-2xl: 0.5rem;
+  --radius-3xl: 0.5rem;
+  --spacing: 0.22rem;
+}
+.theme-dense .card-paper {
+  --card-bg: var(--color-paper-50);
+  --card-shadow: none;
+}
+
+/* コーポレート・ネイビー: 紺と明朝見出しで、社内システムのような格式を出す */
+.theme-corp {
+  --color-paper-50: #ffffff;
+  --color-paper-100: #eef1f5;
+  --color-paper-200: #e7ebf1;
+  --color-paper-300: #d7dce3;
+  --color-paper-400: #aab2c2;
+
+  --color-ink-900: #16233e;
+  --color-ink-800: #1c2b4a;
+  --color-ink-700: #364766;
+  --color-ink-600: #4b5b7a;
+  --color-ink-500: #63708c;
+  --color-ink-400: #96a1b7;
+
+  --color-brand: #16233e;
+  --color-brand-dk: #0e1729;
+  --color-accent: #a9812f;
+  --color-accent-dk: #856421;
+  --color-success: #2f6b4c;
+  --color-success-dk: #234f38;
+
+  --font-klee: "Shippori Mincho", serif;
+  --font-zen: "Noto Sans JP", sans-serif;
+
+  --radius-lg: 0.3rem;
+  --radius-xl: 0.35rem;
+  --radius-2xl: 0.4rem;
+  --radius-3xl: 0.4rem;
+}
+.theme-corp .card-paper {
+  --card-bg: var(--color-paper-50);
+  --card-shadow: 0 1px 2px rgba(15, 25, 45, 0.05);
+}
+
+/* ハイコントラスト: 白地に濃い文字色・太い枠線で視認性を最優先。文字サイズも一段大きくする */
+.theme-contrast {
+  --color-paper-50: #ffffff;
+  --color-paper-100: #ffffff;
+  --color-paper-200: #eef0ee;
+  --color-paper-300: #111111;
+  --color-paper-400: #3d3d3d;
+
+  --color-ink-900: #000000;
+  --color-ink-800: #111111;
+  --color-ink-700: #1a1a1a;
+  --color-ink-600: #2c2c2c;
+  --color-ink-500: #3d3d3d;
+  --color-ink-400: #565656;
+
+  --color-brand: #9c1f34;
+  --color-brand-dk: #741726;
+  --color-accent: #7a5a00;
+  --color-accent-dk: #5c4400;
+  --color-success: #2f5a34;
+  --color-success-dk: #234227;
+
+  --font-klee: "Zen Kaku Gothic New", sans-serif;
+  --font-zen: "Noto Sans JP", sans-serif;
+
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.6rem;
+  --radius-2xl: 0.75rem;
+  --radius-3xl: 0.9rem;
+
+  --text-xs: 0.82rem;
+  --text-sm: 1rem;
+  --text-base: 1.125rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.4rem;
+  --text-2xl: 1.7rem;
+  --text-3xl: 2.1rem;
+}
+.theme-contrast .card-paper {
+  --card-bg: var(--color-paper-50);
+  --card-border-w: 2px;
+  --card-shadow: none;
+}
+
+/* ダーク（ナイトモード）: 暖色寄りの黒地にブランドカラーを明るく発色させる */
+.theme-dark {
+  --color-paper-50: #211f24;
+  --color-paper-100: #18171b;
+  --color-paper-200: #2c2930;
+  --color-paper-300: #322f36;
+  --color-paper-400: #4a4650;
+
+  --color-ink-900: #f5f2ec;
+  --color-ink-800: #e3ded4;
+  --color-ink-700: #c9c2b4;
+  --color-ink-600: #ada595;
+  --color-ink-500: #948c7c;
+  --color-ink-400: #6b6455;
+
+  --color-brand: #e85d72;
+  --color-brand-dk: #c94660;
+  --color-accent: #e3b955;
+  --color-accent-dk: #c39c3e;
+  --color-success: #7fb885;
+  --color-success-dk: #5f9668;
+
+  --font-klee: "Zen Kaku Gothic New", sans-serif;
+  --font-zen: "Noto Sans JP", sans-serif;
+
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.6rem;
+  --radius-2xl: 0.75rem;
+  --radius-3xl: 1rem;
+}
+.theme-dark .card-paper {
+  --card-bg: var(--color-paper-50);
+  --card-shadow: none;
 }
 
 /* ======================================================

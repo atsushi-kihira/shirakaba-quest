@@ -3,22 +3,25 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "build": "esbuild src/index.ts --bundle --outfile=dist/_worker.js --format=esm --platform=browser --target=es2022 --minify",
+    "dev": "pnpm build && wrangler pages dev dist",
+    "deploy": "pnpm build && wrangler pages deploy dist --project-name shirakaba-quest-api",
     "typecheck": "tsc --noEmit",
     "db:migrate:local": "wrangler d1 migrations apply shirakaba-quest --local",
     "db:migrate:remote": "wrangler d1 migrations apply shirakaba-quest --remote",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "hono": "^4.7.11",
+    "@pushforge/builder": "^2.0.5",
+    "@shirakaba/shared": "workspace:*",
     "drizzle-orm": "^0.44.1",
-    "@shirakaba/shared": "workspace:*"
+    "hono": "^4.7.11"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250508.0",
-    "wrangler": "^4.15.2",
     "drizzle-kit": "^0.31.1",
-    "typescript": "^5.8.3"
+    "esbuild": "^0.24.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.15.2"
   }
 }

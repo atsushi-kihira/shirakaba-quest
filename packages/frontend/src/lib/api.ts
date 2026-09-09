@@ -3,10 +3,10 @@
 // =============================================================
 
 // 開発環境: Vite のプロキシ経由（/api → localhost:8787）
-// 本番環境: Cloudflare Workers の直接 URL
+// 本番環境: バックエンドのカスタムドメイン
 export const API_BASE_URL = import.meta.env.DEV
   ? "/api"
-  : "https://shirakaba-quest-api.a-kihira.workers.dev/api";
+  : "https://bizquest-api.bizolve.jp/api";
 
 const BASE_URL = API_BASE_URL;
 

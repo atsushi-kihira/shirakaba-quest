@@ -25,6 +25,12 @@ export type Env = {
   // Zoom OAuth
   ZOOM_CLIENT_ID: string;
   ZOOM_CLIENT_SECRET: string;
+  // Web Push（VAPID）
+  VAPID_PUBLIC_KEY: string;
+  VAPID_PRIVATE_KEY_JWK: string; // JSON文字列化されたJWK
+  VAPID_SUBJECT: string;         // "mailto:xxx@example.com" 形式
+  // 会社概要バックグラウンド生成の自己連鎖呼び出し（/api/internal/*）を保護する共有シークレット
+  INTERNAL_TASK_SECRET: string;
 };
 
 // Hono のコンテキスト変数

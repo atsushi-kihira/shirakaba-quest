@@ -11,28 +11,41 @@ import { MemberDetailScreen } from "@/screens/members/member-detail-screen";
 import { QuestsScreen } from "@/screens/quests/quests-screen";
 import { RankingScreen } from "@/screens/ranking/ranking-screen";
 import { MypageScreen } from "@/screens/mypage/mypage-screen";
+import { MypageThemeScreen } from "@/screens/mypage/mypage-theme-screen";
 
 import { OneOnOneScreen } from "@/screens/oneonone/oneonone-screen";
+import { OneOnOneSessionDetailScreen } from "@/screens/oneonone/oneonone-session-detail-screen";
 import { ReceiveCardScreen } from "@/screens/cards/receive-card-screen";
 import { MeetingsScreen } from "@/screens/meetings/meetings-screen";
 import { MeetingNewScreen } from "@/screens/meetings/meeting-new-screen";
+import { OneOnOneMeetingScreen } from "@/screens/meetings/one-on-one-meeting-screen";
 import { MeetingDetailScreen } from "@/screens/meetings/meeting-detail-screen";
+import { MeetingSeriesNewScreen } from "@/screens/meetings/meeting-series-new-screen";
+import { MeetingSeriesDetailScreen } from "@/screens/meetings/meeting-series-detail-screen";
 import { ScheduleScreen } from "@/screens/schedule/schedule-screen";
 import { ScheduleInviteScreen } from "@/screens/schedule/schedule-invite-screen";
+import { OneOnOneRespondScreen } from "@/screens/oneonone/oneonone-respond-screen";
 import { AdminLayout } from "@/screens/admin/admin-layout";
 import { AdminDashboardScreen } from "@/screens/admin/admin-dashboard-screen";
 import { AdminMembersScreen } from "@/screens/admin/admin-members-screen";
 import { AdminQuestsScreen } from "@/screens/admin/admin-quests-screen";
 import { AdminPointsScreen } from "@/screens/admin/admin-points-screen";
+import { AdminOneOnOneHistoryScreen } from "@/screens/admin/admin-oneonone-history-screen";
 import { AdminSettingsScreen } from "@/screens/admin/admin-settings-screen";
 import { AdminEmailTemplatesScreen } from "@/screens/admin/admin-email-templates-screen";
 import { AdminUspsScreen } from "@/screens/admin/admin-usps-screen";
 import { AdminSeasonsScreen } from "@/screens/admin/admin-seasons-screen";
 import { AdminEventTypesScreen } from "@/screens/admin/admin-event-types-screen";
 import { EventsScreen } from "@/screens/events/events-screen";
+import { CollabScreen } from "@/screens/collab/collab-screen";
+import { EnishiRegisterScreen } from "@/screens/enishi/enishi-register-screen";
+import { EnishiSearchScreen } from "@/screens/enishi/enishi-search-screen";
+import { EnishiHistoryScreen } from "@/screens/enishi/enishi-history-screen";
+import { EnishiHistoryDetailScreen } from "@/screens/enishi/enishi-history-detail-screen";
 import { EventDetailScreen } from "@/screens/events/event-detail-screen";
 import { AdminTeamsScreen } from "@/screens/admin/admin-teams-screen";
 import { AdminMeetingsScreen } from "@/screens/admin/admin-meetings-screen";
+import { AdminCollabScreen } from "@/screens/admin/admin-collab-screen";
 import { AdminCardSettingsScreen } from "@/screens/admin/admin-card-settings-screen";
 import { CardOrderScreen } from "@/screens/card-order/card-order-screen";
 import { SchedulerDashboardScreen } from "@/screens/scheduler/scheduler-dashboard-screen";
@@ -45,13 +58,19 @@ import { PublicBookingForm } from "@/screens/public-booking/public-booking-form"
 import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
 import { NotificationsScreen } from "@/screens/notifications/notifications-screen";
 import { PrivacyPolicyScreen } from "@/screens/privacy-policy-screen";
+import { TermsOfUseScreen } from "@/screens/terms-of-use-screen";
+import { SupportScreen } from "@/screens/support-screen";
+import { ZoomIntegrationDocsScreen } from "@/screens/zoom-integration-docs-screen";
 import { LandingScreen } from "@/screens/site/landing-screen";
 import { FeaturesScreen } from "@/screens/site/features-screen";
 import { IntroductionScreen } from "@/screens/site/introduction-screen";
 import { useMe } from "@/hooks/use-me";
+import { useApplyTheme, usePwaMetaTags } from "@/hooks/use-settings";
 
 function AppWithMe({ children }: { children: React.ReactNode }) {
   useMe();
+  useApplyTheme();
+  usePwaMetaTags();
   return <>{children}</>;
 }
 
@@ -66,6 +85,9 @@ export default function App() {
             <Route path="/features" element={<FeaturesScreen />} />
             <Route path="/introduction" element={<IntroductionScreen />} />
             <Route path="/privacy" element={<PrivacyPolicyScreen />} />
+            <Route path="/terms" element={<TermsOfUseScreen />} />
+            <Route path="/support" element={<SupportScreen />} />
+            <Route path="/zoom-integration" element={<ZoomIntegrationDocsScreen />} />
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/register" element={<RegisterScreen />} />
 
@@ -74,6 +96,9 @@ export default function App() {
 
             {/* 外部ゲスト向け日程回答（認証不要） */}
             <Route path="/schedule/invite/:inviteToken" element={<ScheduleInviteScreen />} />
+
+            {/* 1to1（日程指定申込）のメール経由 承諾/辞退（認証不要） */}
+            <Route path="/oneonone/respond/:token" element={<OneOnOneRespondScreen />} />
             <Route path="/schedule/:token" element={<ScheduleScreen />} />
 
             {/* 1on1 スケジューラー公開予約ページ（ログイン済みはナビ付き、未ログインはスタンドアロン） */}
@@ -90,14 +115,24 @@ export default function App() {
                 <Route path="members" element={<MembersScreen />} />
                 <Route path="members/:id" element={<MemberDetailScreen />} />
                 <Route path="quests" element={<QuestsScreen />} />
+                <Route path="collab" element={<CollabScreen />} />
+                <Route path="enishi" element={<EnishiSearchScreen />} />
+                <Route path="enishi/register" element={<EnishiRegisterScreen />} />
+                <Route path="enishi/history" element={<EnishiHistoryScreen />} />
+                <Route path="enishi/history/:id" element={<EnishiHistoryDetailScreen />} />
                 <Route path="ranking" element={<RankingScreen />} />
                 <Route path="me" element={<MypageScreen />} />
+                <Route path="me/theme" element={<MypageThemeScreen />} />
                 <Route path="team" element={<Navigate to="/members" replace />} />
                 <Route path="events" element={<EventsScreen />} />
                 <Route path="events/:id" element={<EventDetailScreen />} />
                 <Route path="oneonone" element={<OneOnOneScreen />} />
+                <Route path="oneonone/:sessionId" element={<OneOnOneSessionDetailScreen />} />
                 <Route path="meetings" element={<MeetingsScreen />} />
                 <Route path="meetings/new" element={<MeetingNewScreen />} />
+                <Route path="meetings/one-on-one" element={<OneOnOneMeetingScreen />} />
+                <Route path="meetings/series/new" element={<MeetingSeriesNewScreen />} />
+                <Route path="meetings/series/:id" element={<MeetingSeriesDetailScreen />} />
                 <Route path="meetings/:id" element={<MeetingDetailScreen />} />
                 {/* 1on1 スケジューラー（ホスト向け） */}
                 <Route path="scheduler" element={<SchedulerDashboardScreen />} />
@@ -122,8 +157,10 @@ export default function App() {
                 <Route path="event-types" element={<AdminEventTypesScreen />} />
                 <Route path="teams" element={<AdminTeamsScreen />} />
                 <Route path="meetings" element={<AdminMeetingsScreen />} />
+                <Route path="collab" element={<AdminCollabScreen />} />
                 <Route path="card" element={<AdminCardSettingsScreen />} />
                 <Route path="points" element={<AdminPointsScreen />} />
+                <Route path="oneonone-history" element={<AdminOneOnOneHistoryScreen />} />
                 <Route path="email-templates" element={<AdminEmailTemplatesScreen />} />
                 <Route path="settings" element={<AdminSettingsScreen />} />
               </Route>

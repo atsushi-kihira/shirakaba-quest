@@ -4,11 +4,39 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/bizquest-logo.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#b5384b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="BizQuest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="BizQuestは、ビジネスネットワーク・コミュニティのメンバー同士がカードゲームを通じてお互いを深く理解し、信頼のネットワークを築くためのプラットフォームです。Googleカレンダーと連携し、メンバー同士の1on1やミーティングの日程調整をスムーズに行うことができます。" />
+    <meta property="og:site_name" content="BizQuest" />
+    <meta property="og:title" content="BizQuest" />
+    <meta property="og:description" content="BizQuestは、ビジネスネットワーク・コミュニティのメンバー同士がカードゲームを通じてお互いを深く理解し、信頼のネットワークを築くためのプラットフォームです。Googleカレンダーと連携し、メンバー同士の1on1やミーティングの日程調整をスムーズに行うことができます。" />
     <meta name="zoom-domain-verification" content="ZOOM_verify_cbffcb797e6e42fcbfac2c0be15b2e65" />
     <title>BizQuest</title>
   </head>
   <body>
+    <noscript>
+      <div>
+        <h1>BizQuest（ビズクエスト）</h1>
+        <p>
+          BizQuestは、ビジネスネットワーク・コミュニティ（BNIチャプターなど）のメンバー同士が、
+          カードゲームのようなゲーム要素を通じてお互いの強み・スキルを知り合い、信頼関係を深めていくための
+          メンバー限定プラットフォームです。BizQuestに参加するメンバーは、1対1の面談（1on1）やお題（クエスト）
+          への挑戦を通じてポイントを獲得し、ネットワーク内での交流を活性化させます。
+        </p>
+        <p>
+          BizQuestは、メンバー同士の日程調整をスムーズにするため、Googleカレンダーとの連携機能を提供しています。
+          Googleカレンダーと連携すると、BizQuestはメンバーの空き時間を自動的に確認し、1on1やミーティングの
+          日程調整を効率化します。また、確定した会議にはGoogle MeetまたはZoomのオンライン会議URLが自動的に
+          発行され、参加者へ共有されます。BizQuestはこれらの外部サービス連携により、メンバーが手作業でカレンダーや
+          会議ツールを操作する手間を減らし、ビジネスネットワークにおける交流をより円滑にすることを目的としています。
+        </p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

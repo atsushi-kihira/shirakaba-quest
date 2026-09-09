@@ -1,5 +1,5 @@
 name = "shirakaba-quest-api"
-main = "src/index.ts"
+pages_build_output_dir = "dist"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
@@ -18,23 +18,17 @@ bucket_name = "shirakaba-assets"
 
 [vars]
 ENVIRONMENT = "production"
-CORS_ORIGIN = "https://shirakaba-quest.pages.dev"
+CORS_ORIGIN = "https://shirakaba-quest.pages.dev,https://bizquest.bizolve.jp"
 
-# ---- 本番環境 ----
-# wrangler deploy --env production で使用
-[env.production.vars]
-ENVIRONMENT = "production"
-CORS_ORIGIN = "https://shirakaba-quest.pages.dev"
-# 独自ドメイン使用時: CORS_ORIGIN = "https://your-domain.com"
-
-# Secrets は wrangler secret put で設定（コードに書かない）:
-#   wrangler secret put SENDGRID_API_KEY
-#   wrangler secret put ANTHROPIC_API_KEY
-#   wrangler secret put GOOGLE_VISION_API_KEY
-#   wrangler secret put SESSION_SECRET  ← openssl rand -hex 32 で生成
-#
-# スケジューラー機能 (Phase 1) 追加シークレット:
-#   wrangler secret put GOOGLE_OAUTH_CLIENT_ID
-#   wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
-#   wrangler secret put SCHEDULER_TOKEN_KEY  ← openssl rand -base64 32 で生成
-#   wrangler secret put FRONTEND_URL         ← 例: https://shirakaba-quest.pages.dev
+# Secrets は wrangler pages secret put で設定（コードに書かない）:
+#   wrangler pages secret put SENDGRID_API_KEY --project-name shirakaba-quest-api
+#   wrangler pages secret put SENDGRID_FROM_EMAIL --project-name shirakaba-quest-api
+#   wrangler pages secret put ANTHROPIC_API_KEY --project-name shirakaba-quest-api
+#   wrangler pages secret put GOOGLE_VISION_API_KEY --project-name shirakaba-quest-api
+#   wrangler pages secret put SESSION_SECRET --project-name shirakaba-quest-api
+#   wrangler pages secret put GOOGLE_OAUTH_CLIENT_ID --project-name shirakaba-quest-api
+#   wrangler pages secret put GOOGLE_OAUTH_CLIENT_SECRET --project-name shirakaba-quest-api
+#   wrangler pages secret put SCHEDULER_TOKEN_KEY --project-name shirakaba-quest-api
+#   wrangler pages secret put FRONTEND_URL --project-name shirakaba-quest-api
+#   wrangler pages secret put ZOOM_CLIENT_ID --project-name shirakaba-quest-api
+#   wrangler pages secret put ZOOM_CLIENT_SECRET --project-name shirakaba-quest-api

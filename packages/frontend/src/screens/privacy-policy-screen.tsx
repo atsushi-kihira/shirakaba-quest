@@ -67,6 +67,14 @@ export function PrivacyPolicyScreen() {
             <p className="mt-2 p-3 rounded-xl text-xs" style={{ background: "rgba(90,140,92,0.08)", color: "var(--color-ink-700, #555)" }}>
               Googleカレンダーへのアクセスは、明示的に連携を許可した管理者のアカウントのみが対象です。メンバーのGoogleアカウントにはアクセスしません。取得したカレンダー情報は、ミーティングスケジュールの管理機能のみに利用し、他の目的には使用しません。また、Google APIから取得したデータを第三者に販売・共有することはありません。
             </p>
+
+            <h3 className="font-semibold mb-2 mt-4">2-4. AI（人工知能）機能の利用について</h3>
+            <p className="mb-2">
+              本サービスは、お題（クエスト）の自動生成、ギルド分けの提案、名刺カードの読み取り支援のために、Anthropic社の生成AI（Claude API）を利用しています。これらのAI機能が処理する情報は、メンバーが本サービス内で登録したスキル情報や名刺カード画像などに限られます。
+            </p>
+            <p className="mt-2 p-3 rounded-xl text-xs" style={{ background: "rgba(90,140,92,0.08)", color: "var(--color-ink-700, #555)" }}>
+              Googleカレンダー等のGoogle Workspace APIから取得したデータ（予定の内容・参加者情報等）を、AI・機械学習モデルの学習や改善のために使用すること、またAnthropic社を含む第三者へ提供することは一切ありません。Google Workspace APIから取得した生データおよびそれに由来するデータの取り扱いは、Googleユーザーデータポリシー（Limited Use要件を含む）を遵守します。
+            </p>
           </section>
 
           {/* 3 */}
@@ -115,6 +123,7 @@ export function PrivacyPolicyScreen() {
                     ["Cloudflare", "サーバー・データベース・ファイル保管", "cloudflare.com/privacypolicy"],
                     ["SendGrid（Twilio）", "メール送信", "sendgrid.com/policies/privacy"],
                     ["Google", "カレンダー連携・OCR", "policies.google.com/privacy"],
+                    ["Anthropic（Claude API）", "お題の自動生成・ギルド分けの提案・名刺カードの読み取り支援", "anthropic.com/legal/privacy"],
                   ].map(([name, usage, url], i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? "var(--color-paper-200, #f0e8d4)" : "transparent" }}>
                       <td className="px-3 py-2 font-medium">{name}</td>
