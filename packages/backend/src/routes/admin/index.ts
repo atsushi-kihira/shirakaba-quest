@@ -2,7 +2,8 @@
 // 管理者ルート集約
 // =============================================================
 import { Hono } from "hono";
-import { sum } from "drizzle-orm";
+import { eq, and, gte, lte, inArray, sql } from "drizzle-orm";
+import { VALID_THEMES } from "../../services/theme.ts";
 import { adminMemberRoutes } from "./members.ts";
 import { adminQuestRoutes } from "./quests.ts";
 import { adminUspRoutes } from "./usps.ts";
@@ -14,6 +15,8 @@ import { adminTeamRoutes } from "./teams.ts";
 import { adminMeetingRoutes } from "./meetings.ts";
 import { adminCardPrintRoutes } from "./card-print.ts";
 import { adminEmailTemplateRoutes } from "./email-templates.ts";
+import { adminCollabRoutes } from "./collab.ts";
+import { adminOneOnOneRoutes } from "./oneonone.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -31,50 +34,162 @@ adminRoutes.route("/teams", adminTeamRoutes);
 adminRoutes.route("/meetings", adminMeetingRoutes);
 adminRoutes.route("/card-print", adminCardPrintRoutes);
 adminRoutes.route("/email-templates", adminEmailTemplateRoutes);
+adminRoutes.route("/collab", adminCollabRoutes);
+adminRoutes.route("/oneonone", adminOneOnOneRoutes);
 
-// ---- POST /api/admin/points/reset ----
-adminRoutes.post("/points/reset", async (c) => {
+// D1のバインド変数上限を避けるため、IN句に渡すID件数を安全な単位に分割するヘルパー
+const POINTS_ID_CHUNK_SIZE = 50;
+function chunkPointIds(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += POINTS_ID_CHUNK_SIZE) chunks.push(ids.slice(i, i + POINTS_ID_CHUNK_SIZE));
+  return chunks;
+}
+
+// ---- POST /api/admin/points/reset-season ----
+// 特定シーズンの期間に記録されたポイント履歴を削除する（全員 or 指定メンバーのみ）。
+// 履歴を残したままマイナスの取引を積むのではなく、対象期間の履歴そのものを削除する。
+adminRoutes.post("/points/reset-season", async (c) => {
+  const db = createDb(c.env.DB);
+  const adminId = c.get("userId");
+  const { seasonId, memberIds } = await c.req.json<{ seasonId?: string; memberIds?: string[] }>()
+    .catch(() => ({ seasonId: undefined, memberIds: undefined }));
+
+  if (!seasonId) return c.json({ error: { code: "invalid_input", message: "シーズンを指定してください" } }, 400);
+
+  const season = await db.select().from(schema.seasons).where(eq(schema.seasons.id, seasonId)).get();
+  if (!season) return c.json({ error: { code: "not_found", message: "シーズンが見つかりません" } }, 404);
+
+  const endTs = season.endsAt ?? Math.floor(Date.now() / 1000);
+  const conditions = [
+    gte(schema.pointTransactions.createdAt, season.startsAt),
+    lte(schema.pointTransactions.createdAt, endTs),
+  ];
+  if (memberIds && memberIds.length > 0) {
+    conditions.push(inArray(schema.pointTransactions.memberId, memberIds));
+  }
+
+  const targets = await db.select({ id: schema.pointTransactions.id })
+    .from(schema.pointTransactions).where(and(...conditions)).all();
+
+  for (const chunk of chunkPointIds(targets.map((t) => t.id))) {
+    await db.delete(schema.pointTransactions).where(inArray(schema.pointTransactions.id, chunk));
+  }
+
+  console.log(`[ADMIN] Season point reset by ${adminId}, season=${seasonId}, ${targets.length} transactions deleted`);
+  return c.json({ ok: true, deletedCount: targets.length });
+});
+
+// ---- DELETE /api/admin/points/transactions ----
+// 選択したポイント履歴（複数）を一括削除する
+adminRoutes.delete("/points/transactions", async (c) => {
+  const db = createDb(c.env.DB);
+  const adminId = c.get("userId");
+  const { ids } = await c.req.json<{ ids?: string[] }>().catch(() => ({ ids: undefined }));
+  const uniqueIds = [...new Set(ids ?? [])];
+
+  if (uniqueIds.length === 0) {
+    return c.json({ error: { code: "invalid_input", message: "削除する履歴を選択してください" } }, 400);
+  }
+
+  for (const chunk of chunkPointIds(uniqueIds)) {
+    await db.delete(schema.pointTransactions).where(inArray(schema.pointTransactions.id, chunk));
+  }
+
+  console.log(`[ADMIN] Point transactions deleted by ${adminId}: ${uniqueIds.length}`);
+  return c.json({ ok: true, deletedCount: uniqueIds.length });
+});
+
+// ---- POST /api/admin/points/reset-all ----
+// 過去累計のポイント履歴をすべて削除する（全員 or 指定メンバーのみ）。マイナス取引の追加ではなく削除。
+adminRoutes.post("/points/reset-all", async (c) => {
+  const db = createDb(c.env.DB);
+  const adminId = c.get("userId");
+  const { memberIds } = await c.req.json<{ memberIds?: string[] }>().catch(() => ({ memberIds: undefined }));
+
+  const targets = memberIds && memberIds.length > 0
+    ? await db.select({ id: schema.pointTransactions.id }).from(schema.pointTransactions)
+        .where(inArray(schema.pointTransactions.memberId, memberIds)).all()
+    : await db.select({ id: schema.pointTransactions.id }).from(schema.pointTransactions).all();
+
+  for (const chunk of chunkPointIds(targets.map((t) => t.id))) {
+    await db.delete(schema.pointTransactions).where(inArray(schema.pointTransactions.id, chunk));
+  }
+
+  console.log(`[ADMIN] All-time point reset by ${adminId}, ${targets.length} transactions deleted`);
+  return c.json({ ok: true, deletedCount: targets.length });
+});
+
+// ---- GET /api/admin/points/member-summary/:id ----
+// ポイント調整パネルで、調整前に現在の得点を確認するための要約
+adminRoutes.get("/points/member-summary/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = c.req.param("id");
+
+  const member = await db.select({ id: schema.members.id, name: schema.members.name })
+    .from(schema.members).where(eq(schema.members.id, memberId)).get();
+  if (!member) return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+
+  const allTimeRow = await db
+    .select({ total: sql<number>`sum(${schema.pointTransactions.delta})`.as("total") })
+    .from(schema.pointTransactions)
+    .where(eq(schema.pointTransactions.memberId, memberId))
+    .get();
+  const allTimePoints = allTimeRow?.total ?? 0;
+
+  const activeSeason = await db.select().from(schema.seasons).where(eq(schema.seasons.isActive, 1)).get();
+
+  let seasonPoints = 0;
+  if (activeSeason) {
+    const endTs = activeSeason.endsAt ?? Math.floor(Date.now() / 1000);
+    // シーズンランキング（/api/seasons/ranking）と同じ集計式に揃える（delta>0のみ合算）。
+    // 管理画面で見せる「現在のシーズン得点」を、メンバーが実際に見るランキング数値と一致させるため。
+    const seasonRow = await db
+      .select({ total: sql<number>`sum(${schema.pointTransactions.delta})`.as("total") })
+      .from(schema.pointTransactions)
+      .where(
+        sql`${schema.pointTransactions.memberId} = ${memberId} AND ${schema.pointTransactions.delta} > 0 AND ${schema.pointTransactions.createdAt} >= ${activeSeason.startsAt} AND ${schema.pointTransactions.createdAt} <= ${endTs}`
+      )
+      .get();
+    seasonPoints = seasonRow?.total ?? 0;
+  }
+
+  return c.json({
+    data: {
+      memberId, memberName: member.name,
+      allTimePoints, seasonPoints,
+      activeSeasonName: activeSeason?.name ?? null,
+    },
+  });
+});
+
+// ---- POST /api/admin/points/adjust ----
+// 特定メンバーのポイントを加算・減算する（累計・現在シーズンの両方に反映される単一の取引を記録する）
+adminRoutes.post("/points/adjust", async (c) => {
   const db = createDb(c.env.DB);
   const adminId = c.get("userId");
   const now = Math.floor(Date.now() / 1000);
-  const { label } = await c.req.json<{ label?: string }>().catch(() => ({ label: undefined }));
+  const { memberId, delta, note } = await c.req.json<{ memberId?: string; delta?: number; note?: string }>()
+    .catch(() => ({ memberId: undefined, delta: undefined, note: undefined }));
 
-  const { eq } = await import("drizzle-orm");
-
-  const activeMembers = await db
-    .select({ id: schema.members.id })
-    .from(schema.members)
-    .where(eq(schema.members.status, "active"))
-    .all();
-
-  const pointRows = await db
-    .select({
-      memberId: schema.pointTransactions.memberId,
-      total: sum(schema.pointTransactions.delta).as("total"),
-    })
-    .from(schema.pointTransactions)
-    .groupBy(schema.pointTransactions.memberId)
-    .all();
-
-  const pointMap = new Map(pointRows.map((r) => [r.memberId, Number(r.total ?? 0)]));
-
-  const inserts = activeMembers
-    .filter((m) => (pointMap.get(m.id) ?? 0) > 0)
-    .map((m) => ({
-      id: newId(),
-      memberId: m.id,
-      delta: -(pointMap.get(m.id)!),
-      reason: "admin_reset" as const,
-      relatedId: label ?? null,
-      createdAt: now,
-    }));
-
-  if (inserts.length > 0) {
-    await db.insert(schema.pointTransactions).values(inserts);
+  if (!memberId) return c.json({ error: { code: "invalid_input", message: "メンバーを指定してください" } }, 400);
+  if (!Number.isInteger(delta) || delta === 0) {
+    return c.json({ error: { code: "invalid_input", message: "0以外の整数で調整量を指定してください" } }, 400);
   }
 
-  console.log(`[ADMIN] Point reset by ${adminId}, ${inserts.length} members affected`);
-  return c.json({ ok: true, affectedMembers: inserts.length });
+  const member = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.id, memberId)).get();
+  if (!member) return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+
+  await db.insert(schema.pointTransactions).values({
+    id: newId(),
+    memberId,
+    delta: delta as number,
+    reason: "admin_adjust",
+    relatedId: note?.trim() || null,
+    createdAt: now,
+  });
+
+  console.log(`[ADMIN] Point adjust by ${adminId}: member=${memberId}, delta=${delta}`);
+  return c.json({ ok: true });
 });
 
 // ---- GET /api/admin/my-member ----
@@ -131,11 +246,19 @@ adminRoutes.patch("/app-settings", async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const body = await c.req.json<Partial<{
     appTitle: string; appLogo: string; appPointName: string;
-    termQuest: string; termUsp: string; termOneOnOne: string;
-    timezone: string;
+    termQuest: string; termUsp: string; termOneOnOne: string; termExternalGuest: string; termEnishi: string; termBusinessCommunity: string;
+    timezone: string; theme: string;
+    schedulerLinkValidityHours: number;
   }>>();
 
   const { eq } = await import("drizzle-orm");
+
+  if (body.theme !== undefined && !VALID_THEMES.includes(body.theme as (typeof VALID_THEMES)[number])) {
+    return c.json({ error: { code: "invalid_theme", message: "不正なテーマが指定されました" } }, 400);
+  }
+  if (body.schedulerLinkValidityHours !== undefined && (body.schedulerLinkValidityHours < 6 || body.schedulerLinkValidityHours > 336)) {
+    return c.json({ error: { code: "invalid_input", message: "公開URLの有効期間は6時間〜336時間（2週間）で指定してください" } }, 400);
+  }
 
   await db.update(schema.cardDesigns).set({
     ...(body.appTitle     !== undefined && { appTitle: body.appTitle }),
@@ -144,7 +267,12 @@ adminRoutes.patch("/app-settings", async (c) => {
     ...(body.termQuest    !== undefined && { termQuest: body.termQuest }),
     ...(body.termUsp      !== undefined && { termUsp: body.termUsp }),
     ...(body.termOneOnOne !== undefined && { termOneOnOne: body.termOneOnOne }),
+    ...(body.termExternalGuest !== undefined && { termExternalGuest: body.termExternalGuest }),
+    ...(body.termEnishi    !== undefined && { termEnishi: body.termEnishi }),
+    ...(body.termBusinessCommunity !== undefined && { termBusinessCommunity: body.termBusinessCommunity }),
     ...(body.timezone     !== undefined && { timezone: body.timezone }),
+    ...(body.theme        !== undefined && { theme: body.theme }),
+    ...(body.schedulerLinkValidityHours !== undefined && { schedulerLinkValidityHours: body.schedulerLinkValidityHours }),
     updatedAt: now,
     updatedBy: adminId,
   }).where(eq(schema.cardDesigns.id, "default"));

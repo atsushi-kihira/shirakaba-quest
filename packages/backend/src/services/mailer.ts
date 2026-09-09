@@ -4,6 +4,7 @@
 import { eq } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { EMAIL_DEFAULTS_MAP } from "./email-defaults.ts";
+import { sendPushForEmailRecipient, type PushEnv } from "./push.ts";
 
 // ── 低レベル送信 ────────────────────────────────────────────
 type SendMailOptions = {
@@ -52,7 +53,7 @@ export function renderVars(template: string, vars: Record<string, string>): stri
 
 // ── MailService ─────────────────────────────────────────────
 
-type MailEnv = {
+type MailEnv = PushEnv & {
   SENDGRID_API_KEY: string;
   SENDGRID_FROM_EMAIL?: string;
   ENVIRONMENT?: string;
@@ -64,13 +65,12 @@ export class MailService {
     private env: MailEnv
   ) {}
 
-  async send(emailKey: string, to: string, vars: Record<string, string>): Promise<void> {
-    const isDev = this.env.ENVIRONMENT !== "production";
-    if (isDev) {
-      console.log(`[DEV mail] ${emailKey} → ${to}`, vars);
-      return;
-    }
-
+  async send(
+    emailKey: string,
+    to: string,
+    vars: Record<string, string>,
+    options?: { skipEmailSend?: boolean }
+  ): Promise<void> {
     const defaults = EMAIL_DEFAULTS_MAP.get(emailKey);
     if (!defaults) {
       console.warn(`[mail] unknown emailKey: ${emailKey}`);
@@ -83,6 +83,7 @@ export class MailService {
       .where(eq(schema.emailTemplates.emailKey, emailKey))
       .get();
 
+    // enabled は管理者が通知種別ごとに設定するアプリ全体の設定（無効ならメール・Push共に送らない）
     const enabled = dbRow ? !!dbRow.enabled : defaults.enabled;
     if (!enabled) return;
 
@@ -90,33 +91,47 @@ export class MailService {
     // body_html カラムにプレーンテキストを保存しているため bodyHtml フィールドで取得
     const bodyText = renderVars(dbRow?.bodyHtml ?? defaults.bodyText, vars);
 
-    // システム既定設定・共通ヘッダー/フッターを cardDesigns から取得
-    const design = await this.db.select({
-      systemFromEmail:   schema.cardDesigns.systemFromEmail,
-      appTitle:          schema.cardDesigns.appTitle,
-      emailCommonHeader: schema.cardDesigns.emailCommonHeader,
-      emailCommonFooter: schema.cardDesigns.emailCommonFooter,
-    }).from(schema.cardDesigns).get();
+    // skipEmailSend は「申込者がメール通知を希望しなかった」等、個人の選択でメール送信のみを省略するためのもの。
+    // Web Pushはこの選択に関わらず常に送る（下記）。
+    if (!options?.skipEmailSend) {
+      const isDev = this.env.ENVIRONMENT !== "production";
+      if (isDev) {
+        console.log(`[DEV mail] ${emailKey} → ${to}`, vars);
+      } else {
+        // システム既定設定・共通ヘッダー/フッターを cardDesigns から取得
+        const design = await this.db.select({
+          systemFromEmail:   schema.cardDesigns.systemFromEmail,
+          appTitle:          schema.cardDesigns.appTitle,
+          emailCommonHeader: schema.cardDesigns.emailCommonHeader,
+          emailCommonFooter: schema.cardDesigns.emailCommonFooter,
+        }).from(schema.cardDesigns).get();
 
-    const fromEmail = dbRow?.fromEmail ?? design?.systemFromEmail ?? this.env.SENDGRID_FROM_EMAIL;
-    const fromName = vars.appTitle ?? design?.appTitle ?? "BizQuest";
+        const fromEmail = dbRow?.fromEmail ?? design?.systemFromEmail ?? this.env.SENDGRID_FROM_EMAIL;
+        const fromName = vars.appTitle ?? design?.appTitle ?? "BizQuest";
 
-    // 共通ヘッダー・フッターを組み立て（テンプレートごとに無効化可能）
-    const useHeader = design?.emailCommonHeader && !dbRow?.disableCommonHeader;
-    const useFooter = design?.emailCommonFooter && !dbRow?.disableCommonFooter;
-    const header = useHeader ? renderVars(design!.emailCommonHeader!, vars) : "";
-    const footer = useFooter ? renderVars(design!.emailCommonFooter!, vars) : "";
+        // 共通ヘッダー・フッターを組み立て（テンプレートごとに無効化可能）
+        const useHeader = design?.emailCommonHeader && !dbRow?.disableCommonHeader;
+        const useFooter = design?.emailCommonFooter && !dbRow?.disableCommonFooter;
+        const header = useHeader ? renderVars(design!.emailCommonHeader!, vars) : "";
+        const footer = useFooter ? renderVars(design!.emailCommonFooter!, vars) : "";
 
-    const finalText = [header, bodyText, footer].filter(Boolean).join("\n\n");
+        const finalText = [header, bodyText, footer].filter(Boolean).join("\n\n");
 
-    await sendMail({
-      to,
-      apiKey: this.env.SENDGRID_API_KEY,
-      fromEmail,
-      fromName,
-      subject,
-      text: finalText,
-    });
+        await sendMail({
+          to,
+          apiKey: this.env.SENDGRID_API_KEY,
+          fromEmail,
+          fromName,
+          subject,
+          text: finalText,
+        });
+      }
+    }
+
+    // Web Push: メールと同じ件名・本文を、対象がBizQuest会員かつ購読していれば送る
+    // （ゲスト等・会員が見つからない場合は sendPushForEmailRecipient 内で何もせず戻る）
+    await sendPushForEmailRecipient(this.db, this.env, to, { title: subject, body: bodyText })
+      .catch((err) => console.error(`[push] ${emailKey} の通知送信に失敗`, err));
   }
 }
 

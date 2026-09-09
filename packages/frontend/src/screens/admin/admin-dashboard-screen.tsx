@@ -113,7 +113,13 @@ export function AdminDashboardScreen() {
     {
       to: "/admin/points",
       icon: "🔄",
-      label: "ポイントリセット",
+      label: "ポイント管理",
+      stats: [],
+    },
+    {
+      to: "/admin/oneonone-history",
+      icon: "🤝",
+      label: "1to1履歴管理",
       stats: [],
     },
     {

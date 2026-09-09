@@ -36,6 +36,27 @@ seasonRoutes.get("/", async (c) => {
   });
 });
 
+// GET /api/season/list — 全シーズン一覧（新しい順。ランキング画面のシーズン選択に使う）
+seasonRoutes.get("/list", async (c) => {
+  const db = createDb(c.env.DB);
+  const rows = await db
+    .select()
+    .from(schema.seasons)
+    .orderBy(sql`${schema.seasons.startsAt} DESC`)
+    .all();
+
+  return c.json({
+    data: rows.map((s) => ({
+      id: s.id,
+      name: s.name,
+      theme: s.theme,
+      startsAt: s.startsAt,
+      endsAt: s.endsAt,
+      isActive: !!s.isActive,
+    })),
+  });
+});
+
 // GET /api/season/ranking?seasonId=xxx — シーズンランキング
 seasonRoutes.get("/ranking", authMiddleware, async (c) => {
   const db = createDb(c.env.DB);

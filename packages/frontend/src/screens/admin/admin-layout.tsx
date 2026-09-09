@@ -3,7 +3,7 @@
 // =============================================================
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 
 export function AdminLayout() {
@@ -16,10 +16,12 @@ export function AdminLayout() {
     { to: "/admin/quests",   icon: ScrollText,      label: `${termQuest}管理`,        end: false },
     { to: "/admin/seasons",  icon: CalendarDays,    label: "シーズン",                end: false },
     { to: "/admin/event-types", icon: Megaphone,     label: "イベント",                end: false },
-    { to: "/admin/teams",    icon: UsersRound,      label: "チーム",                  end: false },
+    { to: "/admin/teams",    icon: UsersRound,      label: "ギルド",                  end: false },
     { to: "/admin/meetings", icon: Calendar,        label: "ミーティング",            end: false },
+    { to: "/admin/collab",  icon: Handshake,       label: "協働",                    end: false },
     { to: "/admin/card",      icon: CreditCard,      label: "カード作成",              end: false },
-    { to: "/admin/points",   icon: RotateCcw,       label: "ポイントリセット",        end: false },
+    { to: "/admin/points",   icon: RotateCcw,       label: "ポイント管理",        end: false },
+    { to: "/admin/oneonone-history", icon: History, label: "1to1履歴管理",        end: false },
     { to: "/admin/email-templates", icon: Mail,      label: "メール配信",              end: false },
     { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
   ] as const;
@@ -88,7 +90,8 @@ export function AdminLayout() {
       </nav>
 
       {/* メインコンテンツ */}
-      <main className="flex-1 main-with-tabbar max-w-4xl mx-auto w-full px-0 lg:px-8 lg:py-6 overflow-y-auto">
+      <main className="flex-1 main-with-tabbar max-w-4xl w-full px-0 lg:px-8 lg:py-6 overflow-y-auto"
+        style={{ "--sidebar-w": "256px" } as React.CSSProperties}>
         <Outlet />
       </main>
 

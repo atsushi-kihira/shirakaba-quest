@@ -12,6 +12,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { checkAndAwardBadges } from "../services/badge.ts";
+import { ensureWeeklySelection, getSystemTimezone, getWeekStart } from "../services/quest-week.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const questRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -66,6 +67,11 @@ questRoutes.get("/", async (c) => {
     .all();
   const solvedSet = new Set(solvedAttempts.map((a) => a.questId));
 
+  // 今週のクエスト選出（未生成なら未クリアからランダムで選んで保存）
+  const tz = await getSystemTimezone(db);
+  const weekStart = getWeekStart(tz);
+  const thisWeekSet = await ensureWeeklySelection(db, memberId, weekStart);
+
   return c.json({
     data: quests.map((q) => {
       const skillNames: string[] = JSON.parse(q.answerSkills ?? "[]");
@@ -74,6 +80,7 @@ questRoutes.get("/", async (c) => {
         // { name, emoji }[] に変換して返す
         answerSkills: skillNames.map((name) => ({ name, emoji: uspEmojiMap.get(name) ?? "⭐" })),
         isSolved: solvedSet.has(q.id),
+        isThisWeek: thisWeekSet.has(q.id),
       };
     }),
   });
@@ -142,6 +149,14 @@ questRoutes.post("/:id/attempts", async (c) => {
 
   if (!quest) {
     return c.json({ error: { code: "not_found", message: "お題が見つかりません" } }, 404);
+  }
+
+  // 「今週のクエスト」以外は挑戦不可
+  const tz = await getSystemTimezone(db);
+  const weekStart = getWeekStart(tz);
+  const thisWeekSet = await ensureWeeklySelection(db, memberId, weekStart);
+  if (!thisWeekSet.has(questId)) {
+    return c.json({ error: { code: "not_this_week", message: "このお題は今週のクエストではないため挑戦できません" } }, 400);
   }
 
   // 個数チェック

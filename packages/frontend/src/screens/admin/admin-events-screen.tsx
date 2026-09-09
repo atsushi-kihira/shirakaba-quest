@@ -107,7 +107,7 @@ function AdminMemberPickerWithTabs({
               color: activeTab === tab ? "white" : "var(--color-ink-600)",
             }}
           >
-            {tab === "all" ? "全員" : "チームで絞り込む"}
+            {tab === "all" ? "全員" : "ギルドで絞り込む"}
           </button>
         ))}
       </div>
@@ -120,7 +120,7 @@ function AdminMemberPickerWithTabs({
           className="w-full px-3 py-2 rounded-xl border text-sm"
           style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
         >
-          <option value="">— チームを選択 —</option>
+          <option value="">— ギルドを選択 —</option>
           {teams.map((t) => (
             <option key={t.id} value={t.id}>{t.emblemEmoji} {t.name}</option>
           ))}
@@ -129,13 +129,23 @@ function AdminMemberPickerWithTabs({
 
       {/* 絞り込み検索 + 全選択 */}
       <div className="flex gap-2">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="名前で絞り込む"
-          className="flex-1 px-3 py-1.5 rounded-xl border text-sm"
-          style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
-        />
+        <div className="relative flex-1">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="名前で絞り込む"
+            className="w-full px-3 pr-9 py-1.5 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+          />
+          {search && (
+            <button type="button" onClick={() => setSearch("")}
+              aria-label="検索条件をクリア"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full"
+              style={{ color: "var(--color-ink-400)" }}>
+              <X size={14} />
+            </button>
+          )}
+        </div>
         <button
           onClick={allFilteredSelected ? deselectAll : selectAll}
           disabled={filtered.length === 0}
@@ -164,7 +174,7 @@ function AdminMemberPickerWithTabs({
       >
         {filtered.length === 0 ? (
           <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-400)" }}>
-            {activeTab === "team" && !selectedTeamId ? "チームを選択してください" : "メンバーが見つかりません"}
+            {activeTab === "team" && !selectedTeamId ? "ギルドを選択してください" : "メンバーが見つかりません"}
           </p>
         ) : (
           filtered.map((m) => (

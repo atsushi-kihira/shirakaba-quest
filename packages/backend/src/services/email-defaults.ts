@@ -12,7 +12,7 @@ export type EmailVar = {
 export type EmailDefault = {
   emailKey: string;
   label: string;
-  category: "auth" | "usp" | "meeting" | "oneonone" | "card" | "scheduler";
+  category: "auth" | "usp" | "meeting" | "oneonone" | "card" | "scheduler" | "collab";
   triggerDescription: string;
   enabled: boolean;
   subject: string;
@@ -48,6 +48,35 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     availableVars: [
       { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
       { key: "otpCode", label: "ログインコード（6桁）", example: "123456" },
+    ],
+  },
+
+  // ============================================================
+  // アカウント登録
+  // ============================================================
+  {
+    emailKey: "member_approved",
+    label: "メンバー登録承認通知",
+    category: "auth",
+    triggerDescription: "管理者がメンバーの登録申請を承認したとき（登録者本人に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】登録が承認されました",
+    bodyText: `{{memberName}} さん
+
+{{appTitle}} へのご登録が承認されました！🎉
+
+下記のURLからログインして、さっそく使い始めましょう。
+
+{{loginUrl}}
+
+ご不明な点はお気軽に管理者へご連絡ください。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "loginUrl", label: "ログインURL", example: "https://shirakaba-quest.pages.dev" },
     ],
   },
 
@@ -416,6 +445,300 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
       { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
     ],
   },
+  {
+    emailKey: "meeting_candidates_added_member",
+    label: "候補日追加通知（メンバー向け）",
+    category: "meeting",
+    triggerDescription: "ミーティングに新しい候補日が追加されたとき（参加メンバー全員に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】🗓️ 「{{meetingTitle}}」に新しい候補日が追加されました",
+    bodyText: `{{memberName}} さん
+
+{{addedByName}}さんより、「{{meetingTitle}}」に新しい候補日が追加されました。
+お手数ですが、もう一度ご都合をお知らせください。
+
+▼ 追加された候補日
+{{candidatesText}}
+
+主催：{{hostName}}
+
+▼ 回答はこちら
+{{meetingUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "addedByName", label: "候補日を追加した人の名前", example: "鈴木 一郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "candidatesText", label: "追加された候補日一覧", example: "・2024年7月20日(土) 10:00〜11:00" },
+      { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_candidates_added_guest",
+    label: "候補日追加通知（外部ゲスト向け）",
+    category: "meeting",
+    triggerDescription: "ミーティングに新しい候補日が追加されたとき（外部ゲスト全員に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】🗓️ 「{{meetingTitle}}」に新しい候補日が追加されました",
+    bodyText: `{{guestName}} さん
+
+{{addedByName}}さんより、「{{meetingTitle}}」に新しい候補日が追加されました。
+お手数ですが、もう一度ご都合をお知らせください。
+
+▼ 追加された候補日
+{{candidatesText}}
+
+主催：{{hostName}}
+
+▼ 回答はこちら
+{{scheduleUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "ゲスト名", example: "鈴木 一郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "addedByName", label: "候補日を追加した人の名前", example: "山田 太郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "candidatesText", label: "追加された候補日一覧", example: "・2024年7月20日(土) 10:00〜11:00" },
+      { key: "scheduleUrl", label: "個人ページURL", example: "https://app.example.com/schedule/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_candidate_removed_member",
+    label: "候補日削除通知（メンバー向け）",
+    category: "meeting",
+    triggerDescription: "ミーティングの候補日が削除されたとき（参加メンバー全員に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】🗑️ 「{{meetingTitle}}」の候補日が削除されました",
+    bodyText: `{{memberName}} さん
+
+{{removedByName}}さんにより、「{{meetingTitle}}」の以下の候補日が削除されました。
+
+▼ 削除された候補日
+{{removedDateText}}
+
+主催：{{hostName}}
+
+▼ 確認URL
+{{meetingUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "removedByName", label: "候補日を削除した人の名前", example: "鈴木 一郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "removedDateText", label: "削除された候補日", example: "2024年7月20日(土) 10:00〜11:00" },
+      { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_candidate_removed_guest",
+    label: "候補日削除通知（外部ゲスト向け）",
+    category: "meeting",
+    triggerDescription: "ミーティングの候補日が削除されたとき（外部ゲスト全員に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】🗑️ 「{{meetingTitle}}」の候補日が削除されました",
+    bodyText: `{{guestName}} さん
+
+{{removedByName}}さんにより、「{{meetingTitle}}」の以下の候補日が削除されました。
+
+▼ 削除された候補日
+{{removedDateText}}
+
+主催：{{hostName}}
+
+▼ 確認URL
+{{scheduleUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "ゲスト名", example: "鈴木 一郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "removedByName", label: "候補日を削除した人の名前", example: "山田 太郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "removedDateText", label: "削除された候補日", example: "2024年7月20日(土) 10:00〜11:00" },
+      { key: "scheduleUrl", label: "個人ページURL", example: "https://app.example.com/schedule/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_unavailable_contact_host",
+    label: "都合が悪い旨の連絡（主催者向け）",
+    category: "meeting",
+    triggerDescription: "メンバーがどの候補日も都合が悪く、主催者へメッセージを送ったとき（主催者に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】💬 「{{meetingTitle}}」に{{respondentName}}さんからご連絡です",
+    bodyText: `{{hostName}} さん
+
+「{{meetingTitle}}」について、{{respondentName}}さんから以下のご連絡がありました。
+
+▼ メッセージ
+{{message}}
+
+▼ ミーティングページURL
+{{meetingUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "respondentName", label: "連絡してきた人の名前", example: "山田 太郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "message", label: "メッセージ本文", example: "その週は出張が多く、どの日も難しそうです。" },
+      { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_candidate_updated_member",
+    label: "候補日変更通知（メンバー向け）",
+    category: "meeting",
+    triggerDescription: "ミーティングの候補日の日時が変更されたとき（参加メンバー全員に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】🗓️ 「{{meetingTitle}}」の候補日が変更されました",
+    bodyText: `{{memberName}} さん
+
+{{updatedByName}}さんにより、「{{meetingTitle}}」の候補日が以下のとおり変更されました。
+
+▼ 変更後の候補日
+{{updatedDateText}}
+
+主催：{{hostName}}
+
+▼ 確認・再回答URL
+{{meetingUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "updatedByName", label: "変更した人の名前", example: "鈴木 一郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "updatedDateText", label: "変更後の候補日", example: "2024年7月20日(土) 10:00〜11:00" },
+      { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_candidate_updated_guest",
+    label: "候補日変更通知（外部ゲスト向け）",
+    category: "meeting",
+    triggerDescription: "ミーティングの候補日の日時が変更されたとき（外部ゲスト全員に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】🗓️ 「{{meetingTitle}}」の候補日が変更されました",
+    bodyText: `{{guestName}} さん
+
+{{updatedByName}}さんにより、「{{meetingTitle}}」の候補日が以下のとおり変更されました。
+
+▼ 変更後の候補日
+{{updatedDateText}}
+
+主催：{{hostName}}
+
+▼ 確認・再回答URL
+{{scheduleUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "ゲスト名", example: "鈴木 一郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "updatedByName", label: "変更した人の名前", example: "山田 太郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "updatedDateText", label: "変更後の候補日", example: "2024年7月20日(土) 10:00〜11:00" },
+      { key: "scheduleUrl", label: "個人ページURL", example: "https://app.example.com/schedule/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_declined_host",
+    label: "辞退通知（主催者向け）",
+    category: "meeting",
+    triggerDescription: "メンバーがミーティングを辞退したとき（主催者に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】「{{meetingTitle}}」を{{declinedByName}}さんが辞退しました",
+    bodyText: `{{hostName}} さん
+
+{{declinedByName}}さんが「{{meetingTitle}}」を辞退しました。
+
+▼ ミーティングページURL
+{{meetingUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "declinedByName", label: "辞退した人の名前", example: "山田 太郎" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_reminder_member",
+    label: "未回答リマインダー（メンバー向け）",
+    category: "meeting",
+    triggerDescription: "主催者が未回答のメンバーへリマインダーを送信したとき",
+    enabled: true,
+    subject: "【{{appTitle}}】⏰ 「{{meetingTitle}}」まだご回答いただいていません",
+    bodyText: `{{memberName}} さん
+
+「{{meetingTitle}}」の日程調整に、まだご回答いただいていません。
+お手数ですが、ご都合をお知らせください。
+
+主催：{{hostName}}
+
+▼ 回答はこちら
+{{meetingUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_reminder_guest",
+    label: "未回答リマインダー（外部ゲスト向け）",
+    category: "meeting",
+    triggerDescription: "主催者が未回答の外部ゲストへリマインダーを送信したとき",
+    enabled: true,
+    subject: "【{{appTitle}}】⏰ 「{{meetingTitle}}」まだご回答いただいていません",
+    bodyText: `{{guestName}} さん
+
+「{{meetingTitle}}」の日程調整に、まだご回答いただいていません。
+お手数ですが、ご都合をお知らせください。
+
+主催：{{hostName}}
+
+▼ 回答はこちら
+{{scheduleUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "ゲスト名", example: "鈴木 一郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "scheduleUrl", label: "個人ページURL", example: "https://app.example.com/schedule/xxx" },
+    ],
+  },
 
   // ============================================================
   // 1to1
@@ -431,7 +754,7 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
 
 {{requesterName}}さんから1to1の申込が届きました！
 
-{{schedulerBlock}}アプリを開いて内容を確認してみましょう。
+{{titleBlock}}{{noteBlock}}{{schedulerBlock}}アプリを開いて内容を確認してみましょう。
 
 ---
 {{appTitle}}`,
@@ -439,7 +762,41 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
       { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
       { key: "responderName", label: "受取人名", example: "山田 太郎" },
       { key: "requesterName", label: "申込者名", example: "紀平 篤志" },
+      { key: "titleBlock", label: "ミーティングのタイトル（設定済みの場合のみ表示）", example: "📌 タイトル：営業のご相談\n\n" },
+      { key: "noteBlock", label: "申込者からのメッセージ（ある場合のみ表示）", example: "💬 メッセージ：よろしくお願いします\n\n" },
       { key: "schedulerBlock", label: "スケジューラーURL（設定済みの場合のみ表示）", example: "📅 日程を予約する: https://...\n\n" },
+    ],
+  },
+
+  {
+    emailKey: "oneonone_prearranged_request",
+    label: "1to1申込通知（日程指定・要回答）",
+    category: "oneonone",
+    triggerDescription: "メンバーが日時・会議URLを指定して1to1を申し込んだとき（相手に送信、承諾/辞退の回答が必要）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{requesterName}}さんから1to1の申込が届きました（要回答）",
+    bodyText: `{{responderName}} さん
+
+{{requesterName}}さんから、日時を指定して1to1の申込が届きました。
+
+▼ 日時
+{{dateLabel}}
+
+{{conferenceBlock}}{{noteBlock}}このままでよろしければ「承諾する」、都合が合わなければ「断る」を選んでください（ログイン不要です）。
+
+▼ 回答はこちら
+{{respondUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "responderName", label: "受取人名", example: "山田 太郎" },
+      { key: "requesterName", label: "申込者名", example: "紀平 篤志" },
+      { key: "dateLabel", label: "指定日時", example: "2024年7月15日(月) 10:00" },
+      { key: "conferenceBlock", label: "会議URL（設定済みの場合のみ表示）", example: "🔗 Zoom URL: https://...\n\n" },
+      { key: "noteBlock", label: "申込者からのメッセージ（ある場合のみ表示）", example: "💬 メッセージ：よろしくお願いします\n\n" },
+      { key: "respondUrl", label: "回答用URL（ログイン不要）", example: "https://app.example.com/oneonone/respond/xxx" },
     ],
   },
 
@@ -583,6 +940,85 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
       { key: "orderPhone", label: "カード記載電話番号", example: "03-0000-0000" },
     ],
   },
+
+  // ============================================================
+  // 協働（人脈レイヤー）
+  // ============================================================
+  {
+    emailKey: "collab_intro_request",
+    label: "紹介依頼通知",
+    category: "collab",
+    triggerDescription: "協働マップの人脈レイヤーで、自分の人脈に紹介依頼が届いたとき（持ち主に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{requesterName}}さんから紹介の依頼が届きました",
+    bodyText: `{{ownerName}} さん
+
+{{requesterName}}さんが、あなたの人脈「{{contactName}}」さんに興味を持ち、紹介を依頼しています。
+
+紹介できそうであれば、{{requesterName}}さんに直接ご連絡ください。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "ownerName", label: "人脈の持ち主名", example: "山田 太郎" },
+      { key: "requesterName", label: "依頼者名", example: "紀平 篤志" },
+      { key: "contactName", label: "人脈の名前", example: "鈴木 一郎" },
+    ],
+  },
+  {
+    emailKey: "collab_reaction_message",
+    label: "リアクションメッセージ通知",
+    category: "collab",
+    triggerDescription: "活動タイムラインの投稿に「紹介できそう」「私も参加したい」でリアクション＋メッセージが送られたとき（投稿者・関係者に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{reactorName}}さんから「{{reactionLabel}}」のメッセージが届きました",
+    bodyText: `{{recipientName}} さん
+
+{{reactorName}}さんが、以下の活動投稿に「{{reactionLabel}}」でリアクションし、メッセージを送ってくれました。
+
+▼ 投稿内容
+{{postBody}}
+
+▼ {{reactorName}}さんからのメッセージ
+{{reactionMessage}}
+
+アプリのホーム画面から詳細を確認できます。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "recipientName", label: "宛先メンバー名", example: "山田 太郎" },
+      { key: "reactorName", label: "リアクションした人の名前", example: "紀平 篤志" },
+      { key: "reactionLabel", label: "リアクションの種類", example: "紹介できそう" },
+      { key: "postBody", label: "投稿内容", example: "鈴木さんと1to1をしました！" },
+      { key: "reactionMessage", label: "添えられたメッセージ", example: "ぜひ紹介させてください！" },
+    ],
+  },
+  {
+    emailKey: "collab_team_invite",
+    label: "協働チーム招待通知",
+    category: "collab",
+    triggerDescription: "協働チーム（緩いチーム／パワーチーム）に新しいメンバーとして招待されたとき（招待された本人に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{inviterName}}さんから「{{teamName}}」への招待が届きました",
+    bodyText: `{{inviteeName}} さん
+
+{{inviterName}}さんから、{{teamTypeLabel}}「{{teamName}}」への参加に招待されました。
+
+アプリの協働マップから、参加するかどうかを選べます。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "inviteeName", label: "招待された人の名前", example: "山田 太郎" },
+      { key: "inviterName", label: "招待した人の名前", example: "紀平 篤志" },
+      { key: "teamName", label: "チーム名", example: "新規開拓チーム" },
+      { key: "teamTypeLabel", label: "チーム種別", example: "パワーチーム" },
+    ],
+  },
 ];
 
 export const EMAIL_DEFAULTS_MAP = new Map<string, EmailDefault>(
@@ -596,4 +1032,5 @@ export const CATEGORY_LABELS: Record<EmailDefault["category"], string> = {
   oneonone: "1to1",
   card: "カード発注",
   scheduler: "スケジューラー",
+  collab: "協働",
 };

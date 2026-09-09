@@ -215,16 +215,18 @@ adminUspRoutes.post("/requests/:id/approve", async (c) => {
   // 申請者へメール通知
   const appDesign = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
   const appTitleUsp = appDesign?.appTitle ?? "白樺クエスト";
-  new MailService(db, c.env).send("usp_request_result", req.requesterEmail, {
-    appTitle: appTitleUsp,
-    requesterName: req.requesterName,
-    uspEmoji: req.emoji,
-    uspName: req.uspName,
-    resultLabel: "✅ 承認されました！",
-    resultColor: "#5A8C5C",
-    reviewNote: reviewNote ?? "",
-    resultMessage: "ログインしてUSPを選択してください。",
-  }).catch((e) => console.error("[usp-approve-mail]", e));
+  c.executionCtx.waitUntil(
+    new MailService(db, c.env).send("usp_request_result", req.requesterEmail, {
+      appTitle: appTitleUsp,
+      requesterName: req.requesterName,
+      uspEmoji: req.emoji,
+      uspName: req.uspName,
+      resultLabel: "✅ 承認されました！",
+      resultColor: "#5A8C5C",
+      reviewNote: reviewNote ?? "",
+      resultMessage: "ログインしてUSPを選択してください。",
+    }).catch((e) => console.error("[usp-approve-mail]", e))
+  );
 
   return c.json({ ok: true });
 });
@@ -250,16 +252,18 @@ adminUspRoutes.post("/requests/:id/reject", async (c) => {
   }).where(eq(schema.uspRequests.id, reqId));
 
   const appDesign2 = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
-  new MailService(db, c.env).send("usp_request_result", req.requesterEmail, {
-    appTitle: appDesign2?.appTitle ?? "白樺クエスト",
-    requesterName: req.requesterName,
-    uspEmoji: req.emoji,
-    uspName: req.uspName,
-    resultLabel: "❌ 今回は見送りとなりました",
-    resultColor: "#B5384B",
-    reviewNote: reviewNote ?? "",
-    resultMessage: "ご不明な点は運営チームにお問い合わせください。",
-  }).catch((e) => console.error("[usp-reject-mail]", e));
+  c.executionCtx.waitUntil(
+    new MailService(db, c.env).send("usp_request_result", req.requesterEmail, {
+      appTitle: appDesign2?.appTitle ?? "白樺クエスト",
+      requesterName: req.requesterName,
+      uspEmoji: req.emoji,
+      uspName: req.uspName,
+      resultLabel: "❌ 今回は見送りとなりました",
+      resultColor: "#B5384B",
+      reviewNote: reviewNote ?? "",
+      resultMessage: "ご不明な点は運営チームにお問い合わせください。",
+    }).catch((e) => console.error("[usp-reject-mail]", e))
+  );
 
   return c.json({ ok: true });
 });

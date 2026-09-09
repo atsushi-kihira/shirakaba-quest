@@ -5,7 +5,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, X, CheckCircle2, Trophy, Star, Target, ChevronDown, ChevronUp } from "lucide-react";
+import { Loader2, X, CheckCircle2, Trophy, Star, Target, ChevronDown, ChevronUp, Lock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
@@ -22,6 +22,7 @@ type Quest = {
   level: "normal" | "hard"; skillCount: number; required2x: number | null;
   answerSkills: AnswerSkill[];
   reward: number; deadline: number | null; status: string; isSolved: boolean;
+  isThisWeek: boolean;
 };
 type TeamMember = {
   id: string; memberId: string; isLeader: boolean;
@@ -44,21 +45,20 @@ export function QuestsScreen() {
   });
 
   const [selectedQuest, setSelectedQuest] = useState<Quest | null>(null);
-  const [filter, setFilter] = useState<"all" | "unsolved" | "solved">("all");
+  const [filter, setFilter] = useState<"thisWeek" | "unsolved" | "solved">("thisWeek");
 
   const quests = data?.data ?? [];
   const filtered = (() => {
     const base = quests.filter((q) => {
+      if (filter === "thisWeek") return q.isThisWeek;
       if (filter === "unsolved") return !q.isSolved;
       if (filter === "solved")   return q.isSolved;
       return true;
     });
-    if (filter === "all") {
-      return [...base.filter((q) => !q.isSolved), ...base.filter((q) => q.isSolved)];
-    }
-    return base;
+    return [...base.filter((q) => !q.isSolved), ...base.filter((q) => q.isSolved)];
   })();
 
+  const canChallenge = filter === "thisWeek";
   const solvedCount = quests.filter((q) => q.isSolved).length;
 
   return (
@@ -80,14 +80,14 @@ export function QuestsScreen() {
             <span style={{ color: "var(--color-ink-500)" }}> / {quests.length} クリア</span>
           </span>
           <div className="ml-auto flex gap-1">
-            {(["all", "unsolved", "solved"] as const).map((f) => (
+            {(["thisWeek", "unsolved", "solved"] as const).map((f) => (
               <button key={f} onClick={() => setFilter(f)}
                 className="text-xs px-2.5 py-1 rounded-full transition"
                 style={{
                   background: filter === f ? "var(--color-brand)" : "var(--color-paper-200)",
                   color: filter === f ? "white" : "var(--color-ink-500)",
                 }}>
-                {{ all: "すべて", unsolved: "未クリア", solved: "クリア済み" }[f]}
+                {{ thisWeek: "今週のクエスト", unsolved: "未クリア", solved: "クリア済み" }[f]}
               </button>
             ))}
           </div>
@@ -103,28 +103,32 @@ export function QuestsScreen() {
       {!isLoading && (
         <div className="space-y-4">
           {filtered.map((quest) => (
-            <QuestCard key={quest.id} quest={quest} termUsp={termUsp}
+            <QuestCard key={quest.id} quest={quest} termUsp={termUsp} canChallenge={canChallenge}
               onChallenge={() => setSelectedQuest(quest)} />
           ))}
           {filtered.length === 0 && (
             <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
               <p className="text-4xl mb-2">📭</p>
-              <p>{filter === "solved" ? `まだクリアした${termQuest}がありません` : `現在公開中の${termQuest}はありません`}</p>
+              <p>
+                {filter === "solved" ? `まだクリアした${termQuest}がありません`
+                  : filter === "thisWeek" ? `今週挑戦できる${termQuest}がありません`
+                  : `現在公開中の${termQuest}はありません`}
+              </p>
             </div>
           )}
         </div>
       )}
 
       {selectedQuest && (
-        <ChallengeModal quest={selectedQuest} termUsp={termUsp} onClose={() => setSelectedQuest(null)} />
+        <ChallengeModal quest={selectedQuest} termUsp={termUsp} canChallenge={canChallenge} onClose={() => setSelectedQuest(null)} />
       )}
     </div>
   );
 }
 
 // ---- クエストカード ----
-function QuestCard({ quest, termUsp, onChallenge }: {
-  quest: Quest; termUsp: string; onChallenge: () => void;
+function QuestCard({ quest, termUsp, canChallenge, onChallenge }: {
+  quest: Quest; termUsp: string; canChallenge: boolean; onChallenge: () => void;
 }) {
   const tz = useTimezone();
   const isHard = quest.level === "hard";
@@ -222,10 +226,10 @@ function QuestCard({ quest, termUsp, onChallenge }: {
           <button onClick={onChallenge}
             className="text-sm px-5 py-2 rounded-2xl font-medium transition active:opacity-80"
             style={{
-              background: quest.isSolved ? "var(--color-paper-300)" : "var(--color-brand)",
-              color: quest.isSolved ? "var(--color-ink-600)" : "white",
+              background: !canChallenge ? "var(--color-paper-200)" : quest.isSolved ? "var(--color-paper-300)" : "var(--color-brand)",
+              color: !canChallenge ? "var(--color-ink-500)" : quest.isSolved ? "var(--color-ink-600)" : "white",
             }}>
-            {quest.isSolved ? "再挑戦" : "挑戦する ⚔️"}
+            {!canChallenge ? "詳細を見る" : quest.isSolved ? "再挑戦" : "挑戦する ⚔️"}
           </button>
         </div>
       </div>
@@ -234,7 +238,7 @@ function QuestCard({ quest, termUsp, onChallenge }: {
 }
 
 // ---- 挑戦モーダル ----
-function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: string; onClose: () => void }) {
+function ChallengeModal({ quest, termUsp, canChallenge, onClose }: { quest: Quest; termUsp: string; canChallenge: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const tz = useTimezone();
   const [mode, setMode] = useState<"connections" | "team">("connections");
@@ -410,7 +414,8 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
             </div>
           )}
 
-          {/* スキルスロット（選択状況） */}
+          {/* スキルスロット（選択状況、挑戦可能な場合のみ表示） */}
+          {canChallenge && (
           <div className="mb-1">
             <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>
               👆 下のリストからタップして選択してください
@@ -441,10 +446,13 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
               })}
             </div>
           </div>
+          )}
         </div>
 
         <div className="px-5 pb-5">
-          {result ? (
+          {!canChallenge ? (
+            <LockedPanel isSolved={quest.isSolved} onClose={onClose} />
+          ) : result ? (
             <ResultPanel result={result} onClose={onClose} onRetry={() => { setResult(null); setSelected([]); }} />
           ) : (
             <>
@@ -477,7 +485,7 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
                     background: mode === "team" ? "var(--color-brand)" : "var(--color-paper-200)",
                     color: mode === "team" ? "white" : "var(--color-ink-600)",
                   }}>
-                  🦊 チームメンバー
+                  🦊 ギルドメンバー
                 </button>
               </div>
 
@@ -491,7 +499,7 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
                   <p className="text-xs mt-1">
                     {mode === "connections"
                       ? "1to1を完了すると" + termUsp + "が増えます"
-                      : "チームに所属するとメンバーの" + termUsp + "が使えます"}
+                      : "ギルドに所属するとメンバーの" + termUsp + "が使えます"}
                   </p>
                 </div>
               ) : (
@@ -553,6 +561,35 @@ function ChallengeModal({ quest, termUsp, onClose }: { quest: Quest; termUsp: st
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---- 挑戦不可パネル（今週のクエスト以外） ----
+function LockedPanel({ isSolved, onClose }: { isSolved: boolean; onClose: () => void }) {
+  return (
+    <div className="text-center py-6">
+      {isSolved ? (
+        <>
+          <CheckCircle2 size={40} className="mx-auto mb-3" style={{ color: "var(--color-success)" }} />
+          <p className="font-semibold mb-1" style={{ color: "var(--color-ink-800)" }}>クリア済みです</p>
+        </>
+      ) : (
+        <>
+          <Lock size={40} className="mx-auto mb-3" style={{ color: "var(--color-ink-300)" }} />
+          <p className="font-semibold mb-1" style={{ color: "var(--color-ink-800)" }}>
+            「今週のクエスト」に選ばれると挑戦できます
+          </p>
+          <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+            未クリアのクエストの中からランダムで毎週選ばれます
+          </p>
+        </>
+      )}
+      <button onClick={onClose}
+        className="w-full rounded-2xl py-3 text-sm font-medium"
+        style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+        閉じる
+      </button>
     </div>
   );
 }

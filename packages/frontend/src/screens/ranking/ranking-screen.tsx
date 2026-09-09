@@ -1,7 +1,7 @@
 // =============================================================
 // ランキング画面 — 個人/チーム × シーズン/累計
 // =============================================================
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Trophy, ChevronDown, ChevronUp } from "lucide-react";
@@ -22,6 +22,7 @@ type RankingEntry = {
 type RankingResponse = { data: RankingEntry[] };
 type SeasonRankingResponse = { data: SeasonRankingEntry[]; season: Season | null };
 type ActiveSeasonResponse = { data: Season | null };
+type SeasonListResponse = { data: Season[] };
 type TeamRankingResponse = { data: TeamRankingEntry[]; season: Season | null };
 
 const RANK_MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" };
@@ -37,6 +38,8 @@ export function RankingScreen() {
   const [scope, setScope] = useState<"season" | "total">("season");
   // 展開中のチームID
   const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
+  // 表示中のシーズンID（未選択時はアクティブ最新シーズンに自動フォーカス）
+  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
 
   // 個人・累計
   const { data: totalData, isLoading: totalLoading } = useQuery({
@@ -51,11 +54,28 @@ export function RankingScreen() {
     queryFn: () => api.get<ActiveSeasonResponse>("/season"),
   });
 
+  // 全シーズン一覧（過去シーズンを選べるように）。新しい順で返ってくる
+  const { data: seasonList } = useQuery({
+    queryKey: ["season", "list"],
+    queryFn: () => api.get<SeasonListResponse>("/season/list"),
+  });
+  const seasons = seasonList?.data ?? [];
+
+  // 初回ロード時は必ず「最新シーズン」（アクティブシーズン優先、無ければ一番新しいシーズン）にフォーカスする
+  useEffect(() => {
+    if (selectedSeasonId !== null) return;
+    const defaultId = activeSeason?.data?.id ?? seasons[0]?.id;
+    if (defaultId) setSelectedSeasonId(defaultId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSeason, seasons.length]);
+
+  const effectiveSeasonId = selectedSeasonId ?? activeSeason?.data?.id ?? seasons[0]?.id ?? "";
+
   // 個人・シーズン
   const { data: seasonData, isLoading: seasonLoading } = useQuery({
-    queryKey: ["ranking", "individual", "season"],
-    queryFn: () => api.get<SeasonRankingResponse>("/season/ranking"),
-    enabled: view === "individual" && scope === "season",
+    queryKey: ["ranking", "individual", "season", effectiveSeasonId],
+    queryFn: () => api.get<SeasonRankingResponse>(`/season/ranking?seasonId=${effectiveSeasonId}`),
+    enabled: view === "individual" && scope === "season" && !!effectiveSeasonId,
   });
 
   // チーム・累計
@@ -67,13 +87,13 @@ export function RankingScreen() {
 
   // チーム・シーズン
   const { data: teamSeasonData, isLoading: teamSeasonLoading } = useQuery({
-    queryKey: ["ranking", "team", "season"],
-    queryFn: () => api.get<TeamRankingResponse>("/teams/ranking?scope=season"),
-    enabled: view === "team" && scope === "season",
+    queryKey: ["ranking", "team", "season", effectiveSeasonId],
+    queryFn: () => api.get<TeamRankingResponse>(`/teams/ranking?scope=season&seasonId=${effectiveSeasonId}`),
+    enabled: view === "team" && scope === "season" && !!effectiveSeasonId,
   });
 
-  const currentSeason = activeSeason?.data ?? seasonData?.season ?? null;
-  const teamCurrentSeason = teamSeasonData?.season ?? null;
+  const currentSeason = seasonData?.season ?? seasons.find((s) => s.id === effectiveSeasonId) ?? activeSeason?.data ?? null;
+  const teamCurrentSeason = teamSeasonData?.season ?? currentSeason;
 
   const isLoading =
     (view === "individual" && scope === "total" && totalLoading) ||
@@ -120,7 +140,7 @@ export function RankingScreen() {
             color: view === "team" ? "white" : "var(--color-ink-600)",
           }}
         >
-          🦊 チーム
+          🦊 ギルド
         </button>
       </div>
 
@@ -148,25 +168,43 @@ export function RankingScreen() {
         </button>
       </div>
 
-      {/* シーズン情報バナー */}
-      {scope === "season" && (() => {
-        const s = view === "individual" ? currentSeason : teamCurrentSeason;
-        return s ? (
-          <div className="mb-4 p-3 rounded-2xl text-sm"
-            style={{ background: "rgba(181,56,75,0.06)", border: "1px solid rgba(181,56,75,0.2)" }}>
-            <p className="font-semibold" style={{ color: "var(--color-brand)" }}>🌸 {s.name}</p>
-            {s.theme && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>{s.theme}</p>}
-            <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-              開始: {fmtDateISO(s.startsAt, tz)}
-            </p>
-          </div>
-        ) : (
+      {/* シーズン選択 + 情報バナー */}
+      {scope === "season" && (
+        seasons.length === 0 ? (
           <div className="mb-4 p-3 rounded-2xl text-sm text-center"
             style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
-            現在アクティブなシーズンはありません
+            シーズンがまだありません
           </div>
-        );
-      })()}
+        ) : (() => {
+          const s = view === "individual" ? currentSeason : teamCurrentSeason;
+          return (
+            <div className="mb-4 p-3 rounded-2xl text-sm"
+              style={{ background: "rgba(181,56,75,0.06)", border: "1px solid rgba(181,56,75,0.2)" }}>
+              <div className="flex items-center gap-2 flex-wrap mb-1">
+                <select
+                  value={effectiveSeasonId}
+                  onChange={(e) => setSelectedSeasonId(e.target.value)}
+                  className="flex-1 min-w-0 px-2 py-1.5 rounded-xl border text-sm font-semibold"
+                  style={{ borderColor: "rgba(181,56,75,0.3)", color: "var(--color-brand)", background: "var(--color-paper-50)" }}
+                >
+                  {seasons.map((season) => (
+                    <option key={season.id} value={season.id}>
+                      🌸 {season.name}{season.isActive ? "（最新）" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {s?.theme && <p className="text-xs mt-1" style={{ color: "var(--color-ink-600)" }}>{s.theme}</p>}
+              {s && (
+                <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+                  開始: {fmtDateISO(s.startsAt, tz)}
+                  {s.endsAt ? ` 〜 終了: ${fmtDateISO(s.endsAt, tz)}` : "（進行中）"}
+                </p>
+              )}
+            </div>
+          );
+        })()
+      )}
 
       {/* ローディング */}
       {isLoading && (
@@ -185,7 +223,7 @@ export function RankingScreen() {
         <div className="space-y-2">
           {teamEntries.length === 0 ? (
             <div className="text-center py-12">
-              <p style={{ color: "var(--color-ink-400)" }}>チームがまだありません</p>
+              <p style={{ color: "var(--color-ink-400)" }}>ギルドがまだありません</p>
             </div>
           ) : (
             teamEntries.map((entry) => {

@@ -3,7 +3,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Play, StopCircle, Pencil, Check, X } from "lucide-react";
+import { Plus, Play, StopCircle, Pencil, Check, X, Trash2, AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Season } from "@shared/types";
 import { useSettings } from "@/hooks/use-settings";
@@ -14,6 +14,7 @@ export function AdminSeasonsScreen() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [deletingSeason, setDeletingSeason] = useState<Season | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "seasons"],
@@ -118,6 +119,14 @@ export function AdminSeasonsScreen() {
                           終了
                         </button>
                       )}
+                      <button
+                        onClick={() => setDeletingSeason(s)}
+                        className="p-2 rounded-2xl transition hover:opacity-80"
+                        style={{ background: "var(--color-paper-200)" }}
+                        title="削除"
+                      >
+                        <Trash2 size={14} style={{ color: "var(--color-brand)" }} />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -128,6 +137,66 @@ export function AdminSeasonsScreen() {
       )}
 
       {showCreate && <CreateModal onClose={() => setShowCreate(false)} />}
+      {deletingSeason && <DeleteSeasonModal season={deletingSeason} onClose={() => setDeletingSeason(null)} />}
+    </div>
+  );
+}
+
+// ---- 削除確認モーダル ----
+function DeleteSeasonModal({ season, onClose }: { season: Season; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [deletePointHistory, setDeletePointHistory] = useState(false);
+
+  const del = useMutation({
+    mutationFn: () => api.delete(`/admin/seasons/${season.id}?deletePointHistory=${deletePointHistory}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "seasons"] });
+      onClose();
+    },
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+      style={{ background: "rgba(0,0,0,0.4)" }} onClick={() => !del.isPending && onClose()}>
+      <div className="card-paper p-6 w-full max-w-sm rounded-3xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 mb-3">
+          <AlertTriangle size={20} style={{ color: "var(--color-brand)" }} />
+          <h3 className="font-semibold text-lg" style={{ fontFamily: "var(--font-klee)" }}>
+            「{season.name}」を削除しますか？
+          </h3>
+        </div>
+        <p className="text-sm mb-4" style={{ color: "var(--color-ink-600)" }}>
+          この操作は取り消せません。このシーズン期間に記録されたポイント履歴をどうするか選んでください。
+        </p>
+
+        <label className="flex items-start gap-2 py-2.5 px-3 rounded-2xl cursor-pointer mb-2"
+          style={{ background: !deletePointHistory ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
+          <input type="radio" className="mt-0.5" checked={!deletePointHistory} onChange={() => setDeletePointHistory(false)} />
+          <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+            📊 履歴は残す（各メンバーの累計ポイントとして残ります。シーズンとの紐付けだけがなくなります）
+          </span>
+        </label>
+        <label className="flex items-start gap-2 py-2.5 px-3 rounded-2xl cursor-pointer mb-4"
+          style={{ background: deletePointHistory ? "rgba(181,56,75,0.1)" : "var(--color-paper-200)" }}>
+          <input type="radio" className="mt-0.5" checked={deletePointHistory} onChange={() => setDeletePointHistory(true)} />
+          <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+            🗑️ このシーズン期間のポイント履歴も一緒に削除する（累計ポイントも減ります）
+          </span>
+        </label>
+
+        <div className="flex gap-3">
+          <button onClick={onClose} disabled={del.isPending}
+            className="flex-1 py-2.5 rounded-2xl text-sm font-medium"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+            キャンセル
+          </button>
+          <button onClick={() => del.mutate()} disabled={del.isPending}
+            className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50"
+            style={{ background: "var(--color-brand)" }}>
+            {del.isPending ? "削除中..." : "削除する"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

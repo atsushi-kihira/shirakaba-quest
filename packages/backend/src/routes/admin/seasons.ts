@@ -5,12 +5,21 @@
 // PATCH  /api/admin/seasons/:id
 // PATCH  /api/admin/seasons/:id/activate
 // PATCH  /api/admin/seasons/:id/end
+// DELETE /api/admin/seasons/:id
 // =============================================================
 import { Hono } from "hono";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, gte, lte, inArray } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
+
+// D1のバインド変数上限を避けるため、IN句に渡すID件数を安全な単位に分割するヘルパー
+const SEASON_ID_CHUNK_SIZE = 50;
+function chunkIds(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += SEASON_ID_CHUNK_SIZE) chunks.push(ids.slice(i, i + SEASON_ID_CHUNK_SIZE));
+  return chunks;
+}
 
 export const adminSeasonRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -105,6 +114,39 @@ adminSeasonRoutes.patch("/:id/end", async (c) => {
     .where(eq(schema.seasons.id, c.req.param("id")));
 
   return c.json({ ok: true });
+});
+
+// DELETE /api/admin/seasons/:id?deletePointHistory=true|false
+// シーズンそのものを削除する。deletePointHistory=true の場合はそのシーズン期間に
+// 記録されたポイント履歴も合わせて削除する。false（既定）の場合は履歴を残し、
+// 各メンバーの累計ポイントとしてはそのまま残る（シーズンとの紐付けだけがなくなる）。
+adminSeasonRoutes.delete("/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const seasonId = c.req.param("id");
+  const deletePointHistory = c.req.query("deletePointHistory") === "true";
+
+  const season = await db.select().from(schema.seasons).where(eq(schema.seasons.id, seasonId)).get();
+  if (!season) return c.json({ error: { code: "not_found", message: "シーズンが見つかりません" } }, 404);
+
+  let deletedTransactionCount = 0;
+  if (deletePointHistory) {
+    const endTs = season.endsAt ?? Math.floor(Date.now() / 1000);
+    const targets = await db.select({ id: schema.pointTransactions.id })
+      .from(schema.pointTransactions)
+      .where(and(
+        gte(schema.pointTransactions.createdAt, season.startsAt),
+        lte(schema.pointTransactions.createdAt, endTs)
+      ))
+      .all();
+    deletedTransactionCount = targets.length;
+    for (const chunk of chunkIds(targets.map((t) => t.id))) {
+      await db.delete(schema.pointTransactions).where(inArray(schema.pointTransactions.id, chunk));
+    }
+  }
+
+  await db.delete(schema.seasons).where(eq(schema.seasons.id, seasonId));
+
+  return c.json({ ok: true, deletedTransactionCount });
 });
 
 function toPublic(s: typeof schema.seasons.$inferSelect) {

@@ -28,7 +28,7 @@ type EmailTemplate = {
   isCustomized: boolean;
 };
 
-const CATEGORY_ORDER = ["auth", "usp", "meeting", "oneonone", "scheduler", "card"];
+const CATEGORY_ORDER = ["auth", "usp", "meeting", "oneonone", "scheduler", "card", "collab"];
 
 function groupByCategory(templates: EmailTemplate[]) {
   const map = new Map<string, EmailTemplate[]>();

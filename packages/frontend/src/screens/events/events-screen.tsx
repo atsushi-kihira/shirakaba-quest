@@ -152,14 +152,14 @@ function MemberPickerWithTabs({
     { key: "all", label: "全員" },
     { key: "connected", label: "1to1済み" },
     { key: "not_connected", label: "1to1未" },
-    { key: "team", label: "チーム" },
+    { key: "team", label: "ギルド" },
   ];
 
   const emptyMessage: Record<FilterTab, string> = {
     all: "メンバーが見つかりません",
     connected: "1to1が完了しているメンバーがいません",
     not_connected: "1to1が未完了のメンバーがいません",
-    team: myTeam ? "該当するメンバーがいません" : "チームに所属していません",
+    team: myTeam ? "該当するメンバーがいません" : "ギルドに所属していません",
   };
 
   return (
@@ -183,13 +183,23 @@ function MemberPickerWithTabs({
 
       {/* 絞り込み検索 + 全選択ボタン */}
       <div className="flex gap-2">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="名前で絞り込む"
-          className="flex-1 px-3 py-1.5 rounded-xl border text-sm"
-          style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
-        />
+        <div className="relative flex-1">
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="名前で絞り込む"
+            className="w-full px-3 pr-9 py-1.5 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+          />
+          {search && (
+            <button type="button" onClick={() => setSearch("")}
+              aria-label="検索条件をクリア"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full"
+              style={{ color: "var(--color-ink-400)" }}>
+              <X size={14} />
+            </button>
+          )}
+        </div>
         <button
           onClick={allFilteredSelected ? deselectAll : selectAll}
           disabled={filtered.length === 0}

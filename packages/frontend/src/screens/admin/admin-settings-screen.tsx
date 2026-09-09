@@ -3,9 +3,10 @@
 // =============================================================
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Upload, RotateCcw, ImageIcon, Trash2, Plus, Loader2 } from "lucide-react";
+import { Save, Upload, RotateCcw, ImageIcon, Trash2, Plus, Loader2, Check } from "lucide-react";
 import { api, API_BASE_URL } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { THEME_OPTIONS, type AppTheme } from "@/hooks/use-settings";
 
 type AppSettings = {
   id: string;
@@ -15,8 +16,13 @@ type AppSettings = {
   termQuest: string;
   termUsp: string;
   termOneOnOne: string;
+  termExternalGuest: string;
+  termEnishi: string;
+  termBusinessCommunity: string;
   timezone: string;
   characterImageKey: string | null;
+  theme: AppTheme;
+  schedulerLinkValidityHours: number;
 };
 
 type FormState = {
@@ -26,8 +32,22 @@ type FormState = {
   termQuest: string;
   termUsp: string;
   termOneOnOne: string;
+  termExternalGuest: string;
+  termEnishi: string;
+  termBusinessCommunity: string;
   timezone: string;
+  theme: AppTheme;
+  schedulerLinkValidityHours: number;
 };
+
+const SCHEDULER_LINK_VALIDITY_OPTIONS = [
+  { value: 6, label: "6時間" },
+  { value: 12, label: "12時間" },
+  { value: 24, label: "1日" },
+  { value: 72, label: "3日（既定）" },
+  { value: 168, label: "1週間" },
+  { value: 336, label: "2週間" },
+];
 
 const TIMEZONE_OPTIONS = [
   { value: "Asia/Tokyo",     label: "🇯🇵 日本標準時 (UTC+9)" },
@@ -48,7 +68,12 @@ const DEFAULTS: FormState = {
   termQuest: "お題",
   termUsp: "USP",
   termOneOnOne: "1to1",
+  termExternalGuest: "外部ゲスト",
+  termEnishi: "ご縁",
+  termBusinessCommunity: "ビジネスコミュニティ",
   timezone: "Asia/Tokyo",
+  theme: "playful",
+  schedulerLinkValidityHours: 72,
 };
 
 type AdminUser = {
@@ -121,7 +146,12 @@ export function AdminSettingsScreen() {
         termQuest:    data.data.termQuest    ?? DEFAULTS.termQuest,
         termUsp:      data.data.termUsp      ?? DEFAULTS.termUsp,
         termOneOnOne: data.data.termOneOnOne ?? DEFAULTS.termOneOnOne,
+        termExternalGuest: data.data.termExternalGuest ?? DEFAULTS.termExternalGuest,
+        termEnishi:   data.data.termEnishi   ?? DEFAULTS.termEnishi,
+        termBusinessCommunity: data.data.termBusinessCommunity ?? DEFAULTS.termBusinessCommunity,
         timezone:     data.data.timezone     ?? DEFAULTS.timezone,
+        theme:        data.data.theme        ?? DEFAULTS.theme,
+        schedulerLinkValidityHours: data.data.schedulerLinkValidityHours ?? DEFAULTS.schedulerLinkValidityHours,
       });
     }
   }, [data]);
@@ -293,12 +323,107 @@ export function AdminSettingsScreen() {
           </p>
         </div>
 
+        {/* 外部ゲスト */}
+        <div>
+          <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+            🌐 メンバー外の相手の呼び方
+          </label>
+          <input
+            value={form.termExternalGuest}
+            onChange={(e) => set("termExternalGuest", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)" }}
+            placeholder="外部ゲスト"
+          />
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            デフォルト: 「外部ゲスト」。例: ビジター / 招待者 など
+          </p>
+        </div>
+
+        {/* ご縁 */}
+        <div>
+          <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+            🕸️ 人脈紹介機能の呼び方
+          </label>
+          <input
+            value={form.termEnishi}
+            onChange={(e) => set("termEnishi", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)" }}
+            placeholder="ご縁"
+          />
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            デフォルト: 「ご縁」。例: リファーラル / 紹介 など
+          </p>
+        </div>
+
+        {/* ビジネスコミュニティ */}
+        <div>
+          <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+            🏢 母体となるビジネスコミュニティの呼び方
+          </label>
+          <input
+            value={form.termBusinessCommunity}
+            onChange={(e) => set("termBusinessCommunity", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)" }}
+            placeholder="ビジネスコミュニティ"
+          />
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            デフォルト: 「ビジネスコミュニティ」。白樺チャプターでは「BNI」を設定すると、プロフィールの入会日欄が「BNI入会日」と表示されます。
+          </p>
+        </div>
+
         {/* 用語プレビュー */}
         <div className="p-4 rounded-2xl" style={{ background: "var(--color-paper-200)" }}>
           <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>用語プレビュー</p>
           <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>
             「{form.termUsp || "USP"}を {form.termQuest || "お題"}に組み合わせて、{form.termOneOnOne || "1to1"}でなかまのカードを集めよう！」
           </p>
+          <p className="text-sm mt-1" style={{ color: "var(--color-ink-700)" }}>
+            「なかまの人脈から、新しい{form.termEnishi || "ご縁"}を見つけよう！」
+          </p>
+          <p className="text-sm mt-1" style={{ color: "var(--color-ink-700)" }}>
+            「{form.termBusinessCommunity || "ビジネスコミュニティ"}入会日」
+          </p>
+        </div>
+      </div>
+
+      {/* ---- カラーテーマ ---- */}
+      <div className="card-paper p-6 space-y-4 mb-5">
+        <div>
+          <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+            🎨 カラーテーマ
+          </h2>
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            一般メンバー向け画面（管理ダッシュボードを除く）の色調を選べます。個別の色ではなく、全体の配色セットを切り替えます。
+          </p>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {THEME_OPTIONS.map((t) => {
+            const active = form.theme === t.value;
+            return (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => set("theme", t.value)}
+                className="rounded-2xl p-3 text-left border transition"
+                style={{
+                  borderColor: active ? "var(--color-brand)" : "var(--color-paper-300)",
+                  background: active ? "rgba(181,56,75,0.06)" : "var(--color-paper-50)",
+                }}
+              >
+                <div className="flex items-center gap-1.5 mb-2">
+                  {t.swatch.map((c, i) => (
+                    <span key={i} className="w-5 h-5 rounded-full border" style={{ background: c, borderColor: "rgba(0,0,0,0.08)" }} />
+                  ))}
+                  {active && <Check size={14} className="ml-auto" style={{ color: "var(--color-brand)" }} />}
+                </div>
+                <p className="text-xs font-medium" style={{ color: "var(--color-ink-700)" }}>{t.label}</p>
+                <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{t.description}</p>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -323,6 +448,35 @@ export function AdminSettingsScreen() {
             style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}
           >
             {TIMEZONE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* ---- 日程調整の公開URL設定 ---- */}
+      <div className="card-paper p-6 space-y-4 mb-5">
+        <div>
+          <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+            🔗 日程調整の公開URLの有効期間
+          </h2>
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            メンバーが外部の方と共有する日程調整の公開URLは、恒久的なものではなく期限付きで発行されます。
+            発行してからここで設定した時間が経つと自動的に無効になり、共有した相手はページを開けなくなります
+            （既に確定した予約自体には影響しません）。
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+            有効期間
+          </label>
+          <select
+            value={form.schedulerLinkValidityHours}
+            onChange={(e) => set("schedulerLinkValidityHours", Number(e.target.value))}
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}
+          >
+            {SCHEDULER_LINK_VALIDITY_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>

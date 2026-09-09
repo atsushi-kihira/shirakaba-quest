@@ -221,6 +221,8 @@ rankingRoutes.get("/history", async (c) => {
       ? eventCampaign.title
       : attendedMeeting
       ? attendedMeeting.title
+      : t.reason === "admin_adjust" && t.relatedId
+      ? t.relatedId // 管理者調整のメモ（自由記述）をそのまま表示する
       : undefined;
 
     return {
