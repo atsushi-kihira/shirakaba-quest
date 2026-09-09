@@ -4,13 +4,15 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, ChevronLeft, Check, Link as LinkIcon, Copy, CheckCircle, Edit2, UserPlus, Trash2, Video, ExternalLink } from "lucide-react";
+import { Loader2, ChevronLeft, Check, Link as LinkIcon, Copy, CheckCircle, Edit2, UserPlus, Trash2, Video, ExternalLink, X, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useSettings } from "@/hooks/use-settings";
+import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 
 type Availability = "yes" | "maybe" | "no";
 
-type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null; sortOrder: number; isConfirmed: number; conferenceUrl: string | null };
+type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null; sortOrder: number; isConfirmed: number; conferenceUrl: string | null; addedByMemberId: string | null; addedByName: string | null };
 type Respondent = {
   type: "member" | "external";
   id: string;
@@ -33,6 +35,8 @@ type Meeting = {
   deadline: number | null; createdAt: number;
   conferenceType: "manual" | "google_meet" | "zoom";
   conferenceUrl: string | null;
+  seriesId: string | null;
+  seriesOccurrenceIndex: number | null;
   inviteToken: string | null;
 };
 type LinkedEvent = { id: string; title: string; multiplier: number | null };
@@ -45,8 +49,12 @@ type DetailResponse = {
     externalInvitees: ExternalInvitee[];
     myAnswers: Record<string, Availability>;
     isHost: boolean;
+    declinedMemberIds: string[];
+    myDeclined: boolean;
+    maxCandidates: number;
+    lastReminderSentAt: number | null;
     linkedEvent: LinkedEvent | null;
-    myAttendance: { status: "attended" | "absent"; candidateId: string | null; pointsAwarded: number | null } | null;
+    myAttendances: { status: "attended" | "absent"; candidateId: string | null; pointsAwarded: number | null }[];
     attendances: AttendanceRecord[];
     availableConferenceTypes: ("google_meet" | "zoom")[];
   };
@@ -80,6 +88,26 @@ function formatCandidateDate(ts: number, endsAt: number | null): { date: string;
   return { date, time: startT === "00:00" ? "" : startT };
 }
 
+// 候補日追加フォーム用の行データ（meeting-new-screen.tsx と同じ入力パターン）
+type NewCandidateRow = { date: string; time: string; endTime: string };
+function emptyCandidateRow(): NewCandidateRow {
+  return { date: "", time: "09:00", endTime: "10:00" };
+}
+function rowToUnixTimestamp(date: string, time: string): number {
+  const dt = time ? new Date(`${date}T${time}:00`) : new Date(`${date}T00:00:00`);
+  return Math.floor(dt.getTime() / 1000);
+}
+function todayDateStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function toDateTimeStr(ts: number): { date: string; time: string } {
+  const d = new Date(ts * 1000);
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return { date, time };
+}
+
 function AvailCell({ value }: { value: Availability | undefined }) {
   const s = availStyle(value);
   return (
@@ -95,6 +123,8 @@ function countYes(respondents: Respondent[], candidateId: string): number {
 }
 
 // 確定済み候補日のセルにRSVP出欠を表示するためのステータス解決
+// 1人が複数の確定日にそれぞれ個別の出席記録を持てるため、まずcandidateIdが完全一致する記録を探す。
+// 旧データ（candidateIdがnullで1件のみ）は後方互換のフォールバックで拾う。
 function getAttendanceForCell(
   memberId: string,
   candidateId: string,
@@ -103,12 +133,14 @@ function getAttendanceForCell(
   totalConfirmedCount: number,
 ): "attended" | "absent" | null {
   if (!isConfirmed) return null;
-  const att = attendances.find((a) => a.memberId === memberId);
-  if (!att) return null;
-  if (att.candidateId === candidateId) return att.status;
-  if (att.candidateId === null) {
-    if (att.status === "absent") return "absent"; // 全日程を欠席
-    if (att.status === "attended" && totalConfirmedCount === 1) return "attended"; // 確定日が1つのみなら自明
+  const myAtts = attendances.filter((a) => a.memberId === memberId);
+  if (myAtts.length === 0) return null;
+  const exact = myAtts.find((a) => a.candidateId === candidateId);
+  if (exact) return exact.status;
+  const legacy = myAtts.find((a) => a.candidateId === null);
+  if (legacy) {
+    if (legacy.status === "absent") return "absent"; // 全日程を欠席
+    if (legacy.status === "attended" && totalConfirmedCount === 1) return "attended"; // 確定日が1つのみなら自明
   }
   return null;
 }
@@ -135,6 +167,7 @@ export function MeetingDetailScreen() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
+  const { termExternalGuest } = useSettings();
 
   const [myAnswers, setMyAnswers] = useState<Record<string, Availability>>({});
   const [hasEdited, setHasEdited] = useState(false);
@@ -147,6 +180,10 @@ export function MeetingDetailScreen() {
   const [manualConfUrl, setManualConfUrl] = useState("");
   const [settingUrlForCandidate, setSettingUrlForCandidate] = useState<string | null>(null);
   const [copiedConfUrl, setCopiedConfUrl] = useState<string>("");
+  const [reschedulingCandidateId, setReschedulingCandidateId] = useState<string | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState("");
+  const [rescheduleTime, setRescheduleTime] = useState("");
+  const [rescheduleEndTime, setRescheduleEndTime] = useState("");
   // 確定モーダル
   type ConfirmModal = { candidateId: string; dateText: string };
   const [confirmModal, setConfirmModal] = useState<ConfirmModal | null>(null);
@@ -154,6 +191,17 @@ export function MeetingDetailScreen() {
   const [confirmManualUrl, setConfirmManualUrl] = useState("");
   const [sharedInviteUrl, setSharedInviteUrl] = useState<string | null>(null);
   const [copiedSharedUrl, setCopiedSharedUrl] = useState(false);
+  // 出席確認後、活動タイムラインへの投稿を促すプロンプト（パイロット限定・相手が1名の時のみ）
+  const [postPromptPartner, setPostPromptPartner] = useState<{ id: string; name: string } | null>(null);
+  // 都合が悪い場合の連絡・候補日提案（参加者向け）
+  const [showUnavailableForm, setShowUnavailableForm] = useState(false);
+  const [unavailableMessage, setUnavailableMessage] = useState("");
+  const [proposedCandidates, setProposedCandidates] = useState<NewCandidateRow[]>([]);
+  // 候補日の追加（主催者向け）
+  const [showHostAddForm, setShowHostAddForm] = useState(false);
+  const [hostNewCandidates, setHostNewCandidates] = useState<NewCandidateRow[]>([emptyCandidateRow()]);
+  // 候補日の編集
+  const [editCandidateModal, setEditCandidateModal] = useState<{ id: string } & NewCandidateRow | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["meetings", id],
@@ -203,6 +251,67 @@ export function MeetingDetailScreen() {
     mutationFn: ({ candidateId, deferNotification }: { candidateId: string; deferNotification?: boolean }) =>
       api.patch(`/meetings/${id}/confirm`, { candidateId, deferNotification }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["meetings", id] }),
+  });
+
+  const addCandidatesMutation = useMutation({
+    mutationFn: (payload: { candidates?: Array<{ startsAt: number; endsAt?: number }>; message?: string }) =>
+      api.post(`/meetings/${id}/candidates`, payload),
+    onSuccess: () => {
+      setShowUnavailableForm(false);
+      setUnavailableMessage("");
+      setProposedCandidates([]);
+      setShowHostAddForm(false);
+      setHostNewCandidates([emptyCandidateRow()]);
+      qc.invalidateQueries({ queryKey: ["meetings", id] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "候補日の追加に失敗しました";
+      window.alert(msg);
+    },
+  });
+
+  const removeCandidateMutation = useMutation({
+    mutationFn: (candidateId: string) => api.delete(`/meetings/${id}/candidates/${candidateId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["meetings", id] }),
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "候補日の削除に失敗しました";
+      window.alert(msg);
+    },
+  });
+
+  const editCandidateMutation = useMutation({
+    mutationFn: ({ candidateId, startsAt, endsAt }: { candidateId: string; startsAt: number; endsAt?: number }) =>
+      api.patch(`/meetings/${id}/candidates/${candidateId}`, { startsAt, endsAt }),
+    onSuccess: () => {
+      setEditCandidateModal(null);
+      qc.invalidateQueries({ queryKey: ["meetings", id] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "候補日の編集に失敗しました";
+      window.alert(msg);
+    },
+  });
+
+  const declineMutation = useMutation({
+    mutationFn: () => api.post(`/meetings/${id}/decline`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["meetings", id] }),
+  });
+
+  const undeclineMutation = useMutation({
+    mutationFn: () => api.delete(`/meetings/${id}/decline`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["meetings", id] }),
+  });
+
+  const remindMutation = useMutation({
+    mutationFn: () => api.post<{ data: { remindedCount: number }; message?: string }>(`/meetings/${id}/remind`, {}),
+    onSuccess: (res) => {
+      window.alert(res.message ?? `${res.data.remindedCount}人にリマインダーを送信しました`);
+      qc.invalidateQueries({ queryKey: ["meetings", id] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "リマインダーの送信に失敗しました";
+      window.alert(msg);
+    },
   });
 
   // 日程確定 + 会議URL設定を同時に行う複合ミューテーション
@@ -296,13 +405,29 @@ export function MeetingDetailScreen() {
     },
   });
 
+  const rescheduleMutation = useMutation({
+    mutationFn: (body: { startsAt: number; endsAt?: number }) => api.patch(`/meetings/${id}/reschedule`, body),
+    onSuccess: () => {
+      setReschedulingCandidateId(null);
+      qc.invalidateQueries({ queryKey: ["meetings", id] });
+    },
+  });
+
   const attendanceMutation = useMutation({
     mutationFn: ({ status, candidateId }: { status: "attended" | "absent"; candidateId?: string | null }) =>
       api.post<{ ok: boolean; pointsAwarded: number }>(`/meetings/${id}/attendance`, { status, candidateId }),
-    onSuccess: () => {
+    onSuccess: (_res, variables) => {
       qc.invalidateQueries({ queryKey: ["meetings", id] });
       qc.invalidateQueries({ queryKey: ["meetings", "pending-attendance"] });
       qc.invalidateQueries({ queryKey: ["ranking", "me"] });
+      // 出席（参加した）を記録した時、相手が1名だけの1to1的なミーティングなら、
+      // 活動タイムラインへの投稿を促す
+      if (variables.status === "attended") {
+        const others = (data?.data.respondents ?? []).filter((r) => r.type === "member" && r.id !== user?.id);
+        if (others.length === 1) {
+          setPostPromptPartner({ id: others[0].id, name: others[0].name });
+        }
+      }
     },
   });
 
@@ -314,8 +439,16 @@ export function MeetingDetailScreen() {
     );
   }
 
-  const { meeting, candidates, respondents, externalInvitees, isHost, linkedEvent, myAttendance, attendances, availableConferenceTypes } = data.data;
+  const { meeting, candidates, respondents, externalInvitees, isHost, linkedEvent, myAttendances, attendances, availableConferenceTypes, myDeclined, maxCandidates } = data.data;
   const confirmedCandidates = candidates.filter((c) => c.isConfirmed === 1).sort((a, b) => a.startsAt - b.startsAt);
+  const candidateSlotsLeft = maxCandidates - candidates.length;
+
+  // 指定した候補日に対する自分の出席予定を探す（旧データはcandidateIdがnullで1件のみ保持しているため後方互換で拾う）
+  const findMyAttendance = (candidateId: string) =>
+    myAttendances.find((a) => a.candidateId === candidateId)
+    ?? (myAttendances.length === 1 && myAttendances[0].candidateId === null ? myAttendances[0] : undefined);
+  // 「出席確認」（開催後）セクションは最も早い確定日を対象に表示する
+  const myAttendanceForEarliestDate = confirmedCandidates[0] ? findMyAttendance(confirmedCandidates[0].id) : undefined;
 
   const nowSec = Math.floor(Date.now() / 1000);
   const maxYesCount = Math.max(0, ...candidates.map((c) => countYes(respondents, c.id)));
@@ -354,7 +487,7 @@ export function MeetingDetailScreen() {
     setEditingDesc(true);
   }
 
-  const scopeLabel: Record<string, string> = { all: "全メンバー", team: "チーム", selected: "指定メンバー" };
+  const scopeLabel: Record<string, string> = { all: "全メンバー", team: "ギルド", selected: "指定メンバー" };
 
   return (
     <div className="px-4 py-6 pb-24 max-w-2xl mx-auto">
@@ -371,6 +504,12 @@ export function MeetingDetailScreen() {
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
             {meeting.host?.emoji} {meeting.host?.name}さん主催 · {scopeLabel[meeting.scope]}
           </p>
+          {meeting.seriesId && (
+            <button onClick={() => navigate(`/meetings/series/${meeting.seriesId}`)}
+              className="text-xs mt-0.5" style={{ color: "var(--color-brand)" }}>
+              🔁 定例会の第{meeting.seriesOccurrenceIndex}回です（シリーズ全体を見る）
+            </button>
+          )}
         </div>
         {/* ステータスバッジ */}
         {meeting.status === "confirmed" && (
@@ -404,6 +543,55 @@ export function MeetingDetailScreen() {
                   style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
                   {date} {time}
                 </p>
+                {isHost && confirmedCandidates.length === 1 && meeting.status === "confirmed" && (
+                  <div className="text-center">
+                    {reschedulingCandidateId === cand.id ? (
+                      <div className="rounded-2xl p-3 space-y-2 inline-block text-left"
+                        style={{ background: "white", border: "1px solid rgba(90,140,92,0.3)" }}>
+                        <div className="flex items-center gap-2">
+                          <input type="date" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)}
+                            className="px-2 py-1.5 rounded-lg text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
+                          <input type="time" value={rescheduleTime} onChange={(e) => setRescheduleTime(e.target.value)}
+                            className="px-2 py-1.5 rounded-lg text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
+                          <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>〜</span>
+                          <input type="time" value={rescheduleEndTime} onChange={(e) => setRescheduleEndTime(e.target.value)}
+                            className="px-2 py-1.5 rounded-lg text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => setReschedulingCandidateId(null)}
+                            className="flex-1 py-1.5 rounded-lg text-xs font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                            キャンセル
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (!rescheduleDate || !rescheduleTime) return;
+                              const startsAt = Math.floor(new Date(`${rescheduleDate}T${rescheduleTime}:00`).getTime() / 1000);
+                              const endsAt = rescheduleEndTime ? Math.floor(new Date(`${rescheduleDate}T${rescheduleEndTime}:00`).getTime() / 1000) : undefined;
+                              rescheduleMutation.mutate({ startsAt, endsAt });
+                            }}
+                            disabled={rescheduleMutation.isPending || !rescheduleDate || !rescheduleTime}
+                            className="flex-1 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
+                            style={{ background: "var(--color-success)" }}>
+                            {rescheduleMutation.isPending ? <Loader2 size={11} className="animate-spin inline" /> : "保存"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          const d = new Date(cand.startsAt * 1000);
+                          setRescheduleDate(d.toISOString().slice(0, 10));
+                          setRescheduleTime(d.toTimeString().slice(0, 5));
+                          setRescheduleEndTime(cand.endsAt ? new Date(cand.endsAt * 1000).toTimeString().slice(0, 5) : "");
+                          setReschedulingCandidateId(cand.id);
+                        }}
+                        className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-2xl border transition"
+                        style={{ borderColor: "var(--color-paper-300)", color: "var(--color-ink-400)", background: "white" }}>
+                        <Edit2 size={11} />今回だけ日時を変更する
+                      </button>
+                    )}
+                  </div>
+                )}
                 {cand.conferenceUrl ? (
                   /* URL設定済み: 参加ボタン + コピーボタン */
                   <div className="flex items-center gap-2 justify-center flex-wrap">
@@ -436,23 +624,31 @@ export function MeetingDetailScreen() {
                       </button>
                     )}
                   </div>
-                ) : isHost ? (
-                  /* URL未設定・ホスト: 設定ボタン or インライン設定パネル */
-                  !isSettingUrl ? (
-                    <div className="text-center">
-                      <button
-                        onClick={() => { setSettingUrlForCandidate(cand.id); setManualConfUrl(""); }}
-                        className="inline-flex items-center gap-1.5 text-xs px-4 py-2 rounded-2xl font-medium border"
-                        style={{ borderColor: "rgba(90,140,92,0.4)", color: "var(--color-success)", background: "white" }}>
-                        <Video size={12} />会議URLを設定
-                      </button>
-                    </div>
-                  ) : null
-                ) : (
-                  /* URL未設定・非ホスト */
-                  <p className="text-center text-xs" style={{ color: "var(--color-ink-400)" }}>
-                    会議URLは後日お知らせします
+                ) : null}
+                {cand.conferenceUrl && (
+                  <p className="text-xs text-center break-all px-2" style={{ color: "var(--color-ink-400)" }}>
+                    {cand.conferenceUrl}
                   </p>
+                )}
+                {!cand.conferenceUrl && (
+                  isHost ? (
+                    /* URL未設定・ホスト: 設定ボタン or インライン設定パネル */
+                    !isSettingUrl ? (
+                      <div className="text-center">
+                        <button
+                          onClick={() => { setSettingUrlForCandidate(cand.id); setManualConfUrl(""); }}
+                          className="inline-flex items-center gap-1.5 text-xs px-4 py-2 rounded-2xl font-medium border"
+                          style={{ borderColor: "rgba(90,140,92,0.4)", color: "var(--color-success)", background: "white" }}>
+                          <Video size={12} />会議URLを設定
+                        </button>
+                      </div>
+                    ) : null
+                  ) : (
+                    /* URL未設定・非ホスト */
+                    <p className="text-center text-xs" style={{ color: "var(--color-ink-400)" }}>
+                      会議URLは後日お知らせします
+                    </p>
+                  )
                 )}
                 {/* インライン会議URL設定パネル（ホスト用） */}
                 {isHost && isSettingUrl && (
@@ -623,9 +819,12 @@ export function MeetingDetailScreen() {
                         return hasYes || hasRsvp;
                       }).length
                     : yesCount;
+                  const canModify = meeting.status !== "cancelled" && !isConfirmed
+                    && (isHost || cand.addedByMemberId === user?.id);
+                  const canRemove = canModify && candidates.length > 1;
                   return (
                     <th key={cand.id} className="text-center pb-1">
-                      <div className={`px-2 py-1.5 rounded-xl text-xs font-medium leading-tight ${isConfirmed ? "ring-2" : ""}`}
+                      <div className={`relative px-2 py-1.5 rounded-xl text-xs font-medium leading-tight ${isConfirmed ? "ring-2" : ""}`}
                         style={{
                           background: isConfirmed
                             ? "rgba(90,140,92,0.15)"
@@ -637,6 +836,34 @@ export function MeetingDetailScreen() {
                           border: isTopCandidate && !isConfirmed ? "1.5px solid rgba(212,160,59,0.6)" : undefined,
                           ...(isConfirmed ? { "--tw-ring-color": "var(--color-success)" } as React.CSSProperties : {}),
                         }}>
+                        {canModify && (
+                          <button
+                            onClick={() => {
+                              const parts = toDateTimeStr(cand.startsAt);
+                              const endParts = cand.endsAt ? toDateTimeStr(cand.endsAt).time : "";
+                              setEditCandidateModal({ id: cand.id, date: parts.date, time: parts.time, endTime: endParts });
+                            }}
+                            className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full flex items-center justify-center"
+                            style={{ background: "var(--color-paper-50)", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}
+                            title="この候補日を編集する"
+                          >
+                            <Edit2 size={9} />
+                          </button>
+                        )}
+                        {canRemove && (
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`${date}${time ? " " + time : ""} の候補日を削除しますか？\n参加者に通知されます。`)) {
+                                removeCandidateMutation.mutate(cand.id);
+                              }
+                            }}
+                            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full flex items-center justify-center"
+                            style={{ background: "var(--color-paper-50)", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}
+                            title="この候補日を削除する"
+                          >
+                            <X size={10} />
+                          </button>
+                        )}
                         {isTopCandidate && !isConfirmed && (
                           <div className="text-xs mb-0.5" style={{ color: "var(--color-accent)" }}>★最多</div>
                         )}
@@ -645,6 +872,11 @@ export function MeetingDetailScreen() {
                         <div className="mt-1 font-bold text-sm" style={{ color: "var(--color-success)" }}>
                           ○{displayCount}
                         </div>
+                        {cand.addedByName && (
+                          <div className="mt-0.5 text-xs whitespace-nowrap" style={{ color: "var(--color-ink-500)", opacity: 0.85 }}>
+                            {cand.addedByName}さんが追加
+                          </div>
+                        )}
                       </div>
                     </th>
                   );
@@ -686,8 +918,35 @@ export function MeetingDetailScreen() {
         </div>
       </div>
 
+      {/* ---- 回答受付終了（回答期限超過） ---- */}
+      {meeting.status === "open" && meeting.deadline != null && meeting.deadline < nowSec && (
+        <div className="card-paper rounded-3xl p-4 mb-5 text-center">
+          <p className="text-sm font-medium" style={{ color: "var(--color-ink-500)" }}>
+            🔒 回答受付は終了しました（期限: {formatDeadline(meeting.deadline)}）
+          </p>
+        </div>
+      )}
+
+      {/* ---- 辞退済みバナー（主催者以外） ---- */}
+      {!isHost && myDeclined && (
+        <div className="card-paper rounded-3xl p-4 mb-5 flex items-center gap-3">
+          <span className="text-lg">🙇</span>
+          <p className="flex-1 text-sm" style={{ color: "var(--color-ink-600)" }}>
+            このミーティングを辞退しています
+          </p>
+          <button
+            onClick={() => undeclineMutation.mutate()}
+            disabled={undeclineMutation.isPending}
+            className="shrink-0 text-xs font-medium px-3 py-1.5 rounded-full disabled:opacity-50"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+          >
+            やっぱり参加する
+          </button>
+        </div>
+      )}
+
       {/* ---- 自分の回答入力（open ミーティングのみ） ---- */}
-      {meeting.status === "open" && (
+      {meeting.status === "open" && !myDeclined && (meeting.deadline == null || meeting.deadline >= nowSec) && (
         <div className="card-paper rounded-3xl p-4 mb-5">
           <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--color-ink-700)" }}>
             ✏️ あなたの回答（タップで切り替え）
@@ -730,8 +989,221 @@ export function MeetingDetailScreen() {
         </div>
       )}
 
-      {/* ---- 参加予定の確認（確定後かつ未開催の日程がある場合） ---- */}
-      {meeting.status === "confirmed" && confirmedCandidates.some((c) => c.startsAt > nowSec) && !isHost && (
+      {/* ---- 都合が悪い場合の連絡・候補日提案（open ミーティング・主催者以外） ---- */}
+      {meeting.status === "open" && !isHost && !myDeclined && (
+        <div className="card-paper rounded-3xl p-4 mb-5">
+          {!showUnavailableForm ? (
+            <button
+              onClick={() => setShowUnavailableForm(true)}
+              className="w-full text-sm font-medium text-left flex items-center gap-2"
+              style={{ color: "var(--color-ink-500)" }}
+            >
+              😥 都合の良い日程がない場合はこちら
+            </button>
+          ) : (
+            <>
+              <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--color-ink-700)" }}>
+                😥 都合の良い日程がありません
+              </h2>
+              <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+                主催者へメッセージを送ったり、あなたの都合の良い候補日を提案できます（どちらも任意です）。
+              </p>
+              <textarea
+                value={unavailableMessage}
+                onChange={(e) => setUnavailableMessage(e.target.value)}
+                placeholder="主催者へのメッセージ（任意）"
+                rows={3}
+                className="w-full px-3 py-2 rounded-xl text-sm outline-none border mb-3"
+                style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
+              />
+              <div className="space-y-2 mb-2">
+                {proposedCandidates.map((cand, i) => (
+                  <div key={i} className="rounded-2xl px-3 py-2" style={{ background: "var(--color-paper-100)" }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-xs font-medium" style={{ color: "var(--color-ink-500)" }}>提案する候補日 {i + 1}</span>
+                      <button
+                        onClick={() => setProposedCandidates(proposedCandidates.filter((_, idx) => idx !== i))}
+                        className="ml-auto p-1 rounded-xl hover:opacity-70"
+                        style={{ color: "var(--color-ink-400)" }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <input type="date" value={cand.date} min={todayDateStr()}
+                        onChange={(e) => setProposedCandidates(proposedCandidates.map((c, idx) => idx === i ? { ...c, date: e.target.value } : c))}
+                        className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
+                        style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+                      <input type="time" value={cand.time}
+                        onChange={(e) => setProposedCandidates(proposedCandidates.map((c, idx) => idx === i ? { ...c, time: e.target.value } : c))}
+                        className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
+                        style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+                      <input type="time" value={cand.endTime}
+                        onChange={(e) => setProposedCandidates(proposedCandidates.map((c, idx) => idx === i ? { ...c, endTime: e.target.value } : c))}
+                        className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
+                        style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setProposedCandidates([...proposedCandidates, emptyCandidateRow()])}
+                disabled={proposedCandidates.length >= candidateSlotsLeft}
+                className="w-full py-2 rounded-2xl text-xs font-medium flex items-center justify-center gap-1.5 mb-1 disabled:opacity-50"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+              >
+                <Plus size={13} /> 候補日を提案する
+              </button>
+              <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
+                候補日は最大{maxCandidates}個まで（現在{candidates.length}個）
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setShowUnavailableForm(false); setUnavailableMessage(""); setProposedCandidates([]); }}
+                  className="flex-1 py-2.5 rounded-2xl text-sm"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={() => {
+                    const validCandidates = proposedCandidates
+                      .filter((c) => c.date)
+                      .map((c) => ({
+                        startsAt: rowToUnixTimestamp(c.date, c.time),
+                        endsAt: c.endTime ? rowToUnixTimestamp(c.date, c.endTime) : undefined,
+                      }));
+                    addCandidatesMutation.mutate({
+                      candidates: validCandidates.length > 0 ? validCandidates : undefined,
+                      message: unavailableMessage.trim() || undefined,
+                    });
+                  }}
+                  disabled={addCandidatesMutation.isPending || (!unavailableMessage.trim() && proposedCandidates.every((c) => !c.date))}
+                  className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50 flex items-center justify-center gap-2"
+                  style={{ background: "var(--color-brand)" }}
+                >
+                  {addCandidatesMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  送信する
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ---- ミーティングの辞退（open ミーティング・主催者以外） ---- */}
+      {meeting.status === "open" && !isHost && !myDeclined && (
+        <div className="mb-5 text-center">
+          <button
+            onClick={() => {
+              if (window.confirm("このミーティングを辞退しますか？\n主催者に通知されます。あとから「やっぱり参加する」で取り消せます。")) {
+                declineMutation.mutate();
+              }
+            }}
+            className="text-xs underline"
+            style={{ color: "var(--color-ink-400)" }}
+          >
+            このミーティングを辞退する
+          </button>
+        </div>
+      )}
+
+      {/* ---- 候補日の追加（open ミーティング・主催者のみ） ---- */}
+      {meeting.status === "open" && isHost && (
+        <div className="card-paper rounded-3xl p-4 mb-5">
+          {!showHostAddForm ? (
+            <button
+              onClick={() => setShowHostAddForm(true)}
+              className="w-full text-sm font-medium text-left flex items-center gap-2"
+              style={{ color: "var(--color-ink-500)" }}
+            >
+              ➕ 候補日を追加する
+            </button>
+          ) : (
+            <>
+              <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--color-ink-700)" }}>
+                ➕ 候補日を追加する
+              </h2>
+              <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+                追加すると、参加者全員にもう一度ご都合の確認をお願いする通知が届きます。
+              </p>
+              <div className="space-y-2 mb-2">
+                {hostNewCandidates.map((cand, i) => (
+                  <div key={i} className="rounded-2xl px-3 py-2" style={{ background: "var(--color-paper-100)" }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-xs font-medium" style={{ color: "var(--color-ink-500)" }}>候補 {i + 1}</span>
+                      {hostNewCandidates.length > 1 && (
+                        <button
+                          onClick={() => setHostNewCandidates(hostNewCandidates.filter((_, idx) => idx !== i))}
+                          className="ml-auto p-1 rounded-xl hover:opacity-70"
+                          style={{ color: "var(--color-ink-400)" }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <input type="date" value={cand.date} min={todayDateStr()}
+                        onChange={(e) => setHostNewCandidates(hostNewCandidates.map((c, idx) => idx === i ? { ...c, date: e.target.value } : c))}
+                        className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
+                        style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+                      <input type="time" value={cand.time}
+                        onChange={(e) => setHostNewCandidates(hostNewCandidates.map((c, idx) => idx === i ? { ...c, time: e.target.value } : c))}
+                        className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
+                        style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+                      <input type="time" value={cand.endTime}
+                        onChange={(e) => setHostNewCandidates(hostNewCandidates.map((c, idx) => idx === i ? { ...c, endTime: e.target.value } : c))}
+                        className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
+                        style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setHostNewCandidates([...hostNewCandidates, emptyCandidateRow()])}
+                disabled={hostNewCandidates.length >= candidateSlotsLeft}
+                className="w-full py-2 rounded-2xl text-xs font-medium flex items-center justify-center gap-1.5 mb-1 disabled:opacity-50"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+              >
+                <Plus size={13} /> 候補日を追加
+              </button>
+              <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
+                候補日は最大{maxCandidates}個まで（現在{candidates.length}個）
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setShowHostAddForm(false); setHostNewCandidates([emptyCandidateRow()]); }}
+                  className="flex-1 py-2.5 rounded-2xl text-sm"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={() => {
+                    const validCandidates = hostNewCandidates
+                      .filter((c) => c.date)
+                      .map((c) => ({
+                        startsAt: rowToUnixTimestamp(c.date, c.time),
+                        endsAt: c.endTime ? rowToUnixTimestamp(c.date, c.endTime) : undefined,
+                      }));
+                    if (validCandidates.length === 0) return;
+                    addCandidatesMutation.mutate({ candidates: validCandidates });
+                  }}
+                  disabled={addCandidatesMutation.isPending || hostNewCandidates.every((c) => !c.date)}
+                  className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50 flex items-center justify-center gap-2"
+                  style={{ background: "var(--color-brand)" }}
+                >
+                  {addCandidatesMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  追加する
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ---- 参加予定の確認（確定後かつ未開催の日程がある場合）。定例会の開催回では主催者にも表示し、招待された人と同じUIで参加登録できるようにする ---- */}
+      {meeting.status === "confirmed" && confirmedCandidates.some((c) => c.startsAt > nowSec) && (!isHost || meeting.seriesId) && (
         <div className="card-paper rounded-3xl p-4 mb-5">
           <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--color-ink-700)" }}>
             📋 参加予定の確認
@@ -743,89 +1215,110 @@ export function MeetingDetailScreen() {
               <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
                 このミーティングに参加予定ですか？
               </p>
-              {myAttendance ? (
-                <div>
-                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-2xl mb-2"
-                    style={{ background: myAttendance.status === "attended" ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
-                    <span className="text-lg">{myAttendance.status === "attended" ? "✅" : "❌"}</span>
-                    <p className="text-sm font-medium" style={{ color: myAttendance.status === "attended" ? "var(--color-success)" : "var(--color-ink-500)" }}>
-                      {myAttendance.status === "attended" ? "参加予定" : "欠席予定"}
-                    </p>
+              {(() => {
+                const onlyCandidate = confirmedCandidates.find((c) => c.startsAt > nowSec)!;
+                const myAtt = findMyAttendance(onlyCandidate.id);
+                return myAtt ? (
+                  <div>
+                    <div className="flex items-center gap-2 px-3 py-2.5 rounded-2xl mb-2"
+                      style={{ background: myAtt.status === "attended" ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
+                      <span className="text-lg">{myAtt.status === "attended" ? "✅" : "❌"}</span>
+                      <p className="text-sm font-medium" style={{ color: myAtt.status === "attended" ? "var(--color-success)" : "var(--color-ink-500)" }}>
+                        {myAtt.status === "attended" ? "参加予定" : "欠席予定"}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => attendanceMutation.mutate({ status: "attended", candidateId: onlyCandidate.id })}
+                        disabled={attendanceMutation.isPending}
+                        className="flex-1 py-2 rounded-xl text-xs font-medium transition"
+                        style={{ background: myAtt.status === "attended" ? "var(--color-success)" : "var(--color-paper-200)", color: myAtt.status === "attended" ? "white" : "var(--color-ink-600)" }}
+                      >
+                        ✅ 参加する
+                      </button>
+                      <button
+                        onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: onlyCandidate.id })}
+                        disabled={attendanceMutation.isPending}
+                        className="flex-1 py-2 rounded-xl text-xs font-medium transition"
+                        style={{ background: myAtt.status === "absent" ? "var(--color-ink-500)" : "var(--color-paper-200)", color: myAtt.status === "absent" ? "white" : "var(--color-ink-600)" }}
+                      >
+                        ❌ 欠席する
+                      </button>
+                    </div>
                   </div>
+                ) : (
                   <div className="flex gap-2">
                     <button
-                      onClick={() => attendanceMutation.mutate({ status: "attended" })}
+                      onClick={() => attendanceMutation.mutate({ status: "attended", candidateId: onlyCandidate.id })}
                       disabled={attendanceMutation.isPending}
-                      className="flex-1 py-2 rounded-xl text-xs font-medium transition"
-                      style={{ background: myAttendance.status === "attended" ? "var(--color-success)" : "var(--color-paper-200)", color: myAttendance.status === "attended" ? "white" : "var(--color-ink-600)" }}
+                      className="flex-1 py-3 rounded-2xl text-sm font-medium text-white transition"
+                      style={{ background: "var(--color-success)" }}
                     >
-                      ✅ 参加する
+                      {attendanceMutation.isPending ? <Loader2 size={14} className="animate-spin mx-auto" /> : "✅ 参加する"}
                     </button>
                     <button
-                      onClick={() => attendanceMutation.mutate({ status: "absent" })}
+                      onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: onlyCandidate.id })}
                       disabled={attendanceMutation.isPending}
-                      className="flex-1 py-2 rounded-xl text-xs font-medium transition"
-                      style={{ background: myAttendance.status === "absent" ? "var(--color-ink-500)" : "var(--color-paper-200)", color: myAttendance.status === "absent" ? "white" : "var(--color-ink-600)" }}
+                      className="flex-1 py-3 rounded-2xl text-sm font-medium transition"
+                      style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
                     >
                       ❌ 欠席する
                     </button>
                   </div>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => attendanceMutation.mutate({ status: "attended" })}
-                    disabled={attendanceMutation.isPending}
-                    className="flex-1 py-3 rounded-2xl text-sm font-medium text-white transition"
-                    style={{ background: "var(--color-success)" }}
-                  >
-                    {attendanceMutation.isPending ? <Loader2 size={14} className="animate-spin mx-auto" /> : "✅ 参加する"}
-                  </button>
-                  <button
-                    onClick={() => attendanceMutation.mutate({ status: "absent" })}
-                    disabled={attendanceMutation.isPending}
-                    className="flex-1 py-3 rounded-2xl text-sm font-medium transition"
-                    style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
-                  >
-                    ❌ 欠席する
-                  </button>
-                </div>
-              )}
+                );
+              })()}
             </>
           ) : (
-            /* ── 確定日程が複数 ── */
+            /* ── 確定日程が複数：日程ごとに独立して参加・欠席を選べる（両方参加も可） ── */
             <>
               <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-                参加予定の日程を選んでください（複数の日程が確定しています）
+                日程ごとに参加予定を選んでください（両方に参加する場合はそれぞれ「参加する」を選んでください）
               </p>
               <div className="space-y-2 mb-3">
                 {confirmedCandidates
                   .filter((c) => c.startsAt > nowSec)
                   .map((cand) => {
                     const { date, time } = formatCandidateDate(cand.startsAt, cand.endsAt);
-                    const isSelected = myAttendance?.candidateId === cand.id && myAttendance?.status === "attended";
+                    const myAtt = findMyAttendance(cand.id);
+                    const isAttending = myAtt?.status === "attended";
+                    const isAbsent = myAtt?.status === "absent";
                     return (
-                      <button
-                        key={cand.id}
-                        onClick={() => attendanceMutation.mutate({ status: "attended", candidateId: cand.id })}
-                        disabled={attendanceMutation.isPending}
-                        className="w-full px-4 py-3 rounded-2xl flex items-center gap-3 text-left transition disabled:opacity-50"
+                      <div key={cand.id} className="px-4 py-3 rounded-2xl"
                         style={{
-                          background: isSelected ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)",
-                          border: isSelected ? "1.5px solid rgba(90,140,92,0.35)" : "1.5px solid transparent",
+                          background: isAttending ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)",
+                          border: isAttending ? "1.5px solid rgba(90,140,92,0.35)" : "1.5px solid transparent",
                         }}
                       >
-                        <span className="text-xl">{isSelected ? "✅" : "📅"}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold" style={{ color: isSelected ? "var(--color-success)" : "var(--color-ink-800)" }}>
-                            {date}　{time}
-                          </p>
-                          <p className="text-xs mt-0.5" style={{ color: isSelected ? "var(--color-success)" : "var(--color-ink-500)" }}>
-                            {isSelected ? "参加予定" : "この日に参加する"}
-                          </p>
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="text-xl">{isAttending ? "✅" : isAbsent ? "❌" : "📅"}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold" style={{ color: isAttending ? "var(--color-success)" : "var(--color-ink-800)" }}>
+                              {date}　{time}
+                            </p>
+                            <p className="text-xs mt-0.5" style={{ color: isAttending ? "var(--color-success)" : isAbsent ? "var(--color-ink-500)" : "var(--color-ink-400)" }}>
+                              {isAttending ? "参加予定" : isAbsent ? "欠席予定" : "未回答"}
+                            </p>
+                          </div>
                         </div>
-                        {isSelected && <Check size={16} style={{ color: "var(--color-success)" }} />}
-                      </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => attendanceMutation.mutate({ status: "attended", candidateId: cand.id })}
+                            disabled={attendanceMutation.isPending}
+                            className="flex-1 py-2 rounded-xl text-xs font-medium transition disabled:opacity-50"
+                            style={{ background: isAttending ? "var(--color-success)" : "white", color: isAttending ? "white" : "var(--color-ink-600)" }}
+                          >
+                            ✅ この日に参加する
+                          </button>
+                          <button
+                            onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: cand.id })}
+                            disabled={attendanceMutation.isPending}
+                            className="flex-1 py-2 rounded-xl text-xs font-medium transition disabled:opacity-50"
+                            style={{ background: isAbsent ? "var(--color-ink-500)" : "white", color: isAbsent ? "white" : "var(--color-ink-600)" }}
+                          >
+                            ❌ この日は欠席する
+                          </button>
+                        </div>
+                      </div>
                     );
                   })}
               </div>
@@ -833,13 +1326,9 @@ export function MeetingDetailScreen() {
                 onClick={() => attendanceMutation.mutate({ status: "absent" })}
                 disabled={attendanceMutation.isPending}
                 className="w-full py-2 rounded-xl text-xs font-medium transition disabled:opacity-50"
-                style={{
-                  background: myAttendance?.status === "absent" ? "rgba(0,0,0,0.06)" : "var(--color-paper-200)",
-                  color: myAttendance?.status === "absent" ? "var(--color-ink-500)" : "var(--color-ink-400)",
-                  border: myAttendance?.status === "absent" ? "1.5px solid rgba(0,0,0,0.08)" : "1.5px solid transparent",
-                }}
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-400)" }}
               >
-                {myAttendance?.status === "absent" ? "❌ 欠席予定（変更する場合は上の日程を選択）" : "❌ 全日程を欠席する"}
+                ❌ 全日程を欠席する
               </button>
             </>
           )}
@@ -856,25 +1345,25 @@ export function MeetingDetailScreen() {
           {/* 自分の出席記録 */}
           <div className="mb-4">
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
-              {myAttendance ? "あなたの出席状況" : "このミーティングに出席しましたか？"}
+              {myAttendanceForEarliestDate ? "あなたの出席状況" : "このミーティングに出席しましたか？"}
             </p>
-            {myAttendance ? (
+            {myAttendanceForEarliestDate ? (
               <div className="flex items-center gap-2 px-3 py-2.5 rounded-2xl"
-                style={{ background: myAttendance.status === "attended" ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
-                <span className="text-lg">{myAttendance.status === "attended" ? "✅" : "❌"}</span>
+                style={{ background: myAttendanceForEarliestDate.status === "attended" ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
+                <span className="text-lg">{myAttendanceForEarliestDate.status === "attended" ? "✅" : "❌"}</span>
                 <div className="flex-1">
-                  <p className="text-sm font-medium" style={{ color: myAttendance.status === "attended" ? "var(--color-success)" : "var(--color-ink-500)" }}>
-                    {myAttendance.status === "attended" ? "出席済み" : "欠席"}
+                  <p className="text-sm font-medium" style={{ color: myAttendanceForEarliestDate.status === "attended" ? "var(--color-success)" : "var(--color-ink-500)" }}>
+                    {myAttendanceForEarliestDate.status === "attended" ? "出席済み" : "欠席"}
                   </p>
-                  {myAttendance.pointsAwarded != null && myAttendance.pointsAwarded > 0 && (
-                    <p className="text-xs" style={{ color: "var(--color-accent)" }}>+{myAttendance.pointsAwarded}pt 獲得！</p>
+                  {myAttendanceForEarliestDate.pointsAwarded != null && myAttendanceForEarliestDate.pointsAwarded > 0 && (
+                    <p className="text-xs" style={{ color: "var(--color-accent)" }}>+{myAttendanceForEarliestDate.pointsAwarded}pt 獲得！</p>
                   )}
                 </div>
               </div>
             ) : (
               <div className="flex gap-2">
                 <button
-                  onClick={() => attendanceMutation.mutate({ status: "attended" })}
+                  onClick={() => attendanceMutation.mutate({ status: "attended", candidateId: confirmedCandidates[0]?.id })}
                   disabled={attendanceMutation.isPending}
                   className="flex-1 py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 transition disabled:opacity-50"
                   style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-success)", border: "1.5px solid rgba(90,140,92,0.3)" }}
@@ -883,7 +1372,7 @@ export function MeetingDetailScreen() {
                   出席した
                 </button>
                 <button
-                  onClick={() => attendanceMutation.mutate({ status: "absent" })}
+                  onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: confirmedCandidates[0]?.id })}
                   disabled={attendanceMutation.isPending}
                   className="flex-1 py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 transition disabled:opacity-50"
                   style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}
@@ -892,26 +1381,20 @@ export function MeetingDetailScreen() {
                 </button>
               </div>
             )}
-            {linkedEvent?.multiplier != null && !myAttendance && (
+            {linkedEvent?.multiplier != null && !myAttendanceForEarliestDate && (
               <p className="text-xs mt-2 text-center" style={{ color: "var(--color-accent)" }}>
                 出席すると +{linkedEvent.multiplier}pt が付与されます 🎯
               </p>
             )}
           </div>
 
-          {/* ホスト向け：全員の出席状況 */}
+          {/* ホスト向け：全員の出席状況（確定日が複数ある場合は日程ごとに表示） */}
           {isHost && attendances.length > 0 && (
             <div>
               <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>参加者の出席状況</p>
               <div className="space-y-1">
                 {respondents.filter((r) => r.type === "member").map((r) => {
-                  const att = attendances.find((a) => a.memberId === r.id);
-                  const candidateForAtt = att?.candidateId
-                    ? confirmedCandidates.find((c) => c.id === att.candidateId)
-                    : null;
-                  const dateLabel = candidateForAtt
-                    ? (() => { const { date, time } = formatCandidateDate(candidateForAtt.startsAt, candidateForAtt.endsAt); return `${date}${time ? " " + time : ""}`; })()
-                    : null;
+                  const myAtts = attendances.filter((a) => a.memberId === r.id);
                   return (
                     <div key={r.id} className="flex items-center gap-2 px-3 py-2 rounded-xl"
                       style={{ background: "var(--color-paper-200)" }}>
@@ -919,15 +1402,35 @@ export function MeetingDetailScreen() {
                         {r.emoji}
                       </div>
                       <span className="text-xs flex-1" style={{ color: "var(--color-ink-700)" }}>{r.name}</span>
-                      <span className="text-xs font-medium text-right" style={{
-                        color: att?.status === "attended" ? "var(--color-success)" : att?.status === "absent" ? "var(--color-ink-400)" : "var(--color-ink-300)"
-                      }}>
-                        {att?.status === "attended"
-                          ? (dateLabel ? `✅ ${dateLabel}` : "✅ 参加予定")
-                          : att?.status === "absent"
-                            ? "❌ 欠席"
-                            : "未回答"}
-                      </span>
+                      <div className="text-xs font-medium text-right">
+                        {myAtts.length === 0 ? (
+                          <span style={{ color: "var(--color-ink-300)" }}>未回答</span>
+                        ) : confirmedCandidates.length === 1 ? (
+                          (() => {
+                            const att = myAtts.find((a) => a.candidateId === confirmedCandidates[0].id)
+                              ?? myAtts.find((a) => a.candidateId === null)
+                              ?? myAtts[0];
+                            return (
+                              <span style={{ color: att.status === "attended" ? "var(--color-success)" : "var(--color-ink-400)" }}>
+                                {att.status === "attended" ? "✅ 参加予定" : "❌ 欠席"}
+                              </span>
+                            );
+                          })()
+                        ) : (
+                          <div className="space-y-0.5">
+                            {confirmedCandidates.map((cand) => {
+                              const att = myAtts.find((a) => a.candidateId === cand.id);
+                              if (!att) return null;
+                              const { date, time } = formatCandidateDate(cand.startsAt, cand.endsAt);
+                              return (
+                                <div key={cand.id} style={{ color: att.status === "attended" ? "var(--color-success)" : "var(--color-ink-400)" }}>
+                                  {att.status === "attended" ? "✅" : "❌"} {date}{time ? ` ${time}` : ""}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -941,6 +1444,21 @@ export function MeetingDetailScreen() {
       {isHost && meeting.status !== "cancelled" && (
         <div className="card-paper rounded-3xl p-4 mb-5 space-y-4">
           <h2 className="text-sm font-semibold" style={{ color: "var(--color-ink-700)" }}>⚙️ 主催者メニュー</h2>
+
+          {/* 未回答者へのリマインダー（確定前のみ） */}
+          {meeting.status === "open" && (
+            <div>
+              <button
+                onClick={() => remindMutation.mutate()}
+                disabled={remindMutation.isPending}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium transition hover:opacity-80 disabled:opacity-50"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+              >
+                {remindMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <span>⏰</span>}
+                未回答者にリマインダーを送る
+              </button>
+            </div>
+          )}
 
           {/* イベント紐付け（確定前のみ） */}
           {meeting.status === "open" && (
@@ -1024,6 +1542,9 @@ export function MeetingDetailScreen() {
           <div>
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
               日程の確定（複数選択可・タップで確定／解除）
+            </p>
+            <p className="text-xs mb-2 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-600)" }}>
+              💡 参加者の回答を待たなくても、主催者は候補日をいつでも確定できます。確定すると、その場でZoom等の会議URLを発行できるようになります。
             </p>
             <div className="space-y-1.5">
               {candidates.map((cand) => {
@@ -1109,15 +1630,23 @@ export function MeetingDetailScreen() {
               {/* メンバーピッカー */}
               {showMemberPicker && (
                 <div className="rounded-2xl overflow-hidden border" style={{ borderColor: "var(--color-paper-300)" }}>
-                  <div className="px-3 py-2" style={{ background: "var(--color-paper-50)" }}>
+                  <div className="relative px-3 py-2" style={{ background: "var(--color-paper-50)" }}>
                     <input
                       value={memberSearch}
                       onChange={(e) => setMemberSearch(e.target.value)}
                       placeholder="名前で絞り込む"
                       autoFocus
-                      className="w-full text-sm outline-none bg-transparent"
+                      className="w-full pr-7 text-sm outline-none bg-transparent"
                       style={{ color: "var(--color-ink-800)" }}
                     />
+                    {memberSearch && (
+                      <button type="button" onClick={() => setMemberSearch("")}
+                        aria-label="検索条件をクリア"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full"
+                        style={{ color: "var(--color-ink-400)" }}>
+                        <X size={14} />
+                      </button>
+                    )}
                   </div>
                   <div className="max-h-48 overflow-y-auto divide-y divide-paper-200">
                     {!allMembersData ? (
@@ -1196,7 +1725,7 @@ export function MeetingDetailScreen() {
           {sharedInviteUrl ? (
             <div className="space-y-2">
               <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>
-                🔗 外部ゲスト共有招待URL
+                🔗 {termExternalGuest}共有招待URL
               </p>
               <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
                 このURLを複数人に共有できます。回答時に各自のゲストページが作成されます。
@@ -1224,14 +1753,14 @@ export function MeetingDetailScreen() {
               style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
             >
               {sharedInviteMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <LinkIcon size={14} />}
-              外部ゲスト招待URLを取得する
+              {termExternalGuest}招待URLを取得する
             </button>
           )}
 
           {/* 外部招待者一覧（URLコピー＋削除ボタン付き） */}
           {externalInvitees.length > 0 && (
             <div className="space-y-1">
-              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>外部ゲスト</p>
+              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{termExternalGuest}</p>
               {externalInvitees.map((ext) => (
                 <div key={ext.id} className="flex items-center gap-2 px-3 py-2 rounded-xl"
                   style={{ background: "var(--color-paper-200)" }}>
@@ -1271,6 +1800,62 @@ export function MeetingDetailScreen() {
       )}
 
       {/* 日程確定モーダル */}
+      {editCandidateModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+          style={{ background: "rgba(26,20,16,0.5)" }}
+          onClick={(e) => { if (e.target === e.currentTarget) setEditCandidateModal(null); }}
+        >
+          <div className="card-paper rounded-3xl w-full max-w-sm p-6 space-y-4">
+            <p className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+              🗓️ 候補日を編集
+            </p>
+            <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+              日時を変更すると、この候補日への回答はリセットされ、参加者に再回答をお願いする通知が届きます。
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <input type="date" value={editCandidateModal.date} min={todayDateStr()}
+                onChange={(e) => setEditCandidateModal({ ...editCandidateModal, date: e.target.value })}
+                className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
+                style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+              <input type="time" value={editCandidateModal.time}
+                onChange={(e) => setEditCandidateModal({ ...editCandidateModal, time: e.target.value })}
+                className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
+                style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+              <input type="time" value={editCandidateModal.endTime}
+                onChange={(e) => setEditCandidateModal({ ...editCandidateModal, endTime: e.target.value })}
+                className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
+                style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setEditCandidateModal(null)}
+                className="flex-1 py-2.5 rounded-2xl text-sm"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  if (!editCandidateModal.date) return;
+                  editCandidateMutation.mutate({
+                    candidateId: editCandidateModal.id,
+                    startsAt: rowToUnixTimestamp(editCandidateModal.date, editCandidateModal.time),
+                    endsAt: editCandidateModal.endTime ? rowToUnixTimestamp(editCandidateModal.date, editCandidateModal.endTime) : undefined,
+                  });
+                }}
+                disabled={!editCandidateModal.date || editCandidateMutation.isPending}
+                className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50 flex items-center justify-center gap-2"
+                style={{ background: "var(--color-brand)" }}
+              >
+                {editCandidateMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                保存する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirmModal && (
         <div
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
@@ -1399,6 +1984,18 @@ export function MeetingDetailScreen() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 出席確認後：活動タイムラインへの投稿を促すプロンプト（パイロット限定） */}
+      {postPromptPartner && (
+        <ActivityPostPrompt
+          title={`🎉 ${postPromptPartner.name}さんとのミーティング、お疲れさまでした！`}
+          description="協働マップの活動タイムラインに、今日のミーティングについて残しませんか？"
+          contextType="link"
+          partnerId={postPromptPartner.id}
+          suggestedBody={`${postPromptPartner.name}さんとミーティングをしました！`}
+          onClose={() => setPostPromptPartner(null)}
+        />
       )}
     </div>
   );

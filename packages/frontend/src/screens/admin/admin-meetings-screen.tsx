@@ -35,7 +35,7 @@ const STATUS_LABEL: Record<string, { label: string; color: string; bg: string }>
   confirmed: { label: "確定済み", color: "var(--color-success)", bg: "rgba(90,140,92,0.12)" },
   cancelled: { label: "キャンセル", color: "var(--color-ink-400)", bg: "var(--color-paper-300)" },
 };
-const SCOPE_LABEL: Record<string, string> = { all: "全メンバー", team: "チーム", selected: "指定メンバー" };
+const SCOPE_LABEL: Record<string, string> = { all: "全メンバー", team: "ギルド", selected: "指定メンバー" };
 
 export function AdminMeetingsScreen() {
   const qc = useQueryClient();

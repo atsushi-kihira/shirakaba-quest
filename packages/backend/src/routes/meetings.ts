@@ -1,6 +1,7 @@
 // =============================================================
 // ミーティング（日程調整）ルート（認証必要）
 // POST   /api/meetings                      — 作成
+// POST   /api/meetings/suggest-slots        — AIによる日程候補の抽出（作成前・複数人ミーティング専用）
 // GET    /api/meetings                      — 自分が関係する会の一覧
 // GET    /api/meetings/upcoming             — 確定済み近日ミーティング（ホーム用）
 // GET    /api/meetings/notifications        — 未読通知一覧
@@ -8,8 +9,14 @@
 // GET    /api/meetings/notifications/history — 既読通知履歴
 // GET    /api/meetings/:id                  — 詳細（グリッドデータ含む）
 // POST   /api/meetings/:id/respond          — 自分の回答を投稿・更新
+// POST   /api/meetings/:id/candidates       — 候補日を追加／都合が悪い旨を主催者へ連絡
+// PATCH  /api/meetings/:id/candidates/:candidateId — 候補日の日時を編集
+// DELETE /api/meetings/:id/candidates/:candidateId — 候補日を削除
 // PATCH  /api/meetings/:id/confirm          — 日程確定（主催者のみ）＋メール通知
 // PATCH  /api/meetings/:id/description      — 詳細情報更新（主催者のみ）＋メール通知
+// POST   /api/meetings/:id/decline          — このミーティングを辞退する
+// DELETE /api/meetings/:id/decline          — 辞退を取り消す（やっぱり参加する）
+// POST   /api/meetings/:id/remind           — 未回答者へリマインダーを送る（主催者のみ）
 // POST   /api/meetings/:id/read-notifications — このミーティングの通知を既読にする
 // DELETE /api/meetings/:id                  — キャンセル（主催者のみ）
 // POST   /api/meetings/:id/external         — 外部招待URLを生成
@@ -22,17 +29,26 @@ import { eq, inArray, and, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
+import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import {
   getAvailableConferenceTypes,
   getValidGoogleAccessToken,
   getValidZoomAccessToken,
   createZoomMeeting,
+  autoCreateConferenceForOccurrence,
+  cancelAutoConference,
 } from "../services/conferenceService.ts";
 import { insertCalendarEvent } from "../services/googleClient.ts";
+import { getFrontendUrl } from "../services/frontendUrl.ts";
+import { searchCommonFreeSlots } from "../services/meetingSlotSearch.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
+
+const MAX_CANDIDATES = 10;
+const REMINDER_COOLDOWN_SECONDS = 6 * 60 * 60; // 6時間
+const SLOT_SEARCH_ALLOWED_DURATIONS = [15, 30, 45, 60, 90, 120, 180];
 
 export const meetingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 meetingRoutes.use("*", authMiddleware);
@@ -42,20 +58,25 @@ meetingRoutes.use("*", authMiddleware);
 // ----------------------------------------------------------------
 meetingRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const now = Math.floor(Date.now() / 1000);
 
   const body = await c.req.json<{
     title: string;
     description?: string;
-    scope: "all" | "team" | "selected";
+    scope: "all" | "team" | "collab_team" | "selected";
     teamId?: string;
+    collabTeamId?: string;
     inviteeIds?: string[];   // scope=selected 用
     deadline?: number;
     eventCampaignId?: string;
     eventTypeDefId?: string;
     registrationDeadline?: number;
     candidates: Array<{ startsAt: number; endsAt?: number; note?: string }>;
+    confirmNow?: boolean;
+    conferenceType?: "manual" | "zoom" | "google_meet" | "none";
+    conferenceUrl?: string;
   }>();
 
   if (!body.title?.trim()) {
@@ -63,6 +84,34 @@ meetingRoutes.post("/", async (c) => {
   }
   if (!body.candidates || body.candidates.length === 0) {
     return c.json({ error: { code: "invalid_input", message: "候補日を1つ以上設定してください" } }, 400);
+  }
+  if (body.candidates.length > MAX_CANDIDATES) {
+    return c.json({ error: { code: "too_many_candidates", message: `候補日は${MAX_CANDIDATES}個までです` } }, 400);
+  }
+  if (body.candidates.some((cd) => cd.startsAt < now)) {
+    return c.json({ error: { code: "past_date", message: "過去の日時は候補日に設定できません" } }, 400);
+  }
+  if (body.scope === "team" && !body.teamId) {
+    return c.json({ error: { code: "invalid_input", message: "ギルドを指定してください" } }, 400);
+  }
+  if (body.scope === "collab_team" && !body.collabTeamId) {
+    return c.json({ error: { code: "invalid_input", message: "対象チームを指定してください" } }, 400);
+  }
+
+  const confirmNow = body.confirmNow === true;
+  let manualConferenceUrl: string | undefined;
+  if (confirmNow) {
+    if (body.conferenceType === "manual") {
+      manualConferenceUrl = body.conferenceUrl?.trim();
+      if (!manualConferenceUrl || !/^https?:\/\//.test(manualConferenceUrl)) {
+        return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
+      }
+    } else if (body.conferenceType === "zoom" || body.conferenceType === "google_meet") {
+      const available = await getAvailableConferenceTypes(db, memberId);
+      if (!available.includes(body.conferenceType)) {
+        return c.json({ error: { code: "not_connected", message: "指定した会議ツールと連携されていません" } }, 400);
+      }
+    }
   }
 
   const meetingId = newId();
@@ -73,8 +122,9 @@ meetingRoutes.post("/", async (c) => {
     description: body.description?.trim() || null,
     hostMemberId: memberId,
     scope: body.scope ?? "all",
-    teamId: body.teamId ?? null,
-    status: "open",
+    teamId: body.scope === "team" ? body.teamId ?? null : null,
+    collabTeamId: body.scope === "collab_team" ? body.collabTeamId ?? null : null,
+    status: confirmNow ? "confirmed" : "open",
     confirmedCandidateId: null,
     deadline: body.deadline ?? null,
     eventCampaignId: body.eventCampaignId ?? null,
@@ -84,17 +134,25 @@ meetingRoutes.post("/", async (c) => {
     updatedAt: now,
   });
 
-  // 候補日を挿入
+  // 候補日を挿入（確定日として作成する場合は、すべての候補日を最初から確定済みとして登録する）
+  const candidateIds: string[] = [];
   for (let i = 0; i < body.candidates.length; i++) {
     const c2 = body.candidates[i];
+    const candidateId = newId();
+    candidateIds.push(candidateId);
     await db.insert(schema.meetingDateCandidates).values({
-      id: newId(),
+      id: candidateId,
       meetingId,
       startsAt: c2.startsAt,
       endsAt: c2.endsAt ?? null,
       note: c2.note ?? null,
       sortOrder: i,
+      isConfirmed: confirmNow ? 1 : 0,
+      addedByMemberId: memberId,
     });
+  }
+  if (confirmNow) {
+    await db.update(schema.meetings).set({ confirmedCandidateId: candidateIds[0] }).where(eq(schema.meetings.id, meetingId));
   }
 
   // scope=selected の場合は招待メンバーを挿入
@@ -108,46 +166,257 @@ meetingRoutes.post("/", async (c) => {
     }
   }
 
-  // 招待メール送信（主催者を除く対象メンバーへ）
-  const tempMeeting = { id: meetingId, scope: body.scope ?? "all", teamId: body.teamId ?? null, hostMemberId: memberId };
-  const inviteTargets = await getTargetMembers(db, tempMeeting);
-  const host = await db.select({ name: schema.members.name }).from(schema.members)
-    .where(eq(schema.members.id, memberId)).get();
-  const hostName = host?.name ?? "主催者";
-  const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
-  const systemTzForInvite = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+  const appUrl = getFrontendUrl(c.env);
   const appTitleDesign = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
   const appTitle = appTitleDesign?.appTitle ?? "白樺クエスト";
   const mailer = new MailService(db, c.env);
+  const host = await db.select({ name: schema.members.name, email: schema.members.email }).from(schema.members)
+    .where(eq(schema.members.id, memberId)).get();
+  const hostName = host?.name ?? "主催者";
+  const tempMeeting = { id: meetingId, scope: body.scope ?? "all", teamId: body.teamId ?? null, collabTeamId: body.collabTeamId ?? null, hostMemberId: memberId };
+  const inviteTargets = await getTargetMembers(db, tempMeeting);
+  const mailPromises: Promise<void>[] = [];
 
-  for (const m of inviteTargets) {
-    if (m.id === memberId || !m.email) continue;
-    // ホーム画面用の招待通知をDBに挿入
-    await db.insert(schema.meetingNotifications).values({
-      id: newId(),
-      meetingId,
-      memberId: m.id,
-      type: "invited",
-      message: `「${body.title.trim()}」に招待されました`,
-      readAt: null,
-      createdAt: now,
-    });
-    const deadlineStr = body.deadline
-      ? `（回答期限: ${new Intl.DateTimeFormat("ja-JP", { timeZone: systemTzForInvite, year: "numeric", month: "numeric", day: "numeric" }).format(new Date(body.deadline * 1000))}）`
+  if (!confirmNow) {
+    // 招待メール送信（候補日を提案し、投票をお願いする通常フロー）
+    const systemTzForInvite = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+    for (const m of inviteTargets) {
+      if (m.id === memberId || !m.email) continue;
+      await db.insert(schema.meetingNotifications).values({
+        id: newId(),
+        meetingId,
+        memberId: m.id,
+        type: "invited",
+        message: `「${body.title.trim()}」に招待されました`,
+        readAt: null,
+        createdAt: now,
+      });
+      const deadlineStr = body.deadline
+        ? `（回答期限: ${new Intl.DateTimeFormat("ja-JP", { timeZone: systemTzForInvite, year: "numeric", month: "numeric", day: "numeric" }).format(new Date(body.deadline * 1000))}）`
+        : "";
+      mailPromises.push(
+        mailer.send("meeting_invitation", m.email, {
+          appTitle,
+          memberName: m.name,
+          hostName,
+          meetingTitle: body.title.trim(),
+          meetingDescription: body.description?.trim() ?? "",
+          deadlineStr,
+          meetingUrl: `${appUrl}/meetings/${meetingId}`,
+        }).catch(console.error)
+      );
+    }
+  } else {
+    // 確定日として作成する場合：会議URLを発行してから、招待と確定通知を1通にまとめて送る
+    const confirmedCandidates = await db.select().from(schema.meetingDateCandidates)
+      .where(eq(schema.meetingDateCandidates.meetingId, meetingId)).orderBy(schema.meetingDateCandidates.startsAt).all();
+    let finalConferenceUrl: string | null = null;
+    let finalConferenceType: "manual" | "zoom" | "google_meet" | null = null;
+    let finalConferenceMetaJson: string | null = null;
+    let finalCalendarEventId: string | null = null;
+
+    if (body.conferenceType === "manual" && manualConferenceUrl) {
+      finalConferenceUrl = manualConferenceUrl;
+      finalConferenceType = "manual";
+      for (const cd of confirmedCandidates) {
+        await db.update(schema.meetingDateCandidates).set({ conferenceUrl: manualConferenceUrl }).where(eq(schema.meetingDateCandidates.id, cd.id));
+      }
+    } else if (body.conferenceType === "zoom") {
+      const first = confirmedCandidates[0];
+      const conf = await autoCreateConferenceForOccurrence(
+        db, c.env, memberId, "zoom", body.title.trim(), body.description?.trim() ?? "",
+        first.startsAt, first.endsAt ?? first.startsAt + 3600
+      );
+      if (conf?.conferenceUrl) {
+        finalConferenceUrl = conf.conferenceUrl;
+        finalConferenceType = "zoom";
+        finalConferenceMetaJson = conf.conferenceMetaJson;
+        for (const cd of confirmedCandidates) {
+          await db.update(schema.meetingDateCandidates).set({ conferenceUrl: conf.conferenceUrl }).where(eq(schema.meetingDateCandidates.id, cd.id));
+        }
+      }
+    } else if (body.conferenceType === "google_meet") {
+      for (const cd of confirmedCandidates) {
+        const conf = await autoCreateConferenceForOccurrence(
+          db, c.env, memberId, "google_meet", body.title.trim(), body.description?.trim() ?? "",
+          cd.startsAt, cd.endsAt ?? cd.startsAt + 3600
+        );
+        if (conf?.conferenceUrl) {
+          await db.update(schema.meetingDateCandidates).set({ conferenceUrl: conf.conferenceUrl }).where(eq(schema.meetingDateCandidates.id, cd.id));
+          if (!finalConferenceUrl) {
+            finalConferenceUrl = conf.conferenceUrl;
+            finalConferenceType = "google_meet";
+            finalCalendarEventId = conf.calendarEventId;
+          }
+        }
+      }
+    }
+
+    if (finalConferenceType) {
+      await db.update(schema.meetings).set({
+        conferenceType: finalConferenceType, conferenceUrl: finalConferenceUrl,
+        conferenceMetaJson: finalConferenceMetaJson, calendarEventId: finalCalendarEventId, updatedAt: now,
+      }).where(eq(schema.meetings.id, meetingId));
+    }
+
+    const systemTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+    const confirmedDateText = confirmedCandidates.length > 0
+      ? formatCandidateDateText(confirmedCandidates[0].startsAt, confirmedCandidates[0].endsAt, systemTz)
       : "";
-    // 招待メール送信
-    mailer.send("meeting_invitation", m.email, {
-      appTitle,
-      memberName: m.name,
-      hostName,
-      meetingTitle: body.title.trim(),
-      meetingDescription: body.description?.trim() ?? "",
-      deadlineStr,
-      meetingUrl: `${appUrl}/meetings/${meetingId}`,
-    }).catch(console.error);
+    const typeLabel = finalConferenceType === "google_meet" ? "Google Meet" : finalConferenceType === "zoom" ? "Zoom" : "オンライン会議";
+    const subjectAction = "ミーティングが確定しました — ";
+    const confirmHeading = "確定済みミーティングへのご案内";
+    const confirmIntro = `「${body.title.trim()}」の日程が確定しました。ご参加をお願いします！`;
+    const notifyMsg = `「${body.title.trim()}」が${confirmedDateText}に確定し、招待されました`;
+
+    for (const m of inviteTargets) {
+      if (m.id === memberId) continue;
+      await db.insert(schema.meetingNotifications).values({
+        id: newId(), meetingId, memberId: m.id, type: "confirmed", message: notifyMsg, readAt: null, createdAt: now,
+      });
+      if (!m.email) continue;
+      if (finalConferenceUrl) {
+        mailPromises.push(
+          mailer.send("meeting_conference_member", m.email, {
+            appTitle, memberName: m.name, meetingTitle: body.title.trim(),
+            hostName, confirmedDate: confirmedDateText, conferenceUrl: finalConferenceUrl, conferenceType: typeLabel,
+            subjectAction, confirmHeading, confirmIntro,
+            meetingUrl: `${appUrl}/meetings/${meetingId}`,
+          }).catch(console.error)
+        );
+      } else {
+        mailPromises.push(
+          mailer.send("meeting_confirmed_member", m.email, {
+            appTitle, memberName: m.name, meetingTitle: body.title.trim(),
+            hostName, confirmedDate: confirmedDateText, urlPendingNote: "",
+            meetingUrl: `${appUrl}/meetings/${meetingId}`,
+          }).catch(console.error)
+        );
+      }
+    }
+    // 主催者本人にも確認用メールを送信
+    if (host?.email) {
+      if (finalConferenceUrl) {
+        mailPromises.push(
+          mailer.send("meeting_conference_member", host.email, {
+            appTitle, memberName: hostName, meetingTitle: body.title.trim(),
+            hostName, confirmedDate: confirmedDateText, conferenceUrl: finalConferenceUrl, conferenceType: typeLabel,
+            subjectAction, confirmHeading, confirmIntro,
+            meetingUrl: `${appUrl}/meetings/${meetingId}`,
+          }).catch(console.error)
+        );
+      } else {
+        mailPromises.push(
+          mailer.send("meeting_confirmed_member", host.email, {
+            appTitle, memberName: hostName, meetingTitle: body.title.trim(),
+            hostName, confirmedDate: confirmedDateText, urlPendingNote: "",
+            meetingUrl: `${appUrl}/meetings/${meetingId}`,
+          }).catch(console.error)
+        );
+      }
+    }
   }
 
+  // waitUntil でレスポンス後もメール送信を完走させる
+  c.executionCtx.waitUntil(Promise.all(mailPromises));
+
   return c.json({ data: { id: meetingId } }, 201);
+});
+
+// ----------------------------------------------------------------
+// POST /api/meetings/suggest-slots — AIによる日程候補の抽出（作成前）
+// 招待予定メンバーのうちGoogleカレンダー連携済みの人の空き時間を確認し、
+// 指定した曜日・時間帯・所要時間の条件で全員が空いている候補日時を抽出する。
+// 自由記述が指定された場合のみ、確定的に導いた候補の中からAIに絞り込ませる。
+// ----------------------------------------------------------------
+meetingRoutes.post("/suggest-slots", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const body = await c.req.json<{
+    scope: "all" | "team" | "collab_team" | "selected";
+    teamId?: string;
+    collabTeamId?: string;
+    inviteeIds?: string[];
+    priorityMemberIds?: string[]; // scope=all の場合に、確認を優先したいメンバー（最大10人）
+    daysOfWeek: number[];
+    timeStartLocal: string;
+    timeEndLocal: string;
+    durationMinutes: number;
+    searchFromLocal?: string;
+    searchToLocal?: string;
+    maxMembersToCheck?: number;
+    maxCandidates?: number;
+    freeText?: string;
+  }>();
+
+  if (!body.daysOfWeek || body.daysOfWeek.length === 0 || body.daysOfWeek.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) {
+    return c.json({ error: { code: "invalid_input", message: "曜日を1つ以上指定してください" } }, 400);
+  }
+  if (!/^\d{2}:\d{2}$/.test(body.timeStartLocal ?? "") || !/^\d{2}:\d{2}$/.test(body.timeEndLocal ?? "")) {
+    return c.json({ error: { code: "invalid_input", message: "時間帯の指定が正しくありません" } }, 400);
+  }
+  if (body.timeStartLocal >= body.timeEndLocal) {
+    return c.json({ error: { code: "invalid_input", message: "終了時刻は開始時刻より後にしてください" } }, 400);
+  }
+  if (!SLOT_SEARCH_ALLOWED_DURATIONS.includes(body.durationMinutes)) {
+    return c.json({ error: { code: "invalid_input", message: "ミーティング時間の指定が正しくありません" } }, 400);
+  }
+  if (body.scope === "team" && !body.teamId) {
+    return c.json({ error: { code: "invalid_input", message: "ギルドを指定してください" } }, 400);
+  }
+  if (body.scope === "collab_team" && !body.collabTeamId) {
+    return c.json({ error: { code: "invalid_input", message: "対象チームを指定してください" } }, 400);
+  }
+  if (body.priorityMemberIds && body.priorityMemberIds.length > 10) {
+    return c.json({ error: { code: "invalid_input", message: "優先メンバーは10人までです" } }, 400);
+  }
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  if (!body.searchFromLocal || !body.searchToLocal || !DATE_RE.test(body.searchFromLocal) || !DATE_RE.test(body.searchToLocal)) {
+    return c.json({ error: { code: "invalid_input", message: "検索期間を指定してください" } }, 400);
+  }
+  if (body.searchToLocal < body.searchFromLocal) {
+    return c.json({ error: { code: "invalid_input", message: "検索期間の終了日は開始日以降にしてください" } }, 400);
+  }
+  const rangeDays = Math.round((new Date(`${body.searchToLocal}T00:00:00Z`).getTime() - new Date(`${body.searchFromLocal}T00:00:00Z`).getTime()) / 86400_000) + 1;
+  if (rangeDays > 56) {
+    return c.json({ error: { code: "invalid_input", message: "検索期間は最大8週間（56日）までです" } }, 400);
+  }
+
+  const maxMembersToCheck = Math.min(Math.max(Math.floor(body.maxMembersToCheck ?? 10), 1), 20);
+  const maxCandidates = Math.min(Math.max(Math.floor(body.maxCandidates ?? 5), 1), 15);
+
+  // 作成前のため meetings 行はまだ無い。scope に応じて対象メンバーを直接解決する
+  let candidateMemberIds: string[] = [];
+  if (body.scope === "all") {
+    const rows = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.status, "active")).all();
+    candidateMemberIds = rows.map((r) => r.id);
+  } else if (body.scope === "team" && body.teamId) {
+    const rows = await db.select({ memberId: schema.teamMembers.memberId }).from(schema.teamMembers).where(eq(schema.teamMembers.teamId, body.teamId)).all();
+    candidateMemberIds = rows.map((r) => r.memberId);
+  } else if (body.scope === "collab_team" && body.collabTeamId) {
+    const rows = await db.select({ memberId: schema.collabTeamMembers.memberId }).from(schema.collabTeamMembers)
+      .where(and(eq(schema.collabTeamMembers.teamId, body.collabTeamId), eq(schema.collabTeamMembers.status, "active"))).all();
+    candidateMemberIds = rows.map((r) => r.memberId);
+  } else if (body.scope === "selected") {
+    candidateMemberIds = body.inviteeIds ?? [];
+  }
+
+  try {
+    const result = await searchCommonFreeSlots({
+      db, env: c.env, hostMemberId: memberId, candidateMemberIds, scope: body.scope,
+      daysOfWeek: body.daysOfWeek, timeStartLocal: body.timeStartLocal, timeEndLocal: body.timeEndLocal,
+      durationMinutes: body.durationMinutes, searchFromLocal: body.searchFromLocal, searchToLocal: body.searchToLocal,
+      maxMembersToCheck, maxCandidates,
+      priorityMemberIds: body.scope === "all" ? body.priorityMemberIds : undefined,
+      freeText: body.freeText, isDev: c.env.ENVIRONMENT === "development",
+    });
+    return c.json({ data: result });
+  } catch (e) {
+    console.error("[meetings/suggest-slots] 候補抽出に失敗しました:", e);
+    return c.json({ error: { code: "search_failed", message: "候補日の抽出に失敗しました。時間をおいて再度お試しください。" } }, 503);
+  }
 });
 
 // ----------------------------------------------------------------
@@ -155,7 +424,8 @@ meetingRoutes.post("/", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.get("/upcoming", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ data: [] });
   const now = Math.floor(Date.now() / 1000);
   const weekLater = now + 7 * 86400;
 
@@ -216,6 +486,17 @@ meetingRoutes.get("/upcoming", async (c) => {
       ).map((r) => r.teamId)
     : [];
 
+  // コラボチーム（パワーチーム/ゆるいチーム）メンバーシップ確認
+  const collabTeamIds = upcoming.filter((m) => m.scope === "collab_team" && m.collabTeamId).map((m) => m.collabTeamId!);
+  const myCollabTeamIds = collabTeamIds.length > 0
+    ? (await db
+        .select({ teamId: schema.collabTeamMembers.teamId })
+        .from(schema.collabTeamMembers)
+        .where(and(eq(schema.collabTeamMembers.memberId, memberId), eq(schema.collabTeamMembers.status, "active")))
+        .all()
+      ).map((r) => r.teamId)
+    : [];
+
   // scope=selected の招待確認
   const selectedMeetingIds = upcoming.filter((m) => m.scope === "selected").map((m) => m.id);
   const invitedIds = selectedMeetingIds.length > 0
@@ -237,6 +518,7 @@ meetingRoutes.get("/upcoming", async (c) => {
     if (m.hostMemberId === memberId) return true;
     if (m.scope === "all") return yesSet.has(m.id) || true; // all = 全員
     if (m.scope === "team") return myTeamIds.includes(m.teamId ?? "");
+    if (m.scope === "collab_team") return myCollabTeamIds.includes(m.collabTeamId ?? "");
     if (m.scope === "selected") return invitedSet.has(m.id);
     return false;
   });
@@ -273,7 +555,8 @@ meetingRoutes.get("/upcoming", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.get("/", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ data: [] });
 
   // 主催ミーティング
   const hosted = await db
@@ -327,11 +610,33 @@ meetingRoutes.get("/", async (c) => {
         .all()
     : [];
 
-  // 重複排除して統合
+  // コラボチーム（パワーチーム/ゆるいチーム）ミーティング
+  const myCollabTeams = await db
+    .select({ teamId: schema.collabTeamMembers.teamId })
+    .from(schema.collabTeamMembers)
+    .where(and(eq(schema.collabTeamMembers.memberId, memberId), eq(schema.collabTeamMembers.status, "active")))
+    .all();
+  const myCollabTeamIds = myCollabTeams.map((r) => r.teamId);
+
+  const collabTeamMeetings = myCollabTeamIds.length > 0
+    ? await db
+        .select()
+        .from(schema.meetings)
+        .where(
+          and(
+            eq(schema.meetings.scope, "collab_team"),
+            inArray(schema.meetings.collabTeamId, myCollabTeamIds),
+            sql`${schema.meetings.hostMemberId} != ${memberId}`
+          )
+        )
+        .all()
+    : [];
+
+  // 重複排除して統合（定例会から自動生成された開催回は一覧に出さず、定例会詳細画面にまとめる）
   const seen = new Set<string>();
   const all: typeof hosted = [];
-  for (const m of [...hosted, ...allScope, ...selectedInvited, ...teamMeetings]) {
-    if (!seen.has(m.id)) {
+  for (const m of [...hosted, ...allScope, ...selectedInvited, ...teamMeetings, ...collabTeamMeetings]) {
+    if (!seen.has(m.id) && !m.seriesId) {
       seen.add(m.id);
       all.push(m);
     }
@@ -374,7 +679,7 @@ meetingRoutes.get("/", async (c) => {
     : [];
   const hostMap = new Map(hosts.map((h) => [h.id, h]));
 
-  // 自分の回答有無
+  // 自分の回答有無（日程確定前の候補日回答 + 確定後の出欠回答の両方を見る）
   const myResponses = meetingIds.length > 0
     ? await db
         .select({ meetingId: schema.meetingResponses.meetingId })
@@ -387,7 +692,22 @@ meetingRoutes.get("/", async (c) => {
         )
         .all()
     : [];
-  const respondedSet = new Set(myResponses.map((r) => r.meetingId));
+  const myAttendances = meetingIds.length > 0
+    ? await db
+        .select({ meetingId: schema.meetingAttendances.meetingId })
+        .from(schema.meetingAttendances)
+        .where(
+          and(
+            inArray(schema.meetingAttendances.meetingId, meetingIds),
+            eq(schema.meetingAttendances.memberId, memberId)
+          )
+        )
+        .all()
+    : [];
+  const respondedSet = new Set([
+    ...myResponses.map((r) => r.meetingId),
+    ...myAttendances.map((a) => a.meetingId),
+  ]);
 
   const result = all
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -418,7 +738,8 @@ meetingRoutes.get("/", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.get("/notifications", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ data: [] });
 
   const rows = await db
     .select()
@@ -439,7 +760,8 @@ meetingRoutes.get("/notifications", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.post("/notifications/read-all", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const now = Math.floor(Date.now() / 1000);
 
   await db
@@ -460,7 +782,8 @@ meetingRoutes.post("/notifications/read-all", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.get("/notifications/history", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ data: [] });
 
   const rows = await db
     .select()
@@ -483,7 +806,8 @@ meetingRoutes.get("/notifications/history", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.get("/pending-attendance", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ data: [] });
   const now = Math.floor(Date.now() / 1000);
 
   // 確定済みで時間が過ぎたミーティングを取得
@@ -532,7 +856,8 @@ meetingRoutes.get("/pending-attendance", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.get("/:id", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
 
   const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
@@ -545,6 +870,11 @@ meetingRoutes.get("/:id", async (c) => {
     .where(eq(schema.meetingDateCandidates.meetingId, id))
     .orderBy(schema.meetingDateCandidates.sortOrder)
     .all();
+
+  // 辞退者一覧
+  const declines = await db.select({ memberId: schema.meetingDeclines.memberId })
+    .from(schema.meetingDeclines).where(eq(schema.meetingDeclines.meetingId, id)).all();
+  const declinedMemberIds = declines.map((d) => d.memberId);
 
   // 全回答
   const allResponses = await db
@@ -578,6 +908,20 @@ meetingRoutes.get("/:id", async (c) => {
         .where(and(inArray(schema.members.id, tmIds), eq(schema.members.status, "active")))
         .all();
     }
+  } else if (meeting.scope === "collab_team" && meeting.collabTeamId) {
+    const collabMemberRows = await db
+      .select({ memberId: schema.collabTeamMembers.memberId })
+      .from(schema.collabTeamMembers)
+      .where(and(eq(schema.collabTeamMembers.teamId, meeting.collabTeamId), eq(schema.collabTeamMembers.status, "active")))
+      .all();
+    const ctmIds = collabMemberRows.map((r) => r.memberId);
+    if (ctmIds.length > 0) {
+      targetMembers = await db
+        .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor })
+        .from(schema.members)
+        .where(and(inArray(schema.members.id, ctmIds), eq(schema.members.status, "active")))
+        .all();
+    }
   } else if (meeting.scope === "selected") {
     const invitees = await db
       .select({ memberId: schema.meetingInvitees.memberId })
@@ -606,6 +950,23 @@ meetingRoutes.get("/:id", async (c) => {
       .all();
   }
   const allTargetMembers = [...targetMembers, ...extraMembers];
+
+  // 候補日の追加者名解決（対象メンバー一覧にいない場合は追加取得）
+  const addedByIds = [...new Set(candidates.map((c) => c.addedByMemberId).filter(Boolean) as string[])];
+  const knownIds = new Set(allTargetMembers.map((m) => m.id));
+  const unknownAddedByIds = addedByIds.filter((aid) => !knownIds.has(aid));
+  let extraAdders: Array<{ id: string; name: string }> = [];
+  if (unknownAddedByIds.length > 0) {
+    extraAdders = await db
+      .select({ id: schema.members.id, name: schema.members.name })
+      .from(schema.members)
+      .where(inArray(schema.members.id, unknownAddedByIds))
+      .all();
+  }
+  const adderNameById = new Map<string, string>([
+    ...allTargetMembers.map((m) => [m.id, m.name] as const),
+    ...extraAdders.map((m) => [m.id, m.name] as const),
+  ]);
 
   // ホスト情報
   const host = allTargetMembers.find((m) => m.id === meeting.hostMemberId)
@@ -688,12 +1049,12 @@ meetingRoutes.get("/:id", async (c) => {
     linkedEvent = ev ?? null;
   }
 
-  // 出席記録
+  // 出席記録（確定日が複数ある場合、候補日ごとに個別の記録を持てる）
   const attendanceRows = await db.select()
     .from(schema.meetingAttendances)
     .where(eq(schema.meetingAttendances.meetingId, id))
     .all();
-  const myAttendance = attendanceRows.find((a) => a.memberId === memberId) ?? null;
+  const myAttendances = attendanceRows.filter((a) => a.memberId === memberId);
 
   // 確定済み候補日（複数対応）— 最も早い日時を confirmedStartsAt として返す
   // 旧形式（isConfirmed が未設定）の確定済みミーティングは confirmedCandidateId を参照してフォールバック
@@ -721,6 +1082,7 @@ meetingRoutes.get("/:id", async (c) => {
         hostMemberId: meeting.hostMemberId,
         scope: meeting.scope,
         teamId: meeting.teamId,
+        collabTeamId: meeting.collabTeamId,
         status: meeting.status,
         confirmedCandidateId: meeting.confirmedCandidateId,
         confirmedStartsAt,
@@ -730,6 +1092,8 @@ meetingRoutes.get("/:id", async (c) => {
         eventTypeDefId: meeting.eventTypeDefId,
         conferenceType: meeting.conferenceType,
         conferenceUrl: meeting.conferenceUrl,
+        seriesId: meeting.seriesId,
+        seriesOccurrenceIndex: meeting.seriesOccurrenceIndex,
         inviteToken: isHost ? (meeting.inviteToken ?? null) : null,
         createdAt: meeting.createdAt,
         updatedAt: meeting.updatedAt,
@@ -740,6 +1104,11 @@ meetingRoutes.get("/:id", async (c) => {
         // 旧形式確定ミーティングの候補は isConfirmed が 0 でも confirmedCandidateId が指す場合は 1 として返す
         isConfirmed: c.isConfirmed === 1 || c.id === meeting.confirmedCandidateId ? 1 : 0,
         conferenceUrl: c.conferenceUrl ?? null,
+        // 主催者自身が追加した候補日（作成時含む）は addedByName を返さない（タグ表示不要のため）
+        addedByMemberId: c.addedByMemberId,
+        addedByName: c.addedByMemberId && c.addedByMemberId !== meeting.hostMemberId
+          ? (adderNameById.get(c.addedByMemberId) ?? null)
+          : null,
       })),
       respondents: [...memberRespondents, ...externalRespondents],
       externalInvitees: externalInvitees.map((e) => ({
@@ -747,8 +1116,12 @@ meetingRoutes.get("/:id", async (c) => {
       })),
       myAnswers,
       isHost,
+      declinedMemberIds,
+      myDeclined: declinedMemberIds.includes(memberId),
+      maxCandidates: MAX_CANDIDATES,
+      lastReminderSentAt: meeting.lastReminderSentAt,
       linkedEvent,
-      myAttendance: myAttendance ? { status: myAttendance.status, candidateId: myAttendance.candidateId ?? null, pointsAwarded: myAttendance.pointsAwarded } : null,
+      myAttendances: myAttendances.map((a) => ({ status: a.status, candidateId: a.candidateId ?? null, pointsAwarded: a.pointsAwarded })),
       attendances: attendanceRows.map((a) => ({ memberId: a.memberId, status: a.status, candidateId: a.candidateId ?? null, pointsAwarded: a.pointsAwarded })),
     },
   });
@@ -759,7 +1132,8 @@ meetingRoutes.get("/:id", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.post("/:id/respond", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -767,6 +1141,9 @@ meetingRoutes.post("/:id/respond", async (c) => {
   if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
   if (meeting.status !== "open") {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
+  }
+  if (meeting.deadline != null && meeting.deadline < now) {
+    return c.json({ error: { code: "deadline_passed", message: "回答受付は終了しています" } }, 400);
   }
 
   const body = await c.req.json<{ answers: Record<string, Availability> }>();
@@ -796,16 +1173,19 @@ meetingRoutes.post("/:id/respond", async (c) => {
   // 回答確認メールを送信
   const respondingMember = await db.select({ name: schema.members.name, email: schema.members.email })
     .from(schema.members).where(eq(schema.members.id, memberId)).get();
-  const appUrl2 = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+  const appUrl2 = getFrontendUrl(c.env);
   const appTitleRes = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
   const mailerRes = new MailService(db, c.env);
+  const respondMailPromises: Promise<void>[] = [];
   if (respondingMember?.email) {
-    mailerRes.send("meeting_response_member", respondingMember.email, {
-      appTitle: appTitleRes,
-      memberName: respondingMember.name,
-      meetingTitle: meeting.title,
-      meetingUrl: `${appUrl2}/meetings/${id}`,
-    }).catch(console.error);
+    respondMailPromises.push(
+      mailerRes.send("meeting_response_member", respondingMember.email, {
+        appTitle: appTitleRes,
+        memberName: respondingMember.name,
+        meetingTitle: meeting.title,
+        meetingUrl: `${appUrl2}/meetings/${id}`,
+      }).catch(console.error)
+    );
   }
 
   // 主催者が自分でない場合、主催者にも通知
@@ -813,17 +1193,574 @@ meetingRoutes.post("/:id/respond", async (c) => {
     const host = await db.select({ name: schema.members.name, email: schema.members.email })
       .from(schema.members).where(eq(schema.members.id, meeting.hostMemberId)).get();
     if (host?.email) {
-      mailerRes.send("meeting_response_host", host.email, {
-        appTitle: appTitleRes,
-        hostName: host.name,
-        respondentName: respondingMember?.name ?? "メンバー",
-        meetingTitle: meeting.title,
-        meetingUrl: `${appUrl2}/meetings/${id}`,
-      }).catch(console.error);
+      respondMailPromises.push(
+        mailerRes.send("meeting_response_host", host.email, {
+          appTitle: appTitleRes,
+          hostName: host.name,
+          respondentName: respondingMember?.name ?? "メンバー",
+          meetingTitle: meeting.title,
+          meetingUrl: `${appUrl2}/meetings/${id}`,
+        }).catch(console.error)
+      );
+    }
+  }
+  // waitUntil でレスポンス後もメール送信を完走させる
+  c.executionCtx.waitUntil(Promise.all(respondMailPromises));
+
+  return c.json({ ok: true });
+});
+
+// ----------------------------------------------------------------
+// POST /api/meetings/:id/candidates — 候補日を追加（主催者・招待対象メンバー）
+//   ・候補日の追加（自分/主催者どちらも可）
+//   ・都合が悪い旨のメッセージを主催者へ送る（任意）
+// ----------------------------------------------------------------
+meetingRoutes.post("/:id/candidates", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.status !== "open") {
+    return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
+  }
+
+  const body = await c.req.json<{
+    candidates?: Array<{ startsAt: number; endsAt?: number; note?: string }>;
+    message?: string;
+  }>();
+  const newCandidates = body.candidates ?? [];
+  const message = body.message?.trim() || null;
+
+  if (newCandidates.length === 0 && !message) {
+    return c.json({ error: { code: "invalid_input", message: "候補日またはメッセージを入力してください" } }, 400);
+  }
+  if (newCandidates.some((nc) => nc.startsAt < now)) {
+    return c.json({ error: { code: "past_date", message: "過去の日時は候補日に設定できません" } }, 400);
+  }
+
+  const isHost = meeting.hostMemberId === memberId;
+  const targetMembers = await getTargetMembers(db, meeting);
+  const isTarget = isHost || targetMembers.some((m) => m.id === memberId);
+  if (!isTarget) {
+    return c.json({ error: { code: "forbidden", message: "このミーティングの対象者のみ操作できます" } }, 403);
+  }
+
+  const requester = await db.select({ name: schema.members.name })
+    .from(schema.members).where(eq(schema.members.id, memberId)).get();
+  const hostMember = targetMembers.find((m) => m.id === meeting.hostMemberId)
+    ?? await db.select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
+        .from(schema.members).where(eq(schema.members.id, meeting.hostMemberId)).get();
+
+  const appUrl = getFrontendUrl(c.env);
+  const appTitle = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
+  const systemTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+  const mailer = new MailService(db, c.env);
+  const mailPromises: Promise<void>[] = [];
+
+  const createdCandidates: Array<{ id: string; startsAt: number; endsAt: number | null; note: string | null; sortOrder: number }> = [];
+
+  if (newCandidates.length > 0) {
+    const existingSortOrders = await db
+      .select({ sortOrder: schema.meetingDateCandidates.sortOrder })
+      .from(schema.meetingDateCandidates)
+      .where(eq(schema.meetingDateCandidates.meetingId, id))
+      .all();
+    if (existingSortOrders.length + newCandidates.length > MAX_CANDIDATES) {
+      return c.json({
+        error: {
+          code: "too_many_candidates",
+          message: `候補日は最大${MAX_CANDIDATES}個までです（現在${existingSortOrders.length}個）。不要な候補日を削除してから追加してください`,
+        },
+      }, 400);
+    }
+    let nextSortOrder = existingSortOrders.length > 0
+      ? Math.max(...existingSortOrders.map((r) => r.sortOrder)) + 1
+      : 0;
+
+    for (const nc of newCandidates) {
+      const candId = newId();
+      const sortOrder = nextSortOrder++;
+      await db.insert(schema.meetingDateCandidates).values({
+        id: candId,
+        meetingId: id,
+        startsAt: nc.startsAt,
+        endsAt: nc.endsAt ?? null,
+        note: nc.note ?? null,
+        sortOrder,
+        addedByMemberId: memberId,
+      });
+      createdCandidates.push({ id: candId, startsAt: nc.startsAt, endsAt: nc.endsAt ?? null, note: nc.note ?? null, sortOrder });
+    }
+
+    // 追加者本人以外の対象メンバー・外部ゲストへ「再度ご都合をお知らせください」通知
+    const candidatesText = createdCandidates
+      .map((cc) => `・${formatCandidateDateText(cc.startsAt, cc.endsAt, systemTz)}`)
+      .join("\n");
+
+    for (const m of targetMembers) {
+      if (m.id === memberId) continue;
+      await db.insert(schema.meetingNotifications).values({
+        id: newId(),
+        meetingId: id,
+        memberId: m.id,
+        type: "candidates_added",
+        message: `「${meeting.title}」に新しい候補日が追加されました。ご都合をもう一度お知らせください。`,
+        readAt: null,
+        createdAt: now,
+      });
+      if (m.email) {
+        mailPromises.push(
+          mailer.send("meeting_candidates_added_member", m.email, {
+            appTitle,
+            memberName: m.name,
+            hostName: hostMember?.name ?? "主催者",
+            meetingTitle: meeting.title,
+            addedByName: requester?.name ?? "参加者",
+            candidatesText,
+            meetingUrl: `${appUrl}/meetings/${id}`,
+          }).catch(console.error)
+        );
+      }
+    }
+
+    const externalInvitees = await db.select().from(schema.meetingExternalInvitees)
+      .where(eq(schema.meetingExternalInvitees.meetingId, id)).all();
+    for (const ext of externalInvitees) {
+      if (!ext.email) continue;
+      mailPromises.push(
+        mailer.send("meeting_candidates_added_guest", ext.email, {
+          appTitle,
+          guestName: ext.name || "ゲスト",
+          hostName: hostMember?.name ?? "主催者",
+          meetingTitle: meeting.title,
+          addedByName: requester?.name ?? "参加者",
+          candidatesText,
+          scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+        }).catch(console.error)
+      );
     }
   }
 
+  // 都合が悪い旨のメッセージを主催者へ（主催者自身の操作の場合は送らない）
+  if (message && !isHost && hostMember) {
+    await db.insert(schema.meetingNotifications).values({
+      id: newId(),
+      meetingId: id,
+      memberId: hostMember.id,
+      type: "unavailable_contact",
+      message: `${requester?.name ?? "メンバー"}さんより: ${message}`,
+      readAt: null,
+      createdAt: now,
+    });
+    if (hostMember.email) {
+      mailPromises.push(
+        mailer.send("meeting_unavailable_contact_host", hostMember.email, {
+          appTitle,
+          hostName: hostMember.name,
+          respondentName: requester?.name ?? "メンバー",
+          meetingTitle: meeting.title,
+          message,
+          meetingUrl: `${appUrl}/meetings/${id}`,
+        }).catch(console.error)
+      );
+    }
+  }
+
+  c.executionCtx.waitUntil(Promise.all(mailPromises));
+
+  return c.json({ data: { candidates: createdCandidates } }, 201);
+});
+
+// ----------------------------------------------------------------
+// PATCH /api/meetings/:id/candidates/:candidateId — 候補日の日時を編集
+//   （主催者は全ての候補日、参加者は自分が追加した候補日のみ編集可）
+// ----------------------------------------------------------------
+meetingRoutes.patch("/:id/candidates/:candidateId", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id, candidateId } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.status !== "open") {
+    return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
+  }
+
+  const candidate = await db.select().from(schema.meetingDateCandidates)
+    .where(and(eq(schema.meetingDateCandidates.id, candidateId), eq(schema.meetingDateCandidates.meetingId, id)))
+    .get();
+  if (!candidate) return c.json({ error: { code: "not_found", message: "候補日が見つかりません" } }, 404);
+
+  const isHost = meeting.hostMemberId === memberId;
+  const isOwnCandidate = candidate.addedByMemberId === memberId;
+  if (!isHost && !isOwnCandidate) {
+    return c.json({ error: { code: "forbidden", message: "主催者、または自分が追加した候補日のみ編集できます" } }, 403);
+  }
+  if (candidate.isConfirmed === 1 || candidate.id === meeting.confirmedCandidateId) {
+    return c.json({ error: { code: "confirmed_candidate", message: "確定済みの候補日は編集できません。先に確定を解除してください" } }, 400);
+  }
+
+  const body = await c.req.json<{ startsAt: number; endsAt?: number; note?: string }>();
+  if (!body.startsAt) {
+    return c.json({ error: { code: "invalid_input", message: "日時を入力してください" } }, 400);
+  }
+  if (body.startsAt < now) {
+    return c.json({ error: { code: "past_date", message: "過去の日時は設定できません" } }, 400);
+  }
+
+  // 日時が変わる場合、この候補日への既存の回答は意味が変わるためリセットする
+  const dateChanged = body.startsAt !== candidate.startsAt || (body.endsAt ?? null) !== candidate.endsAt;
+  if (dateChanged) {
+    await db.delete(schema.meetingResponses).where(eq(schema.meetingResponses.candidateId, candidateId));
+  }
+
+  await db.update(schema.meetingDateCandidates)
+    .set({ startsAt: body.startsAt, endsAt: body.endsAt ?? null, note: body.note ?? candidate.note })
+    .where(eq(schema.meetingDateCandidates.id, candidateId));
+
+  if (dateChanged) {
+    // 変更者本人以外の対象メンバー・外部ゲストへ「再度ご都合をお知らせください」通知
+    const requester = await db.select({ name: schema.members.name })
+      .from(schema.members).where(eq(schema.members.id, memberId)).get();
+    const systemTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+    const appTitle = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
+    const appUrl = getFrontendUrl(c.env);
+    const dateText = formatCandidateDateText(body.startsAt, body.endsAt ?? null, systemTz);
+    const targetMembers = await getTargetMembers(db, meeting);
+    const mailer = new MailService(db, c.env);
+    const mailPromises: Promise<void>[] = [];
+
+    for (const m of targetMembers) {
+      if (m.id === memberId) continue;
+      await db.insert(schema.meetingNotifications).values({
+        id: newId(),
+        meetingId: id,
+        memberId: m.id,
+        type: "candidate_updated",
+        message: `「${meeting.title}」の候補日が変更されました。ご都合をもう一度お知らせください。`,
+        readAt: null,
+        createdAt: now,
+      });
+      if (m.email) {
+        mailPromises.push(
+          mailer.send("meeting_candidate_updated_member", m.email, {
+            appTitle,
+            memberName: m.name,
+            hostName: targetMembers.find((h) => h.id === meeting.hostMemberId)?.name ?? "主催者",
+            updatedByName: requester?.name ?? "参加者",
+            meetingTitle: meeting.title,
+            updatedDateText: dateText,
+            meetingUrl: `${appUrl}/meetings/${id}`,
+          }).catch(console.error)
+        );
+      }
+    }
+
+    const externalInvitees = await db.select().from(schema.meetingExternalInvitees)
+      .where(eq(schema.meetingExternalInvitees.meetingId, id)).all();
+    for (const ext of externalInvitees) {
+      if (!ext.email) continue;
+      mailPromises.push(
+        mailer.send("meeting_candidate_updated_guest", ext.email, {
+          appTitle,
+          guestName: ext.name || "ゲスト",
+          hostName: targetMembers.find((h) => h.id === meeting.hostMemberId)?.name ?? "主催者",
+          updatedByName: requester?.name ?? "参加者",
+          meetingTitle: meeting.title,
+          updatedDateText: dateText,
+          scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+        }).catch(console.error)
+      );
+    }
+
+    c.executionCtx.waitUntil(Promise.all(mailPromises));
+  }
+
   return c.json({ ok: true });
+});
+
+// ----------------------------------------------------------------
+// DELETE /api/meetings/:id/candidates/:candidateId — 候補日を削除
+//   （主催者は全ての候補日、参加者は自分が追加した候補日のみ削除可）
+// ----------------------------------------------------------------
+meetingRoutes.delete("/:id/candidates/:candidateId", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id, candidateId } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.status === "cancelled") {
+    return c.json({ error: { code: "meeting_closed", message: "このミーティングは既にキャンセルされています" } }, 400);
+  }
+
+  const candidate = await db.select().from(schema.meetingDateCandidates)
+    .where(and(eq(schema.meetingDateCandidates.id, candidateId), eq(schema.meetingDateCandidates.meetingId, id)))
+    .get();
+  if (!candidate) return c.json({ error: { code: "not_found", message: "候補日が見つかりません" } }, 404);
+
+  const isHost = meeting.hostMemberId === memberId;
+  const isOwnCandidate = candidate.addedByMemberId === memberId;
+  if (!isHost && !isOwnCandidate) {
+    return c.json({ error: { code: "forbidden", message: "主催者、または自分が追加した候補日のみ削除できます" } }, 403);
+  }
+  // 複数日程確定に対応：この候補日自体が確定済みの場合のみブロックする（他の候補日が確定済みでもブロックしない）
+  if (candidate.isConfirmed === 1 || candidate.id === meeting.confirmedCandidateId) {
+    return c.json({ error: { code: "confirmed_candidate", message: "確定済みの候補日は削除できません。先に確定を解除してください" } }, 400);
+  }
+
+  const remainingCandidates = await db.select({ id: schema.meetingDateCandidates.id })
+    .from(schema.meetingDateCandidates)
+    .where(eq(schema.meetingDateCandidates.meetingId, id))
+    .all();
+  if (remainingCandidates.length <= 1) {
+    return c.json({ error: { code: "last_candidate", message: "候補日は1つ以上必要です" } }, 400);
+  }
+
+  await db.delete(schema.meetingResponses).where(eq(schema.meetingResponses.candidateId, candidateId));
+  await db.delete(schema.meetingAttendances).where(eq(schema.meetingAttendances.candidateId, candidateId));
+  await db.delete(schema.meetingDateCandidates).where(eq(schema.meetingDateCandidates.id, candidateId));
+
+  // 削除者本人以外の対象メンバー・外部ゲストへ通知
+  const requester = await db.select({ name: schema.members.name })
+    .from(schema.members).where(eq(schema.members.id, memberId)).get();
+  const systemTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+  const appTitle = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
+  const appUrl = getFrontendUrl(c.env);
+  const dateText = formatCandidateDateText(candidate.startsAt, candidate.endsAt, systemTz);
+  const targetMembers = await getTargetMembers(db, meeting);
+  const mailer = new MailService(db, c.env);
+  const mailPromises: Promise<void>[] = [];
+
+  for (const m of targetMembers) {
+    if (m.id === memberId) continue;
+    await db.insert(schema.meetingNotifications).values({
+      id: newId(),
+      meetingId: id,
+      memberId: m.id,
+      type: "candidate_removed",
+      message: `「${meeting.title}」の候補日（${dateText}）が削除されました`,
+      readAt: null,
+      createdAt: now,
+    });
+    if (m.email) {
+      mailPromises.push(
+        mailer.send("meeting_candidate_removed_member", m.email, {
+          appTitle,
+          memberName: m.name,
+          hostName: targetMembers.find((h) => h.id === meeting.hostMemberId)?.name ?? "主催者",
+          removedByName: requester?.name ?? "参加者",
+          meetingTitle: meeting.title,
+          removedDateText: dateText,
+          meetingUrl: `${appUrl}/meetings/${id}`,
+        }).catch(console.error)
+      );
+    }
+  }
+
+  const externalInvitees = await db.select().from(schema.meetingExternalInvitees)
+    .where(eq(schema.meetingExternalInvitees.meetingId, id)).all();
+  for (const ext of externalInvitees) {
+    if (!ext.email) continue;
+    mailPromises.push(
+      mailer.send("meeting_candidate_removed_guest", ext.email, {
+        appTitle,
+        guestName: ext.name || "ゲスト",
+        hostName: targetMembers.find((h) => h.id === meeting.hostMemberId)?.name ?? "主催者",
+        removedByName: requester?.name ?? "参加者",
+        meetingTitle: meeting.title,
+        removedDateText: dateText,
+        scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+      }).catch(console.error)
+    );
+  }
+
+  c.executionCtx.waitUntil(Promise.all(mailPromises));
+
+  return c.json({ ok: true });
+});
+
+// ----------------------------------------------------------------
+// POST /api/meetings/:id/decline — このミーティングを辞退する
+// ----------------------------------------------------------------
+meetingRoutes.post("/:id/decline", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId === memberId) {
+    return c.json({ error: { code: "forbidden", message: "主催者はこのミーティングを辞退できません" } }, 403);
+  }
+
+  const existing = await db.select({ id: schema.meetingDeclines.id }).from(schema.meetingDeclines)
+    .where(and(eq(schema.meetingDeclines.meetingId, id), eq(schema.meetingDeclines.memberId, memberId))).get();
+  if (!existing) {
+    await db.insert(schema.meetingDeclines).values({ id: newId(), meetingId: id, memberId, declinedAt: now });
+  }
+  // 既存の回答は辞退により意味を持たなくなるため削除
+  await db.delete(schema.meetingResponses)
+    .where(and(eq(schema.meetingResponses.meetingId, id), eq(schema.meetingResponses.memberId, memberId)));
+
+  const requester = await db.select({ name: schema.members.name }).from(schema.members)
+    .where(eq(schema.members.id, memberId)).get();
+  const host = await db.select({ name: schema.members.name, email: schema.members.email }).from(schema.members)
+    .where(eq(schema.members.id, meeting.hostMemberId)).get();
+  await db.insert(schema.meetingNotifications).values({
+    id: newId(),
+    meetingId: id,
+    memberId: meeting.hostMemberId,
+    type: "declined",
+    message: `${requester?.name ?? "メンバー"}さんが「${meeting.title}」を辞退しました`,
+    readAt: null,
+    createdAt: now,
+  });
+  if (host?.email) {
+    const appTitle = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
+    const appUrl = getFrontendUrl(c.env);
+    c.executionCtx.waitUntil(
+      new MailService(db, c.env).send("meeting_declined_host", host.email, {
+        appTitle,
+        hostName: host.name,
+        declinedByName: requester?.name ?? "メンバー",
+        meetingTitle: meeting.title,
+        meetingUrl: `${appUrl}/meetings/${id}`,
+      }).catch(console.error)
+    );
+  }
+
+  return c.json({ ok: true });
+});
+
+// ----------------------------------------------------------------
+// DELETE /api/meetings/:id/decline — 辞退を取り消す（やっぱり参加する）
+// ----------------------------------------------------------------
+meetingRoutes.delete("/:id/decline", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+
+  const meeting = await db.select({ id: schema.meetings.id }).from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+
+  await db.delete(schema.meetingDeclines)
+    .where(and(eq(schema.meetingDeclines.meetingId, id), eq(schema.meetingDeclines.memberId, memberId)));
+
+  return c.json({ ok: true });
+});
+
+// ----------------------------------------------------------------
+// POST /api/meetings/:id/remind — 未回答者へリマインダーを送る（主催者のみ）
+// ----------------------------------------------------------------
+meetingRoutes.post("/:id/remind", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== memberId) {
+    return c.json({ error: { code: "forbidden", message: "主催者のみリマインダーを送信できます" } }, 403);
+  }
+  if (meeting.status !== "open") {
+    return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
+  }
+  if (meeting.deadline != null && meeting.deadline < now) {
+    return c.json({ error: { code: "deadline_passed", message: "回答受付は終了しています" } }, 400);
+  }
+  if (meeting.lastReminderSentAt != null && now - meeting.lastReminderSentAt < REMINDER_COOLDOWN_SECONDS) {
+    const waitMinutes = Math.ceil((REMINDER_COOLDOWN_SECONDS - (now - meeting.lastReminderSentAt)) / 60);
+    return c.json({
+      error: {
+        code: "reminder_cooldown",
+        message: `リマインダーは前回送信から${Math.ceil(REMINDER_COOLDOWN_SECONDS / 3600)}時間は再送できません（あと約${waitMinutes}分）`,
+      },
+    }, 400);
+  }
+
+  const targetMembers = await getTargetMembers(db, meeting);
+  const responses = await db.select({ memberId: schema.meetingResponses.memberId })
+    .from(schema.meetingResponses)
+    .where(and(eq(schema.meetingResponses.meetingId, id), isNotNull(schema.meetingResponses.memberId)))
+    .all();
+  const respondedIds = new Set(responses.map((r) => r.memberId).filter(Boolean) as string[]);
+  const nonRespondents = targetMembers.filter((m) => m.id !== meeting.hostMemberId && !respondedIds.has(m.id));
+
+  const externalInvitees = await db.select().from(schema.meetingExternalInvitees)
+    .where(eq(schema.meetingExternalInvitees.meetingId, id)).all();
+  const extResponses = await db.select({ externalInviteeId: schema.meetingResponses.externalInviteeId })
+    .from(schema.meetingResponses)
+    .where(and(eq(schema.meetingResponses.meetingId, id), isNotNull(schema.meetingResponses.externalInviteeId)))
+    .all();
+  const respondedExtIds = new Set(extResponses.map((r) => r.externalInviteeId).filter(Boolean) as string[]);
+  const nonRespondentGuests = externalInvitees.filter((ext) => !respondedExtIds.has(ext.id));
+
+  if (nonRespondents.length === 0 && nonRespondentGuests.length === 0) {
+    return c.json({ data: { remindedCount: 0 }, message: "全員回答済みです" });
+  }
+
+  const host = await db.select({ name: schema.members.name }).from(schema.members)
+    .where(eq(schema.members.id, meeting.hostMemberId)).get();
+  const appTitle = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
+  const appUrl = getFrontendUrl(c.env);
+  const mailer = new MailService(db, c.env);
+  const mailPromises: Promise<void>[] = [];
+
+  for (const m of nonRespondents) {
+    await db.insert(schema.meetingNotifications).values({
+      id: newId(),
+      meetingId: id,
+      memberId: m.id,
+      type: "reminder",
+      message: `「${meeting.title}」の日程調整にまだご回答いただいていません。ご都合をお知らせください。`,
+      readAt: null,
+      createdAt: now,
+    });
+    if (m.email) {
+      mailPromises.push(
+        mailer.send("meeting_reminder_member", m.email, {
+          appTitle,
+          memberName: m.name,
+          hostName: host?.name ?? "主催者",
+          meetingTitle: meeting.title,
+          meetingUrl: `${appUrl}/meetings/${id}`,
+        }).catch(console.error)
+      );
+    }
+  }
+
+  for (const ext of nonRespondentGuests) {
+    if (!ext.email) continue;
+    mailPromises.push(
+      mailer.send("meeting_reminder_guest", ext.email, {
+        appTitle,
+        guestName: ext.name || "ゲスト",
+        hostName: host?.name ?? "主催者",
+        meetingTitle: meeting.title,
+        scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+      }).catch(console.error)
+    );
+  }
+
+  await db.update(schema.meetings).set({ lastReminderSentAt: now }).where(eq(schema.meetings.id, id));
+
+  c.executionCtx.waitUntil(Promise.all(mailPromises));
+
+  return c.json({ data: { remindedCount: nonRespondents.length + nonRespondentGuests.length } });
 });
 
 // ----------------------------------------------------------------
@@ -850,28 +1787,45 @@ function formatCandidateDateText(startsAt: number, endsAt: number | null, tz = "
 }
 
 // 共通：ミーティングの対象メンバーをscope別に取得
-async function getTargetMembers(db: ReturnType<typeof import("../db/index.ts").createDb>, meeting: { id: string; scope: string; teamId: string | null; hostMemberId: string }) {
+async function getTargetMembers(db: ReturnType<typeof import("../db/index.ts").createDb>, meeting: { id: string; scope: string; teamId: string | null; collabTeamId?: string | null; hostMemberId: string }) {
+  let result: Array<{ id: string; name: string; email: string | null }> = [];
   if (meeting.scope === "all") {
-    return await db
+    result = await db
       .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
       .from(schema.members).where(eq(schema.members.status, "active")).all();
   } else if (meeting.scope === "team" && meeting.teamId) {
     const tms = await db.select({ memberId: schema.teamMembers.memberId }).from(schema.teamMembers)
       .where(eq(schema.teamMembers.teamId, meeting.teamId)).all();
     const ids = tms.map((r) => r.memberId);
-    if (ids.length === 0) return [];
-    return await db
-      .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
-      .from(schema.members).where(and(inArray(schema.members.id, ids), eq(schema.members.status, "active"))).all();
+    if (ids.length > 0) {
+      result = await db
+        .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
+        .from(schema.members).where(and(inArray(schema.members.id, ids), eq(schema.members.status, "active"))).all();
+    }
+  } else if (meeting.scope === "collab_team" && meeting.collabTeamId) {
+    const tms = await db.select({ memberId: schema.collabTeamMembers.memberId }).from(schema.collabTeamMembers)
+      .where(and(eq(schema.collabTeamMembers.teamId, meeting.collabTeamId), eq(schema.collabTeamMembers.status, "active"))).all();
+    const ids = tms.map((r) => r.memberId);
+    if (ids.length > 0) {
+      result = await db
+        .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
+        .from(schema.members).where(and(inArray(schema.members.id, ids), eq(schema.members.status, "active"))).all();
+    }
   } else if (meeting.scope === "selected") {
     const inv = await db.select({ memberId: schema.meetingInvitees.memberId }).from(schema.meetingInvitees)
       .where(eq(schema.meetingInvitees.meetingId, meeting.id)).all();
     const ids = [...new Set([meeting.hostMemberId, ...inv.map((r) => r.memberId)])];
-    return await db
+    result = await db
       .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
       .from(schema.members).where(inArray(schema.members.id, ids)).all();
   }
-  return [];
+
+  // 辞退済みメンバーは通知・回答対象から除外する（主催者は辞退できないため常に含まれる）
+  const declines = await db.select({ memberId: schema.meetingDeclines.memberId })
+    .from(schema.meetingDeclines).where(eq(schema.meetingDeclines.meetingId, meeting.id)).all();
+  if (declines.length === 0) return result;
+  const declinedIds = new Set(declines.map((d) => d.memberId));
+  return result.filter((m) => !declinedIds.has(m.id));
 }
 
 // ----------------------------------------------------------------
@@ -879,7 +1833,8 @@ async function getTargetMembers(db: ReturnType<typeof import("../db/index.ts").c
 // ----------------------------------------------------------------
 meetingRoutes.patch("/:id/confirm", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -934,16 +1889,18 @@ meetingRoutes.patch("/:id/confirm", async (c) => {
     const hostName = host?.name ?? "主催者";
     const systemTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
     const confirmedDateText = formatCandidateDateText(candidate.startsAt, candidate.endsAt, systemTz);
-    const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+    const appUrl = getFrontendUrl(c.env);
     const appTitleConf = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
     const mailerConf = new MailService(db, c.env);
-    const urlPendingNote = "📹 会議URLは別途お知らせします";
+    // すでに会議URLが設定済み（手動入力・自動発行いずれも）の場合は「別途お知らせします」を出さない
+    const urlPendingNote = meeting.conferenceUrl ? "" : "📹 会議URLは別途お知らせします";
     const notifyMsg = wasAlreadyConfirmed
       ? `「${meeting.title}」に${confirmedDateText}が追加されました`
       : `「${meeting.title}」の日程が${confirmedDateText}に確定しました`;
 
     const targetMembers = await getTargetMembers(db, meeting);
     const notifyMembers = targetMembers.filter((m) => m.id !== meeting.hostMemberId);
+    const confirmMailPromises: Promise<void>[] = [];
 
     for (const m of notifyMembers) {
       await db.insert(schema.meetingNotifications).values({
@@ -956,37 +1913,127 @@ meetingRoutes.patch("/:id/confirm", async (c) => {
         createdAt: now,
       });
       if (m.email) {
-        mailerConf.send("meeting_confirmed_member", m.email, {
-          appTitle: appTitleConf, memberName: m.name, meetingTitle: meeting.title,
-          hostName, confirmedDate: confirmedDateText, urlPendingNote,
-          meetingUrl: `${appUrl}/meetings/${id}`,
-        }).catch(console.error);
+        confirmMailPromises.push(
+          mailerConf.send("meeting_confirmed_member", m.email, {
+            appTitle: appTitleConf, memberName: m.name, meetingTitle: meeting.title,
+            hostName, confirmedDate: confirmedDateText, urlPendingNote,
+            meetingUrl: `${appUrl}/meetings/${id}`,
+          }).catch(console.error)
+        );
       }
     }
 
     // 主催者本人にも確定メールを送信（操作確認のため）
     if (host?.email) {
-      mailerConf.send("meeting_confirmed_member", host.email, {
-        appTitle: appTitleConf, memberName: hostName, meetingTitle: meeting.title,
-        hostName, confirmedDate: confirmedDateText, urlPendingNote,
-        meetingUrl: `${appUrl}/meetings/${id}`,
-      }).catch(console.error);
+      confirmMailPromises.push(
+        mailerConf.send("meeting_confirmed_member", host.email, {
+          appTitle: appTitleConf, memberName: hostName, meetingTitle: meeting.title,
+          hostName, confirmedDate: confirmedDateText, urlPendingNote,
+          meetingUrl: `${appUrl}/meetings/${id}`,
+        }).catch(console.error)
+      );
     }
 
     const extInvitees = await db.select().from(schema.meetingExternalInvitees)
       .where(eq(schema.meetingExternalInvitees.meetingId, id)).all();
     for (const ext of extInvitees) {
       if (ext.email && ext.name) {
-        mailerConf.send("meeting_confirmed_guest", ext.email, {
-          appTitle: appTitleConf, guestName: ext.name, meetingTitle: meeting.title,
-          hostName, confirmedDate: confirmedDateText, urlPendingNote,
-          scheduleUrl: `${appUrl}/schedule/${ext.token}`,
-        }).catch(console.error);
+        confirmMailPromises.push(
+          mailerConf.send("meeting_confirmed_guest", ext.email, {
+            appTitle: appTitleConf, guestName: ext.name, meetingTitle: meeting.title,
+            hostName, confirmedDate: confirmedDateText, urlPendingNote,
+            scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+          }).catch(console.error)
+        );
       }
     }
+    // waitUntil でレスポンス後もメール送信を完走させる
+    c.executionCtx.waitUntil(Promise.all(confirmMailPromises));
   }
 
   return c.json({ ok: true, confirmed: newValue === 1 });
+});
+
+// ----------------------------------------------------------------
+// PATCH /api/meetings/:id/reschedule — 確定済み日時（候補1件のみ）を変更する（主催者のみ）
+// 定例会（meeting_series）から生成された1回だけの日時変更・シリーズ全体には影響しない用途を想定。
+// ----------------------------------------------------------------
+meetingRoutes.patch("/:id/reschedule", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== memberId) {
+    return c.json({ error: { code: "forbidden", message: "主催者のみ日時を変更できます" } }, 403);
+  }
+  if (meeting.status !== "confirmed" || !meeting.confirmedCandidateId) {
+    return c.json({ error: { code: "invalid_status", message: "確定済みのミーティングのみ日時を変更できます" } }, 400);
+  }
+
+  const body = await c.req.json<{ startsAt: number; endsAt?: number }>();
+  if (!body.startsAt || body.startsAt < now) {
+    return c.json({ error: { code: "invalid_input", message: "未来の日時を指定してください" } }, 400);
+  }
+
+  await db.update(schema.meetingDateCandidates)
+    .set({ startsAt: body.startsAt, endsAt: body.endsAt ?? null })
+    .where(eq(schema.meetingDateCandidates.id, meeting.confirmedCandidateId));
+
+  // 会議URLが自動発行済みだった場合、古いURLをキャンセルして新しい日時で発行し直す
+  let regeneratedConferenceUrl: string | null = null;
+  if (meeting.conferenceType === "zoom" || meeting.conferenceType === "google_meet") {
+    await cancelAutoConference(db, c.env, meeting.hostMemberId, meeting.conferenceType, meeting.conferenceMetaJson, meeting.calendarEventId);
+    const conf = await autoCreateConferenceForOccurrence(
+      db, c.env, meeting.hostMemberId, meeting.conferenceType,
+      meeting.title, meeting.description ?? "", body.startsAt, body.endsAt ?? null
+    );
+    await db.update(schema.meetings).set({
+      conferenceType: conf?.conferenceType ?? "manual",
+      conferenceUrl: conf?.conferenceUrl ?? null,
+      conferenceMetaJson: conf?.conferenceMetaJson ?? null,
+      calendarEventId: conf?.calendarEventId ?? null,
+      updatedAt: now,
+    }).where(eq(schema.meetings.id, id));
+    await db.update(schema.meetingDateCandidates)
+      .set({ conferenceUrl: conf?.conferenceUrl ?? null })
+      .where(eq(schema.meetingDateCandidates.id, meeting.confirmedCandidateId));
+    regeneratedConferenceUrl = conf?.conferenceUrl ?? null;
+  } else {
+    await db.update(schema.meetings).set({ updatedAt: now }).where(eq(schema.meetings.id, id));
+  }
+
+  // 日時変更を通知
+  const host = await db.select({ name: schema.members.name }).from(schema.members).where(eq(schema.members.id, meeting.hostMemberId)).get();
+  const systemTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+  const newDateText = formatCandidateDateText(body.startsAt, body.endsAt ?? null, systemTz);
+  const appUrl = getFrontendUrl(c.env);
+  const appTitleResched = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
+  const mailerResched = new MailService(db, c.env);
+  const targetMembers = await getTargetMembers(db, meeting);
+  const notifyMembers = targetMembers.filter((m) => m.id !== meeting.hostMemberId);
+  const notifyMsg = `「${meeting.title}」の日時が${newDateText}に変更されました${regeneratedConferenceUrl ? "（会議URLも新しく発行されました）" : ""}`;
+  const reschedMailPromises: Promise<void>[] = [];
+  for (const m of notifyMembers) {
+    await db.insert(schema.meetingNotifications).values({
+      id: newId(), meetingId: id, memberId: m.id, type: "details_updated", message: notifyMsg, readAt: null, createdAt: now,
+    });
+    if (m.email) {
+      reschedMailPromises.push(
+        mailerResched.send("meeting_confirmed_member", m.email, {
+          appTitle: appTitleResched, memberName: m.name, meetingTitle: meeting.title,
+          hostName: host?.name ?? "主催者", confirmedDate: newDateText, urlPendingNote: "",
+          meetingUrl: `${appUrl}/meetings/${id}`,
+        }).catch(console.error)
+      );
+    }
+  }
+  c.executionCtx.waitUntil(Promise.all(reschedMailPromises));
+
+  return c.json({ ok: true });
 });
 
 // ----------------------------------------------------------------
@@ -994,7 +2041,8 @@ meetingRoutes.patch("/:id/confirm", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.patch("/:id/conference", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -1009,7 +2057,7 @@ meetingRoutes.patch("/:id/conference", async (c) => {
 
   const body = await c.req.json<{ type: "manual" | "google_meet" | "zoom"; url?: string; justConfirmed?: boolean }>();
   const justConfirmed = body.justConfirmed ?? false;
-  const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+  const appUrl = getFrontendUrl(c.env);
   const appTitleConf2 = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
   const mailerConf2 = new MailService(db, c.env);
 
@@ -1042,6 +2090,7 @@ meetingRoutes.patch("/:id/conference", async (c) => {
 
     const targetMembers = await getTargetMembers(db, meeting);
     const targetMemberIdSet = new Set(targetMembers.map((m) => m.id));
+    const conferenceMailPromises: Promise<void>[] = [];
     for (const m of targetMembers) {
       await db.insert(schema.meetingNotifications).values({
         id: newId(),
@@ -1053,36 +2102,44 @@ meetingRoutes.patch("/:id/conference", async (c) => {
         createdAt: now,
       });
       if (m.email) {
-        mailerConf2.send("meeting_conference_member", m.email, {
-          appTitle: appTitleConf2, memberName: m.name, meetingTitle: meeting.title,
-          hostName, confirmedDate: dateText, conferenceUrl, conferenceType: typeLabel,
-          subjectAction, confirmHeading, confirmIntro,
-          meetingUrl: `${appUrl}/meetings/${id}`,
-        }).catch(console.error);
+        conferenceMailPromises.push(
+          mailerConf2.send("meeting_conference_member", m.email, {
+            appTitle: appTitleConf2, memberName: m.name, meetingTitle: meeting.title,
+            hostName, confirmedDate: dateText, conferenceUrl, conferenceType: typeLabel,
+            subjectAction, confirmHeading, confirmIntro,
+            meetingUrl: `${appUrl}/meetings/${id}`,
+          }).catch(console.error)
+        );
       }
     }
     // チームスコープ等でホストがtargetMembersに含まれない場合でも必ずメール送信
     if (!targetMemberIdSet.has(meeting.hostMemberId) && hostMember?.email) {
-      mailerConf2.send("meeting_conference_member", hostMember.email, {
-        appTitle: appTitleConf2, memberName: hostName, meetingTitle: meeting.title,
-        hostName, confirmedDate: dateText, conferenceUrl, conferenceType: typeLabel,
-        subjectAction, confirmHeading, confirmIntro,
-        meetingUrl: `${appUrl}/meetings/${id}`,
-      }).catch(console.error);
+      conferenceMailPromises.push(
+        mailerConf2.send("meeting_conference_member", hostMember.email, {
+          appTitle: appTitleConf2, memberName: hostName, meetingTitle: meeting.title,
+          hostName, confirmedDate: dateText, conferenceUrl, conferenceType: typeLabel,
+          subjectAction, confirmHeading, confirmIntro,
+          meetingUrl: `${appUrl}/meetings/${id}`,
+        }).catch(console.error)
+      );
     }
 
     const extInvitees = await db.select().from(schema.meetingExternalInvitees)
       .where(eq(schema.meetingExternalInvitees.meetingId, id)).all();
     for (const ext of extInvitees) {
       if (ext.email && ext.name) {
-        mailerConf2.send("meeting_conference_guest", ext.email, {
-          appTitle: appTitleConf2, guestName: ext.name, meetingTitle: meeting.title,
-          hostName, confirmedDate: dateText, conferenceUrl, conferenceType: typeLabel,
-          subjectAction, confirmHeading, confirmIntro,
-          scheduleUrl: `${appUrl}/schedule/${ext.token}`,
-        }).catch(console.error);
+        conferenceMailPromises.push(
+          mailerConf2.send("meeting_conference_guest", ext.email, {
+            appTitle: appTitleConf2, guestName: ext.name, meetingTitle: meeting.title,
+            hostName, confirmedDate: dateText, conferenceUrl, conferenceType: typeLabel,
+            subjectAction, confirmHeading, confirmIntro,
+            scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+          }).catch(console.error)
+        );
       }
     }
+    // ここで待つことで、呼び出し側の waitUntil がメール送信の完了を正しく待てるようにする
+    await Promise.all(conferenceMailPromises);
   };
 
   if (body.type === "manual") {
@@ -1096,7 +2153,7 @@ meetingRoutes.patch("/:id/conference", async (c) => {
     await db.update(schema.meetings)
       .set({ conferenceType: "manual", conferenceUrl: url, conferenceMetaJson: null, calendarEventId: null, updatedAt: now })
       .where(eq(schema.meetings.id, id));
-    sendConferenceNotifications(url, "manual").catch(console.error);
+    c.executionCtx.waitUntil(sendConferenceNotifications(url, "manual").catch(console.error));
     return c.json({ data: { conferenceType: "manual", conferenceUrl: url } });
   }
 
@@ -1140,14 +2197,17 @@ meetingRoutes.patch("/:id/conference", async (c) => {
         updatedAt: now,
       })
       .where(eq(schema.meetings.id, id));
-    sendConferenceNotifications(result.joinUrl, "zoom").catch(console.error);
+    c.executionCtx.waitUntil(sendConferenceNotifications(result.joinUrl, "zoom").catch(console.error));
     return c.json({ data: { conferenceType: "zoom", conferenceUrl: result.joinUrl } });
   }
 
   if (body.type === "google_meet") {
     const googleCred = await getValidGoogleAccessToken(db, memberId, c.env.SCHEDULER_TOKEN_KEY, c.env.GOOGLE_OAUTH_CLIENT_ID, c.env.GOOGLE_OAUTH_CLIENT_SECRET);
-    if (!googleCred) {
+    if (googleCred.status === "not_connected") {
       return c.json({ error: { code: "not_connected", message: "Googleカレンダーと連携してください" } }, 400);
+    }
+    if (googleCred.status === "refresh_failed") {
+      return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
     }
     const host = await db.select({ email: schema.members.email }).from(schema.members)
       .where(eq(schema.members.id, memberId)).get();
@@ -1192,7 +2252,7 @@ meetingRoutes.patch("/:id/conference", async (c) => {
         updatedAt: now,
       })
       .where(eq(schema.meetings.id, id));
-    sendConferenceNotifications(firstMeetUrl, "google_meet").catch(console.error);
+    c.executionCtx.waitUntil(sendConferenceNotifications(firstMeetUrl, "google_meet").catch(console.error));
     return c.json({ data: { conferenceType: "google_meet", conferenceUrl: firstMeetUrl } });
   }
 
@@ -1204,7 +2264,8 @@ meetingRoutes.patch("/:id/conference", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.delete("/:id", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -1219,6 +2280,12 @@ meetingRoutes.delete("/:id", async (c) => {
     .set({ status: "cancelled", updatedAt: now })
     .where(eq(schema.meetings.id, id));
 
+  if (meeting.conferenceType === "zoom" || meeting.conferenceType === "google_meet") {
+    c.executionCtx.waitUntil(
+      cancelAutoConference(db, c.env, meeting.hostMemberId, meeting.conferenceType, meeting.conferenceMetaJson, meeting.calendarEventId)
+    );
+  }
+
   return c.json({ ok: true });
 });
 
@@ -1227,7 +2294,8 @@ meetingRoutes.delete("/:id", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.delete("/:id/delete", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
 
   const meeting = await db.select({ hostMemberId: schema.meetings.hostMemberId })
@@ -1281,7 +2349,6 @@ meetingRoutes.post("/:id/invite", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.post("/:id/external", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -1308,7 +2375,8 @@ meetingRoutes.post("/:id/external", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.patch("/:id/description", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -1327,7 +2395,7 @@ meetingRoutes.patch("/:id/description", async (c) => {
   const host = await db.select({ name: schema.members.name }).from(schema.members)
     .where(eq(schema.members.id, meeting.hostMemberId)).get();
   const hostName = host?.name ?? "主催者";
-  const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+  const appUrl = getFrontendUrl(c.env);
   const appTitleDesc = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
   const mailerDesc = new MailService(db, c.env);
 
@@ -1346,6 +2414,8 @@ meetingRoutes.patch("/:id/description", async (c) => {
   // 主催者を除く
   notifyMemberIds = notifyMemberIds.filter((mid) => mid !== meeting.hostMemberId);
 
+  const descMailPromises: Promise<void>[] = [];
+
   if (notifyMemberIds.length > 0) {
     const memberRows = await db.select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
       .from(schema.members)
@@ -1363,11 +2433,13 @@ meetingRoutes.patch("/:id/description", async (c) => {
         createdAt: now,
       });
       if (m.email) {
-        mailerDesc.send("meeting_details_member", m.email, {
-          appTitle: appTitleDesc, memberName: m.name, meetingTitle: meeting.title,
-          hostName, details: description,
-          meetingUrl: `${appUrl}/meetings/${id}`,
-        }).catch(console.error);
+        descMailPromises.push(
+          mailerDesc.send("meeting_details_member", m.email, {
+            appTitle: appTitleDesc, memberName: m.name, meetingTitle: meeting.title,
+            hostName, details: description,
+            meetingUrl: `${appUrl}/meetings/${id}`,
+          }).catch(console.error)
+        );
       }
     }
   }
@@ -1387,13 +2459,17 @@ meetingRoutes.patch("/:id/description", async (c) => {
 
   for (const ext of extRows) {
     if (ext.email && ext.name) {
-      mailerDesc.send("meeting_details_guest", ext.email, {
-        appTitle: appTitleDesc, guestName: ext.name, meetingTitle: meeting.title,
-        hostName, details: description,
-        scheduleUrl: `${appUrl}/schedule/${ext.token}`,
-      }).catch(console.error);
+      descMailPromises.push(
+        mailerDesc.send("meeting_details_guest", ext.email, {
+          appTitle: appTitleDesc, guestName: ext.name, meetingTitle: meeting.title,
+          hostName, details: description,
+          scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+        }).catch(console.error)
+      );
     }
   }
+  // waitUntil でレスポンス後もメール送信を完走させる
+  c.executionCtx.waitUntil(Promise.all(descMailPromises));
 
   return c.json({ ok: true });
 });
@@ -1403,12 +2479,16 @@ meetingRoutes.patch("/:id/description", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.post("/:id/invite-member", async (c) => {
   const db = createDb(c.env.DB);
-  const hostId = c.get("userId");
+  const hostId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!hostId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
   const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
   if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== hostId) {
+    return c.json({ error: { code: "forbidden", message: "主催者のみメンバーを招待できます" } }, 403);
+  }
 
   const { memberId } = await c.req.json<{ memberId: string }>();
 
@@ -1431,7 +2511,7 @@ meetingRoutes.post("/:id/invite-member", async (c) => {
   const host = await db.select({ name: schema.members.name }).from(schema.members)
     .where(eq(schema.members.id, hostId)).get();
   const hostName = host?.name ?? "主催者";
-  const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+  const appUrl = getFrontendUrl(c.env);
 
   if (targetMember.email) {
     const systemTzForSingleInvite = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
@@ -1439,11 +2519,13 @@ meetingRoutes.post("/:id/invite-member", async (c) => {
     const deadlineStrInv = meeting.deadline
       ? `（回答期限: ${new Intl.DateTimeFormat("ja-JP", { timeZone: systemTzForSingleInvite, year: "numeric", month: "numeric", day: "numeric" }).format(new Date(meeting.deadline * 1000))}）`
       : "";
-    new MailService(db, c.env).send("meeting_invitation", targetMember.email, {
-      appTitle: appTitleInv, memberName: targetMember.name, meetingTitle: meeting.title,
-      hostName, meetingDescription: meeting.description ?? "", deadlineStr: deadlineStrInv,
-      meetingUrl: `${appUrl}/meetings/${id}`,
-    }).catch(console.error);
+    c.executionCtx.waitUntil(
+      new MailService(db, c.env).send("meeting_invitation", targetMember.email, {
+        appTitle: appTitleInv, memberName: targetMember.name, meetingTitle: meeting.title,
+        hostName, meetingDescription: meeting.description ?? "", deadlineStr: deadlineStrInv,
+        meetingUrl: `${appUrl}/meetings/${id}`,
+      }).catch(console.error)
+    );
   }
 
   // DB通知
@@ -1462,11 +2544,15 @@ meetingRoutes.post("/:id/invite-member", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.delete("/:id/invitees/:memberId", async (c) => {
   const db = createDb(c.env.DB);
-  const hostId = c.get("userId");
+  const hostId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!hostId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id, memberId } = c.req.param();
 
   const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
   if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== hostId) {
+    return c.json({ error: { code: "forbidden", message: "主催者のみ招待を削除できます" } }, 403);
+  }
 
   // meetingInvitees から削除
   await db.delete(schema.meetingInvitees)
@@ -1484,11 +2570,15 @@ meetingRoutes.delete("/:id/invitees/:memberId", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.delete("/:id/external/:externalId", async (c) => {
   const db = createDb(c.env.DB);
-  const hostId = c.get("userId");
+  const hostId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!hostId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id, externalId } = c.req.param();
 
   const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
   if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== hostId) {
+    return c.json({ error: { code: "forbidden", message: "主催者のみ招待を削除できます" } }, 403);
+  }
 
   // 回答を先に削除
   await db.delete(schema.meetingResponses)
@@ -1506,7 +2596,8 @@ meetingRoutes.delete("/:id/external/:externalId", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.patch("/:id/event", async (c) => {
   const db = createDb(c.env.DB);
-  const hostId = c.get("userId");
+  const hostId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!hostId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -1528,10 +2619,13 @@ meetingRoutes.patch("/:id/event", async (c) => {
 
 // ----------------------------------------------------------------
 // POST /api/meetings/:id/attendance — 出席記録（確定済みミーティングのみ。開催前はRSVP、開催後はポイント付与）
+// 確定日程が複数ある場合は候補日ごとに個別の記録を持てる（両方に参加する、片方だけ参加する、等に対応）。
+// 参加すると回答したら、候補日への回答（yes/no/maybe）が未回答でも自動的に「○」を補完する。
 // ----------------------------------------------------------------
 meetingRoutes.post("/:id/attendance", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
@@ -1543,57 +2637,105 @@ meetingRoutes.post("/:id/attendance", async (c) => {
 
   const { status, candidateId } = await c.req.json<{ status: "attended" | "absent"; candidateId?: string | null }>();
 
-  // 指定された候補日（またはフォールバックとして最初の確定日）の開始時刻を取得
-  const targetCandidateId = candidateId ?? meeting.confirmedCandidateId;
-  const confirmedCandidate = await db.select({ startsAt: schema.meetingDateCandidates.startsAt })
-    .from(schema.meetingDateCandidates)
-    .where(eq(schema.meetingDateCandidates.id, targetCandidateId ?? ""))
-    .get();
+  // 確定済み候補日を取得
+  let confirmedCandidates = await db.select().from(schema.meetingDateCandidates)
+    .where(and(eq(schema.meetingDateCandidates.meetingId, id), eq(schema.meetingDateCandidates.isConfirmed, 1)))
+    .all();
+  if (confirmedCandidates.length === 0 && meeting.confirmedCandidateId) {
+    const legacy = await db.select().from(schema.meetingDateCandidates)
+      .where(eq(schema.meetingDateCandidates.id, meeting.confirmedCandidateId)).get();
+    if (legacy) confirmedCandidates = [legacy];
+  }
 
-  const meetingStarted = !!confirmedCandidate && confirmedCandidate.startsAt < now;
+  // 対象の候補日を決定する。指定がなければ、確定日が1つだけの場合に限りそれを対象にする
+  // （欠席のみ、候補日未指定＝「全日程を欠席する」として全確定日を対象にする）
+  let targetCandidateIds: string[];
+  if (candidateId) {
+    targetCandidateIds = [candidateId];
+  } else if (status === "absent") {
+    targetCandidateIds = confirmedCandidates.map((cnd) => cnd.id);
+  } else if (confirmedCandidates.length === 1) {
+    targetCandidateIds = [confirmedCandidates[0].id];
+  } else {
+    return c.json({ error: { code: "invalid_input", message: "確定日が複数あるため、参加する日程を指定してください" } }, 400);
+  }
+  if (targetCandidateIds.length === 0) {
+    return c.json({ error: { code: "invalid_input", message: "対象の候補日が見つかりません" } }, 400);
+  }
 
-  // 既存の記録を確認
-  const existing = await db.select().from(schema.meetingAttendances)
-    .where(and(eq(schema.meetingAttendances.meetingId, id), eq(schema.meetingAttendances.memberId, memberId)))
-    .get();
+  let totalPointsAwarded = 0;
+  for (const targetCandidateId of targetCandidateIds) {
+    const confirmedCandidate = confirmedCandidates.find((cnd) => cnd.id === targetCandidateId);
+    const meetingStarted = !!confirmedCandidate && confirmedCandidate.startsAt < now;
 
-  // ポイント付与：開催後かつ出席に変更かつまだポイント未付与の場合のみ
-  let pointsToAward = 0;
-  if (meetingStarted && status === "attended" && (!existing || existing.status === "absent") && !existing?.pointsAwarded) {
-    if (meeting.eventTypeDefId) {
-      const typeDef = await db.select({ pointValue: schema.eventTypeDefinitions.pointValue })
-        .from(schema.eventTypeDefinitions)
-        .where(eq(schema.eventTypeDefinitions.id, meeting.eventTypeDefId))
-        .get();
-      if (typeDef?.pointValue) pointsToAward = typeDef.pointValue;
-    } else if (meeting.eventCampaignId) {
-      const ev = await db.select({ multiplier: schema.eventCampaigns.multiplier })
-        .from(schema.eventCampaigns)
-        .where(eq(schema.eventCampaigns.id, meeting.eventCampaignId))
-        .get();
-      if (ev?.multiplier) pointsToAward = ev.multiplier;
+    const existing = await db.select().from(schema.meetingAttendances)
+      .where(and(
+        eq(schema.meetingAttendances.meetingId, id),
+        eq(schema.meetingAttendances.memberId, memberId),
+        eq(schema.meetingAttendances.candidateId, targetCandidateId)
+      ))
+      .get();
+
+    // ポイント付与：開催後かつ出席に変更かつまだポイント未付与の場合のみ
+    let pointsToAward = 0;
+    if (meetingStarted && status === "attended" && (!existing || existing.status === "absent") && !existing?.pointsAwarded) {
+      if (meeting.eventTypeDefId) {
+        const typeDef = await db.select({ pointValue: schema.eventTypeDefinitions.pointValue })
+          .from(schema.eventTypeDefinitions)
+          .where(eq(schema.eventTypeDefinitions.id, meeting.eventTypeDefId))
+          .get();
+        if (typeDef?.pointValue) pointsToAward = typeDef.pointValue;
+      } else if (meeting.eventCampaignId) {
+        const ev = await db.select({ multiplier: schema.eventCampaigns.multiplier })
+          .from(schema.eventCampaigns)
+          .where(eq(schema.eventCampaigns.id, meeting.eventCampaignId))
+          .get();
+        if (ev?.multiplier) pointsToAward = ev.multiplier;
+      }
+    }
+
+    if (existing) {
+      await db.update(schema.meetingAttendances)
+        .set({ status, candidateId: targetCandidateId, recordedAt: now, ...(pointsToAward > 0 && { pointsAwarded: pointsToAward }) })
+        .where(eq(schema.meetingAttendances.id, existing.id));
+    } else {
+      await db.insert(schema.meetingAttendances).values({
+        id: newId(), meetingId: id, memberId, candidateId: targetCandidateId, status, recordedAt: now,
+        pointsAwarded: pointsToAward > 0 ? pointsToAward : null,
+      });
+    }
+
+    if (pointsToAward > 0) {
+      await db.insert(schema.pointTransactions).values({
+        id: newId(), memberId, delta: pointsToAward,
+        reason: "meeting_attendance", relatedId: id, createdAt: now,
+      });
+      totalPointsAwarded += pointsToAward;
+    }
+
+    // 候補日への回答（yes/no/maybe）が未回答、または食い違っている場合に自動で補完する
+    // （「参加予定の確認」で先に回答した場合、候補日の回答状況にも○/×が反映されるようにするため）
+    const desiredAvailability: Availability = status === "attended" ? "yes" : "no";
+    const existingResponse = await db.select().from(schema.meetingResponses)
+      .where(and(
+        eq(schema.meetingResponses.candidateId, targetCandidateId),
+        eq(schema.meetingResponses.memberId, memberId)
+      ))
+      .get();
+    if (!existingResponse || existingResponse.availability !== desiredAvailability) {
+      await db.delete(schema.meetingResponses)
+        .where(and(
+          eq(schema.meetingResponses.candidateId, targetCandidateId),
+          eq(schema.meetingResponses.memberId, memberId)
+        ));
+      await db.insert(schema.meetingResponses).values({
+        id: newId(), meetingId: id, candidateId: targetCandidateId, memberId,
+        externalInviteeId: null, availability: desiredAvailability, comment: null, respondedAt: now,
+      });
     }
   }
 
-  if (existing) {
-    await db.update(schema.meetingAttendances)
-      .set({ status, candidateId: candidateId ?? null, recordedAt: now, ...(pointsToAward > 0 && { pointsAwarded: pointsToAward }) })
-      .where(and(eq(schema.meetingAttendances.meetingId, id), eq(schema.meetingAttendances.memberId, memberId)));
-  } else {
-    await db.insert(schema.meetingAttendances).values({
-      id: newId(), meetingId: id, memberId, candidateId: candidateId ?? null, status, recordedAt: now,
-      pointsAwarded: pointsToAward > 0 ? pointsToAward : null,
-    });
-  }
-
-  if (pointsToAward > 0) {
-    await db.insert(schema.pointTransactions).values({
-      id: newId(), memberId, delta: pointsToAward,
-      reason: "meeting_attendance", relatedId: id, createdAt: now,
-    });
-  }
-
-  return c.json({ ok: true, pointsAwarded: pointsToAward });
+  return c.json({ ok: true, pointsAwarded: totalPointsAwarded });
 });
 
 // ----------------------------------------------------------------
@@ -1601,7 +2743,8 @@ meetingRoutes.post("/:id/attendance", async (c) => {
 // ----------------------------------------------------------------
 meetingRoutes.post("/:id/read-notifications", async (c) => {
   const db = createDb(c.env.DB);
-  const memberId = c.get("userId");
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   const { id } = c.req.param();
   const now = Math.floor(Date.now() / 1000);
 
