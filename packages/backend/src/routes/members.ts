@@ -5,7 +5,7 @@
 // PATCH /api/members/me      → 自分のプロフィール編集
 // =============================================================
 import { Hono } from "hono";
-import { eq, and, or, like, sum, desc } from "drizzle-orm";
+import { eq, and, or, like, sum, desc, ne } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -14,6 +14,7 @@ import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { saveCardImage, saveAvatarImage, getCardImageDataUrl } from "../services/card-image.ts";
 import { checkAndAwardBadges } from "../services/badge.ts";
 import { getActiveSeasonPoints } from "../services/season-points.ts";
+import { VALID_THEMES } from "../services/theme.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -75,6 +76,51 @@ memberRoutes.get("/", async (c) => {
 
   const connectionMap = new Map(myConnections.map((c) => [c.toMemberId, c]));
 
+  // 自分の完了済み1to1（相手ごとの直近実施日・回数）
+  const myCompletedSessions = await db
+    .select({
+      requesterId: schema.oneOnOneSessions.requesterId,
+      responderId: schema.oneOnOneSessions.responderId,
+      completedAt: schema.oneOnOneSessions.completedAt,
+    })
+    .from(schema.oneOnOneSessions)
+    .where(
+      and(
+        eq(schema.oneOnOneSessions.status, "completed"),
+        or(
+          eq(schema.oneOnOneSessions.requesterId, viewerId),
+          eq(schema.oneOnOneSessions.responderId, viewerId)
+        )
+      )
+    )
+    .all();
+
+  const oneOnOneStatsMap = new Map<string, { count: number; lastAt: number | null }>();
+  for (const s of myCompletedSessions) {
+    const partnerId = s.requesterId === viewerId ? s.responderId : s.requesterId;
+    const stat = oneOnOneStatsMap.get(partnerId) ?? { count: 0, lastAt: null };
+    stat.count += 1;
+    if (s.completedAt != null && (stat.lastAt === null || s.completedAt > stat.lastAt)) {
+      stat.lastAt = s.completedAt;
+    }
+    oneOnOneStatsMap.set(partnerId, stat);
+  }
+
+  // 外部人脈の登録件数（非公開を除く）・詳細公開件数
+  const allContactRows = await db
+    .select({ ownerMemberId: schema.externalContacts.ownerMemberId, visibility: schema.externalContacts.visibility })
+    .from(schema.externalContacts)
+    .where(ne(schema.externalContacts.visibility, "private"))
+    .all();
+
+  const contactStatsMap = new Map<string, { total: number; detail: number }>();
+  for (const row of allContactRows) {
+    const stat = contactStatsMap.get(row.ownerMemberId) ?? { total: 0, detail: 0 };
+    stat.total += 1;
+    if (row.visibility === "full") stat.detail += 1;
+    contactStatsMap.set(row.ownerMemberId, stat);
+  }
+
   const result = allMembers.map((member) => {
     const isSelf = member.id === viewerId;
     const conn = connectionMap.get(member.id);
@@ -109,6 +155,10 @@ memberRoutes.get("/", async (c) => {
       instagramUrl: isUnlocked ? member.instagramUrl : null,
       customFields: isUnlocked ? parseJson(member.customFields, {}) : null,
       characterKey: member.characterKey ?? null,
+      oneOnOneCount: oneOnOneStatsMap.get(member.id)?.count ?? 0,
+      lastOneOnOneAt: oneOnOneStatsMap.get(member.id)?.lastAt ?? null,
+      externalContactCount: contactStatsMap.get(member.id)?.total ?? 0,
+      externalContactDetailCount: contactStatsMap.get(member.id)?.detail ?? 0,
     };
   });
 
@@ -154,6 +204,15 @@ memberRoutes.get("/:id", async (c) => {
 
   const isUnlocked = connStatus !== "none";
 
+  // 外部人脈の登録件数（非公開を除く）・詳細公開件数
+  const targetContactRows = await db
+    .select({ visibility: schema.externalContacts.visibility })
+    .from(schema.externalContacts)
+    .where(and(eq(schema.externalContacts.ownerMemberId, targetId), ne(schema.externalContacts.visibility, "private")))
+    .all();
+  const externalContactCount = targetContactRows.length;
+  const externalContactDetailCount = targetContactRows.filter((r) => r.visibility === "full").length;
+
   return c.json({
     data: {
       id: member.id,
@@ -179,6 +238,9 @@ memberRoutes.get("/:id", async (c) => {
       instagramUrl: isUnlocked ? member.instagramUrl : null,
       customFields: isUnlocked ? parseJson(member.customFields, {}) : null,
       characterKey: member.characterKey ?? null,
+      businessCommunityJoinedDate: member.businessCommunityJoinedDate ?? null,
+      externalContactCount,
+      externalContactDetailCount,
     },
   });
 });
@@ -213,7 +275,12 @@ memberRoutes.patch("/me", async (c) => {
     instagramUrl: string;
     customFields: Record<string, string>;
     timezone: string | null;
+    businessCommunityJoinedDate: string | null;
   }>>();
+
+  if (body.businessCommunityJoinedDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(body.businessCommunityJoinedDate)) {
+    return c.json({ error: { code: "invalid_input", message: "入会日の形式が正しくありません" } }, 400);
+  }
 
   const now = Math.floor(Date.now() / 1000);
 
@@ -239,11 +306,36 @@ memberRoutes.patch("/me", async (c) => {
       ...(body.instagramUrl      !== undefined && { instagramUrl: body.instagramUrl }),
       ...(body.customFields      !== undefined && { customFields: JSON.stringify(body.customFields) }),
       ...(body.timezone          !== undefined && { timezone: body.timezone }),
+      ...(body.businessCommunityJoinedDate !== undefined && { businessCommunityJoinedDate: body.businessCommunityJoinedDate }),
       updatedAt: now,
     })
     .where(eq(schema.members.id, userId));
 
   return c.json({ ok: true });
+});
+
+// ---- PATCH /api/members/me/theme ----
+// 自分のアカウント表示にのみ適用される個人用カラーテーマを設定する（null で解除しアプリ全体のテーマに戻す）
+memberRoutes.patch("/me/theme", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = c.get("userId");
+  const userType = c.get("userType");
+
+  if (userType !== "member") {
+    return c.json({ error: { code: "forbidden", message: "メンバーのみ利用可能です" } }, 403);
+  }
+
+  const body = await c.req.json<{ theme?: string | null }>().catch(() => ({ theme: undefined }));
+  if (body.theme !== null && body.theme !== undefined && !VALID_THEMES.includes(body.theme as (typeof VALID_THEMES)[number])) {
+    return c.json({ error: { code: "invalid_theme", message: "不正なテーマが指定されました" } }, 400);
+  }
+
+  await db
+    .update(schema.members)
+    .set({ personalTheme: body.theme ?? null, updatedAt: Math.floor(Date.now() / 1000) })
+    .where(eq(schema.members.id, userId));
+
+  return c.json({ ok: true, data: { personalTheme: body.theme ?? null } });
 });
 
 // ---- POST /api/members/me/card-image ----
@@ -733,6 +825,8 @@ memberRoutes.get("/:id/history", async (c) => {
   const db = createDb(c.env.DB);
   const { sum, desc } = await import("drizzle-orm");
   const targetId = c.req.param("id");
+  // 管理画面の「特定の履歴を削除」UIなど、20件超の全件が必要な場面向けに limit を指定可能にする
+  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 20, 1), 1000);
 
   const [totalRow, txs] = await Promise.all([
     db.select({ total: sum(schema.pointTransactions.delta) })
@@ -749,7 +843,7 @@ memberRoutes.get("/:id/history", async (c) => {
       .from(schema.pointTransactions)
       .where(eq(schema.pointTransactions.memberId, targetId))
       .orderBy(desc(schema.pointTransactions.createdAt))
-      .limit(20)
+      .limit(limit)
       .all(),
   ]);
 
@@ -859,6 +953,8 @@ memberRoutes.get("/:id/history", async (c) => {
           ? eventCampaign.title
           : attendedMeeting
           ? attendedMeeting.title
+          : t.reason === "admin_adjust" && t.relatedId
+          ? t.relatedId // 管理者調整のメモ（自由記述）をそのまま表示する
           : undefined;
         return { id: t.id, delta: t.delta, label, detail, createdAt: t.createdAt };
       }),

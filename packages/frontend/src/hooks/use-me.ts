@@ -15,6 +15,10 @@ type MeResponse = {
     status?: string;
     role?: string;
     avatarImageKey?: string | null;
+    isPilot1?: boolean;
+    isPilot2?: boolean;
+    personalTheme?: string | null;
+    businessCommunityJoinedDate?: string | null;
   };
 };
 
@@ -40,6 +44,10 @@ export function useMe() {
         emoji: u.emoji,
         bgColor: u.bgColor,
         avatarImageKey: u.avatarImageKey ?? null,
+        isPilot1: u.isPilot1 ?? false,
+        isPilot2: u.isPilot2 ?? false,
+        personalTheme: u.personalTheme ?? null,
+        businessCommunityJoinedDate: u.businessCommunityJoinedDate ?? null,
       });
     }
     if (query.error) {

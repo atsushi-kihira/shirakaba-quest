@@ -2,12 +2,13 @@
 // ログイン画面 — パスワードレス OTP
 // =============================================================
 import { useState, useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { Mail, Sparkles, ArrowLeft, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { LogoOrbit } from "@/components/logo-orbit";
+import { AuthFooterLinks } from "@/screens/auth/_auth-footer-links";
 import type { PublicMember } from "@shared/types";
 
 type Step = "email" | "otp";
@@ -36,6 +37,13 @@ export function LoginScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [otpSentAt, setOtpSentAt] = useState<number | null>(null);
 
+  // ブックマーク時のタイトルが常に「BizQuest」になってしまうため、実際のチャプター名に合わせる
+  useEffect(() => {
+    if (!settingsLoading && appTitle) {
+      document.title = `${appTitle} ログイン`;
+    }
+  }, [appTitle, settingsLoading]);
+
   // ---- Step1: メールアドレス送信 ----
   async function handleEmailSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -46,7 +54,7 @@ export function LoginScreen() {
         "/auth/request-otp",
         { email, context: isAdminMode ? "admin" : "member" }
       );
-      // 承認待ち・停止中の場合はメッセージを表示してOTPステップには進まない
+      // 承認待ち・休会中の場合はメッセージを表示してOTPステップには進まない
       if (!res.ok && res.message) {
         setIsPending(res.status === "pending");
         setError(res.message);
@@ -162,6 +170,18 @@ export function LoginScreen() {
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center px-4 py-8" style={{ background: "var(--color-paper-100)" }}>
+      {/* BizQuest 説明ページへ戻るリンク */}
+      <div className="w-full max-w-sm mb-2">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1 text-xs hover:opacity-70 transition"
+          style={{ color: "var(--color-ink-400)" }}
+        >
+          <ArrowLeft size={12} />
+          BizQuestとは？（サービス紹介ページへ）
+        </Link>
+      </div>
+
       {/* キャラクター画像（カスタム設定時のみ表示） */}
       {characterImageUrl && (
         <div className="mb-2 relative">
@@ -240,6 +260,8 @@ export function LoginScreen() {
           </a>
         </div>
       )}
+
+      <AuthFooterLinks />
     </div>
   );
 }

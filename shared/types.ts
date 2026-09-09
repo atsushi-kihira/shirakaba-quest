@@ -42,7 +42,7 @@ export function buildSkillDescription(skill: Skill): string {
 // メンバー
 // -------------------------------------------------------
 
-export type MemberStatus = "pending" | "active" | "suspended" | "deleted";
+export type MemberStatus = "pending" | "active" | "on_leave" | "deleted";
 
 /** DB の生の Member 型（API レスポンスには直接使わない） */
 export type Member = {
@@ -74,6 +74,10 @@ export type Member = {
 
   characterKey?: string | null;  // ゲームカードのキャラクター
 
+  // ビジネスコミュニティ（用語はチャプターごとにカスタマイズ可能。例: 白樺チャプターでは「BNI」）への
+  // 入会日。"YYYY-MM-DD"形式（日にちは正確でなくてもよく、年月さえ合っていればよい）
+  businessCommunityJoinedDate: string | null;
+
   status: MemberStatus;
   approvedAt: number | null; // Unix timestamp
   createdAt: number;
@@ -102,6 +106,10 @@ export type PublicMember = Omit<
   instagramUrl: string | null;
   customFields: Record<string, string> | null;
   characterKey: string | null;
+  oneOnOneCount: number; // 自分との完了済み1to1回数
+  lastOneOnOneAt: number | null; // 自分との直近1to1完了日時（Unix秒）
+  externalContactCount: number; // 登録している外部人脈の件数（非公開を除く）
+  externalContactDetailCount: number; // うち「詳細まで公開」の件数
 };
 
 // -------------------------------------------------------

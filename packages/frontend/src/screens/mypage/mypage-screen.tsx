@@ -11,8 +11,8 @@ import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
+import { usePushNotifications } from "@/hooks/use-push";
 import { fmtDateTime } from "@/lib/date";
-import { queryClient as globalQc } from "@/lib/query-client";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
 import { CARD_CHARACTERS } from "@/screens/card-order/card-order-screen";
@@ -27,6 +27,10 @@ type HistoryResponse = { data: HistoryItem[]; totalPoints: number };
 type AdminMemberResponse = { data: { id: string; name: string; furigana: string; emoji: string; bgColor: string; category: string; businessDescription: string; skills: Skill[]; company?: string; role?: string; status: string } | null };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
+type GoldenEgg  = { id: string; description: string };
+type GoldenGoose = { id: string; description: string };
+type GoldenEggsResponse  = { data: GoldenEgg[] };
+type GoldenGeeseResponse = { data: GoldenGoose[] };
 
 const AVATAR_BG = [
   { cls: "bg-rose-100" }, { cls: "bg-amber-100" }, { cls: "bg-emerald-100" },
@@ -40,6 +44,7 @@ export function MypageScreen() {
   const { user, clearAuth } = useAuthStore();
   const { termUsp } = useSettings();
   const tz = useTimezone();
+  const push = usePushNotifications();
   const [tab, setTab] = useState<"profile" | "history">("profile");
   const [showQr, setShowQr] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -83,6 +88,17 @@ export function MypageScreen() {
     enabled: !isAdmin && !!memberId,
   });
 
+  const { data: goldenEggsData } = useQuery({
+    queryKey: ["enishi", "eggs"],
+    queryFn: () => api.get<GoldenEggsResponse>("/enishi/eggs"),
+    enabled: !isAdmin,
+  });
+  const { data: goldenGeeseData } = useQuery({
+    queryKey: ["enishi", "geese"],
+    queryFn: () => api.get<GoldenGeeseResponse>("/enishi/geese"),
+    enabled: !isAdmin,
+  });
+
   // 管理者の場合はadminMemberData、それ以外はmemberData
   const adminMember = adminMemberData?.data ?? null;
   const hasMemberProfile = isAdmin ? adminMember !== null : !!memberData?.data;
@@ -122,7 +138,6 @@ export function MypageScreen() {
   async function handleLogout() {
     await api.post("/auth/logout").catch(() => {});
     clearAuth();
-    globalQc.clear();
     navigate("/login");
   }
 
@@ -214,11 +229,61 @@ export function MypageScreen() {
               style={{ background: "var(--color-paper-100)" }}>
               <span className="text-lg">🗓️</span>
               <div className="flex-1">
-                <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>スケジュール調整設定</div>
-                <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>スケジュール調整のカレンダー設定を行います</div>
+                <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>日程調整設定</div>
+                <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>日程調整のためのGoogleカレンダーの連携、ミーティングツールのGoogle Meet、Zoomの設定、会議受付時間などの調整を行います</div>
               </div>
               <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
             </Link>
+
+            {/* カラーテーマ設定 */}
+            <Link to="/me/theme"
+              className="mt-2 flex items-center gap-3 px-3 py-2.5 rounded-2xl active:opacity-80 hover:opacity-90 transition"
+              style={{ background: "var(--color-paper-100)" }}>
+              <span className="text-lg">🎨</span>
+              <div className="flex-1">
+                <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>カラーテーマ設定</div>
+                <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>自分のアカウントの表示にだけ適用されるカラーテーマを選べます（他のメンバーの表示には影響しません）</div>
+              </div>
+              <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
+            </Link>
+
+            {/* プッシュ通知設定 */}
+            {!isAdmin && push.support !== "unsupported" && (
+              <div className="mt-2 flex items-center gap-3 px-3 py-2.5 rounded-2xl"
+                style={{ background: "var(--color-paper-100)" }}>
+                <span className="text-lg">🔔</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>プッシュ通知</div>
+                  {push.support === "ios-needs-install" ? (
+                    <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
+                      iPhoneで通知を受け取るには、まずこのアプリをホーム画面に追加してください（共有ボタン → 「ホーム画面に追加」）
+                    </div>
+                  ) : (
+                    <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
+                      {push.subscribed ? "メールと同じ内容をこの端末にも通知しています" : "メールでお届けしている通知を、この端末にも届けます"}
+                    </div>
+                  )}
+                  {push.error && (
+                    <div className="text-xs mt-1" style={{ color: "var(--color-brand)" }}>{push.error}</div>
+                  )}
+                </div>
+                {push.support === "supported" && !push.loading && (
+                  push.subscribed ? (
+                    <button onClick={push.disable} disabled={push.busy}
+                      className="shrink-0 text-xs font-medium px-3 py-1.5 rounded-full active:opacity-70 disabled:opacity-50 transition"
+                      style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                      解除する
+                    </button>
+                  ) : (
+                    <button onClick={push.enable} disabled={push.busy}
+                      className="shrink-0 text-xs font-medium px-3 py-1.5 rounded-full active:opacity-70 disabled:opacity-50 transition"
+                      style={{ background: "var(--color-brand)", color: "white" }}>
+                      {push.busy ? "処理中…" : "有効にする"}
+                    </button>
+                  )
+                )}
+              </div>
+            )}
           </div>
 
           {/* マイカード（撮影画像） */}
@@ -431,6 +496,45 @@ export function MypageScreen() {
               )}
             </div>
           )}
+
+          {/* 金の卵・金のガチョウ */}
+          {!isAdmin && (
+            <div className="card-paper rounded-3xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>🥚 金の卵・🪙 金のガチョウ</h2>
+                {goldenEggsData && goldenGeeseData && (
+                  <span className="text-xs font-bold shrink-0 ml-2" style={{ color: "var(--color-accent)" }}>
+                    卵 {goldenEggsData.data.length}/8 ・ ガチョウ {goldenGeeseData.data.length}/8
+                  </span>
+                )}
+              </div>
+
+              {(goldenEggsData?.data.length ?? 0) === 0 && (goldenGeeseData?.data.length ?? 0) === 0 ? (
+                <p className="text-sm text-center py-4" style={{ color: "var(--color-ink-500)" }}>まだ登録がありません</p>
+              ) : (
+                <div className="space-y-2 mb-3">
+                  {goldenEggsData?.data.map((e) => (
+                    <div key={e.id} className="text-xs px-3 py-2 rounded-xl line-clamp-2 leading-relaxed"
+                      style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
+                      🥚 {e.description}
+                    </div>
+                  ))}
+                  {goldenGeeseData?.data.map((g) => (
+                    <div key={g.id} className="text-xs px-3 py-2 rounded-xl line-clamp-2 leading-relaxed"
+                      style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
+                      🪙 {g.description}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <Link to="/enishi/register"
+                className="text-sm font-medium py-2 rounded-2xl inline-flex items-center justify-center gap-1 w-full hover:opacity-80 transition"
+                style={{ background: "var(--color-brand)", color: "white" }}>
+                ✎ 登録・編集する
+              </Link>
+            </div>
+          )}
         </div>
 
       </div>
@@ -449,6 +553,9 @@ export function MypageScreen() {
           onSaved={() => {
             setShowEdit(false);
             qc.invalidateQueries({ queryKey: ["member", memberId] });
+            // ビジネスコミュニティ入会日等、認証ストア(useMe)側にも持つプロフィール項目があるため、
+            // 保存直後にホーム画面の入力促しバナーがすぐ消えるよう合わせて無効化する
+            qc.invalidateQueries({ queryKey: ["me"] });
           }}
         />
       )}
@@ -525,6 +632,7 @@ type EditForm = {
   phone: string; address: string; characterKey: string;
   skills: Skill[];
   timezone: string;
+  businessCommunityJoinedDate: string;
 };
 
 function EditModal({ member, onClose, onSaved }: {
@@ -532,6 +640,7 @@ function EditModal({ member, onClose, onSaved }: {
 }) {
   const qcEdit = useQueryClient();
   const { user: authUser } = useAuthStore();
+  const { termBusinessCommunity } = useSettings();
   const [form, setForm] = useState<EditForm>({
     name: member.name ?? "",
     furigana: member.furigana ?? "",
@@ -547,6 +656,7 @@ function EditModal({ member, onClose, onSaved }: {
     characterKey: member.characterKey ?? "",
     skills: (member.skills as Skill[]) ?? [],
     timezone: authUser?.timezone ?? "Asia/Tokyo",
+    businessCommunityJoinedDate: member.businessCommunityJoinedDate ?? "",
   });
   const [error, setError] = useState("");
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
@@ -593,6 +703,7 @@ function EditModal({ member, onClose, onSaved }: {
       characterKey: form.characterKey || null,
       skills: form.skills,
       timezone: form.timezone,
+      businessCommunityJoinedDate: form.businessCommunityJoinedDate || null,
     }),
     onSuccess: onSaved,
     onError: (e: Error) => setError(e.message),
@@ -755,6 +866,23 @@ function EditModal({ member, onClose, onSaved }: {
               className="w-full rounded-2xl border px-3"
               style={{ fontSize: "16px", padding: "10px 12px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
             />
+          </div>
+
+          {/* ビジネスコミュニティ入会日 */}
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+              📅 {termBusinessCommunity}入会日
+            </label>
+            <input
+              value={form.businessCommunityJoinedDate}
+              onChange={(e) => setForm((f) => ({ ...f, businessCommunityJoinedDate: e.target.value }))}
+              type="date"
+              className="w-full rounded-2xl border px-3"
+              style={{ fontSize: "16px", padding: "10px 12px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
+            />
+            <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+              日にちは正確でなくても大丈夫です。覚えている範囲で構いません（年月だけは正しく入力してください）
+            </p>
           </div>
 
           {/* キャラクター */}

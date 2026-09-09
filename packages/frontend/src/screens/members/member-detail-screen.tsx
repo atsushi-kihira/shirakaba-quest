@@ -6,6 +6,12 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, Camera } from "lucide-react";
 import { ImportCardModal } from "@/screens/oneonone/import-card-modal";
+import { PrearrangedRequestModal } from "./_prearranged-request-modal";
+import { NormalRequestModal } from "./_normal-request-modal";
+import { MemberContactsPanel } from "./_member-contacts-panel";
+import { ActivityPostPrompt } from "@/components/activity-post-prompt";
+import { GoogleNotConnectedWarning } from "@/components/google-not-connected-warning";
+import { AutoSchedulerShareLinkPanel, useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { api, ApiError } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
@@ -17,13 +23,24 @@ import type { PublicMember, Skill, MemberBadge } from "@shared/types";
 
 type MemberResponse  = { data: PublicMember };
 type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
-type OnoSession = { id: string; status: "pending" | "accepted" | "completed" | "rejected" | "cancelled"; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null; requesterSchedulerUrl?: string | null };
+type OnoSession = { id: string; status: "pending" | "accepted" | "completed" | "rejected" | "cancelled"; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null; requesterSchedulerUrl?: string | null; scheduledFor?: number | null; autoTransitionReason?: "pending_timeout" | "date_passed" | null };
 type OnoListResponse = { data: OnoSession[] };
-type MySchedulerSettings = { data: { slug: string; isPublic: number } | null };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
 type HistoryItem = { id: string; delta: number; label: string; detail?: string; createdAt: number };
 type MemberHistoryResponse = { data: { totalPoints: number; history: HistoryItem[] } };
+
+// ---- 協働情報（パイロット限定） ----
+type CollabGraphNode = { id: string; name: string; emoji: string; bgColor: string };
+type CollabGraphEdge = { memberAId: string; memberBId: string; stage: "one" | "seed" | "loose" };
+type CollabGraphTeamMember = { id: string; status: "active" | "pending" | "declined" };
+type CollabGraphTeam = { id: string; name: string; type: "loose" | "power"; members: CollabGraphTeamMember[] };
+type CollabGraphResponse = { data: { nodes: CollabGraphNode[]; edges: CollabGraphEdge[]; teams: CollabGraphTeam[] } };
+
+// ---- 金の卵・金のガチョウ ----
+type GoldenEgg = { id: string; description: string; issue: string | null };
+type GoldenGoose = { id: string; description: string; contactHypothesis: string | null };
+type EnishiMemberResponse = { data: { eggs: GoldenEgg[]; geese: GoldenGoose[] } };
 
 const STATUS_LABEL: Record<string, { label: string; emoji: string; className: string }> = {
   none:    { label: "未交流",   emoji: "🤝", className: "bg-stone-200 text-stone-600 ring-stone-300" },
@@ -60,7 +77,32 @@ export function MemberDetailScreen() {
     enabled: !isSelf,
   });
 
+  // 協働情報（所属チーム・協働の芽の相手）
+  const { data: collabGraphData } = useQuery({
+    queryKey: ["collab", "graph"],
+    queryFn: () => api.get<CollabGraphResponse>("/collab/graph"),
+    enabled: !!id,
+  });
+  const collabGraph = collabGraphData?.data;
+  const memberTeams = (collabGraph?.teams ?? []).filter(
+    (t) => t.members.some((m) => m.id === id && m.status === "active")
+  );
+  const collabNodeById = new Map((collabGraph?.nodes ?? []).map((n) => [n.id, n]));
+  const seedPartners = (collabGraph?.edges ?? [])
+    .filter((e) => e.stage === "seed" && (e.memberAId === id || e.memberBId === id))
+    .map((e) => collabNodeById.get(e.memberAId === id ? e.memberBId : e.memberAId))
+    .filter((n): n is CollabGraphNode => !!n);
+
   const isUnlockedForCard = !!member && member.connectionStatus !== "none";
+
+  // 金の卵・金のガチョウ概要（本人が登録している場合のみ表示）
+  const { data: enishiMemberData } = useQuery({
+    queryKey: ["enishi", "member", id],
+    queryFn: () => api.get<EnishiMemberResponse>(`/enishi/member/${id}`),
+    enabled: !!id && !isSelf,
+  });
+  const goldenEggs = enishiMemberData?.data.eggs ?? [];
+  const goldenGeese = enishiMemberData?.data.geese ?? [];
 
   const { data: cardImageData } = useQuery({
     queryKey: ["card-image", id],
@@ -90,23 +132,15 @@ export function MemberDetailScreen() {
       (s.status === "pending" || s.status === "accepted")
   );
 
-  // 申込
-  const [notifyByEmail, setNotifyByEmail] = useState(true);
-  const requestMutation = useMutation({
-    mutationFn: () => api.post<OnoResponse>("/oneonone", { responderId: id, notifyByEmail }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["oneonone"] }),
-  });
+  // 自分の公開スケジュールURL（期限付き。申込ボタン押下後に画面表示するため）
+  const { data: shareLinkData } = useAutoSchedulerShareLink();
+  const mySchedulerUrl = shareLinkData?.publicUrl ?? null;
 
-  // 自分の公開スケジュールURL（申込ボタン押下後に画面表示するため）
-  const { data: mySchedulerData } = useQuery({
-    queryKey: ["scheduler", "my-settings"],
-    queryFn: () => api.get<MySchedulerSettings>("/scheduler/me/settings"),
+  const { data: googleStatusData } = useQuery({
+    queryKey: ["scheduler", "google-status"],
+    queryFn: () => api.get<{ data: { connected: boolean } }>("/scheduler/oauth/google/status"),
+    enabled: !!mySchedulerUrl,
   });
-  const mySchedulerSettings = mySchedulerData?.data;
-  const mySchedulerUrl = mySchedulerSettings?.isPublic && mySchedulerSettings.slug
-    ? `${window.location.origin}/book/${mySchedulerSettings.slug}`
-    : null;
-  const [copiedSchedulerUrl, setCopiedSchedulerUrl] = useState(false);
 
   // 完了押下
   const completeMutation = useMutation({
@@ -152,15 +186,9 @@ export function MemberDetailScreen() {
 
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [showImportCard, setShowImportCard] = useState(false);
-
-  async function handleRequest() {
-    try {
-      await requestMutation.mutateAsync();
-      showToast("1to1を申し込みました！🎉", true);
-    } catch (e) {
-      showToast(e instanceof ApiError ? e.message : "エラーが発生しました", false);
-    }
-  }
+  const [showPrearranged, setShowPrearranged] = useState(false);
+  const [showNormalRequest, setShowNormalRequest] = useState(false);
+  const [showPostPrompt, setShowPostPrompt] = useState(false);
 
   async function handleComplete(sessionId: string) {
     try {
@@ -170,6 +198,7 @@ export function MemberDetailScreen() {
       } else {
         showToast("✅ あなたの完了を記録しました。相手の確認を待っています", true);
       }
+      setShowPostPrompt(true);
     } catch (e) {
       showToast(e instanceof ApiError ? e.message : "エラーが発生しました", false);
     }
@@ -273,6 +302,42 @@ export function MemberDetailScreen() {
         )}
       </div>
 
+      {/* 協働情報 */}
+      {(memberTeams.length > 0 || seedPartners.length > 0) && (
+        <div className="card-paper rounded-3xl p-5 mb-4">
+          <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🤝 協働の状況</h2>
+          {memberTeams.length > 0 && (
+            <div className="mb-3">
+              <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-500)" }}>所属している協働チーム</p>
+              <div className="flex flex-wrap gap-1.5">
+                {memberTeams.map((t) => (
+                  <span key={t.id} className="text-xs px-2.5 py-1 rounded-full font-medium"
+                    style={{
+                      background: t.type === "power" ? "rgba(212,160,59,0.15)" : "rgba(90,140,92,0.12)",
+                      color: t.type === "power" ? "var(--color-accent)" : "var(--color-success)",
+                    }}>
+                    {t.type === "power" ? "⚡" : "🌿"} {t.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {seedPartners.length > 0 && (
+            <div>
+              <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-500)" }}>🌱 協働の芽がある相手</p>
+              <div className="flex flex-wrap gap-1.5">
+                {seedPartners.map((n) => (
+                  <span key={n.id} className="text-xs px-2.5 py-1 rounded-full"
+                    style={{ background: "rgba(212,160,59,0.1)", color: "var(--color-ink-700)" }}>
+                    {n.emoji} {n.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* リアルカード（撮影画像） */}
       {!isSelf && (
         <div className="card-paper rounded-3xl p-5 mb-4">
@@ -308,6 +373,29 @@ export function MemberDetailScreen() {
           ))}
         </div>
       </div>
+
+      {/* 金の卵・金のガチョウ概要（本人が登録している場合のみ） */}
+      {(goldenEggs.length > 0 || goldenGeese.length > 0) && (
+        <div className="card-paper rounded-3xl p-5 mb-4">
+          <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🥚 金の卵・🪙 金のガチョウ</h2>
+          <div className="space-y-2">
+            {goldenEggs.map((e) => (
+              <div key={e.id} className="text-xs px-3 py-2 rounded-xl leading-relaxed"
+                style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
+                <p className="line-clamp-2">🥚 {e.description}</p>
+                {e.issue && <p className="mt-1" style={{ color: "var(--color-ink-500)" }}>課題: {e.issue}</p>}
+              </div>
+            ))}
+            {goldenGeese.map((g) => (
+              <div key={g.id} className="text-xs px-3 py-2 rounded-xl leading-relaxed"
+                style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
+                <p className="line-clamp-2">🪙 {g.description}</p>
+                {g.contactHypothesis && <p className="mt-1" style={{ color: "var(--color-ink-500)" }}>接点仮説: {g.contactHypothesis}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* バッジ */}
       {badgesData && badgesData.data.length > 0 && (
@@ -351,36 +439,35 @@ export function MemberDetailScreen() {
             </div>
           )}
 
-          {/* アクティブセッションがない → 申込ボタン */}
-          {!activeSession && (
-            <>
-              {pastSessions.length > 0 && (
-                <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
-                  過去に {pastSessions.length} 回の1to1を実施済みです。何度でも申し込めます。
-                </p>
-              )}
-              <label className="flex items-center gap-2 mb-3 text-sm cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
-                <input
-                  type="checkbox"
-                  checked={notifyByEmail}
-                  onChange={(e) => setNotifyByEmail(e.target.checked)}
-                  className="w-4 h-4 rounded"
-                />
-                📧 {member.name}さんにメールで通知する
-              </label>
-              <button
-                onClick={handleRequest}
-                disabled={requestMutation.isPending}
-                className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition disabled:opacity-50"
-                style={{ background: "var(--color-brand)", color: "white" }}
-              >
-                {requestMutation.isPending
-                  ? <><Loader2 size={16} className="animate-spin" /> 申込中...</>
-                  : <><Handshake size={16} /> 1to1を申し込む</>
-                }
-              </button>
-            </>
-          )}
+          {/* 申込ボタン（進行中の1to1があっても、別日時でさらに申し込める） */}
+          <div className={activeSession ? "mt-4 pt-4" : undefined} style={activeSession ? { borderTop: "1px solid var(--color-paper-300)" } : undefined}>
+            {activeSession ? (
+              <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
+                別の日時でもう一度、{member.name}さんに1to1を申し込むこともできます。
+              </p>
+            ) : pastSessions.length > 0 ? (
+              <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
+                過去に {pastSessions.length} 回の1to1を実施済みです。何度でも申し込めます。
+              </p>
+            ) : null}
+            <button
+              onClick={() => setShowNormalRequest(true)}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl py-3 font-medium text-sm transition"
+              style={{ background: "var(--color-brand)", color: "white" }}
+            >
+              <Handshake size={16} /> 1to1を申し込む
+            </button>
+            <button
+              onClick={() => setShowPrearranged(true)}
+              className="w-full mt-2 flex items-center justify-center gap-1.5 rounded-2xl py-2.5 text-xs font-medium transition"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+            >
+              📅 すでに日程調整済み？日時を指定して申し込む
+            </button>
+            <p className="text-xs mt-1.5 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-600)" }}>
+              💡 相手の回答を待たずに、あなたが日時とZoom等の会議URLをその場で発行して申し込みたい場合は、こちらをご利用ください。
+            </p>
+          </div>
 
           {/* 申込中（相手待ち） */}
           {activeSession?.status === "pending" && myRole === "requester" && (
@@ -390,36 +477,19 @@ export function MemberDetailScreen() {
                 <Clock size={16} /> 相手の承諾を待っています...
               </div>
 
-              {/* 自分の公開スケジュールURL（メールが届きにくい場合の代替共有用） */}
-              {mySchedulerUrl ? (
+              {/* 自分の公開スケジュールURL（期限付き・メールが届きにくい場合の代替共有用。日程指定済みの申込では不要なので出さない） */}
+              {!activeSession.scheduledFor && mySchedulerUrl && googleStatusData && !googleStatusData.data.connected && (
+                <GoogleNotConnectedWarning />
+              )}
+              {!activeSession.scheduledFor && (
                 <div className="rounded-xl p-3" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
                   <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-success)" }}>
                     📅 あなたの予約URL（{member.name}さんに直接共有できます）
                   </p>
-                  <div className="flex items-center gap-2">
-                    <code className="text-xs flex-1 truncate px-2 py-1.5 rounded-lg"
-                      style={{ background: "white", color: "var(--color-ink-700)" }}>
-                      {mySchedulerUrl}
-                    </code>
-                    <button
-                      onClick={async () => {
-                        await navigator.clipboard.writeText(mySchedulerUrl);
-                        setCopiedSchedulerUrl(true);
-                        setTimeout(() => setCopiedSchedulerUrl(false), 2000);
-                      }}
-                      className="text-xs px-2.5 py-1.5 rounded-lg font-medium flex-shrink-0"
-                      style={{ background: "var(--color-success)", color: "white" }}
-                    >
-                      {copiedSchedulerUrl ? "コピー済み" : "コピー"}
-                    </button>
-                  </div>
+                  <AutoSchedulerShareLinkPanel />
                   <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
                     メールが届きにくい場合は、このURLをLINEなどで直接送ってください
                   </p>
-                </div>
-              ) : (
-                <div className="rounded-xl p-3 text-xs" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-500)" }}>
-                  💡 スケジュール調整設定を公開すると、ここに予約URLが表示され{member.name}さんに直接共有できます（マイページ → スケジュール調整設定）
                 </div>
               )}
 
@@ -489,10 +559,16 @@ export function MemberDetailScreen() {
               <div className="space-y-1.5">
                 {pastSessions.map((s) => (
                   <div key={s.id} className="flex items-center justify-between text-xs px-1 gap-2">
-                    {s.status === "completed" ? (
+                    {s.status === "completed" && s.autoTransitionReason === "date_passed" ? (
+                      <span style={{ color: "var(--color-success)" }}>
+                        <CheckCircle2 size={12} className="inline mr-1" />自動完了（実施日から1週間経過）
+                      </span>
+                    ) : s.status === "completed" ? (
                       <span style={{ color: "var(--color-success)" }}>
                         <CheckCircle2 size={12} className="inline mr-1" />完了
                       </span>
+                    ) : s.status === "cancelled" && s.autoTransitionReason === "pending_timeout" ? (
+                      <span style={{ color: "var(--color-ink-400)" }}>自動キャンセル（1週間未回答）</span>
                     ) : s.status === "cancelled" ? (
                       <span style={{ color: "var(--color-ink-400)" }}>キャンセル</span>
                     ) : (
@@ -568,6 +644,9 @@ export function MemberDetailScreen() {
         </div>
       )}
 
+      {/* この人が登録した外部人脈の検索（登録がある場合のみ表示） */}
+      {member && <MemberContactsPanel memberId={member.id} />}
+
       {/* トースト通知 */}
       {toast && (
         <div
@@ -601,6 +680,44 @@ export function MemberDetailScreen() {
               ? (connStatus as "none" | "digital" | "real")
               : "none",
           }}
+        />
+      )}
+
+      {/* 1to1を申し込むモーダル（通常：相手が予約ページで日時を選ぶ方式） */}
+      {showNormalRequest && member && (
+        <NormalRequestModal
+          responderId={member.id}
+          responderName={member.name}
+          onClose={() => setShowNormalRequest(false)}
+          onSuccess={() => {
+            setShowNormalRequest(false);
+            showToast("1to1を申し込みました！🎉", true);
+          }}
+        />
+      )}
+
+      {/* 日程を指定して申し込むモーダル */}
+      {showPrearranged && member && (
+        <PrearrangedRequestModal
+          responderId={member.id}
+          responderName={member.name}
+          onClose={() => setShowPrearranged(false)}
+          onSuccess={() => {
+            setShowPrearranged(false);
+            showToast("1to1を申し込みました！🎉", true);
+          }}
+        />
+      )}
+
+      {/* 1to1完了時：活動タイムラインへの投稿を促すプロンプト（パイロット限定） */}
+      {showPostPrompt && member && (
+        <ActivityPostPrompt
+          title={`🎉 ${member.name}さんとの1to1、お疲れさまでした！`}
+          description="協働マップの活動タイムラインに、今日の1to1について残しませんか？"
+          contextType="link"
+          partnerId={member.id}
+          suggestedBody={`${member.name}さんと1to1をしました！`}
+          onClose={() => setShowPostPrompt(false)}
         />
       )}
     </div>

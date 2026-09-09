@@ -2,14 +2,18 @@
 // なかま一覧画面（チーム統合タブ付き）
 // タブ: 全員 / 1to1済み / 1to1未 / チームメンバー
 // =============================================================
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useMemo } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Loader2, Star, ChevronRight } from "lucide-react";
+import { Search, Loader2, Star, ChevronRight, Handshake, X, Globe } from "lucide-react";
 import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
+import { useTimezone } from "@/hooks/use-timezone";
+import { useIntroRequestCount } from "@/hooks/use-collab-alerts";
+import { fmtDateShort } from "@/lib/date";
+import { ExternalContactsTab } from "./_external-contacts-tab";
 import type { PublicMember } from "@shared/types";
 
 // ---- 型定義 ----
@@ -22,14 +26,40 @@ type Team = { id: string; name: string; emblemEmoji: string; isMine: boolean; me
 type MembersResponse = { data: PublicMember[] };
 type TeamsResponse = { data: Team[] };
 
+// ---- 協働チーム（パイロット限定・所属バッジ表示用） ----
+type CollabTeamMember = { id: string; status: "active" | "pending" | "declined" };
+type CollabTeam = { id: string; name: string; type: "loose" | "power"; members: CollabTeamMember[] };
+type CollabGraphResponse = { data: { teams: CollabTeam[] } };
+
+function useCollabTeamsByMember(enabled: boolean) {
+  const { data } = useQuery({
+    queryKey: ["collab", "graph"],
+    queryFn: () => api.get<CollabGraphResponse>("/collab/graph"),
+    enabled,
+  });
+  return useMemo(() => {
+    const map = new Map<string, { name: string; type: "loose" | "power" }[]>();
+    for (const team of data?.data.teams ?? []) {
+      for (const m of team.members) {
+        if (m.status !== "active") continue;
+        const list = map.get(m.id) ?? [];
+        list.push({ name: team.name, type: team.type });
+        map.set(m.id, list);
+      }
+    }
+    return map;
+  }, [data]);
+}
+
 // ---- タブ定義 ----
-type Tab = "all" | "done" | "undone" | "team";
-const TABS: { key: Tab; label: string }[] = [
+type Tab = "all" | "done" | "undone" | "team" | "contacts";
+const BASE_TABS: { key: Tab; label: string }[] = [
   { key: "all",   label: "全員" },
   { key: "done",  label: "1to1済み" },
   { key: "undone", label: "1to1未" },
-  { key: "team",  label: "チーム" },
+  { key: "team",  label: "ギルド" },
 ];
+const CONTACTS_TAB: { key: Tab; label: string } = { key: "contacts", label: "外部人脈" };
 
 // ---- カード: 一般メンバー ----
 const STATUS_LABEL: Record<string, { label: string; className: string }> = {
@@ -39,9 +69,10 @@ const STATUS_LABEL: Record<string, { label: string; className: string }> = {
   self:    { label: "自分",     className: "bg-violet-100 text-violet-700 ring-violet-300" },
 };
 
-function MemberCard({ member }: { member: PublicMember }) {
+function MemberCard({ member, collabTeams }: { member: PublicMember; collabTeams?: { name: string; type: "loose" | "power" }[] }) {
   const connStatus = member.connectionStatus;
   const badge = STATUS_LABEL[connStatus] ?? STATUS_LABEL.none;
+  const tz = useTimezone();
 
   return (
     <Link
@@ -62,6 +93,36 @@ function MemberCard({ member }: { member: PublicMember }) {
         <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
           {member.category}{member.company && ` · ${member.company}`}
         </p>
+        {member.oneOnOneCount > 0 && member.lastOneOnOneAt && (
+          <p className="text-xs mt-1 flex items-center gap-1" style={{ color: "var(--color-success)" }}>
+            <Handshake size={11} />
+            直近 {fmtDateShort(member.lastOneOnOneAt, tz)}
+            {member.oneOnOneCount > 1 && <span> ・ {member.oneOnOneCount}回</span>}
+          </p>
+        )}
+        {member.externalContactCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 text-xs font-semibold mt-1 px-2 py-0.5 rounded-full"
+            style={{ background: "rgba(59,130,246,0.15)", color: "#1d4ed8" }}
+          >
+            <Globe size={11} />
+            外部人脈 {member.externalContactCount}件
+            {member.externalContactDetailCount > 0 && <span className="font-normal">（詳細公開 {member.externalContactDetailCount}件）</span>}
+          </span>
+        )}
+        {collabTeams && collabTeams.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {collabTeams.map((t) => (
+              <span key={t.name} className="text-xs px-2 py-0.5 rounded-full font-medium"
+                style={{
+                  background: t.type === "power" ? "rgba(212,160,59,0.15)" : "rgba(90,140,92,0.12)",
+                  color: t.type === "power" ? "var(--color-accent)" : "var(--color-success)",
+                }}>
+                {t.type === "power" ? "⚡" : "🌿"} {t.name}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex flex-wrap gap-1 mt-2">
           {member.skills.map((skill) => (
             <span key={skill.name} className={`text-xs px-2 py-0.5 rounded-full ring-1 ${skill.color}`}>
@@ -128,7 +189,9 @@ function TeamMemberCard({ tm, isMe }: { tm: TeamMemberEntry; isMe: boolean }) {
 export function MembersScreen() {
   const me = useAuthStore((s) => s.user);
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<Tab>("all");
+  const [searchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<Tab>(searchParams.get("tab") === "contacts" ? "contacts" : "all");
+  const introRequestCount = useIntroRequestCount();
 
   const { data: membersData, isLoading: membersLoading, error } = useQuery({
     queryKey: ["members"],
@@ -141,10 +204,14 @@ export function MembersScreen() {
     enabled: activeTab === "team",
   });
 
+  const collabTeamsByMember = useCollabTeamsByMember(true);
+
   const members = membersData?.data ?? [];
   const teams = teamsData?.data ?? [];
   const myTeam = teams.find((t) => t.isMine);
   const { termUsp } = useSettings();
+
+  const TABS = [...BASE_TABS, CONTACTS_TAB];
 
   // タブごとのフィルタ
   const filteredMembers = members.filter((m) => {
@@ -156,7 +223,7 @@ export function MembersScreen() {
     return false;
   });
 
-  const isLoading = membersLoading || (activeTab === "team" && teamsLoading);
+  const isLoading = activeTab !== "contacts" && (membersLoading || (activeTab === "team" && teamsLoading));
 
   return (
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto lg:max-w-none">
@@ -170,33 +237,52 @@ export function MembersScreen() {
         </p>
       </div>
 
-      {/* タブバー */}
-      <div className="flex gap-1.5 mb-4 overflow-x-auto pb-1">
+      {/* タブバー（overflow-x-auto指定時、overflow-yも実質clip/autoになるため、負のtop位置を使うバッジが隠れないようpt-2で余白を確保する） */}
+      <div className="flex gap-1.5 mb-4 overflow-x-auto pt-2 pb-1">
         {TABS.map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setActiveTab(key)}
-            className="px-3 py-1.5 rounded-2xl text-sm font-medium whitespace-nowrap transition"
+            className="relative px-3 py-1.5 rounded-2xl text-sm font-medium whitespace-nowrap transition"
             style={{
               background: activeTab === key ? "var(--color-brand)" : "var(--color-paper-200)",
               color: activeTab === key ? "white" : "var(--color-ink-600)",
             }}
           >
             {label}
+            {key === "contacts" && introRequestCount > 0 ? (
+              <span className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] rounded-full text-white flex items-center justify-center px-0.5 font-bold"
+                style={{ background: "var(--color-brand)", fontSize: "9px" }}>
+                {introRequestCount > 9 ? "9+" : introRequestCount}
+              </span>
+            ) : key === "contacts" ? (
+              <span className="absolute -top-1.5 -right-2 h-[13px] rounded-full text-white flex items-center justify-center px-1.5 font-bold whitespace-nowrap"
+                style={{ background: "var(--color-accent)", fontSize: "8px" }}>
+                New!
+              </span>
+            ) : null}
           </button>
         ))}
       </div>
 
-      {/* 検索（チームタブ以外） */}
-      {activeTab !== "team" && (
+      {/* 検索（チームタブ・外部人脈タブ以外） */}
+      {activeTab !== "team" && activeTab !== "contacts" && (
         <div className="relative mb-4">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--color-ink-400)" }} />
           <input
             type="text" placeholder="名前・職種で検索..."
             value={search} onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-2xl pl-9 pr-4 py-2.5 text-sm outline-none"
+            className="w-full rounded-2xl pl-9 pr-9 py-2.5 text-sm outline-none"
             style={{ background: "var(--color-paper-50)", border: "1.5px solid var(--color-paper-300)", color: "var(--color-ink-800)" }}
           />
+          {search && (
+            <button type="button" onClick={() => setSearch("")}
+              aria-label="検索条件をクリア"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full"
+              style={{ color: "var(--color-ink-400)" }}>
+              <X size={14} />
+            </button>
+          )}
         </div>
       )}
 
@@ -220,8 +306,8 @@ export function MembersScreen() {
           {(myTeam ? [myTeam] : teams).length === 0 ? (
             <div className="text-center py-12">
               <p className="text-4xl mb-3">🦊</p>
-              <p style={{ color: "var(--color-ink-400)" }}>チームがまだ作成されていません</p>
-              <p className="text-sm mt-1" style={{ color: "var(--color-ink-400)" }}>管理者にチームを作ってもらいましょう</p>
+              <p style={{ color: "var(--color-ink-400)" }}>ギルドがまだ作成されていません</p>
+              <p className="text-sm mt-1" style={{ color: "var(--color-ink-400)" }}>管理者にギルドを作ってもらいましょう</p>
             </div>
           ) : (myTeam ? [myTeam] : teams).map((team) => {
             const teamTotal = team.members.reduce((sum, tm) => sum + (tm.member?.points ?? 0), 0);
@@ -237,7 +323,7 @@ export function MembersScreen() {
                       </h2>
                       {team.isMine && (
                         <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
-                          style={{ background: "var(--color-brand)", color: "white" }}>あなたのチーム</span>
+                          style={{ background: "var(--color-brand)", color: "white" }}>あなたのギルド</span>
                       )}
                     </div>
                     <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
@@ -261,8 +347,19 @@ export function MembersScreen() {
         </>
       )}
 
+      {/* ---- 外部人脈タブ ---- */}
+      {activeTab === "contacts" && (
+        <div>
+          <h2 className="text-lg font-semibold mb-1 flex items-center gap-2"
+            style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+            🌐 外部人脈を管理
+          </h2>
+          <ExternalContactsTab />
+        </div>
+      )}
+
       {/* ---- 全員 / 1to1済み / 1to1未 ---- */}
-      {!isLoading && !error && activeTab !== "team" && (
+      {!isLoading && !error && activeTab !== "team" && activeTab !== "contacts" && (
         <div className="space-y-3">
           {filteredMembers.length === 0 && (
             <p className="text-center py-8 text-sm" style={{ color: "var(--color-ink-400)" }}>
@@ -272,7 +369,7 @@ export function MembersScreen() {
             </p>
           )}
           {filteredMembers.map((member) => (
-            <MemberCard key={member.id} member={member} />
+            <MemberCard key={member.id} member={member} collabTeams={collabTeamsByMember.get(member.id)} />
           ))}
         </div>
       )}

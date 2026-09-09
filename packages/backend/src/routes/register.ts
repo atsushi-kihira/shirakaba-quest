@@ -66,6 +66,7 @@ registerRoutes.post("/submit", async (c) => {
     role?: string;
     phone?: string;
     address?: string;
+    businessCommunityJoinedDate?: string; // "YYYY-MM-DD"（日は正確でなくてよい）
     cardImageBase64?: string;
     skills?: Array<{
       name: string;
@@ -79,11 +80,27 @@ registerRoutes.post("/submit", async (c) => {
       emoji: string;
       description: string;
     }>;
+    goldenEggs?: Array<{
+      description: string;
+      issue?: string;
+      priceRange?: string;
+      region?: string;
+    }>;
+    goldenGeese?: Array<{
+      description: string;
+      contactHypothesis?: string;
+      priority?: string;
+    }>;
   }>();
 
   if (!body.email || !body.name) {
     return c.json({
       error: { code: "bad_request", message: "メールアドレスと名前は必須です" },
+    }, 400);
+  }
+  if (!body.businessCommunityJoinedDate || !/^\d{4}-\d{2}-\d{2}$/.test(body.businessCommunityJoinedDate)) {
+    return c.json({
+      error: { code: "bad_request", message: "入会日を入力してください" },
     }, 400);
   }
 
@@ -127,6 +144,7 @@ registerRoutes.post("/submit", async (c) => {
     role: body.role ?? "",
     phone: body.phone ?? null,
     address: body.address ?? null,
+    businessCommunityJoinedDate: body.businessCommunityJoinedDate,
     skills: JSON.stringify(body.skills ?? []),
     customFields: JSON.stringify({}),
     cardImageKey,
@@ -135,6 +153,37 @@ registerRoutes.post("/submit", async (c) => {
     createdAt: now,
     updatedAt: now,
   });
+
+  // 金の卵・金のガチョウ（任意入力。登録ウィザードで入力された分のみ登録する）
+  const goldenEggs = (body.goldenEggs ?? []).filter((e) => e.description?.trim()).slice(0, 8);
+  if (goldenEggs.length > 0) {
+    await db.insert(schema.goldenEggs).values(
+      goldenEggs.map((e) => ({
+        id: newId(),
+        memberId: id,
+        description: e.description.trim(),
+        issue: e.issue?.trim() || null,
+        priceRange: e.priceRange?.trim() || null,
+        region: e.region?.trim() || null,
+        createdAt: now,
+        updatedAt: now,
+      }))
+    );
+  }
+  const goldenGeese = (body.goldenGeese ?? []).filter((g) => g.description?.trim()).slice(0, 8);
+  if (goldenGeese.length > 0) {
+    await db.insert(schema.goldenGeese).values(
+      goldenGeese.map((g) => ({
+        id: newId(),
+        memberId: id,
+        description: g.description.trim(),
+        contactHypothesis: g.contactHypothesis?.trim() || null,
+        priority: g.priority?.trim() || null,
+        createdAt: now,
+        updatedAt: now,
+      }))
+    );
+  }
 
   // USP承認申請を登録し、管理者にメール通知
   if (body.uspRequests && body.uspRequests.length > 0) {
@@ -168,20 +217,25 @@ registerRoutes.post("/submit", async (c) => {
     const appTitle = appDesign?.appTitle ?? "白樺クエスト";
 
     const mailerReg = new MailService(db, c.env);
+    const uspMailPromises: Promise<void>[] = [];
     for (const req of body.uspRequests) {
       if (!req.uspName?.trim()) continue;
       for (const admin of admins) {
-        mailerReg.send("usp_request_admin", admin.email, {
-          appTitle,
-          adminName: admin.name,
-          requesterName: body.name.trim(),
-          requesterEmail: body.email.toLowerCase().trim(),
-          uspEmoji: req.emoji || "⭐",
-          uspName: req.uspName.trim(),
-          uspDescription: req.description?.trim() ?? "",
-        }).catch((e) => console.error("[usp-request-mail]", e));
+        uspMailPromises.push(
+          mailerReg.send("usp_request_admin", admin.email, {
+            appTitle,
+            adminName: admin.name,
+            requesterName: body.name.trim(),
+            requesterEmail: body.email.toLowerCase().trim(),
+            uspEmoji: req.emoji || "⭐",
+            uspName: req.uspName.trim(),
+            uspDescription: req.description?.trim() ?? "",
+          }).catch((e) => console.error("[usp-request-mail]", e))
+        );
       }
     }
+    // waitUntil でレスポンス後もメール送信を完走させる
+    c.executionCtx.waitUntil(Promise.all(uspMailPromises));
   }
 
   return c.json({

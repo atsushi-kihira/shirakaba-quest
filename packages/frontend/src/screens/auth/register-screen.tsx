@@ -1,9 +1,10 @@
 // =============================================================
-// メンバー登録画面 — iPhone 最適化 4ステップウィザード
+// メンバー登録画面 — iPhone 最適化 5ステップウィザード
 // Step 1: カード表面撮影（OCR）
 // Step 2: スキル確認・補足入力
 // Step 3: プロフィール（名前・メール）
-// Step 4: 完了
+// Step 4: 金の卵・金のガチョウ（任意）
+// Step 5: 完了
 // =============================================================
 import { useState, useRef, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -12,6 +13,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { LogoOrbit } from "@/components/logo-orbit";
 import { useSettings } from "@/hooks/use-settings";
+import { AuthFooterLinks } from "@/screens/auth/_auth-footer-links";
 import { CARD_CHARACTERS } from "@/screens/card-order/card-order-screen";
 import type { Usp } from "@shared/types";
 
@@ -55,7 +57,7 @@ const AVATAR_EMOJIS = ["😊","😄","🤗","😎","🥰","🌟","💪","🎯","
 // ---- メインコンポーネント ----
 export function RegisterScreen() {
   const navigate = useNavigate();
-  const { appTitle, characterImageUrl, appLogo, isLoading: settingsLoading } = useSettings();
+  const { appTitle, characterImageUrl, appLogo, termBusinessCommunity, isLoading: settingsLoading } = useSettings();
   const [step, setStep] = useState(1);
 
   // Step1
@@ -77,8 +79,12 @@ export function RegisterScreen() {
     name: "", furigana: "", nameRomaji: "", email: "",
     emoji: "😊", bgColor: "bg-rose-100",
     category: "", businessDescription: "",
-    company: "", role: "",
+    company: "", role: "", businessCommunityJoinedDate: "",
   });
+
+  // Step4: 金の卵・金のガチョウ（任意）
+  const [goldenEggDesc, setGoldenEggDesc] = useState("");
+  const [goldenGooseDesc, setGoldenGooseDesc] = useState("");
 
   // ---- OCR mutation ----
   const ocrMutation = useMutation({
@@ -113,10 +119,12 @@ export function RegisterScreen() {
         skills: skills.filter((s) => s.name.trim()),
         cardImageBase64: frontImage ? frontImage.split(",")[1] : undefined,
         uspRequests: pendingUspRequests.length > 0 ? pendingUspRequests : undefined,
+        goldenEggs: goldenEggDesc.trim() ? [{ description: goldenEggDesc.trim() }] : undefined,
+        goldenGeese: goldenGooseDesc.trim() ? [{ description: goldenGooseDesc.trim() }] : undefined,
       }),
     onSuccess: (res) => {
       setRegisteredMemberId(res.data?.id ?? null);
-      setStep(4);
+      setStep(5);
     },
   });
 
@@ -159,7 +167,7 @@ export function RegisterScreen() {
           borderColor: "var(--color-paper-200)",
         }}
       >
-        {step < 4 ? (
+        {step < 5 ? (
           <button
             onClick={() => step > 1 ? setStep(step - 1) : navigate("/login")}
             className="p-2 -ml-2 rounded-full active:opacity-60"
@@ -178,14 +186,14 @@ export function RegisterScreen() {
               メンバー登録
             </span>
           </div>
-          {step < 4 && <StepDots current={step} total={3} />}
+          {step < 5 && <StepDots current={step} total={4} />}
         </div>
 
         <div
           className="text-xs font-medium px-2 py-1 rounded-full"
           style={{ background: "var(--color-paper-300)", color: "var(--color-ink-500)" }}
         >
-          {step < 4 ? `${step} / 3` : "完了"}
+          {step < 5 ? `${step} / 4` : "完了"}
         </div>
       </div>
 
@@ -221,13 +229,23 @@ export function RegisterScreen() {
             <Step3Profile
               profile={profile}
               onUpdate={(field, value) => setProfile((p) => ({ ...p, [field]: value }))}
+              onNext={() => setStep(4)}
+              termBusinessCommunity={termBusinessCommunity}
+            />
+          )}
+          {step === 4 && (
+            <Step4Enishi
+              goldenEggDesc={goldenEggDesc}
+              onGoldenEggDescChange={setGoldenEggDesc}
+              goldenGooseDesc={goldenGooseDesc}
+              onGoldenGooseDescChange={setGoldenGooseDesc}
               onSubmit={() => submitMutation.mutate()}
               loading={submitMutation.isPending}
               error={submitMutation.error?.message}
             />
           )}
-          {step === 4 && (
-            <Step4Done
+          {step === 5 && (
+            <Step5Done
               memberId={registeredMemberId}
               memberInfo={{ ...profile, skills }}
             />
@@ -441,6 +459,8 @@ function Step1Scan({
           ← ログイン画面に戻る
         </Link>
       </div>
+
+      <AuthFooterLinks />
     </div>
   );
 }
@@ -767,15 +787,14 @@ function SkillCard({
 // Step 3: プロフィール
 // ================================================================
 function Step3Profile({
-  profile, onUpdate, onSubmit, loading, error,
+  profile, onUpdate, onNext, termBusinessCommunity,
 }: {
   profile: Record<string, string>;
   onUpdate: (field: string, value: string) => void;
-  onSubmit: () => void;
-  loading: boolean;
-  error?: string;
+  onNext: () => void;
+  termBusinessCommunity: string;
 }) {
-  const canSubmit = profile.name.trim() && profile.email.trim();
+  const canSubmit = profile.name.trim() && profile.email.trim() && profile.businessCommunityJoinedDate.trim();
 
   return (
     <div>
@@ -788,15 +807,6 @@ function Step3Profile({
       <p className="text-sm mb-5" style={{ color: "var(--color-ink-500)" }}>
         ログインに使うメールアドレスと名前を入力してください。
       </p>
-
-      {error && (
-        <div
-          className="mb-4 p-3 rounded-2xl text-sm"
-          style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}
-        >
-          ⚠️ {error}
-        </div>
-      )}
 
       {/* アバター選択 */}
       <div className="card-paper p-4 mb-5 rounded-3xl">
@@ -871,6 +881,17 @@ function Step3Profile({
           type="email"
           inputMode="email"
         />
+        <div>
+          <FormField
+            label={`${termBusinessCommunity}入会日 *`}
+            value={profile.businessCommunityJoinedDate}
+            onChange={(v) => onUpdate("businessCommunityJoinedDate", v)}
+            type="date"
+          />
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            日にちは正確でなくても大丈夫です。覚えている範囲で構いません（年月だけは正しく入力してください）
+          </p>
+        </div>
         <FormField
           label="職種カテゴリー"
           value={profile.category}
@@ -905,9 +926,97 @@ function Step3Profile({
 
       <button
         type="button"
-        onClick={onSubmit}
-        disabled={!canSubmit || loading}
+        onClick={onNext}
+        disabled={!canSubmit}
         className="mt-6 w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50 transition"
+        style={{ background: "var(--color-brand)", minHeight: "52px" }}
+      >
+        次へ <ArrowRight size={18} />
+      </button>
+    </div>
+  );
+}
+
+// ================================================================
+// Step 4: 金の卵・金のガチョウ（任意）
+// ================================================================
+function Step4Enishi({
+  goldenEggDesc, onGoldenEggDescChange, goldenGooseDesc, onGoldenGooseDescChange, onSubmit, loading, error,
+}: {
+  goldenEggDesc: string;
+  onGoldenEggDescChange: (v: string) => void;
+  goldenGooseDesc: string;
+  onGoldenGooseDescChange: (v: string) => void;
+  onSubmit: () => void;
+  loading: boolean;
+  error?: string;
+}) {
+  return (
+    <div>
+      <h2
+        className="text-xl font-semibold mb-1"
+        style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}
+      >
+        🥚🪙 金の卵・金のガチョウ
+      </h2>
+      <p className="text-sm mb-5" style={{ color: "var(--color-ink-500)" }}>
+        「たどり着きたい理想の案件」と「そこへ運んでくれそうな立場の人」を登録しておくと、
+        AIによる「ご縁さがし」の精度が上がります。<br />
+        <strong style={{ color: "var(--color-ink-700)" }}>任意です。今は入力しなくても、あとからマイページでいつでも登録・編集できます。</strong>
+      </p>
+
+      {error && (
+        <div
+          className="mb-4 p-3 rounded-2xl text-sm"
+          style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}
+        >
+          ⚠️ {error}
+        </div>
+      )}
+
+      <div className="card-paper p-4 mb-4 rounded-3xl">
+        <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>
+          🥚 金の卵（狙いたい案件・紹介先）
+        </label>
+        <textarea
+          value={goldenEggDesc}
+          onChange={(e) => onGoldenEggDescChange(e.target.value)}
+          placeholder="例: 首都圏の中堅製造・卸（従業員50〜300名）で、DXの旗振り役が社内におらず経営者が投資判断をする会社"
+          className="w-full rounded-2xl border"
+          style={{
+            fontSize: "16px", padding: "12px 16px", minHeight: 80,
+            borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)",
+            color: "var(--color-ink-800)", WebkitAppearance: "none",
+          }}
+        />
+      </div>
+
+      <div className="card-paper p-4 mb-4 rounded-3xl">
+        <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>
+          🪙 金のガチョウ（運んでくれそうな立場の人）
+        </label>
+        <textarea
+          value={goldenGooseDesc}
+          onChange={(e) => onGoldenGooseDescChange(e.target.value)}
+          placeholder="例: 中小製造業の経営者と日常的に接している士業（税理士・社労士）"
+          className="w-full rounded-2xl border"
+          style={{
+            fontSize: "16px", padding: "12px 16px", minHeight: 80,
+            borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)",
+            color: "var(--color-ink-800)", WebkitAppearance: "none",
+          }}
+        />
+      </div>
+
+      <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
+        💡 それぞれ最大8件まで登録できます。2件目以降や詳細項目（課題・単価帯・地域など）は、あとからマイページの編集画面で追加できます。
+      </p>
+
+      <button
+        type="button"
+        onClick={onSubmit}
+        disabled={loading}
+        className="w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50 transition"
         style={{ background: "var(--color-brand)", minHeight: "52px" }}
       >
         {loading ? (
@@ -961,7 +1070,7 @@ function FormField({
 }
 
 // ================================================================
-// Step 4: 完了 + カード注文ウィザード（インライン・認証不要）
+// Step 5: 完了 + カード注文ウィザード（インライン・認証不要）
 // ================================================================
 type Plan = { name: string; price: number };
 type OrderStep = "celebrate" | "select-char" | "select-photo" | "select-info" | "select-plan" | "confirm" | "ordered";
@@ -981,7 +1090,7 @@ function CRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Step4Done({ memberId, memberInfo }: { memberId: string | null; memberInfo?: MemberInfo }) {
+function Step5Done({ memberId, memberInfo }: { memberId: string | null; memberInfo?: MemberInfo }) {
   const [orderStep, setOrderStep] = useState<OrderStep>("celebrate");
   const [selectedChar, setSelectedChar] = useState<(typeof CARD_CHARACTERS)[number] | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);

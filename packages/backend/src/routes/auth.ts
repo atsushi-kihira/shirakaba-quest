@@ -16,6 +16,7 @@ import {
   deleteSession,
 } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
+import { hasMemberRole } from "../services/member-roles.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { eq } from "drizzle-orm";
 import type { Env, Variables } from "../types.ts";
@@ -64,11 +65,11 @@ authRoutes.post("/request-otp", async (c) => {
         message: "アカウントは管理者の承認待ちです。承認されるとログインできるようになります。",
       });
     }
-    if (member?.status === "suspended") {
+    if (member?.status === "on_leave") {
       return c.json({
         ok: false,
-        status: "suspended",
-        message: "このアカウントは現在停止されています。管理者にお問い合わせください。",
+        status: "on_leave",
+        message: "このアカウントは現在休会中です。管理者にお問い合わせください。",
       });
     }
   }
@@ -184,6 +185,11 @@ authRoutes.get("/me", authMiddleware, async (c) => {
       );
     }
 
+    const [isPilot1, isPilot2] = await Promise.all([
+      hasMemberRole(db, member.id, "pilot1"),
+      hasMemberRole(db, member.id, "pilot2"),
+    ]);
+
     return c.json({
       data: {
         id: member.id,
@@ -195,6 +201,10 @@ authRoutes.get("/me", authMiddleware, async (c) => {
         status: member.status,
         avatarImageKey: member.avatarImageKey ?? null,
         timezone: (member as typeof member & { timezone?: string | null }).timezone ?? null,
+        personalTheme: member.personalTheme ?? null,
+        businessCommunityJoinedDate: member.businessCommunityJoinedDate ?? null,
+        isPilot1,
+        isPilot2,
       },
     });
   }
