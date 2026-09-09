@@ -4,19 +4,22 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, Clock, CheckCircle, Loader2, Users, Camera, Calendar } from "lucide-react";
+import { Check, X, Clock, CheckCircle, Loader2, Users, Camera, Calendar, Link2, Pencil } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTimezone } from "@/hooks/use-timezone";
-import { fmtDateISO } from "@/lib/date";
+import { fmtDateISO, fmtDateTimeFull, fmtTime } from "@/lib/date";
 import { ImportCardModal } from "./import-card-modal";
+import { CompleteOneOnOneModal } from "../meetings/_complete-oneonone-modal";
+import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-modal";
+import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
 
 type Session = {
   id: string;
   requesterId: string;
   responderId: string;
-  status: "pending" | "accepted" | "completed" | "rejected";
+  status: "pending" | "accepted" | "completed" | "rejected" | "cancelled";
   requestedAt: number;
   completedAt: number | null;
   requesterCompletedAt: number | null;
@@ -30,6 +33,11 @@ type Session = {
     category: string;
   } | null;
   requesterSchedulerUrl?: string | null;
+  scheduledFor?: number | null;
+  scheduledForEndUtc?: number | null;
+  conferenceType?: string | null;
+  conferenceUrl?: string | null;
+  autoTransitionReason?: "pending_timeout" | "date_passed" | null;
 };
 
 type SessionsResponse = { data: Session[] };
@@ -40,20 +48,33 @@ export function OneOnOneScreen() {
   const tz = useTimezone();
   const [tab, setTab] = useState<"pending" | "active" | "done">("pending");
   const [showImport, setShowImport] = useState(false);
+  const [completingSession, setCompletingSession] = useState<Session | null>(null);
+  const [editingSchedule, setEditingSchedule] = useState<Session | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["oneonone"],
     queryFn: () => api.get<SessionsResponse>("/oneonone"),
+    // 外部の予約ページで日程確定してから戻ってきた直後でも必ず最新状態を取得する
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 
   const acceptMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/oneonone/${id}/accept`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["oneonone"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
+      // 承諾すると「申込」タブからは消えるため、続きが見える「進行中」タブへ自動で移動する
+      setTab("active");
+    },
   });
 
   const rejectMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/oneonone/${id}/reject`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["oneonone"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
+      // 辞退すると「申込」タブからは消えるため、結果が見える「完了」タブへ自動で移動する
+      setTab("done");
+    },
   });
 
   const completeMutation = useMutation({
@@ -72,6 +93,13 @@ export function OneOnOneScreen() {
     },
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => api.patch(`/oneonone/${id}/cancel`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
+    },
+  });
+
   const sessions = data?.data ?? [];
   const myId = user?.id ?? "";
 
@@ -83,7 +111,7 @@ export function OneOnOneScreen() {
     (s) => s.status === "pending" && s.myRole === "requester"
   );
   const active = sessions.filter((s) => s.status === "accepted");
-  const done = sessions.filter((s) => s.status === "completed" || s.status === "rejected");
+  const done = sessions.filter((s) => s.status === "completed" || s.status === "rejected" || s.status === "cancelled");
 
   const pendingCount = pendingReceived.length;
   const activeCount = active.filter((s) => {
@@ -153,42 +181,53 @@ export function OneOnOneScreen() {
                   <h2 className="text-xs font-semibold mb-2 px-1" style={{ color: "var(--color-brand)" }}>
                     📬 受け取った申込
                   </h2>
-                  {pendingReceived.map((s) => (
-                    <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
-                      {s.requesterSchedulerUrl && (
-                        <a
-                          href={s.requesterSchedulerUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-medium"
-                          style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)", border: "1px solid rgba(90,140,92,0.25)" }}
-                        >
-                          <Calendar size={14} />
-                          {s.partner?.name ?? "相手"}さんの予約ページで日程を選ぶ
-                        </a>
-                      )}
-                      <div className="flex gap-2 mt-3">
-                        <button
-                          onClick={() => rejectMutation.mutate(s.id)}
-                          disabled={rejectMutation.isPending || acceptMutation.isPending}
-                          className="flex-1 py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1"
-                          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
-                        >
-                          <X size={14} />
-                          断る
-                        </button>
-                        <button
-                          onClick={() => acceptMutation.mutate(s.id)}
-                          disabled={acceptMutation.isPending || rejectMutation.isPending}
-                          className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-1"
-                          style={{ background: "var(--color-success)" }}
-                        >
-                          <Check size={14} />
-                          承諾する
-                        </button>
-                      </div>
-                    </SessionCard>
-                  ))}
+                  {pendingReceived.map((s) => {
+                    // 相手（申込者）の予約ページで日程を選べる場合、日程選択＝承諾を意味するため、
+                    // 別途「承諾する」ボタンは出さず「予約ページで日程を選ぶ」か「承諾しない」の2択にする
+                    const canScheduleInstead = !s.scheduledFor && !!s.requesterSchedulerUrl;
+                    return (
+                      <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
+                        {s.scheduledFor ? (
+                          <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                        ) : (
+                          s.requesterSchedulerUrl && (
+                            <a
+                              href={s.requesterSchedulerUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-medium"
+                              style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)", border: "1px solid rgba(90,140,92,0.25)" }}
+                            >
+                              <Calendar size={14} />
+                              {s.partner?.name ?? "相手"}さんの予約ページで日程を選ぶ
+                            </a>
+                          )
+                        )}
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={() => rejectMutation.mutate(s.id)}
+                            disabled={rejectMutation.isPending || acceptMutation.isPending}
+                            className="flex-1 py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1"
+                            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+                          >
+                            <X size={14} />
+                            {canScheduleInstead ? "承諾しない" : "断る"}
+                          </button>
+                          {!canScheduleInstead && (
+                            <button
+                              onClick={() => acceptMutation.mutate(s.id)}
+                              disabled={acceptMutation.isPending || rejectMutation.isPending}
+                              className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-1"
+                              style={{ background: "var(--color-success)" }}
+                            >
+                              <Check size={14} />
+                              承諾する
+                            </button>
+                          )}
+                        </div>
+                      </SessionCard>
+                    );
+                  })}
                 </section>
               )}
 
@@ -199,10 +238,29 @@ export function OneOnOneScreen() {
                   </h2>
                   {pendingSent.map((s) => (
                     <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
+                      {s.scheduledFor ? (
+                        <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                      ) : (
+                        <div className="mt-3 p-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
+                          <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-success)" }}>
+                            📅 あなたの予約URL（{s.partner?.name ?? "相手"}さんに直接共有できます）
+                          </p>
+                          <AutoSchedulerShareLinkPanel />
+                        </div>
+                      )}
                       <div className="mt-2 flex items-center gap-1 text-xs" style={{ color: "var(--color-ink-400)" }}>
                         <Clock size={12} />
                         相手の承諾を待っています
                       </div>
+                      <button
+                        onClick={() => { if (confirm("この1to1申込をキャンセルしますか？")) cancelMutation.mutate(s.id); }}
+                        disabled={cancelMutation.isPending}
+                        className="w-full mt-2 py-2 rounded-2xl text-xs font-medium transition disabled:opacity-50"
+                        style={{ background: "transparent", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}
+                      >
+                        {cancelMutation.isPending ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                        申込をキャンセルする
+                      </button>
                     </SessionCard>
                   ))}
                 </section>
@@ -225,6 +283,18 @@ export function OneOnOneScreen() {
                   const partnerCompleted = s.myRole === "requester" ? s.responderCompletedAt : s.requesterCompletedAt;
                   return (
                     <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
+                      {s.scheduledFor ? (
+                        <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                      ) : (
+                        <button
+                          onClick={() => setEditingSchedule(s)}
+                          className="mt-3 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium"
+                          style={{ background: "rgba(212,160,59,0.18)", color: "var(--color-ink-700)", border: "1px solid rgba(212,160,59,0.4)" }}
+                        >
+                          <Calendar size={13} />
+                          日時・会議URLを入力する（別途調整済みの場合）
+                        </button>
+                      )}
                       <div className="mt-3 space-y-2">
                         {/* 自分の完了状態 */}
                         <div className="flex items-center gap-2 text-xs">
@@ -245,7 +315,10 @@ export function OneOnOneScreen() {
                         {/* 完了ボタン */}
                         {!myCompleted && (
                           <button
-                            onClick={() => completeMutation.mutate(s.id)}
+                            onClick={() => {
+                              if (s.partner) setCompletingSession(s);
+                              else completeMutation.mutate(s.id);
+                            }}
                             disabled={completeMutation.isPending}
                             className="w-full mt-1 py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50"
                             style={{ background: "var(--color-brand)" }}
@@ -286,7 +359,10 @@ export function OneOnOneScreen() {
                           <>
                             <div className="flex items-center gap-1 text-xs">
                               <CheckCircle size={12} style={{ color: "var(--color-success)" }} />
-                              <span style={{ color: "var(--color-success)" }}>完了 — {s.completedAt ? fmtDateISO(s.completedAt, tz) : ""}</span>
+                              <span style={{ color: "var(--color-success)" }}>
+                                完了 — {s.completedAt ? fmtDateISO(s.completedAt, tz) : ""}
+                                {s.autoTransitionReason === "date_passed" && "（実施日から1週間経過し自動完了）"}
+                              </span>
                             </div>
                             {myCompletedAt && (
                               <button
@@ -302,7 +378,9 @@ export function OneOnOneScreen() {
                         ) : (
                           <div className="flex items-center gap-1 text-xs">
                             <X size={12} style={{ color: "var(--color-ink-400)" }} />
-                            <span style={{ color: "var(--color-ink-400)" }}>辞退済み</span>
+                            <span style={{ color: "var(--color-ink-400)" }}>
+                              {s.status === "cancelled" ? "キャンセル済み" : "辞退済み"}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -318,6 +396,24 @@ export function OneOnOneScreen() {
       {/* カード画像インポートモーダル */}
       {showImport && (
         <ImportCardModal onClose={() => setShowImport(false)} />
+      )}
+
+      {completingSession && completingSession.partner && (
+        <CompleteOneOnOneModal
+          sessionId={completingSession.id}
+          partnerId={completingSession.partner.id}
+          partnerName={completingSession.partner.name}
+          onClose={() => setCompletingSession(null)}
+        />
+      )}
+
+      {editingSchedule && (
+        <EditOneOnOneScheduleModal
+          sessionId={editingSchedule.id}
+          currentScheduledFor={editingSchedule.scheduledFor ?? null}
+          currentConferenceUrl={editingSchedule.conferenceUrl ?? null}
+          onClose={() => setEditingSchedule(null)}
+        />
       )}
     </div>
   );
@@ -362,6 +458,38 @@ function SessionCard({ session, tz, children }: {
         )}
       </div>
       {children}
+    </div>
+  );
+}
+
+// ---- 確定済み日時・会議URL表示 ----
+function ScheduledInfo({ session, tz, onEdit }: { session: Session; tz?: string; onEdit?: () => void }) {
+  const label = session.conferenceType === "zoom" ? "Zoom" : session.conferenceType === "google_meet" ? "Google Meet" : "会議";
+  return (
+    <div className="mt-3 p-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
+      <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: "var(--color-success)" }}>
+        <Calendar size={13} />
+        日程確定: {fmtDateTimeFull(session.scheduledFor ?? 0, tz ?? "Asia/Tokyo")}
+        {session.scheduledForEndUtc && `〜${fmtTime(session.scheduledForEndUtc, tz ?? "Asia/Tokyo")}`}
+      </p>
+      {session.conferenceUrl && (
+        <a
+          href={session.conferenceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs mt-1.5 font-medium underline underline-offset-2 flex items-center gap-1.5 break-all"
+          style={{ color: "var(--color-brand)" }}
+        >
+          <Link2 size={13} className="shrink-0" />
+          {label} URL: {session.conferenceUrl}
+        </a>
+      )}
+      {onEdit && (
+        <button onClick={onEdit} className="text-xs mt-1.5 flex items-center gap-1" style={{ color: "var(--color-ink-400)" }}>
+          <Pencil size={11} />
+          編集
+        </button>
+      )}
     </div>
   );
 }

@@ -319,13 +319,21 @@ export function ImportCardModal({ onClose, targetMember }: Props) {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="名前で検索..."
-                  className="w-full pl-9 pr-4 py-2.5 rounded-2xl text-sm border"
+                  className="w-full pl-9 pr-9 py-2.5 rounded-2xl text-sm border"
                   style={{
                     borderColor: "var(--color-paper-300)",
                     background: "var(--color-paper-50)",
                     fontSize: "16px",
                   }}
                 />
+                {searchQuery && (
+                  <button type="button" onClick={() => setSearchQuery("")}
+                    aria-label="検索条件をクリア"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full"
+                    style={{ color: "var(--color-ink-400)" }}>
+                    <X size={14} />
+                  </button>
+                )}
               </div>
 
               {/* メンバーリスト */}
