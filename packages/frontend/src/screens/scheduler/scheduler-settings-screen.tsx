@@ -1,16 +1,19 @@
 // SC-04 自分の調整カレンダー設定画面
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Loader2, ArrowLeft, Copy, Check } from "lucide-react";
+import { Save, Loader2, ArrowLeft, Check, Plus, X } from "lucide-react";
 import { request, ApiError } from "@/lib/api";
+import { GoogleNotConnectedWarning } from "@/components/google-not-connected-warning";
+import { SchedulerShareLinkPanel, useSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 const DEFAULT_HOURS = { start: "09:00", end: "18:00" };
+const DEFAULT_HOURS_2ND = { start: "19:00", end: "21:00" };
+const MAX_RANGES_PER_DAY = 3;
 
 type Settings = {
   memberId: string;
-  slug: string;
   displayTitle: string;
   description: string | null;
   durationMinutes: number;
@@ -22,6 +25,8 @@ type Settings = {
   slotIntervalMinutes: number;
   locationNote: string | null;
   isPublic: number;
+  treatFreeEventsAsBusy: number;
+  blockAllDayEvents: number;
 };
 
 type Rule = {
@@ -31,13 +36,23 @@ type Rule = {
   endTimeLocal: string;
 };
 
-type PublicUrlData = { slug: string | null; publicUrl: string | null };
+// 画面上でのみ使う一意キー（保存前の新規行にはサーバー発行のidが無いため）
+type EditableRule = Rule & { _localId: string };
+
+function newLocalId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 export function SchedulerSettingsScreen() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // 呼び出し元から「戻る」先を指定された場合（例：1to1の外部ゲスト招待画面から）は、
+  // 通常の「スケジューラーに戻る」ではなくそちらへ戻す
+  const returnTo = searchParams.get("returnTo");
   const queryClient = useQueryClient();
   const [saved, setSaved] = useState(false);
-  const [copiedUrl, setCopiedUrl] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { data: settingsData } = useQuery<{ data: Settings | null }>({
@@ -50,15 +65,16 @@ export function SchedulerSettingsScreen() {
     queryFn: () => request("/scheduler/me/availability-rules"),
   });
 
-  const { data: publicUrlData } = useQuery<{ data: PublicUrlData }>({
-    queryKey: ["scheduler", "public-url"],
-    queryFn: () => request("/scheduler/me/public-url"),
+  const { data: shareLinkData } = useSchedulerShareLink();
+
+  const { data: googleStatusData } = useQuery<{ data: { connected: boolean } }>({
+    queryKey: ["scheduler", "google-status"],
+    queryFn: () => request("/scheduler/oauth/google/status"),
   });
 
   const settings = settingsData?.data;
 
   // フォーム状態
-  const [slug, setSlug] = useState("");
   const [displayTitle, setDisplayTitle] = useState("1on1 ミーティング");
   const [description, setDescription] = useState("");
   const [durationMinutes, setDurationMinutes] = useState(30);
@@ -69,14 +85,15 @@ export function SchedulerSettingsScreen() {
   const [slotIntervalMinutes, setSlotIntervalMinutes] = useState(30);
   const [locationNote, setLocationNote] = useState("");
   const [isPublic, setIsPublic] = useState(true);
+  const [treatFreeEventsAsBusy, setTreatFreeEventsAsBusy] = useState(true);
+  const [blockAllDayEvents, setBlockAllDayEvents] = useState(false);
 
-  // 受付時間ルール
-  const [rules, setRules] = useState<Rule[]>([]);
+  // 受付時間ルール（1曜日につき最大2つの時間帯を設定できる）
+  const [rules, setRules] = useState<EditableRule[]>([]);
 
   // settings ロード時にフォーム初期化
   useEffect(() => {
     if (settings) {
-      setSlug(settings.slug ?? "");
       setDisplayTitle(settings.displayTitle ?? "1on1 ミーティング");
       setDescription(settings.description ?? "");
       setDurationMinutes(settings.durationMinutes ?? 30);
@@ -87,11 +104,13 @@ export function SchedulerSettingsScreen() {
       setSlotIntervalMinutes(settings.slotIntervalMinutes ?? 30);
       setLocationNote(settings.locationNote ?? "");
       setIsPublic(settings.isPublic === 1);
+      setTreatFreeEventsAsBusy(settings.treatFreeEventsAsBusy !== 0);
+      setBlockAllDayEvents(settings.blockAllDayEvents === 1);
     }
   }, [settings]);
 
   useEffect(() => {
-    if (rulesData?.data) setRules(rulesData.data);
+    if (rulesData?.data) setRules(rulesData.data.map((r) => ({ ...r, _localId: r.id ?? newLocalId() })));
   }, [rulesData]);
 
   const saveSettings = useMutation({
@@ -99,7 +118,6 @@ export function SchedulerSettingsScreen() {
       await request("/scheduler/me/settings", {
         method: "PUT",
         body: {
-          slug: slug || undefined,
           displayTitle,
           description: description || null,
           durationMinutes,
@@ -110,6 +128,8 @@ export function SchedulerSettingsScreen() {
           slotIntervalMinutes,
           locationNote: locationNote || null,
           isPublic,
+          treatFreeEventsAsBusy,
+          blockAllDayEvents,
         },
       });
       await request("/scheduler/me/availability-rules", {
@@ -134,42 +154,47 @@ export function SchedulerSettingsScreen() {
 
   const toggleDow = (dow: number) => {
     setRules((prev) => {
-      const exists = prev.find((r) => r.dayOfWeek === dow);
+      const exists = prev.some((r) => r.dayOfWeek === dow);
       if (exists) return prev.filter((r) => r.dayOfWeek !== dow);
-      return [...prev, { dayOfWeek: dow, startTimeLocal: DEFAULT_HOURS.start, endTimeLocal: DEFAULT_HOURS.end }]
+      return [...prev, { _localId: newLocalId(), dayOfWeek: dow, startTimeLocal: DEFAULT_HOURS.start, endTimeLocal: DEFAULT_HOURS.end }]
         .sort((a, b) => a.dayOfWeek - b.dayOfWeek);
     });
   };
 
-  const updateRule = (dow: number, field: "startTimeLocal" | "endTimeLocal", value: string) => {
+  const updateRule = (localId: string, field: "startTimeLocal" | "endTimeLocal", value: string) => {
     setRules((prev) =>
-      prev.map((r) => (r.dayOfWeek === dow ? { ...r, [field]: value } : r))
+      prev.map((r) => (r._localId === localId ? { ...r, [field]: value } : r))
     );
   };
 
-  const publicUrl = publicUrlData?.data.publicUrl;
-
-  const copyUrl = async () => {
-    if (!publicUrl) return;
-    await navigator.clipboard.writeText(publicUrl);
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 2000);
+  // 曜日ごとに2つ目の時間帯を追加する（例: 8:00-10:00 と 18:00-21:00 のように分けて設定したい場合）
+  const addTimeRange = (dow: number) => {
+    setRules((prev) => {
+      if (prev.filter((r) => r.dayOfWeek === dow).length >= MAX_RANGES_PER_DAY) return prev;
+      return [...prev, { _localId: newLocalId(), dayOfWeek: dow, startTimeLocal: DEFAULT_HOURS_2ND.start, endTimeLocal: DEFAULT_HOURS_2ND.end }];
+    });
   };
+
+  const removeTimeRange = (localId: string) => {
+    setRules((prev) => prev.filter((r) => r._localId !== localId));
+  };
+
+  const publicUrl = shareLinkData?.publicUrl ?? null;
 
   return (
     <div className="max-w-lg mx-auto px-4 py-6">
       <button
-        onClick={() => navigate("/scheduler")}
+        onClick={() => navigate(returnTo || "/scheduler")}
         className="flex items-center gap-1.5 text-sm mb-6"
         style={{ color: "var(--color-ink-500)" }}
       >
         <ArrowLeft size={16} />
-        スケジューラーに戻る
+        {returnTo ? "戻る" : "スケジューラーに戻る"}
       </button>
 
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-bold" style={{ color: "var(--color-ink-900)" }}>
-          ⚙️ 受付時間の設定
+          ⚙️ 基本設定・受付時間
         </h1>
         <button
           onClick={() => saveSettings.mutate()}
@@ -195,16 +220,14 @@ export function SchedulerSettingsScreen() {
         </div>
       )}
 
+      {/* Google連携が未設定・連携切れの場合は、共有前に連携を促す */}
+      {publicUrl && googleStatusData && !googleStatusData.data.connected && <GoogleNotConnectedWarning />}
+
       {/* 公開 URL */}
-      {publicUrl && (
+      {settings && (
         <div className="rounded-2xl p-4 mb-5" style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
-          <p className="text-xs mb-1.5" style={{ color: "var(--color-ink-500)" }}>公開URL（このURLを相手にシェアします）</p>
-          <div className="flex items-center gap-2">
-            <code className="text-sm flex-1 truncate" style={{ color: "var(--color-ink-700)" }}>{publicUrl}</code>
-            <button onClick={copyUrl} className="p-1.5 rounded-lg" style={{ background: "var(--color-paper-200)" }}>
-              {copiedUrl ? <Check size={14} style={{ color: "var(--color-success)" }} /> : <Copy size={14} />}
-            </button>
-          </div>
+          <p className="text-xs mb-1.5" style={{ color: "var(--color-ink-500)" }}>公開URL（期限付き・このURLを相手にシェアします）</p>
+          <SchedulerShareLinkPanel />
         </div>
       )}
 
@@ -237,19 +260,6 @@ export function SchedulerSettingsScreen() {
                 style={{ borderColor: "var(--color-paper-300)", background: "white" }}
                 rows={2}
                 placeholder="BNI 白樺チャプターメンバーとの 1on1 です"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium mb-1.5 block" style={{ color: "var(--color-ink-600)" }}>
-                URL スラッグ（公開URLの末尾）
-              </label>
-              <input
-                type="text"
-                value={slug}
-                onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                className="w-full px-3 py-2 rounded-xl text-sm border"
-                style={{ borderColor: "var(--color-paper-300)", background: "white" }}
-                placeholder="kihira"
               />
             </div>
           </div>
@@ -331,15 +341,15 @@ export function SchedulerSettingsScreen() {
           <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
             受け付ける曜日をONにして、時間帯を設定してください
           </p>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {DOW_LABELS.map((label, dow) => {
-              const rule = rules.find((r) => r.dayOfWeek === dow);
-              const isOn = !!rule;
+              const dayRules = rules.filter((r) => r.dayOfWeek === dow);
+              const isOn = dayRules.length > 0;
               return (
-                <div key={dow} className="flex items-center gap-3">
+                <div key={dow} className="flex items-start gap-3">
                   <button
                     onClick={() => toggleDow(dow)}
-                    className="flex items-center gap-2 min-w-0"
+                    className="flex items-center gap-2 min-w-0 pt-0.5"
                   >
                     <div
                       className="w-10 h-6 rounded-full relative transition-colors flex-shrink-0"
@@ -354,26 +364,49 @@ export function SchedulerSettingsScreen() {
                       {label}
                     </span>
                   </button>
-                  {isOn && (
-                    <div className="flex items-center gap-1.5 flex-1">
-                      <input
-                        type="time"
-                        value={rule.startTimeLocal}
-                        onChange={(e) => updateRule(dow, "startTimeLocal", e.target.value)}
-                        className="px-2 py-1 rounded-lg text-sm border flex-1"
-                        style={{ borderColor: "var(--color-paper-300)", background: "white" }}
-                      />
-                      <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>〜</span>
-                      <input
-                        type="time"
-                        value={rule.endTimeLocal}
-                        onChange={(e) => updateRule(dow, "endTimeLocal", e.target.value)}
-                        className="px-2 py-1 rounded-lg text-sm border flex-1"
-                        style={{ borderColor: "var(--color-paper-300)", background: "white" }}
-                      />
+                  {isOn ? (
+                    <div className="flex-1 space-y-1.5">
+                      {dayRules.map((rule) => (
+                        <div key={rule._localId} className="flex items-center gap-1.5">
+                          <input
+                            type="time"
+                            value={rule.startTimeLocal}
+                            onChange={(e) => updateRule(rule._localId, "startTimeLocal", e.target.value)}
+                            className="px-2 py-1 rounded-lg text-sm border flex-1"
+                            style={{ borderColor: "var(--color-paper-300)", background: "white" }}
+                          />
+                          <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>〜</span>
+                          <input
+                            type="time"
+                            value={rule.endTimeLocal}
+                            onChange={(e) => updateRule(rule._localId, "endTimeLocal", e.target.value)}
+                            className="px-2 py-1 rounded-lg text-sm border flex-1"
+                            style={{ borderColor: "var(--color-paper-300)", background: "white" }}
+                          />
+                          <button
+                            onClick={() => removeTimeRange(rule._localId)}
+                            className="p-1 rounded-lg flex-shrink-0"
+                            style={{ color: "var(--color-ink-400)" }}
+                            title="この時間帯を削除"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      {dayRules.length < MAX_RANGES_PER_DAY && (
+                        <button
+                          onClick={() => addTimeRange(dow)}
+                          className="flex items-center gap-1 text-xs font-medium"
+                          style={{ color: "var(--color-brand)" }}
+                        >
+                          <Plus size={12} />
+                          時間帯を追加（例: 朝と夜で分けて受付）
+                        </button>
+                      )}
                     </div>
+                  ) : (
+                    <span className="text-xs pt-1.5" style={{ color: "var(--color-ink-400)" }}>受付なし</span>
                   )}
-                  {!isOn && <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>受付なし</span>}
                 </div>
               );
             })}
@@ -403,6 +436,56 @@ export function SchedulerSettingsScreen() {
               OFFにすると公開URLへのアクセスができなくなります
             </p>
           )}
+        </section>
+
+        {/* 空き状況の判定ルール */}
+        <section className="rounded-2xl p-5" style={{ background: "var(--color-paper-50)", border: "1px solid var(--color-paper-300)" }}>
+          <h2 className="font-bold mb-1" style={{ color: "var(--color-ink-800)" }}>空き状況の判定ルール</h2>
+          <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+            Googleカレンダーの予定を、公開URLの空き状況にどう反映するか設定できます
+          </p>
+
+          <label className="flex items-start gap-3 cursor-pointer mb-4">
+            <div
+              className="w-11 h-6 rounded-full relative transition-colors flex-shrink-0 mt-0.5"
+              onClick={() => setTreatFreeEventsAsBusy((v) => !v)}
+              style={{ background: treatFreeEventsAsBusy ? "var(--color-brand)" : "var(--color-paper-300)" }}
+            >
+              <div
+                className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform"
+                style={{ left: treatFreeEventsAsBusy ? "calc(100% - 22px)" : "2px", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }}
+              />
+            </div>
+            <div>
+              <span className="text-sm block" style={{ color: "var(--color-ink-700)" }}>
+                「予定なし」の予定も予定ありとみなす
+              </span>
+              <span className="text-xs block mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+                GoogleカレンダーでOFF（予定なし）に設定した予定でも、実際に予定が入っていれば空き時間として案内しません
+              </span>
+            </div>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer">
+            <div
+              className="w-11 h-6 rounded-full relative transition-colors flex-shrink-0 mt-0.5"
+              onClick={() => setBlockAllDayEvents((v) => !v)}
+              style={{ background: blockAllDayEvents ? "var(--color-brand)" : "var(--color-paper-300)" }}
+            >
+              <div
+                className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform"
+                style={{ left: blockAllDayEvents ? "calc(100% - 22px)" : "2px", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }}
+              />
+            </div>
+            <div>
+              <span className="text-sm block" style={{ color: "var(--color-ink-700)" }}>
+                終日の予定を1日まるごとブロックする
+              </span>
+              <span className="text-xs block mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+                OFFの場合、終日の予定（日付だけ指定したタスク等）があっても、その日の時間帯は予約可能なままにします
+              </span>
+            </div>
+          </label>
         </section>
       </div>
     </div>

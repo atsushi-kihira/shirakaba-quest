@@ -20,7 +20,7 @@ export type AvailabilityOverride = {
 export type Slot = { startUtc: string; endUtc: string };
 
 // ローカル時刻文字列 "09:00" を、指定ローカル日 dateLocal の UTC ms に変換
-function localTimeToUtcMs(dateLocal: string, timeStr: string, timezone: string): number {
+export function localTimeToUtcMs(dateLocal: string, timeStr: string, timezone: string): number {
   const [h, m] = timeStr.split(":").map(Number);
   // ローカル日時をUTC扱いで構築してオフセットを計算
   const [year, month, day] = dateLocal.split("-").map(Number);
@@ -39,7 +39,7 @@ function localTimeToUtcMs(dateLocal: string, timeStr: string, timezone: string):
 }
 
 // UTC ms をそのタイムゾーンでのローカル日付文字列 "YYYY-MM-DD" に変換
-function utcMsToLocalDateStr(utcMs: number, timezone: string): string {
+export function utcMsToLocalDateStr(utcMs: number, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric", month: "2-digit", day: "2-digit",
@@ -49,7 +49,7 @@ function utcMsToLocalDateStr(utcMs: number, timezone: string): string {
 }
 
 // UTC ms をそのタイムゾーンでの曜日 (0=Sun … 6=Sat) に変換
-function utcMsToLocalDayOfWeek(utcMs: number, timezone: string): number {
+export function utcMsToLocalDayOfWeek(utcMs: number, timezone: string): number {
   const dt = new Date(utcMs);
   const localWeekday = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
@@ -170,8 +170,14 @@ export function calculateSlots(args: CalculateSlotsArgs): Slot[] {
         if (dailyMax !== undefined && dailyCount >= dailyMax) break;
 
         // busy 区間との衝突チェック（buffer 込み）
-        const effStart = slotStart - bufferBeforeMs;
-        const effEnd = slotEnd + bufferAfterMs;
+        // 前後どちらの予定に対しても同じ設定（前バッファ・後バッファ）が適用されるべきなので、
+        // 必要な間隔は「前の予定の後バッファ + このスロットの前バッファ」のように両者を
+        // 合算したものになる。片側だけに buffer を足すと、このスロット自身の前後は保護できても
+        // 「直前の予定の直後」を保護できず、後バッファを設定していても隙間なく次の予約が
+        // 入ってしまう不具合になる（実際にこの不具合が発生した）。
+        const totalBufferMs = bufferBeforeMs + bufferAfterMs;
+        const effStart = slotStart - totalBufferMs;
+        const effEnd = slotEnd + totalBufferMs;
         const conflicts = busyPairs.some(
           (b) => effStart < b.end && effEnd > b.start
         );

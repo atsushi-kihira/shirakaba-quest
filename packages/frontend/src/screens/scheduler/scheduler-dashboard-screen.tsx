@@ -1,18 +1,18 @@
 // SC-01 スケジューラーダッシュボード
+import type { MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Link2, Settings, CalendarDays, CheckCircle2, Copy, ExternalLink, Check } from "lucide-react";
-import { useState } from "react";
+import { Link2, Settings, CalendarDays, CheckCircle2, ExternalLink } from "lucide-react";
 import { request } from "@/lib/api";
+import { GoogleNotConnectedWarning } from "@/components/google-not-connected-warning";
+import { SchedulerShareLinkPanel, useSchedulerShareLink, useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 
 type GoogleStatus = { connected: boolean; googleAccountEmail: string | null };
 type ZoomStatus = { connected: boolean; zoomAccountEmail: string | null };
-type PublicUrl = { slug: string | null; publicUrl: string | null };
 type BookingSummary = { data: { id: string; guestName: string; startAtUtc: string; status: string }[] };
 
 export function SchedulerDashboardScreen() {
   const navigate = useNavigate();
-  const [copiedUrl, setCopiedUrl] = useState(false);
 
   const { data: googleData } = useQuery<{ data: GoogleStatus }>({
     queryKey: ["scheduler", "google-status"],
@@ -24,10 +24,8 @@ export function SchedulerDashboardScreen() {
     queryFn: () => request("/scheduler/oauth/zoom/status"),
   });
 
-  const { data: publicUrlData } = useQuery<{ data: PublicUrl }>({
-    queryKey: ["scheduler", "public-url"],
-    queryFn: () => request("/scheduler/me/public-url"),
-  });
+  const { data: shareLinkData } = useSchedulerShareLink();
+  const { data: previewShareData, generate: previewGenerate } = useAutoSchedulerShareLink();
 
   const { data: bookingsData, isLoading: bookingsLoading } = useQuery<BookingSummary>({
     queryKey: ["scheduler", "bookings", "upcoming"],
@@ -36,15 +34,20 @@ export function SchedulerDashboardScreen() {
 
   const google = googleData?.data;
   const zoom = zoomData?.data;
-  const publicUrl = publicUrlData?.data.publicUrl;
+  const publicUrl = shareLinkData?.publicUrl ?? null;
   const upcomingBookings = bookingsData?.data?.slice(0, 3) ?? [];
 
-  const copyUrl = async () => {
-    if (!publicUrl) return;
-    await navigator.clipboard.writeText(publicUrl);
-    setCopiedUrl(true);
-    setTimeout(() => setCopiedUrl(false), 2000);
-  };
+  // 相手（メンバー・外部ゲストいずれの場合も）に見える予約ページを、事前確認のため新しいタブで開く
+  const previewUrl = previewShareData?.publicUrl ?? null;
+  function handleCalendarPreviewClick(e: MouseEvent) {
+    if (previewUrl) return; // <a href> にまかせる
+    e.preventDefault();
+    previewGenerate.mutate(undefined, {
+      onSuccess: (res) => {
+        if (res.data.publicUrl) window.open(res.data.publicUrl, "_blank", "noopener,noreferrer");
+      },
+    });
+  }
 
   const formatDate = (utcStr: string) =>
     new Intl.DateTimeFormat("ja-JP", {
@@ -62,49 +65,31 @@ export function SchedulerDashboardScreen() {
         公開URLを共有して、外部からの予約を受け付けましょう
       </p>
 
-      {/* 公開 URL カード */}
-      {publicUrl ? (
+      {/* Google連携が未設定・連携切れの場合は、共有前に連携を促す */}
+      {publicUrl && google && !google.connected && <GoogleNotConnectedWarning />}
+
+      {/* 公開 URL カード（期限付き） */}
+      {shareLinkData !== undefined && (
         <div
           className="rounded-2xl p-4 mb-4"
-          style={{ background: "var(--color-paper-50)", border: "2px solid var(--color-success)" }}
+          style={{ background: "var(--color-paper-50)", border: `2px ${publicUrl ? "solid var(--color-success)" : "dashed var(--color-paper-400)"}` }}
         >
           <div className="flex items-center gap-2 mb-2">
-            <CheckCircle2 size={16} style={{ color: "var(--color-success)" }} />
-            <span className="text-sm font-bold" style={{ color: "var(--color-success)" }}>
-              公開URLが設定されています
+            <CheckCircle2 size={16} style={{ color: publicUrl ? "var(--color-success)" : "var(--color-ink-400)" }} />
+            <span className="text-sm font-bold" style={{ color: publicUrl ? "var(--color-success)" : "var(--color-ink-600)" }}>
+              {publicUrl ? "公開URLが発行されています" : "公開URLが未発行です"}
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <code className="text-xs flex-1 truncate px-2 py-1 rounded-lg"
-              style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
-              {publicUrl}
-            </code>
-            <button onClick={copyUrl} className="p-1.5 rounded-lg flex-shrink-0"
-              style={{ background: "var(--color-paper-200)" }}>
-              {copiedUrl ? <Check size={14} style={{ color: "var(--color-success)" }} /> : <Copy size={14} />}
+          <SchedulerShareLinkPanel />
+          {!publicUrl && (
+            <button
+              onClick={() => navigate("/scheduler/settings")}
+              className="mt-2 text-xs"
+              style={{ color: "var(--color-ink-500)" }}
+            >
+              まだ受付時間を設定していない場合はこちら →
             </button>
-            <a href={publicUrl} target="_blank" rel="noopener noreferrer"
-              className="p-1.5 rounded-lg flex-shrink-0"
-              style={{ background: "var(--color-paper-200)" }}>
-              <ExternalLink size={14} />
-            </a>
-          </div>
-        </div>
-      ) : (
-        <div
-          className="rounded-2xl p-4 mb-4"
-          style={{ background: "var(--color-paper-50)", border: "2px dashed var(--color-paper-400)" }}
-        >
-          <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>
-            まずは受付時間を設定して、公開URLを作りましょう
-          </p>
-          <button
-            onClick={() => navigate("/scheduler/settings")}
-            className="mt-2 text-sm font-bold"
-            style={{ color: "var(--color-brand)" }}
-          >
-            受付時間を設定する →
-          </button>
+          )}
         </div>
       )}
 
@@ -184,9 +169,22 @@ export function SchedulerDashboardScreen() {
       {/* クイックアクション */}
       <div className="space-y-2">
         <h2 className="font-bold mb-3" style={{ color: "var(--color-ink-800)" }}>設定</h2>
+        <a
+          href={previewUrl ?? "#"}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={handleCalendarPreviewClick}
+          aria-disabled={previewGenerate.isPending}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left disabled:opacity-50"
+          style={{ background: "var(--color-paper-50)", border: "1px solid var(--color-paper-200)" }}
+        >
+          <span style={{ color: "var(--color-ink-600)" }}><ExternalLink size={16} /></span>
+          <span className="text-sm" style={{ color: "var(--color-ink-800)" }}>📅 カレンダーページを表示</span>
+          <span className="ml-auto text-xs" style={{ color: "var(--color-ink-400)" }}>→</span>
+        </a>
         {[
           { icon: <Link2 size={16} />, label: "外部サービス連携", path: "/scheduler/integrations" },
-          { icon: <Settings size={16} />, label: "受付時間・基本設定", path: "/scheduler/settings" },
+          { icon: <Settings size={16} />, label: "基本設定・受付時間", path: "/scheduler/settings" },
           { icon: <CalendarDays size={16} />, label: "予約一覧", path: "/scheduler/bookings" },
         ].map((item) => (
           <button

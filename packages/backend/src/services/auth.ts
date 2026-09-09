@@ -24,6 +24,13 @@ export function generateRawToken(): string {
   return Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** 32バイトのランダムトークンをURLセーフなbase64文字列で生成する（公開URLのパス断片に使う） */
+export function generateUrlSafeToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
 /** 文字列をSHA-256でハッシュ化してhex文字列で返す */
 export async function sha256Hex(input: string): Promise<string> {
   const encoder = new TextEncoder();

@@ -11,11 +11,13 @@ import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
 
 type Availability = "yes" | "maybe" | "no";
-type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null };
+type CandidateRespondent = { name: string; availability: Availability };
+type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null; respondents: CandidateRespondent[] };
 type ApiResponse = {
   data: {
     meeting: {
       id: string; title: string; description: string | null; status: string;
+      confirmedCandidateId: string | null;
       host: { id: string; name: string; emoji: string } | null;
     };
     candidates: Candidate[];
@@ -32,6 +34,23 @@ function formatDate(ts: number, endsAt: number | null, tz: string): string {
   const start = fmtDateTime(ts, tz);
   if (endsAt) return `${start}〜${fmtDateTime(endsAt, tz).split(" ")[1] ?? ""}`;
   return start;
+}
+
+function RespondentSummary({ respondents }: { respondents: CandidateRespondent[] }) {
+  if (respondents.length === 0) return null;
+  return (
+    <div className="mt-1.5 space-y-0.5">
+      {AVAIL_OPTIONS.map((o) => {
+        const names = respondents.filter((r) => r.availability === o.value).map((r) => r.name);
+        if (names.length === 0) return null;
+        return (
+          <p key={o.value} className="text-xs" style={{ color: o.color }}>
+            {o.label} {names.join("、")}
+          </p>
+        );
+      })}
+    </div>
+  );
 }
 
 export function ScheduleInviteScreen() {
@@ -66,10 +85,17 @@ export function ScheduleInviteScreen() {
     setAnswers((prev) => ({ ...prev, [candidateId]: value }));
   }
 
+  // 確定後は「確定した日時」のみを表示・回答対象にする
+  const displayCandidates = apiData
+    ? apiData.meeting.status === "confirmed" && apiData.meeting.confirmedCandidateId
+      ? apiData.candidates.filter((c) => c.id === apiData.meeting.confirmedCandidateId)
+      : apiData.candidates
+    : [];
+
   async function handleSubmit() {
     if (!name.trim()) { setSubmitError("お名前を入力してください"); return; }
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
-    const unanswered = (apiData?.candidates ?? []).filter((c) => !answers[c.id]);
+    const unanswered = displayCandidates.filter((c) => !answers[c.id]);
     if (unanswered.length > 0) { setSubmitError("すべての候補日に回答してください"); return; }
     setSubmitError("");
     setSubmitting(true);
@@ -116,7 +142,6 @@ export function ScheduleInviteScreen() {
   }
 
   const meeting = apiData!.meeting;
-  const candidates = apiData!.candidates;
 
   if (submitted) {
     return (
@@ -185,6 +210,13 @@ export function ScheduleInviteScreen() {
           )}
         </div>
 
+        {meeting.status === "confirmed" && (
+          <div className="mb-4 p-3 rounded-2xl text-center text-sm"
+            style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-success)" }}>
+            ✅ 日程は確定しています。確定した日時への参加可否を回答できます
+          </div>
+        )}
+
         <div className="space-y-5">
           {/* お名前 */}
           <div>
@@ -239,7 +271,7 @@ export function ScheduleInviteScreen() {
               ))}
             </div>
             <div className="space-y-2">
-              {candidates.map((cand) => {
+              {displayCandidates.map((cand) => {
                 const av = answers[cand.id];
                 return (
                   <div key={cand.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3">
@@ -248,6 +280,7 @@ export function ScheduleInviteScreen() {
                         {formatDate(cand.startsAt, cand.endsAt, timezone)}
                       </p>
                       {cand.note && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{cand.note}</p>}
+                      <RespondentSummary respondents={cand.respondents} />
                     </div>
                     <div className="flex gap-2 shrink-0">
                       {AVAIL_OPTIONS.map((o) => (

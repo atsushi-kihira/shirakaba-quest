@@ -10,7 +10,8 @@ import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
 
 type Availability = "yes" | "maybe" | "no";
-type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null };
+type CandidateRespondent = { name: string; availability: Availability };
+type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null; respondents: CandidateRespondent[] };
 type ApiResponse = {
   data: {
     inviteeId: string;
@@ -36,6 +37,23 @@ function formatDate(ts: number, endsAt: number | null, tz: string): string {
   const start = fmtDateTime(ts, tz);
   if (endsAt) return `${start}〜${fmtDateTime(endsAt, tz).split(" ")[1] ?? ""}`;
   return start;
+}
+
+function RespondentSummary({ respondents }: { respondents: CandidateRespondent[] }) {
+  if (respondents.length === 0) return null;
+  return (
+    <div className="mt-1.5 space-y-0.5">
+      {AVAIL_OPTIONS.map((o) => {
+        const names = respondents.filter((r) => r.availability === o.value).map((r) => r.name);
+        if (names.length === 0) return null;
+        return (
+          <p key={o.value} className="text-xs" style={{ color: o.color }}>
+            {o.label} {names.join("、")}
+          </p>
+        );
+      })}
+    </div>
+  );
 }
 
 export function ScheduleScreen() {
@@ -73,10 +91,17 @@ export function ScheduleScreen() {
     setAnswers((prev) => ({ ...prev, [candidateId]: value }));
   }
 
+  // 確定後は「確定した日時」のみを表示・回答対象にする
+  const displayCandidates = apiData
+    ? apiData.meeting.status === "confirmed" && apiData.meeting.confirmedCandidateId
+      ? apiData.candidates.filter((c) => c.id === apiData.meeting.confirmedCandidateId)
+      : apiData.candidates
+    : [];
+
   async function handleSubmit() {
     if (!name.trim()) { setSubmitError("お名前を入力してください"); return; }
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
-    const unanswered = (apiData?.candidates ?? []).filter((c) => !answers[c.id]);
+    const unanswered = displayCandidates.filter((c) => !answers[c.id]);
     if (unanswered.length > 0) { setSubmitError("すべての候補日に回答してください"); return; }
     setSubmitError("");
     setSubmitting(true);
@@ -124,7 +149,8 @@ export function ScheduleScreen() {
   }
 
   const meeting = apiData!.meeting;
-  const candidates = apiData!.candidates;
+  // open（調整中）または confirmed（確定済み・確定日時のみ回答可）なら回答できる。cancelled は不可
+  const respondable = meeting.status === "open" || (meeting.status === "confirmed" && !!meeting.confirmedCandidateId);
 
   if (submitted) {
     const url = scheduleUrl || window.location.href;
@@ -193,7 +219,13 @@ export function ScheduleScreen() {
           )}
         </div>
 
-        {meeting.status !== "open" && (
+        {meeting.status === "confirmed" && (
+          <div className="mb-4 p-3 rounded-2xl text-center text-sm"
+            style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-success)" }}>
+            ✅ 日程は確定しています。確定した日時への参加可否は引き続き回答できます
+          </div>
+        )}
+        {!respondable && (
           <div className="mb-4 p-3 rounded-2xl text-center text-sm"
             style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
             このミーティングの回答受付は終了しています
@@ -210,7 +242,7 @@ export function ScheduleScreen() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="山田 太郎"
-              disabled={meeting.status !== "open"}
+              disabled={!respondable}
               className="w-full px-4 py-3 rounded-2xl text-sm outline-none border"
               style={{
                 background: "var(--color-paper-50)",
@@ -230,7 +262,7 @@ export function ScheduleScreen() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="yamada@example.com"
-              disabled={meeting.status !== "open"}
+              disabled={!respondable}
               className="w-full px-4 py-3 rounded-2xl text-sm outline-none border"
               style={{
                 background: "var(--color-paper-50)",
@@ -256,7 +288,7 @@ export function ScheduleScreen() {
               ))}
             </div>
             <div className="space-y-2">
-              {candidates.map((cand) => {
+              {displayCandidates.map((cand) => {
                 const av = answers[cand.id];
                 return (
                   <div key={cand.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3">
@@ -265,13 +297,14 @@ export function ScheduleScreen() {
                         {formatDate(cand.startsAt, cand.endsAt, timezone)}
                       </p>
                       {cand.note && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{cand.note}</p>}
+                      <RespondentSummary respondents={cand.respondents} />
                     </div>
                     <div className="flex gap-2 shrink-0">
                       {AVAIL_OPTIONS.map((o) => (
                         <button
                           key={o.value}
-                          onClick={() => meeting.status === "open" && setAnswer(cand.id, o.value)}
-                          disabled={meeting.status !== "open"}
+                          onClick={() => respondable && setAnswer(cand.id, o.value)}
+                          disabled={!respondable}
                           className="w-10 h-10 rounded-xl text-base font-bold transition"
                           style={{
                             background: av === o.value ? o.bg : "var(--color-paper-200)",
@@ -295,7 +328,7 @@ export function ScheduleScreen() {
             </p>
           )}
 
-          {meeting.status === "open" && (
+          {respondable && (
             <button
               onClick={handleSubmit}
               disabled={submitting}

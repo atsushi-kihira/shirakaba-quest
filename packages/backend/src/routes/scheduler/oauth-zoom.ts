@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { encryptToken, decryptToken } from "../../services/tokenCrypto.ts";
 import { getFrontendUrl } from "../../services/frontendUrl.ts";
+import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const oauthZoomRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -23,8 +24,15 @@ function basicAuth(clientId: string, clientSecret: string): string {
 
 /** OAuth 開始 */
 oauthZoomRoutes.get("/start", async (c) => {
-  const memberId = c.get("userId");
-  if (!memberId) return c.json({ error: { code: "unauthorized", message: "ログインが必要です" } }, 401);
+  const userId = c.get("userId");
+  const userType = c.get("userType");
+  if (!userId) return c.json({ error: { code: "unauthorized", message: "ログインが必要です" } }, 401);
+
+  const db0 = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db0, userId, userType);
+  if (!memberId) {
+    return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないため連携できません" } }, 403);
+  }
 
   const stateBytes = crypto.getRandomValues(new Uint8Array(32));
   const state = btoa(String.fromCharCode(...stateBytes))
@@ -110,6 +118,8 @@ oauthZoomRoutes.get("/callback", async (c) => {
     const userInfo = (await userRes.json()) as { email: string; id: string };
     zoomEmail = userInfo.email;
     zoomUserId = userInfo.id;
+  } else {
+    console.error("Zoom /v2/users/me failed:", userRes.status, await userRes.text());
   }
 
   const tokenKey = c.env.SCHEDULER_TOKEN_KEY;
@@ -152,10 +162,13 @@ oauthZoomRoutes.get("/callback", async (c) => {
 
 /** 連携解除 */
 oauthZoomRoutes.post("/disconnect", async (c) => {
-  const memberId = c.get("userId");
-  if (!memberId) return c.json({ error: { code: "unauthorized", message: "ログインが必要です" } }, 401);
+  const userId = c.get("userId");
+  const userType = c.get("userType");
+  if (!userId) return c.json({ error: { code: "unauthorized", message: "ログインが必要です" } }, 401);
 
   const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, userId, userType);
+  if (!memberId) return c.json({ data: { disconnected: true } });
 
   const cred = await db
     .select({ accessTokenEnc: schema.zoomCredentials.accessTokenEnc })
@@ -189,10 +202,15 @@ oauthZoomRoutes.post("/disconnect", async (c) => {
 
 /** 連携状態確認 */
 oauthZoomRoutes.get("/status", async (c) => {
-  const memberId = c.get("userId");
-  if (!memberId) return c.json({ error: { code: "unauthorized", message: "ログインが必要です" } }, 401);
+  const userId = c.get("userId");
+  const userType = c.get("userType");
+  if (!userId) return c.json({ error: { code: "unauthorized", message: "ログインが必要です" } }, 401);
 
   const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, userId, userType);
+  if (!memberId) {
+    return c.json({ data: { connected: false, zoomAccountEmail: null, connectedAt: null } });
+  }
   const cred = await db
     .select({
       zoomAccountEmail: schema.zoomCredentials.zoomAccountEmail,

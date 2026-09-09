@@ -1,15 +1,23 @@
 // SC-06 予約詳細画面（ホスト向け）
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, ArrowLeft, Video, Mail, AlertTriangle } from "lucide-react";
+import { Loader2, ArrowLeft, Video, Mail, AlertTriangle, CheckCircle } from "lucide-react";
 import { useState } from "react";
 import { request, ApiError } from "@/lib/api";
+import { AddContactFromBookingModal } from "@/components/add-contact-from-booking-modal";
 
 type Booking = {
   id: string;
   guestName: string;
   guestEmail: string;
   guestMessage: string | null;
+  guestCompany: string | null;
+  guestMemberId: string | null;
+  oneOnOneSessionId: string | null;
+  isExternalGuest: boolean;
+  externalContactId: string | null;
+  guestFollowupDismissedAt: string | null;
+  guestFollowupOutcome: "not_held" | "no_add" | null;
   startAtUtc: string;
   endAtUtc: string;
   timezone: string;
@@ -36,6 +44,7 @@ export function SchedulerBookingDetailScreen() {
   const [cancelReason, setCancelReason] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAddContact, setShowAddContact] = useState(false);
 
   const { data, isLoading } = useQuery<{ data: Booking }>({
     queryKey: ["scheduler", "bookings", id],
@@ -56,6 +65,12 @@ export function SchedulerBookingDetailScreen() {
       setShowCancelConfirm(false);
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : "キャンセルに失敗しました"),
+  });
+
+  const dismissFollowupMutation = useMutation({
+    mutationFn: (outcome: "not_held" | "no_add") =>
+      request(`/scheduler/bookings/${id}/dismiss-followup`, { method: "PATCH", body: { outcome } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scheduler", "bookings"] }),
   });
 
   if (isLoading) {
@@ -165,6 +180,61 @@ export function SchedulerBookingDetailScreen() {
         )}
       </div>
 
+      {/* 外部ゲスト（非会員）1to1の完了報告・人脈登録 */}
+      {!isCancelled && booking.isExternalGuest && (
+        <div className="mb-6">
+          {booking.externalContactId ? (
+            <div className="rounded-xl p-4 flex items-center gap-2"
+              style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.25)" }}>
+              <CheckCircle size={16} style={{ color: "var(--color-success)" }} />
+              <p className="text-sm flex-1" style={{ color: "var(--color-ink-700)" }}>外部人脈として登録済みです</p>
+              <Link to="/members?tab=contacts" className="text-xs font-medium underline underline-offset-2"
+                style={{ color: "var(--color-success)" }}>
+                外部人脈を見る
+              </Link>
+            </div>
+          ) : new Date(booking.endAtUtc).getTime() > Date.now() ? (
+            <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+              1to1の実施後、こちらから完了の報告・外部人脈への登録ができます。
+            </p>
+          ) : (
+            <div className="rounded-xl p-4" style={{ background: "rgba(181,56,75,0.06)", border: "1px solid rgba(181,56,75,0.2)" }}>
+              <p className="text-sm font-medium mb-3" style={{ color: "var(--color-ink-800)" }}>
+                実施予定時刻を過ぎています。1to1は完了しましたか？
+              </p>
+              <div className="space-y-2">
+                <button onClick={() => setShowAddContact(true)}
+                  className="w-full py-2.5 rounded-xl text-sm font-medium text-white"
+                  style={{ background: "var(--color-brand)" }}>
+                  完了・人脈に追加する
+                </button>
+                <div className="flex gap-2">
+                  <button onClick={() => dismissFollowupMutation.mutate("not_held")}
+                    disabled={dismissFollowupMutation.isPending}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50"
+                    style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                    実施せず
+                  </button>
+                  <button onClick={() => dismissFollowupMutation.mutate("no_add")}
+                    disabled={dismissFollowupMutation.isPending}
+                    className="flex-1 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50"
+                    style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                    完了・今回は追加しない
+                  </button>
+                </div>
+              </div>
+              {booking.guestFollowupDismissedAt && (
+                <p className="text-xs mt-2" style={{ color: "var(--color-ink-400)" }}>
+                  {booking.guestFollowupOutcome === "not_held"
+                    ? "「実施せず」を選択済みです。後からでも登録できます。"
+                    : "「完了・今回は追加しない」を選択済みです。後からでも登録できます。"}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* キャンセルボタン */}
       {!isCancelled && (
         <>
@@ -213,6 +283,15 @@ export function SchedulerBookingDetailScreen() {
             </div>
           )}
         </>
+      )}
+
+      {showAddContact && (
+        <AddContactFromBookingModal
+          bookingId={booking.id}
+          guestName={booking.guestName}
+          guestCompany={booking.guestCompany}
+          onClose={() => setShowAddContact(false)}
+        />
       )}
     </div>
   );

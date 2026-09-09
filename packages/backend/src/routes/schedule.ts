@@ -4,15 +4,60 @@
 // POST /api/schedule/:token/respond  — 外部ゲスト回答（メールアドレス必須、初回はブックマークURLをメール送信）
 // =============================================================
 import { Hono } from "hono";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { newId } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
+import { getFrontendUrl } from "../services/frontendUrl.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
 
 export const scheduleRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+type CandidateRespondent = { name: string; availability: Availability };
+
+// 候補日ごとに「誰が○/△/×と回答したか」を返す（会員・外部ゲストを問わず全員分）。
+// 外部ゲスト・未ログインの回答者にも「他の人の回答状況を見て選ぶ」を可能にするため、
+// 会員向け画面と同様に氏名まで含めて返す。
+async function computeCandidateRespondents(
+  db: ReturnType<typeof createDb>,
+  meetingId: string
+): Promise<Map<string, CandidateRespondent[]>> {
+  const allResponses = await db
+    .select({
+      candidateId: schema.meetingResponses.candidateId,
+      availability: schema.meetingResponses.availability,
+      memberId: schema.meetingResponses.memberId,
+      externalInviteeId: schema.meetingResponses.externalInviteeId,
+    })
+    .from(schema.meetingResponses)
+    .where(eq(schema.meetingResponses.meetingId, meetingId))
+    .all();
+
+  const memberIds = [...new Set(allResponses.filter((r) => r.memberId).map((r) => r.memberId as string))];
+  const externalIds = [...new Set(allResponses.filter((r) => r.externalInviteeId).map((r) => r.externalInviteeId as string))];
+
+  const [members, externals] = await Promise.all([
+    memberIds.length > 0
+      ? db.select({ id: schema.members.id, name: schema.members.name }).from(schema.members).where(inArray(schema.members.id, memberIds)).all()
+      : Promise.resolve([]),
+    externalIds.length > 0
+      ? db.select({ id: schema.meetingExternalInvitees.id, name: schema.meetingExternalInvitees.name }).from(schema.meetingExternalInvitees).where(inArray(schema.meetingExternalInvitees.id, externalIds)).all()
+      : Promise.resolve([]),
+  ]);
+  const nameMap = new Map([...members, ...externals].map((p) => [p.id, p.name || "ゲスト"]));
+
+  const respondentsByCandidateId = new Map<string, CandidateRespondent[]>();
+  for (const r of allResponses) {
+    const personId = r.memberId ?? r.externalInviteeId;
+    if (!personId) continue;
+    const list = respondentsByCandidateId.get(r.candidateId) ?? [];
+    list.push({ name: nameMap.get(personId) ?? "不明なゲスト", availability: r.availability as Availability });
+    respondentsByCandidateId.set(r.candidateId, list);
+  }
+  return respondentsByCandidateId;
+}
 
 // GET /api/schedule/:token
 scheduleRoutes.get("/:token", async (c) => {
@@ -65,6 +110,8 @@ scheduleRoutes.get("/:token", async (c) => {
     .where(eq(schema.members.id, meeting.hostMemberId))
     .get();
 
+  const respondentsByCandidateId = await computeCandidateRespondents(db, meeting.id);
+
   return c.json({
     data: {
       inviteeId: extInvitee.id,
@@ -80,6 +127,7 @@ scheduleRoutes.get("/:token", async (c) => {
       },
       candidates: candidates.map((c) => ({
         id: c.id, startsAt: c.startsAt, endsAt: c.endsAt, note: c.note,
+        respondents: respondentsByCandidateId.get(c.id) ?? [],
       })),
       myAnswers,
     },
@@ -108,11 +156,23 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     .where(eq(schema.meetings.id, extInvitee.meetingId))
     .get();
 
-  if (!meeting || meeting.status !== "open") {
+  if (!meeting) {
+    return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  }
+  // open 以外は基本的に締め切りだが、confirmed の場合のみ「確定した日時」に限って回答を受け付ける
+  if (meeting.status !== "open" && !(meeting.status === "confirmed" && meeting.confirmedCandidateId)) {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
   const body = await c.req.json<{ name?: string; email?: string; answers: Record<string, Availability> }>();
+  if (meeting.status === "confirmed" && meeting.confirmedCandidateId) {
+    body.answers = Object.fromEntries(
+      Object.entries(body.answers).filter(([candidateId]) => candidateId === meeting.confirmedCandidateId)
+    );
+    if (Object.keys(body.answers).length === 0) {
+      return c.json({ error: { code: "invalid_input", message: "確定した日時に対する回答を送ってください" } }, 400);
+    }
+  }
 
   // メールアドレスは必須
   const emailInput = body.email?.trim();
@@ -161,7 +221,7 @@ scheduleRoutes.post("/:token/respond", async (c) => {
 
   // 初回回答時にブックマークURL付きメールを送信
   if (isFirstResponse) {
-    const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+    const appUrl = getFrontendUrl(c.env);
     const scheduleUrl = `${appUrl}/schedule/${token}`;
     const guestName = updateFields.name ?? extInvitee.name ?? "ゲスト";
 
@@ -170,16 +230,18 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     const hostName = hostMember?.name ?? "主催者";
     const appTitleSched = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
 
-    new MailService(db, c.env).send("meeting_response_guest", emailInput, {
-      appTitle: appTitleSched,
-      guestName,
-      hostName,
-      meetingTitle: meeting.title,
-      scheduleUrl,
-    }).catch(console.error);
+    c.executionCtx.waitUntil(
+      new MailService(db, c.env).send("meeting_response_guest", emailInput, {
+        appTitle: appTitleSched,
+        guestName,
+        hostName,
+        meetingTitle: meeting.title,
+        scheduleUrl,
+      }).catch(console.error)
+    );
   }
 
-  const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+  const appUrl = getFrontendUrl(c.env);
 
   return c.json({ ok: true, scheduleUrl: `${appUrl}/schedule/${token}` });
 });
@@ -201,7 +263,8 @@ scheduleRoutes.get("/invite/:inviteToken", async (c) => {
     .get();
 
   if (!meeting) return c.json({ error: { code: "not_found", message: "このURLは無効です" } }, 404);
-  if (meeting.status !== "open") {
+  // open 以外は基本的に締め切りだが、confirmed の場合のみ「確定した日時」への回答目的で引き続き閲覧できる
+  if (meeting.status !== "open" && !(meeting.status === "confirmed" && meeting.confirmedCandidateId)) {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
@@ -218,6 +281,8 @@ scheduleRoutes.get("/invite/:inviteToken", async (c) => {
     .where(eq(schema.members.id, meeting.hostMemberId))
     .get();
 
+  const respondentsByCandidateId = await computeCandidateRespondents(db, meeting.id);
+
   return c.json({
     data: {
       meeting: {
@@ -225,10 +290,12 @@ scheduleRoutes.get("/invite/:inviteToken", async (c) => {
         title: meeting.title,
         description: meeting.description,
         status: meeting.status,
+        confirmedCandidateId: meeting.confirmedCandidateId,
         host: host ?? null,
       },
       candidates: candidates.map((c) => ({
         id: c.id, startsAt: c.startsAt, endsAt: c.endsAt, note: c.note,
+        respondents: respondentsByCandidateId.get(c.id) ?? [],
       })),
     },
   });
@@ -246,7 +313,8 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     .get();
 
   if (!meeting) return c.json({ error: { code: "not_found", message: "このURLは無効です" } }, 404);
-  if (meeting.status !== "open") {
+  // open 以外は基本的に締め切りだが、confirmed の場合のみ「確定した日時」に限って回答を受け付ける
+  if (meeting.status !== "open" && !(meeting.status === "confirmed" && meeting.confirmedCandidateId)) {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
@@ -254,6 +322,14 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
   const emailInput = body.email?.trim();
   if (!emailInput) {
     return c.json({ error: { code: "invalid_input", message: "メールアドレスを入力してください" } }, 400);
+  }
+  if (meeting.status === "confirmed" && meeting.confirmedCandidateId) {
+    body.answers = Object.fromEntries(
+      Object.entries(body.answers).filter(([candidateId]) => candidateId === meeting.confirmedCandidateId)
+    );
+    if (Object.keys(body.answers).length === 0) {
+      return c.json({ error: { code: "invalid_input", message: "確定した日時に対する回答を送ってください" } }, 400);
+    }
   }
 
   // 同じメールで既に回答済みなら既存レコードを返す（二重送信防止）
@@ -302,7 +378,7 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     });
   }
 
-  const appUrl = c.env.CORS_ORIGIN ?? "https://shirakaba-quest.pages.dev";
+  const appUrl = getFrontendUrl(c.env);
   const personalScheduleUrl = `${appUrl}/schedule/${invitee.token}`;
 
   // 初回作成時のみ確認メールを送信
@@ -310,13 +386,15 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     const hostMember = await db.select({ name: schema.members.name }).from(schema.members)
       .where(eq(schema.members.id, meeting.hostMemberId)).get();
     const appTitleInv = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
-    new MailService(db, c.env).send("meeting_response_guest", emailInput, {
-      appTitle: appTitleInv,
-      guestName: invitee.name || "ゲスト",
-      hostName: hostMember?.name ?? "主催者",
-      meetingTitle: meeting.title,
-      scheduleUrl: personalScheduleUrl,
-    }).catch(console.error);
+    c.executionCtx.waitUntil(
+      new MailService(db, c.env).send("meeting_response_guest", emailInput, {
+        appTitle: appTitleInv,
+        guestName: invitee.name || "ゲスト",
+        hostName: hostMember?.name ?? "主催者",
+        meetingTitle: meeting.title,
+        scheduleUrl: personalScheduleUrl,
+      }).catch(console.error)
+    );
   }
 
   return c.json({ ok: true, scheduleUrl: personalScheduleUrl });
