@@ -3,7 +3,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus, Pencil, UserPlus, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus, Pencil, UserPlus, ChevronDown, ChevronUp, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Team } from "@shared/types";
 
@@ -51,7 +51,7 @@ export function AdminTeamsScreen() {
     <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-24 max-w-2xl">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-          👥 チーム管理
+          👥 ギルド管理
         </h1>
         <div className="flex gap-2">
           <button
@@ -75,7 +75,7 @@ export function AdminTeamsScreen() {
 
       {/* タブ */}
       <div className="flex gap-2 mb-4">
-        {([["teams", "🦊 チーム一覧"], ["ranking", "🏆 チームランキング"]] as const).map(([t, label]) => (
+        {([["teams", "🦊 ギルド一覧"], ["ranking", "🏆 ギルドランキング"]] as const).map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)}
             className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
             style={{
@@ -94,7 +94,7 @@ export function AdminTeamsScreen() {
             <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>読み込み中...</div>
           ) : teams.length === 0 ? (
             <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
-              チームがまだありません。自動振り分けか手動で作ってみましょう。
+              ギルドがまだありません。自動振り分けか手動で作ってみましょう。
             </div>
           ) : (
             <div className="space-y-3">
@@ -122,7 +122,7 @@ export function AdminTeamsScreen() {
         <div className="space-y-2">
           {(rankingData?.data ?? []).length === 0 ? (
             <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
-              チームランキングを計算中...
+              ギルドランキングを計算中...
             </div>
           ) : (
             (rankingData?.data ?? []).map((entry) => {
@@ -219,7 +219,7 @@ function UnassignedMembersSection({
   return (
     <div className="mt-6">
       <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>
-        ⚠️ チーム未割り当てのメンバー（{unassigned.length}名）
+        ⚠️ ギルド未割り当てのメンバー（{unassigned.length}名）
       </h2>
       <div className="space-y-2">
         {unassigned.map((m) => (
@@ -234,7 +234,7 @@ function UnassignedMembersSection({
               className="text-xs rounded-xl px-2 py-1.5 border"
               style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-700)" }}
             >
-              <option value="">チームを選択...</option>
+              <option value="">ギルドを選択...</option>
               {teams.map((t) => (
                 <option key={t.id} value={t.id}>{t.emblemEmoji} {t.name}</option>
               ))}
@@ -330,7 +330,7 @@ function TeamCard({
               <button
                 onClick={() => { setEditing(true); setEditName(team.name); }}
                 className="p-1 rounded-lg hover:opacity-70"
-                title="チーム名を編集"
+                title="ギルド名を編集"
               >
                 <Pencil size={12} style={{ color: "var(--color-ink-400)" }} />
               </button>
@@ -383,7 +383,7 @@ function TeamCard({
                   onClick={() => removeMember.mutate({ memberId: tm.memberId })}
                   className="p-1.5 rounded-lg"
                   style={{ background: "var(--color-paper-200)" }}
-                  title="チームから外す"
+                  title="ギルドから外す"
                 >
                   <UserMinus size={12} style={{ color: "var(--color-brand)" }} />
                 </button>
@@ -488,7 +488,7 @@ function AddMemberModal({
         {pendingTransfer ? (
           <>
             <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-              🔄 チーム移動の確認
+              🔄 ギルド移動の確認
             </h2>
             <div className="rounded-2xl p-3 mb-4" style={{ background: "var(--color-paper-200)" }}>
               <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>
@@ -500,7 +500,7 @@ function AddMemberModal({
               </p>
             </div>
             <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
-              元のチームから自動的に外されます
+              元のギルドから自動的に外されます
             </p>
             <div className="flex gap-2">
               <button
@@ -525,14 +525,24 @@ function AddMemberModal({
             <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
               {team.emblemEmoji} {team.name}にメンバーを追加
             </h2>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="名前で絞り込み..."
-              className="w-full px-3 py-2 rounded-xl border text-sm mb-3"
-              style={{ borderColor: "var(--color-paper-300)", outline: "none" }}
-              autoFocus
-            />
+            <div className="relative mb-3">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="名前で絞り込み..."
+                className="w-full px-3 pr-9 py-2 rounded-xl border text-sm"
+                style={{ borderColor: "var(--color-paper-300)", outline: "none" }}
+                autoFocus
+              />
+              {search && (
+                <button type="button" onClick={() => setSearch("")}
+                  aria-label="検索条件をクリア"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full"
+                  style={{ color: "var(--color-ink-400)" }}>
+                  <X size={14} />
+                </button>
+              )}
+            </div>
             <div className="space-y-1 max-h-64 overflow-y-auto">
               {filtered.length === 0 && (
                 <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-400)" }}>
@@ -612,7 +622,7 @@ function CreateTeamModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
       style={{ background: "rgba(0,0,0,0.4)" }} onClick={onClose}>
       <div className="card-paper p-6 w-full max-w-sm rounded-3xl" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold mb-4" style={{ fontFamily: "var(--font-klee)" }}>🦊 新しいチーム</h2>
+        <h2 className="text-lg font-semibold mb-4" style={{ fontFamily: "var(--font-klee)" }}>🦊 新しいギルド</h2>
         <div className="space-y-3">
           <div className="flex gap-3">
             <div>
@@ -622,7 +632,7 @@ function CreateTeamModal({ onClose }: { onClose: () => void }) {
                 style={{ borderColor: "var(--color-paper-300)" }} />
             </div>
             <div className="flex-1">
-              <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>チーム名 *</label>
+              <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>ギルド名 *</label>
               <input value={name} onChange={(e) => setName(e.target.value)}
                 placeholder="例: 白樺フォレスト隊"
                 className="w-full px-3 py-2 rounded-xl border text-sm"
@@ -683,7 +693,7 @@ function AutoAssignModal({ onClose }: { onClose: () => void }) {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
-              1チームの人数目安
+              1ギルドの人数目安
             </label>
             <div className="flex items-center gap-3">
               <input type="range" min={3} max={10} value={teamSize} onChange={(e) => setTeamSize(+e.target.value)}
@@ -691,7 +701,7 @@ function AutoAssignModal({ onClose }: { onClose: () => void }) {
               <span className="font-bold w-8 text-center" style={{ color: "var(--color-ink-800)" }}>{teamSize}名</span>
             </div>
             <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
-              アクティブ {activeMembers.length}名 → 約 {teamCount}チーム
+              アクティブ {activeMembers.length}名 → 約 {teamCount}ギルド
             </p>
           </div>
 
@@ -729,7 +739,7 @@ function AutoAssignModal({ onClose }: { onClose: () => void }) {
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="例: 異業種が同じチームになるようにしてください。不動産・建築系は分けてください。"
+                placeholder="例: 異業種が同じギルドになるようにしてください。不動産・建築系は分けてください。"
                 rows={3}
                 className="w-full px-3 py-2 rounded-xl border text-sm resize-none"
                 style={{ borderColor: "var(--color-paper-300)" }}

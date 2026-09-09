@@ -1,5 +1,5 @@
 // =============================================================
-// チームページ — メンバー一覧 + USP表示 + ポイント集計
+// ギルドページ — メンバー一覧 + USP表示 + ポイント集計
 // =============================================================
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -62,10 +62,10 @@ export function TeamScreen() {
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto lg:max-w-none">
       <div className="mb-4">
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-          🦊 チームの活動
+          🦊 ギルドの活動
         </h1>
         <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>
-          チームメンバーの{termUsp}を確認しよう
+          ギルドメンバーの{termUsp}を確認しよう
         </p>
       </div>
 
@@ -78,8 +78,8 @@ export function TeamScreen() {
       {!isLoading && displayTeams.length === 0 && (
         <div className="text-center py-12">
           <p className="text-4xl mb-3">🦊</p>
-          <p style={{ color: "var(--color-ink-400)" }}>チームがまだ作成されていません</p>
-          <p className="text-sm mt-1" style={{ color: "var(--color-ink-400)" }}>管理者にチームを作ってもらいましょう</p>
+          <p style={{ color: "var(--color-ink-400)" }}>ギルドがまだ作成されていません</p>
+          <p className="text-sm mt-1" style={{ color: "var(--color-ink-400)" }}>管理者にギルドを作ってもらいましょう</p>
         </div>
       )}
 
@@ -97,7 +97,7 @@ export function TeamScreen() {
                   </h2>
                   {team.isMine && (
                     <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
-                      style={{ background: "var(--color-brand)", color: "white" }}>あなたのチーム</span>
+                      style={{ background: "var(--color-brand)", color: "white" }}>あなたのギルド</span>
                   )}
                 </div>
                 <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{team.members.length}名</p>

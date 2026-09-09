@@ -85,15 +85,22 @@ teamRoutes.get("/ranking", async (c) => {
   const teams = await db.select().from(schema.teams).all();
   const allTeamMembers = await db.select().from(schema.teamMembers).all();
 
-  // シーズンスコープの場合は現在のアクティブシーズンの期間でフィルタ
+  // シーズンスコープの場合は指定シーズン（未指定ならアクティブシーズン）の期間でフィルタ
+  const seasonId = c.req.query("seasonId");
   let seasonFilter: ReturnType<typeof and> | undefined;
   let activeSeason: { id: string; name: string; startsAt: number; endsAt: number | null } | undefined;
   if (scope === "season") {
-    const s = await db
-      .select({ id: schema.seasons.id, name: schema.seasons.name, startsAt: schema.seasons.startsAt, endsAt: schema.seasons.endsAt })
-      .from(schema.seasons)
-      .where(eq(schema.seasons.isActive, 1))
-      .get();
+    const s = seasonId
+      ? await db
+          .select({ id: schema.seasons.id, name: schema.seasons.name, startsAt: schema.seasons.startsAt, endsAt: schema.seasons.endsAt })
+          .from(schema.seasons)
+          .where(eq(schema.seasons.id, seasonId))
+          .get()
+      : await db
+          .select({ id: schema.seasons.id, name: schema.seasons.name, startsAt: schema.seasons.startsAt, endsAt: schema.seasons.endsAt })
+          .from(schema.seasons)
+          .where(eq(schema.seasons.isActive, 1))
+          .get();
     if (s) {
       activeSeason = s;
       seasonFilter = s.endsAt
