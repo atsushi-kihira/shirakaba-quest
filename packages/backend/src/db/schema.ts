@@ -27,7 +27,7 @@ export const members = sqliteTable("members", {
   cardImageKey:        text("card_image_key"),
   avatarImageKey:      text("avatar_image_key"),
   timezone:            text("timezone"),
-  status:              text("status").notNull().default("pending"), // 'pending' | 'active' | 'on_leave' | 'deleted'
+  status:              text("status").notNull().default("pending"), // 'pending' | 'active' | 'guest' | 'on_leave' | 'rejected' | 'deleted'
   approvedAt:          integer("approved_at"),
   createdAt:           integer("created_at").notNull(),
   updatedAt:           integer("updated_at").notNull(),

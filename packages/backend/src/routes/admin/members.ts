@@ -1,7 +1,9 @@
 // =============================================================
 // 管理者向けメンバー管理ルート
 // GET    /api/admin/members
-// PATCH  /api/admin/members/:id/approve
+// PATCH  /api/admin/members/:id/approve      — 承認（active化。ゲストからの昇格にも使う）
+// PATCH  /api/admin/members/:id/mark-guest   — ゲストユーザーに振り分ける（承認待ちから除外）
+// PATCH  /api/admin/members/:id/reject       — 利用却下（記録は残す。承認待ち・ゲストどちらからも可）
 // PATCH  /api/admin/members/:id/leave        — 休会にする（記録は残す）
 // PATCH  /api/admin/members/:id/reactivate   — 休会からアクティブに戻す
 // DELETE /api/admin/members/:id              — 完全削除（記録ごと全削除。メールアドレスが再登録可能になる）
@@ -109,6 +111,34 @@ adminMemberRoutes.patch("/:id/approve", async (c) => {
       }).catch((e) => console.error("[mail] member_approved failed:", e))
     );
   }
+
+  return c.json({ ok: true });
+});
+
+// ---- PATCH /api/admin/members/:id/mark-guest ----
+// ゲストユーザーに振り分ける：白樺のメンバーとしてではなく、スケジューラー等の
+// 限定機能だけを使うゲストとして扱う。承認待ち一覧・バッジの対象からは外れる。
+adminMemberRoutes.patch("/:id/mark-guest", async (c) => {
+  const db = createDb(c.env.DB);
+  const now = Math.floor(Date.now() / 1000);
+
+  await db.update(schema.members)
+    .set({ status: "guest", updatedAt: now })
+    .where(eq(schema.members.id, c.req.param("id")));
+
+  return c.json({ ok: true });
+});
+
+// ---- PATCH /api/admin/members/:id/reject ----
+// 利用却下：レコードは残したまま「却下済み」として履歴に残す（完全削除はしない）。
+// メールアドレスをすぐに解放したい場合は、別途「完全に削除する」を使う。
+adminMemberRoutes.patch("/:id/reject", async (c) => {
+  const db = createDb(c.env.DB);
+  const now = Math.floor(Date.now() / 1000);
+
+  await db.update(schema.members)
+    .set({ status: "rejected", updatedAt: now })
+    .where(eq(schema.members.id, c.req.param("id")));
 
   return c.json({ ok: true });
 });

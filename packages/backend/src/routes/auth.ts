@@ -57,12 +57,19 @@ authRoutes.post("/request-otp", async (c) => {
       .where(eq(schema.members.id, found.id))
       .get();
 
-    // pending（承認待ち）は、承認前でも限定機能のゲストとしてログインできるようにする（フロント側でUIを制限）
+    // pending（承認待ち）・guest（ゲストユーザー）は、限定機能のゲストとしてログインできるようにする（フロント側でUIを制限）
     if (member?.status === "on_leave") {
       return c.json({
         ok: false,
         status: "on_leave",
         message: "このアカウントは現在休会中です。管理者にお問い合わせください。",
+      });
+    }
+    if (member?.status === "rejected") {
+      return c.json({
+        ok: false,
+        status: "rejected",
+        message: "このアカウントのご利用は承認されませんでした。ご不明な点は管理者にお問い合わせください。",
       });
     }
   }

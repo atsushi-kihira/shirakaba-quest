@@ -42,7 +42,7 @@ export function buildSkillDescription(skill: Skill): string {
 // メンバー
 // -------------------------------------------------------
 
-export type MemberStatus = "pending" | "active" | "on_leave" | "deleted";
+export type MemberStatus = "pending" | "active" | "guest" | "on_leave" | "rejected" | "deleted";
 
 /** DB の生の Member 型（API レスポンスには直接使わない） */
 export type Member = {

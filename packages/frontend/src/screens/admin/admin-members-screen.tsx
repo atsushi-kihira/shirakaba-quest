@@ -3,7 +3,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle, UserMinus, UserCheck, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { CheckCircle, UserMinus, UserCheck, Trash2, ChevronDown, ChevronUp, Ghost, Ban } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { fmtDateISO } from "@/lib/date";
@@ -21,7 +21,7 @@ type AdminMember = {
   company: string | null;
   role: string | null;
   skills: Skill[];
-  status: "pending" | "active" | "on_leave" | "deleted";
+  status: "pending" | "active" | "guest" | "on_leave" | "rejected" | "deleted";
   approvedAt: number | null;
   createdAt: number;
   isPilot1: boolean;
@@ -37,14 +37,16 @@ type MemberRoleName = "pilot1" | "pilot2" | "power_team_coordinator" | "mentor_c
 const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   pending:  { label: "承認待ち", color: "var(--color-accent)" },
   active:   { label: "アクティブ", color: "var(--color-success)" },
+  guest:    { label: "ゲストユーザー", color: "#6B7DB3" },
   on_leave: { label: "休会中", color: "var(--color-ink-400)" },
+  rejected: { label: "利用却下", color: "var(--color-brand)" },
   deleted:  { label: "削除済み", color: "var(--color-ink-300)" },
 };
 
 export function AdminMembersScreen() {
   const qc = useQueryClient();
   const { timezone: tz, termEnishi } = useSettings();
-  const [filter, setFilter] = useState<"all" | "pending" | "active" | "on_leave">("all");
+  const [filter, setFilter] = useState<"all" | "pending" | "active" | "guest" | "on_leave" | "rejected">("all");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -68,6 +70,16 @@ export function AdminMembersScreen() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "members"] }),
   });
 
+  const markGuest = useMutation({
+    mutationFn: (id: string) => api.patch(`/admin/members/${id}/mark-guest`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "members"] }),
+  });
+
+  const reject = useMutation({
+    mutationFn: (id: string) => api.patch(`/admin/members/${id}/reject`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "members"] }),
+  });
+
   const deleteMember = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/members/${id}`),
     onSuccess: () => {
@@ -83,10 +95,11 @@ export function AdminMembersScreen() {
   });
 
   const members = data?.data ?? [];
-  // 「すべて」には休会中・削除済みは含めない（アクティブなメンバーと混ざって見づらくなるため、
-  // 休会中を確認したい場合は専用タブから見る）
+  // 「すべて」には休会中・ゲストユーザー・利用却下・削除済みは含めない（アクティブなメンバーと
+  // 混ざって見づらくなるため、それぞれ専用タブから見る）
+  const SIDE_STATUSES = ["deleted", "on_leave", "guest", "rejected"];
   const filtered = filter === "all"
-    ? members.filter((m) => m.status !== "deleted" && m.status !== "on_leave")
+    ? members.filter((m) => !SIDE_STATUSES.includes(m.status))
     : members.filter((m) => m.status === filter);
 
   const pendingCount = members.filter((m) => m.status === "pending").length;
@@ -105,7 +118,7 @@ export function AdminMembersScreen() {
 
       {/* フィルター */}
       <div className="flex gap-2 mb-4 flex-wrap">
-        {(["all", "pending", "active", "on_leave"] as const).map((f) => (
+        {(["all", "pending", "active", "guest", "on_leave", "rejected"] as const).map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -117,7 +130,7 @@ export function AdminMembersScreen() {
               color: filter === f ? "white" : "var(--color-ink-600)",
             }}
           >
-            {{ all: "すべて", pending: "承認待ち", active: "アクティブ", on_leave: "休会中" }[f]}
+            {{ all: "すべて", pending: "承認待ち", active: "アクティブ", guest: "ゲストユーザー", on_leave: "休会中", rejected: "利用却下" }[f]}
             {f === "pending" && pendingCount > 0 && (
               <span className="ml-1 text-xs">({pendingCount})</span>
             )}
@@ -130,7 +143,11 @@ export function AdminMembersScreen() {
         <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>読み込み中...</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
-          {filter === "pending" ? "承認待ちのメンバーはいません" : filter === "on_leave" ? "休会中のメンバーはいません" : "メンバーがいません"}
+          {filter === "pending" ? "承認待ちのメンバーはいません"
+            : filter === "on_leave" ? "休会中のメンバーはいません"
+            : filter === "guest" ? "ゲストユーザーはいません"
+            : filter === "rejected" ? "利用却下したメンバーはいません"
+            : "メンバーがいません"}
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -244,7 +261,7 @@ export function AdminMembersScreen() {
 
                   {/* アクション */}
                   <div className="flex gap-2 shrink-0">
-                    {m.status === "pending" && (
+                    {(m.status === "pending" || m.status === "guest") && (
                       <>
                         <button
                           onClick={() => setExpandedId(isExpanded ? null : m.id)}
@@ -262,10 +279,30 @@ export function AdminMembersScreen() {
                           disabled={approve.isPending}
                           className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs font-medium text-white transition hover:opacity-80"
                           style={{ background: "var(--color-success)" }}
-                          title="承認"
+                          title={m.status === "guest" ? "白樺のメンバーとして承認する" : "承認"}
                         >
                           <CheckCircle size={14} />
                           承認
+                        </button>
+                        {m.status === "pending" && (
+                          <button
+                            onClick={() => markGuest.mutate(m.id)}
+                            disabled={markGuest.isPending}
+                            className="p-2 rounded-2xl transition hover:opacity-80"
+                            style={{ background: "var(--color-paper-200)" }}
+                            title="ゲストユーザーにする（スケジューラー等の限定機能のみ。承認待ちからは外れます）"
+                          >
+                            <Ghost size={16} style={{ color: "#6B7DB3" }} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => reject.mutate(m.id)}
+                          disabled={reject.isPending}
+                          className="p-2 rounded-2xl transition hover:opacity-80"
+                          style={{ background: "var(--color-paper-200)" }}
+                          title="利用を却下する（記録は残ります）"
+                        >
+                          <Ban size={16} style={{ color: "var(--color-brand)" }} />
                         </button>
                       </>
                     )}
@@ -304,8 +341,8 @@ export function AdminMembersScreen() {
                   </div>
                 </div>
 
-                {/* 承認待ちメンバーのプロフィール展開パネル */}
-                {m.status === "pending" && isExpanded && (
+                {/* 承認待ち・ゲストユーザーのプロフィール展開パネル */}
+                {(m.status === "pending" || m.status === "guest") && isExpanded && (
                   <div className="mt-4 pt-4 border-t space-y-3" style={{ borderColor: "var(--color-paper-300)" }}>
                     {/* 基本情報 */}
                     <div className="space-y-1">

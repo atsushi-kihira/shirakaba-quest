@@ -3,11 +3,33 @@
 // =============================================================
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History } from "lucide-react";
+import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+
+// 未読・要対応の件数を表示するメニューは「メンバー管理（未承認ユーザー）」と
+// 「カード作成（注文リクエスト）」のみに限定する。ミーティング等は日々変動が多く、
+// バッジを付けると溜まり続けて確認疲れになるため、あえて表示しない。
+function useAdminBadgeCounts() {
+  const { data: membersData } = useQuery({
+    queryKey: ["admin", "members"],
+    queryFn: () => api.get<{ data: { status: string }[] }>("/admin/members"),
+    staleTime: 30_000,
+  });
+  const { data: cardOrdersData } = useQuery({
+    queryKey: ["admin", "card-print", "orders"],
+    queryFn: () => api.get<{ data: { status: string }[] }>("/admin/card-print/orders"),
+    staleTime: 30_000,
+  });
+  const pendingMembers = (membersData?.data ?? []).filter((m) => m.status === "pending").length;
+  const pendingCardOrders = (cardOrdersData?.data ?? []).filter((o) => o.status === "pending").length;
+  return { "/admin/members": pendingMembers, "/admin/card": pendingCardOrders } as Record<string, number>;
+}
 
 export function AdminLayout() {
   const { termQuest, appTitle } = useSettings();
+  const badgeCounts = useAdminBadgeCounts();
 
   const ADMIN_NAV = [
     { to: "/admin",          icon: LayoutDashboard, label: "ダッシュボード",          end: true },
@@ -58,7 +80,7 @@ export function AdminLayout() {
             key={to}
             to={to}
             end={end}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition relative"
             style={({ isActive }) => ({
               background: isActive ? "rgba(99,102,241,0.85)" : "transparent",
               color: isActive ? "white" : "rgba(255,255,255,0.6)",
@@ -74,6 +96,12 @@ export function AdminLayout() {
           >
             <Icon size={18} />
             {label}
+            {(badgeCounts[to] ?? 0) > 0 && (
+              <span className="ml-auto min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
+                style={{ background: "var(--color-brand)" }}>
+                {badgeCounts[to] > 9 ? "9+" : badgeCounts[to]}
+              </span>
+            )}
           </NavLink>
         ))}
 
@@ -103,7 +131,7 @@ export function AdminLayout() {
             to={to}
             end={end}
             className={({ isActive }) =>
-              `flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition min-w-[52px] text-xs ${
+              `flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition min-w-[52px] text-xs relative ${
                 isActive ? "font-medium" : ""
               }`
             }
@@ -111,7 +139,15 @@ export function AdminLayout() {
               color: isActive ? "#818cf8" : "rgba(255,255,255,0.45)",
             })}
           >
-            <Icon size={20} />
+            <div className="relative">
+              <Icon size={20} />
+              {(badgeCounts[to] ?? 0) > 0 && (
+                <span className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] rounded-full text-white flex items-center justify-center px-0.5 font-bold"
+                  style={{ background: "var(--color-brand)", fontSize: "9px" }}>
+                  {badgeCounts[to] > 9 ? "9+" : badgeCounts[to]}
+                </span>
+              )}
+            </div>
             <span className="whitespace-nowrap" style={{ fontSize: "10px" }}>{label.replace("管理", "")}</span>
           </NavLink>
         ))}
