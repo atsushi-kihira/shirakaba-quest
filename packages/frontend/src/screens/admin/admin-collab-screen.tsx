@@ -134,14 +134,59 @@ function AdminGraphCanvas({
 
   const positionById = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
-    const count = Math.max(graph.nodes.length, 1);
-    const r = 190;
-    graph.nodes.forEach((n, i) => {
-      const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
-      map.set(n.id, { x: Math.cos(angle) * r, y: Math.sin(angle) * r });
+    const total = graph.nodes.length;
+    if (total === 0) return map;
+    const nodeIds = new Set(graph.nodes.map((n) => n.id));
+    const BASE_R = 190;
+
+    // パワーチーム・ゆるいチームのメンバーは隣接させ、チームに属さない人とは
+    // はっきり離す。全員を1つの円周に均等配置することにはこだわらず、チームごとに
+    // アンカー地点の周りへ小さくまとめることで、パワーチームの背景円ができるだけ
+    // 無関係な人に被らないようにする（パワーチームを優先してグルーピングする）。
+    type Group = { ids: string[] };
+    const groups: Group[] = [];
+    const grouped = new Set<string>();
+    const powerTeams = graph.teams.filter((t) => t.type === "power" && !t.archived);
+    const looseTeams = graph.teams.filter((t) => t.type === "loose" && !t.archived);
+    for (const team of [...powerTeams, ...looseTeams]) {
+      const memberIds = team.members.map((m) => m.id).filter((id) => !grouped.has(id) && nodeIds.has(id));
+      if (memberIds.length === 0) continue;
+      memberIds.forEach((id) => grouped.add(id));
+      groups.push({ ids: memberIds });
+    }
+    const rest = graph.nodes.map((n) => n.id).filter((id) => !grouped.has(id));
+
+    const GAP = Math.PI / 18;
+    const TEAM_SLOT_WEIGHT = 1.4;
+    const weights = groups.map(() => TEAM_SLOT_WEIGHT);
+    if (rest.length > 0) weights.push(rest.length);
+    const totalWeight = weights.reduce((s, w) => s + w, 0) || 1;
+    const slotCount = groups.length + (rest.length > 0 ? 1 : 0);
+    const usableAngle = Math.PI * 2 - GAP * slotCount;
+
+    let cursor = -Math.PI / 2;
+    groups.forEach((group, gi) => {
+      const share = usableAngle * (weights[gi] / totalWeight);
+      const midAngle = cursor + share / 2;
+      const anchorX = Math.cos(midAngle) * BASE_R;
+      const anchorY = Math.sin(midAngle) * BASE_R;
+      const n = group.ids.length;
+      const clusterR = n <= 1 ? 0 : Math.min(Math.max(28, 14 * n), BASE_R * 0.5);
+      group.ids.forEach((id, i) => {
+        const a = (2 * Math.PI * i) / n;
+        map.set(id, { x: anchorX + Math.cos(a) * clusterR, y: anchorY + Math.sin(a) * clusterR });
+      });
+      cursor += share + GAP;
     });
+    if (rest.length > 0) {
+      const share = usableAngle * (weights[weights.length - 1] / totalWeight);
+      rest.forEach((id, i) => {
+        const angle = rest.length === 1 ? cursor + share / 2 : cursor + (share * i) / (rest.length - 1);
+        map.set(id, { x: Math.cos(angle) * BASE_R, y: Math.sin(angle) * BASE_R });
+      });
+    }
     return map;
-  }, [graph.nodes]);
+  }, [graph.nodes, graph.teams]);
 
   const renderEdges = useMemo(() => {
     return graph.edges
@@ -154,16 +199,58 @@ function AdminGraphCanvas({
       .filter((e): e is GraphEdge & { pa: { x: number; y: number }; pb: { x: number; y: number } } => !!e);
   }, [graph.edges, positionById]);
 
+  // チームメンバーの実際の位置だけを包む凸包（＋パディング）を計算する。
+  // 中心からの半径だけで円を描くと、メンバーの並びによっては無関係な人のいる
+  // 領域まで大きくスイープしてしまうことがあるため、輪郭を実際のメンバー位置に
+  // 沿わせる。
+  function convexHull(points: { x: number; y: number }[]): { x: number; y: number }[] {
+    const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+      (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower: typeof pts = [];
+    for (const p of pts) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    const upper: typeof pts = [];
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    upper.pop(); lower.pop();
+    return [...lower, ...upper];
+  }
+
   const teamBlobs = useMemo(() => {
-    return graph.teams.filter((team) => team.type === "power").map((team) => {
+    type TeamBlob = { team: GraphTeam; cx: number; labelY: number; path: string | null; circle: { cx: number; cy: number; r: number } | null };
+    const PAD = 32;
+    return graph.teams.filter((team) => team.type === "power" && !team.archived).map((team): TeamBlob | null => {
       const pts = team.members.map((m) => positionById.get(m.id)).filter((p): p is { x: number; y: number } => !!p);
       if (pts.length === 0) return null;
       const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
       const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
-      const spread = Math.max(...pts.map((p) => Math.hypot(p.x - cx, p.y - cy)), 0);
-      const r = Math.max(spread + 40, 48);
-      return { team, cx, cy, r };
-    }).filter((b): b is { team: GraphTeam; cx: number; cy: number; r: number } => !!b);
+
+      if (pts.length === 1) {
+        return { team, cx, labelY: pts[0].y - 40 - 6, path: null, circle: { cx: pts[0].x, cy: pts[0].y, r: 40 } };
+      }
+      if (pts.length === 2) {
+        const mcx = (pts[0].x + pts[1].x) / 2;
+        const mcy = (pts[0].y + pts[1].y) / 2;
+        const half = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) / 2;
+        const r = half + PAD;
+        return { team, cx: mcx, labelY: mcy - r - 6, path: null, circle: { cx: mcx, cy: mcy, r } };
+      }
+      const hull = convexHull(pts);
+      const padded = hull.map((p) => {
+        const dx = p.x - cx, dy = p.y - cy;
+        const len = Math.hypot(dx, dy) || 1;
+        return { x: p.x + (dx / len) * PAD, y: p.y + (dy / len) * PAD };
+      });
+      const path = `M ${padded.map((p) => `${p.x} ${p.y}`).join(" L ")} Z`;
+      const labelY = Math.min(...padded.map((p) => p.y)) - 6;
+      return { team, cx, labelY, path, circle: null };
+    }).filter((b): b is TeamBlob => !!b);
   }, [graph.teams, positionById]);
 
   const pendingByMemberId = useMemo(() => {
@@ -208,12 +295,17 @@ function AdminGraphCanvas({
           </filter>
         </defs>
         <g transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}>
-          {teamBlobs.map(({ team, cx, cy, r }) => (
-            <circle key={`blob-${team.id}`} cx={cx} cy={cy} r={r}
-              fill={TEAM_TYPE_META[team.type].color} opacity={0.16} filter="url(#admin-collab-blob-blur)" />
+          {teamBlobs.map(({ team, path, circle }) => (
+            path ? (
+              <path key={`blob-${team.id}`} d={path}
+                fill={TEAM_TYPE_META[team.type].color} opacity={0.16} filter="url(#admin-collab-blob-blur)" />
+            ) : circle ? (
+              <circle key={`blob-${team.id}`} cx={circle.cx} cy={circle.cy} r={circle.r}
+                fill={TEAM_TYPE_META[team.type].color} opacity={0.16} filter="url(#admin-collab-blob-blur)" />
+            ) : null
           ))}
-          {teamBlobs.map(({ team, cx, cy, r }) => (
-            <text key={`blob-label-${team.id}`} x={cx} textAnchor="middle" y={cy - r - 6}
+          {teamBlobs.map(({ team, cx, labelY }) => (
+            <text key={`blob-label-${team.id}`} x={cx} textAnchor="middle" y={labelY}
               fontSize="11" fontWeight={700} fill={TEAM_TYPE_META[team.type].color}
               stroke="var(--color-paper-50)" strokeWidth={3} paintOrder="stroke">
               {TEAM_TYPE_META[team.type].icon} {team.name}

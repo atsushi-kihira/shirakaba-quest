@@ -336,15 +336,66 @@ function GraphCanvas({
   }
 
   const positions = useMemo(() => {
-    const count = Math.max(others.length, 1);
-    return others.map((n, i) => {
-      const tier = tierOf(n.id);
-      const r = TIER_RADIUS[tier];
-      const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
-      return { id: n.id, x: Math.cos(angle) * r, y: Math.sin(angle) * r };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+    const total = others.length;
+    if (total === 0) return [];
+    const otherIds = new Set(others.map((n) => n.id));
+
+    // パワーチームのメンバーは角度をまとめて隣接させ、無関係なメンバーのアイコンが
+    // チームの塊（teamBlobs）の中に紛れ込まないようにする。グループ間には隙間を空ける。
+    // 複数のパワーチームに所属するメンバーは、先に見つかったチームのグループに入れる。
+    type Group = { ids: string[]; isTeam: boolean };
+    const groups: Group[] = [];
+    const grouped = new Set<string>();
+    const powerTeams = graph.teams.filter((t) => t.type === "power" && !t.archived);
+    for (const team of powerTeams) {
+      const memberIds = team.members.map((m) => m.id).filter((id) => !grouped.has(id) && otherIds.has(id));
+      if (memberIds.length === 0) continue;
+      memberIds.forEach((id) => grouped.add(id));
+      groups.push({ ids: memberIds, isTeam: true });
+    }
+    const rest = others.map((o) => o.id).filter((id) => !grouped.has(id));
+    if (rest.length > 0) groups.push({ ids: rest, isTeam: false });
+
+    const GAP = Math.PI / 18; // グループ間の隙間
+    // パワーチームは「メンバー1人ぶん強」の角度スロットだけを確保し、実際のメンバーは
+    // その中心（アンカー地点）のごく近くに小さくまとめて配置する。個々の半径（自分との
+    // 関係の近さ）ではなく、チーム全体の平均的な距離感で1箇所にまとまるため、背景の塊が
+    // 丸に近い、こぢんまりした形になる。無所属メンバーはこれまで通り、残りの角度に
+    // 個々の関係の近さ（半径）で配置する。
+    const TEAM_SLOT_WEIGHT = 1.4;
+    const weights = groups.map((g) => (g.isTeam ? TEAM_SLOT_WEIGHT : g.ids.length));
+    const totalWeight = weights.reduce((s, w) => s + w, 0) || 1;
+    const usableAngle = Math.PI * 2 - GAP * groups.length;
+
+    const result: { id: string; x: number; y: number }[] = [];
+    let cursor = -Math.PI / 2;
+    groups.forEach((group, gi) => {
+      const share = usableAngle * (weights[gi] / totalWeight);
+      if (group.isTeam) {
+        const midAngle = cursor + share / 2;
+        const avgR = group.ids.reduce((s, id) => s + TIER_RADIUS[tierOf(id)], 0) / group.ids.length;
+        const anchorX = Math.cos(midAngle) * avgR;
+        const anchorY = Math.sin(midAngle) * avgR;
+        const n = group.ids.length;
+        // クラスタ半径がアンカーの原点からの距離を超えると、原点（自分）側まで
+        // はみ出しかねないため、アンカー距離の6割を上限に抑える
+        const clusterR = n <= 1 ? 0 : Math.min(Math.max(28, 14 * n), avgR * 0.6);
+        group.ids.forEach((id, i) => {
+          const a = (2 * Math.PI * i) / n;
+          result.push({ id, x: anchorX + Math.cos(a) * clusterR, y: anchorY + Math.sin(a) * clusterR });
+        });
+      } else {
+        group.ids.forEach((id, i) => {
+          const angle = group.ids.length === 1 ? cursor + share / 2 : cursor + (share * i) / (group.ids.length - 1);
+          const r = TIER_RADIUS[tierOf(id)];
+          result.push({ id, x: Math.cos(angle) * r, y: Math.sin(angle) * r });
+        });
+      }
+      cursor += share + GAP;
     });
-  }, [others, sharedEdgeWithMe, teammateIds]);
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [others, sharedEdgeWithMe, teammateIds, graph.teams]);
 
   const positionById = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
@@ -366,18 +417,62 @@ function GraphCanvas({
   }, [graph.edges, positionById]);
 
   // 塊（ぼかし背景）で表示するのはパワーチームのみ。緩いチームは関係線（凡例の実線）で表現する
+  // チームメンバーの実際の位置だけを包む凸包（＋パディング）を計算する。
+  // 中心から半径だけで円を描くと、メンバー同士の距離のバラつき（「私」との関係の近さで
+  // 半径が決まるため、同じチームでもメンバーごとに輪の位置が大きく異なりうる）によって
+  // 円が無関係なメンバーのいる領域まで大きくスイープしてしまうため、輪郭を凸包にして
+  // 実際のメンバー位置にできるだけ沿わせる。
+  function convexHull(points: { x: number; y: number }[]): { x: number; y: number }[] {
+    const pts = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+    const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+      (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lower: typeof pts = [];
+    for (const p of pts) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+      lower.push(p);
+    }
+    const upper: typeof pts = [];
+    for (let i = pts.length - 1; i >= 0; i--) {
+      const p = pts[i];
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+      upper.push(p);
+    }
+    upper.pop(); lower.pop();
+    return [...lower, ...upper];
+  }
+
   const teamBlobs = useMemo(() => {
-    return graph.teams.filter((team) => team.type === "power" && !team.archived).map((team) => {
+    type TeamBlob = { team: GraphTeam; cx: number; labelY: number; path: string | null; circle: { cx: number; cy: number; r: number } | null };
+    const PAD = 32;
+    return graph.teams.filter((team) => team.type === "power" && !team.archived).map((team): TeamBlob | null => {
       const pts = team.members
         .map((m) => positionById.get(m.id))
         .filter((p): p is { x: number; y: number } => !!p);
       if (pts.length === 0) return null;
       const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
       const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
-      const spread = Math.max(...pts.map((p) => Math.hypot(p.x - cx, p.y - cy)), 0);
-      const r = Math.max(spread + 40, 48);
-      return { team, cx, cy, r };
-    }).filter((b): b is { team: GraphTeam; cx: number; cy: number; r: number } => !!b);
+
+      if (pts.length === 1) {
+        return { team, cx, labelY: pts[0].y - 40 - 6, path: null, circle: { cx: pts[0].x, cy: pts[0].y, r: 40 } };
+      }
+      if (pts.length === 2) {
+        // 2点だけの場合は凸包が線分になってしまうため、2点を包むカプセル状の円として扱う
+        const mcx = (pts[0].x + pts[1].x) / 2;
+        const mcy = (pts[0].y + pts[1].y) / 2;
+        const half = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) / 2;
+        const r = half + PAD;
+        return { team, cx: mcx, labelY: mcy - r - 6, path: null, circle: { cx: mcx, cy: mcy, r } };
+      }
+      const hull = convexHull(pts);
+      const padded = hull.map((p) => {
+        const dx = p.x - cx, dy = p.y - cy;
+        const len = Math.hypot(dx, dy) || 1;
+        return { x: p.x + (dx / len) * PAD, y: p.y + (dy / len) * PAD };
+      });
+      const path = `M ${padded.map((p) => `${p.x} ${p.y}`).join(" L ")} Z`;
+      const labelY = Math.min(...padded.map((p) => p.y)) - 6;
+      return { team, cx, labelY, path, circle: null };
+    }).filter((b): b is TeamBlob => !!b);
   }, [graph.teams, positionById]);
 
   const pendingByMemberId = useMemo(() => {
@@ -451,15 +546,23 @@ function GraphCanvas({
           </filter>
         </defs>
         <g transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}>
-          {/* 協働チームの塊（ぼかし背景・全員共通） */}
-          {teamBlobs.map(({ team, cx, cy, r }) => (
-            <circle key={`blob-${team.id}`} cx={cx} cy={cy} r={r}
-              fill={TEAM_TYPE_META[team.type].color}
-              opacity={0.16}
-              filter="url(#collab-blob-blur)" />
+          {/* 協働チームの塊（ぼかし背景・全員共通）。実際のメンバー位置を包む形にして、
+              無関係なメンバーのアイコンが塊の中に紛れ込まないようにしている */}
+          {teamBlobs.map(({ team, path, circle }) => (
+            path ? (
+              <path key={`blob-${team.id}`} d={path}
+                fill={TEAM_TYPE_META[team.type].color}
+                opacity={0.16}
+                filter="url(#collab-blob-blur)" />
+            ) : circle ? (
+              <circle key={`blob-${team.id}`} cx={circle.cx} cy={circle.cy} r={circle.r}
+                fill={TEAM_TYPE_META[team.type].color}
+                opacity={0.16}
+                filter="url(#collab-blob-blur)" />
+            ) : null
           ))}
-          {teamBlobs.map(({ team, cx, cy, r }) => (
-            <text key={`blob-label-${team.id}`} x={cx} textAnchor="middle" y={cy - r - 6}
+          {teamBlobs.map(({ team, cx, labelY }) => (
+            <text key={`blob-label-${team.id}`} x={cx} textAnchor="middle" y={labelY}
               fontSize="11" fontWeight={700} fill={TEAM_TYPE_META[team.type].color}
               stroke="var(--color-paper-50)" strokeWidth={3} paintOrder="stroke">
               {TEAM_TYPE_META[team.type].icon} {team.name}
