@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Loader2, ChevronLeft, CalendarDays, Pencil, Sparkles, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { useSettings } from "@/hooks/use-settings";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
@@ -53,6 +54,7 @@ const MAX_CANDIDATES = 10;
 export function MeetingNewScreen() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { termExternalGuest } = useSettings();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -383,6 +385,9 @@ export function MeetingNewScreen() {
               </button>
             ))}
           </div>
+          <p className="text-xs mt-1.5 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-600)" }}>
+            💡 ここではメンバーの中から対象者を選びます。チャプター外の{termExternalGuest}を招待したい場合は、ここでは指定できません。ミーティング作成後の詳細画面で発行できる「招待URL」を、{termExternalGuest}の方に直接お伝えください。
+          </p>
 
           {scope === "team" && (
             <div className="mt-3">
