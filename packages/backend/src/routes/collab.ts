@@ -1912,9 +1912,13 @@ collabRoutes.patch("/contacts/bulk", async (c) => {
   }
 
   // 自分の所有分だけに絞り込む（他人の人脈IDが紛れ込んでいても無視される）
-  const ownRows = await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
-    .where(and(eq(schema.externalContacts.ownerMemberId, meId), inArray(schema.externalContacts.id, ids)))
-    .all();
+  // D1のバインド変数上限を避けるため、idsが多い場合に備えてチャンクごとに絞り込みクエリを実行する
+  const ownRows: { id: string }[] = [];
+  for (const idsChunk of chunkIds(ids)) {
+    ownRows.push(...await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
+      .where(and(eq(schema.externalContacts.ownerMemberId, meId), inArray(schema.externalContacts.id, idsChunk)))
+      .all());
+  }
   const ownIds = ownRows.map((r) => r.id);
 
   let updated = 0;
@@ -1968,15 +1972,23 @@ collabRoutes.delete("/contacts/bulk", async (c) => {
   if (ids.length === 0) return c.json({ error: { code: "invalid_input", message: "対象を選択してください" } }, 400);
 
   // 自分の所有分だけに絞り込んでから削除する（他人の人脈IDが紛れ込んでいても無視される）
-  const ownRows = await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
-    .where(and(eq(schema.externalContacts.ownerMemberId, meId), inArray(schema.externalContacts.id, ids)))
-    .all();
+  // D1のバインド変数上限を避けるため、idsが多い場合に備えてチャンクごとに絞り込みクエリを実行する
+  const ownRows: { id: string }[] = [];
+  for (const idsChunk of chunkIds(ids)) {
+    ownRows.push(...await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
+      .where(and(eq(schema.externalContacts.ownerMemberId, meId), inArray(schema.externalContacts.id, idsChunk)))
+      .all());
+  }
   const ownIds = ownRows.map((r) => r.id);
 
   for (const idsChunk of chunkIds(ownIds)) {
     await db.delete(schema.externalContacts).where(inArray(schema.externalContacts.id, idsChunk));
     await db.delete(schema.collabIntroRequests).where(inArray(schema.collabIntroRequests.contactId, idsChunk));
     await db.delete(schema.externalContactRelationships).where(inArray(schema.externalContactRelationships.contactId, idsChunk));
+    await db.delete(schema.externalContactFavorites).where(inArray(schema.externalContactFavorites.contactId, idsChunk));
+    await db.delete(schema.enishiTransactedContacts).where(inArray(schema.enishiTransactedContacts.contactId, idsChunk));
+    await db.delete(schema.enishiHiddenContacts).where(inArray(schema.enishiHiddenContacts.contactId, idsChunk));
+    await db.delete(schema.enishiIntroducedContacts).where(inArray(schema.enishiIntroducedContacts.myContactId, idsChunk));
   }
 
   return c.json({ data: { deleted: ownIds.length } });
@@ -2151,6 +2163,10 @@ collabRoutes.delete("/contacts/:id", async (c) => {
   await db.delete(schema.externalContacts).where(eq(schema.externalContacts.id, contactId));
   await db.delete(schema.collabIntroRequests).where(eq(schema.collabIntroRequests.contactId, contactId));
   await db.delete(schema.externalContactRelationships).where(eq(schema.externalContactRelationships.contactId, contactId));
+  await db.delete(schema.externalContactFavorites).where(eq(schema.externalContactFavorites.contactId, contactId));
+  await db.delete(schema.enishiTransactedContacts).where(eq(schema.enishiTransactedContacts.contactId, contactId));
+  await db.delete(schema.enishiHiddenContacts).where(eq(schema.enishiHiddenContacts.contactId, contactId));
+  await db.delete(schema.enishiIntroducedContacts).where(eq(schema.enishiIntroducedContacts.myContactId, contactId));
 
   return c.json({ ok: true });
 });

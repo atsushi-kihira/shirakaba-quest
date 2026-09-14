@@ -892,6 +892,7 @@ function MyContactsSection() {
   const [bulkNote, setBulkNote] = useState("");
   const [bulkAddRelationships, setBulkAddRelationships] = useState<string[]>([]);
   const [bulkGenerateMessage, setBulkGenerateMessage] = useState("");
+  const [bulkActionError, setBulkActionError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSpecialties, setSelectedSpecialties] = useState<Set<string>>(new Set());
   const [selectedRelationships, setSelectedRelationships] = useState<Set<string>>(new Set());
@@ -915,12 +916,14 @@ function MyContactsSection() {
   });
   const bulkDeleteMutation = useMutation({
     mutationFn: (ids: string[]) => api.delete("/collab/contacts/bulk", { ids }),
-    onSuccess: () => { invalidate(); setSelected(new Set()); },
+    onSuccess: () => { invalidate(); setSelected(new Set()); setBulkActionError(""); },
+    onError: (e: Error) => setBulkActionError(e.message || "削除に失敗しました"),
   });
   const bulkUpdateMutation = useMutation({
     mutationFn: (patch: { ids: string[]; visibility?: Visibility; specialty?: string; company?: string; note?: string; addRelationships?: string[] }) =>
       api.patch("/collab/contacts/bulk", patch),
-    onSuccess: () => { invalidate(); setSelected(new Set()); setBulkPanel(null); setBulkAddRelationships([]); },
+    onSuccess: () => { invalidate(); setSelected(new Set()); setBulkPanel(null); setBulkAddRelationships([]); setBulkActionError(""); },
+    onError: (e: Error) => setBulkActionError(e.message || "更新に失敗しました"),
   });
   const bulkGenerateMutation = useMutation({
     mutationFn: (ids: string[]) => api.post<{ data: { processed: number; skipped: number } }>("/collab/contacts/bulk/generate-summary", { ids }),
@@ -1166,7 +1169,7 @@ function MyContactsSection() {
         <div className="mb-3 p-3 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", border: "1px solid rgba(181,56,75,0.25)" }}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium" style={{ color: "var(--color-ink-700)" }}>{selected.size}件選択中</span>
-            <button onClick={() => { setSelected(new Set()); setBulkGenerateMessage(""); }} className="text-xs" style={{ color: "var(--color-ink-400)" }}>選択解除</button>
+            <button onClick={() => { setSelected(new Set()); setBulkGenerateMessage(""); setBulkActionError(""); }} className="text-xs" style={{ color: "var(--color-ink-400)" }}>選択解除</button>
           </div>
           <div className="flex flex-wrap gap-1.5 mb-2">
             <button
@@ -1216,6 +1219,9 @@ function MyContactsSection() {
           )}
           {bulkGenerateMessage && (
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-600)" }}>{bulkGenerateMessage}</p>
+          )}
+          {bulkActionError && (
+            <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{bulkActionError}</p>
           )}
 
           {bulkPanel === "visibility" && (
