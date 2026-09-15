@@ -4,7 +4,7 @@
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History, BarChart3 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 
@@ -44,6 +44,7 @@ export function AdminLayout() {
     { to: "/admin/card",      icon: CreditCard,      label: "カード作成",              end: false },
     { to: "/admin/points",   icon: RotateCcw,       label: "ポイント管理",        end: false },
     { to: "/admin/oneonone-history", icon: History, label: "1to1履歴管理",        end: false },
+    { to: "/admin/usage-report", icon: BarChart3, label: "利用状況",             end: false },
     { to: "/admin/email-templates", icon: Mail,      label: "メール配信",              end: false },
     { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
   ] as const;

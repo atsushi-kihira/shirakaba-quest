@@ -123,6 +123,12 @@ export function AdminDashboardScreen() {
       stats: [],
     },
     {
+      to: "/admin/usage-report",
+      icon: "📊",
+      label: "利用状況",
+      stats: [],
+    },
+    {
       to: "/admin/settings",
       icon: "⚙️",
       label: "アプリ設定",

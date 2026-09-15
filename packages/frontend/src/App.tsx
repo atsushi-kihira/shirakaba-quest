@@ -48,6 +48,7 @@ import { AdminTeamsScreen } from "@/screens/admin/admin-teams-screen";
 import { AdminMeetingsScreen } from "@/screens/admin/admin-meetings-screen";
 import { AdminCollabScreen } from "@/screens/admin/admin-collab-screen";
 import { AdminCardSettingsScreen } from "@/screens/admin/admin-card-settings-screen";
+import { AdminUsageReportScreen } from "@/screens/admin/admin-usage-report-screen";
 import { CardOrderScreen } from "@/screens/card-order/card-order-screen";
 import { SchedulerDashboardScreen } from "@/screens/scheduler/scheduler-dashboard-screen";
 import { SchedulerIntegrationsScreen } from "@/screens/scheduler/scheduler-integrations-screen";
@@ -167,6 +168,7 @@ export default function App() {
                 <Route path="card" element={<AdminCardSettingsScreen />} />
                 <Route path="points" element={<AdminPointsScreen />} />
                 <Route path="oneonone-history" element={<AdminOneOnOneHistoryScreen />} />
+                <Route path="usage-report" element={<AdminUsageReportScreen />} />
                 <Route path="email-templates" element={<AdminEmailTemplatesScreen />} />
                 <Route path="settings" element={<AdminSettingsScreen />} />
               </Route>
