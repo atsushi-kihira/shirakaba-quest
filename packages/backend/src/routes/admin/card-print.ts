@@ -4,6 +4,7 @@
 // PUT    /api/admin/card-print          — 設定更新
 // GET    /api/admin/card-print/orders   — 発注一覧
 // PATCH  /api/admin/card-print/orders/:id — ステータス更新
+// GET    /api/admin/card-print/orders/:id/photo — 顔写真取得（未アップロードなら404）
 // =============================================================
 import { Hono } from "hono";
 import { eq, desc } from "drizzle-orm";
@@ -89,6 +90,32 @@ adminCardPrintRoutes.get("/orders", async (c) => {
       ...o,
       memberSnapshot: JSON.parse(o.memberSnapshot || "{}"),
     })),
+  });
+});
+
+// ---- GET /api/admin/card-print/orders/:id/photo ----
+adminCardPrintRoutes.get("/orders/:id/photo", async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param("id");
+
+  const order = await db.select({ photoKey: schema.cardOrders.photoKey })
+    .from(schema.cardOrders)
+    .where(eq(schema.cardOrders.id, id))
+    .get();
+
+  if (!order) return c.json({ error: { code: "not_found", message: "発注データが見つかりません" } }, 404);
+  if (!order.photoKey) return c.json({ error: { code: "no_photo", message: "顔写真がアップロードされていません" } }, 404);
+
+  const obj = await c.env.R2.get(order.photoKey);
+  if (!obj) return c.json({ error: { code: "not_found", message: "画像が見つかりません" } }, 404);
+
+  const contentType = obj.httpMetadata?.contentType ?? "image/jpeg";
+  const buf = await obj.arrayBuffer();
+  return new Response(buf, {
+    headers: {
+      "Content-Type": contentType,
+      "Cache-Control": "private, max-age=300",
+    },
   });
 });
 

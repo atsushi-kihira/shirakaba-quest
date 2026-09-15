@@ -67,9 +67,26 @@ export class ApiError extends Error {
   }
 }
 
+export async function getBlob(path: string): Promise<Blob> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${BASE_URL}${path}`, { headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({
+      error: { code: "unknown", message: "エラーが発生しました" },
+    }));
+    throw new ApiError(res.status, err.error?.code ?? "unknown", err.error?.message ?? "エラーが発生しました");
+  }
+  return res.blob();
+}
+
 export const api = {
   get: <T>(path: string, signal?: AbortSignal) =>
     request<T>(path, { method: "GET", signal }),
+
+  getBlob,
 
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body }),

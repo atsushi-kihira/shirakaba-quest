@@ -3,7 +3,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, ChevronDown, ChevronUp, AlertTriangle, Download, ImageOff } from "lucide-react";
 import { api } from "@/lib/api";
 
 type Plan = { name: string; price: number };
@@ -31,6 +31,7 @@ type CardOrder = {
   createdAt: number;
   address: string | null;
   phone: string | null;
+  photoKey: string | null;
   memberSnapshot: {
     name: string;
     furigana: string;
@@ -170,12 +171,12 @@ export function AdminCardSettingsScreen() {
             ) : (
               orders.map((order) => (
                 <div key={order.id} className="border-t" style={{ borderColor: "var(--color-paper-300)" }}>
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-3 px-4 py-3 text-left active:opacity-70 transition"
-                    onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
-                  >
-                    <div className="flex-1 min-w-0">
+                  <div className="w-full flex items-center gap-3 px-4 py-3">
+                    <button
+                      type="button"
+                      className="flex-1 min-w-0 text-left active:opacity-70 transition"
+                      onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
+                    >
                       <p className="text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>
                         {order.memberSnapshot?.name ?? "—"}
                         <span className="ml-2 text-xs font-normal" style={{ color: "var(--color-ink-400)" }}>
@@ -185,18 +186,25 @@ export function AdminCardSettingsScreen() {
                       <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
                         {order.planName} · {order.characterLabel}
                       </p>
-                    </div>
-                    <span className="text-xs px-2 py-1 rounded-full shrink-0" style={{
-                      background: order.status === "pending" ? "rgba(181,56,75,0.1)" :
-                        order.status === "completed" ? "rgba(90,140,92,0.1)" : "var(--color-paper-200)",
-                      color: order.status === "pending" ? "var(--color-brand)" :
-                        order.status === "completed" ? "var(--color-success)" : "var(--color-ink-500)",
-                    }}>
-                      {ORDER_STATUS_LABELS[order.status] ?? order.status}
-                    </span>
-                    {expandedOrder === order.id ? <ChevronUp size={14} style={{ color: "var(--color-ink-400)" }} />
-                      : <ChevronDown size={14} style={{ color: "var(--color-ink-400)" }} />}
-                  </button>
+                    </button>
+                    <OrderPhotoCell orderId={order.id} hasPhoto={!!order.photoKey} memberName={order.memberSnapshot?.name} />
+                    <button
+                      type="button"
+                      onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
+                      className="flex items-center gap-2 shrink-0"
+                    >
+                      <span className="text-xs px-2 py-1 rounded-full" style={{
+                        background: order.status === "pending" ? "rgba(181,56,75,0.1)" :
+                          order.status === "completed" ? "rgba(90,140,92,0.1)" : "var(--color-paper-200)",
+                        color: order.status === "pending" ? "var(--color-brand)" :
+                          order.status === "completed" ? "var(--color-success)" : "var(--color-ink-500)",
+                      }}>
+                        {ORDER_STATUS_LABELS[order.status] ?? order.status}
+                      </span>
+                      {expandedOrder === order.id ? <ChevronUp size={14} style={{ color: "var(--color-ink-400)" }} />
+                        : <ChevronDown size={14} style={{ color: "var(--color-ink-400)" }} />}
+                    </button>
+                  </div>
 
                   {expandedOrder === order.id && (
                     <div className="px-4 pb-4 space-y-3" style={{ background: "var(--color-paper-50)" }}>
@@ -523,6 +531,47 @@ function DetailRow({ label, value }: { label: string; value: string }) {
     <div>
       <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>{label}</span>
       <p className="text-sm" style={{ color: "var(--color-ink-800)" }}>{value}</p>
+    </div>
+  );
+}
+
+function OrderPhotoCell({ orderId, hasPhoto, memberName }: { orderId: string; hasPhoto: boolean; memberName?: string }) {
+  const { data: blobUrl, isError } = useQuery({
+    queryKey: ["admin", "card-print-order-photo", orderId],
+    queryFn: async () => URL.createObjectURL(await api.getBlob(`/admin/card-print/orders/${orderId}/photo`)),
+    enabled: hasPhoto,
+    staleTime: Infinity,
+  });
+
+  if (!hasPhoto) {
+    return (
+      <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: "var(--color-ink-400)" }}>
+        <ImageOff size={12} /> 顔写真未アップロード
+      </span>
+    );
+  }
+
+  if (isError) {
+    return <span className="text-xs shrink-0" style={{ color: "var(--color-brand)" }}>顔写真を取得できませんでした</span>;
+  }
+
+  return (
+    <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+      {blobUrl ? (
+        <img src={blobUrl} alt="顔写真" className="w-10 h-10 rounded-xl object-cover" style={{ background: "var(--color-paper-200)" }} />
+      ) : (
+        <div className="w-10 h-10 rounded-xl animate-pulse" style={{ background: "var(--color-paper-200)" }} />
+      )}
+      {blobUrl && (
+        <a
+          href={blobUrl}
+          download={`${memberName ?? "member"}-顔写真.jpg`}
+          className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-full font-medium transition hover:opacity-80"
+          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+        >
+          <Download size={12} /> DL
+        </a>
+      )}
     </div>
   );
 }
