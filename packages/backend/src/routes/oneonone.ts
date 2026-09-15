@@ -22,7 +22,7 @@ import { getActiveShareLink, ensureActiveShareLink } from "../services/scheduler
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { touchCollaborationLink } from "../services/collab-link.ts";
 import { generateRawToken } from "../services/auth.ts";
-import { createConference, getAvailableConferenceTypes } from "../services/conferenceService.ts";
+import { createConference, getAvailableConferenceTypes, cancelAutoConference } from "../services/conferenceService.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -250,11 +250,24 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
     if (!requester || !responder) return c.json({ error: { code: "not_found", message: "メンバー情報が見つかりません" } }, 404);
 
     const existingBooking = await db
-      .select({ id: schema.bookings.id })
+      .select({
+        id: schema.bookings.id,
+        conferenceType: schema.bookings.conferenceType,
+        conferenceMetaJson: schema.bookings.conferenceMetaJson,
+        hostCalendarEventId: schema.bookings.hostCalendarEventId,
+      })
       .from(schema.bookings)
       .where(and(eq(schema.bookings.oneOnOneSessionId, sessionId), eq(schema.bookings.status, "confirmed")))
       .get();
     const bookingId = existingBooking?.id ?? newId();
+
+    // 日程変更で会議URLを発行し直す前に、古い会議（Zoom/Googleカレンダー）が残らないようキャンセルしておく
+    if (existingBooking && (existingBooking.conferenceType === "zoom" || existingBooking.conferenceType === "google_meet")) {
+      await cancelAutoConference(
+        db, c.env, session.requesterId,
+        existingBooking.conferenceType, existingBooking.conferenceMetaJson, existingBooking.hostCalendarEventId
+      );
+    }
 
     const conferenceResult = await createConference({
       db,
@@ -316,14 +329,28 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
     update.manualConferenceUrl = body.conferenceUrl?.trim() || null;
     // 手入力に切り替えた場合、既存の連携済み予約があれば表示上の会議URLも合わせておく
     const existingBooking = await db
-      .select({ id: schema.bookings.id })
+      .select({
+        id: schema.bookings.id,
+        conferenceType: schema.bookings.conferenceType,
+        conferenceMetaJson: schema.bookings.conferenceMetaJson,
+        hostCalendarEventId: schema.bookings.hostCalendarEventId,
+      })
       .from(schema.bookings)
       .where(and(eq(schema.bookings.oneOnOneSessionId, sessionId), eq(schema.bookings.status, "confirmed")))
       .get();
     if (existingBooking) {
+      // 自動発行済みの会議（Zoom/Googleカレンダー）から手入力URLに切り替える場合、古い会議を残さずキャンセルする
+      if (existingBooking.conferenceType === "zoom" || existingBooking.conferenceType === "google_meet") {
+        await cancelAutoConference(
+          db, c.env, session.requesterId,
+          existingBooking.conferenceType, existingBooking.conferenceMetaJson, existingBooking.hostCalendarEventId
+        );
+      }
       await db.update(schema.bookings).set({
         conferenceType: "manual",
         conferenceUrl: update.manualConferenceUrl,
+        conferenceMetaJson: null,
+        hostCalendarEventId: null,
         updatedAt: new Date().toISOString(),
       }).where(eq(schema.bookings.id, existingBooking.id));
     }

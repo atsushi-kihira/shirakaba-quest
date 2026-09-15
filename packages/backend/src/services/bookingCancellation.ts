@@ -7,8 +7,7 @@ import { eq } from "drizzle-orm";
 import { schema } from "../db/index.ts";
 import type { Db } from "../db/index.ts";
 import { newId } from "./auth.ts";
-import { getValidGoogleAccessToken } from "./conferenceService.ts";
-import { deleteCalendarEvent } from "./googleClient.ts";
+import { cancelAutoConference } from "./conferenceService.ts";
 import { sendCancellationMail } from "./schedulerMailer.ts";
 import type { Env } from "../types.ts";
 
@@ -28,16 +27,11 @@ export async function cancelConfirmedBooking(
     .set({ status: "cancelled", cancellationReason: options.reason ?? null, updatedAt: now })
     .where(eq(schema.bookings.id, booking.id));
 
-  // Google Calendar から削除
-  if (booking.hostCalendarEventId) {
-    const googleCred = await getValidGoogleAccessToken(
-      db, booking.hostMemberId, env.SCHEDULER_TOKEN_KEY,
-      env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET
-    );
-    if (googleCred.status === "ok") {
-      await deleteCalendarEvent(googleCred.accessToken, googleCred.calendarId, booking.hostCalendarEventId).catch(() => {});
-    }
-  }
+  // 自動発行済みの会議（Google カレンダー予定 / Zoom ミーティング）を削除
+  await cancelAutoConference(
+    db, env, booking.hostMemberId,
+    booking.conferenceType, booking.conferenceMetaJson, booking.hostCalendarEventId
+  );
 
   await db.insert(schema.bookingEvents).values({
     id: newId(),

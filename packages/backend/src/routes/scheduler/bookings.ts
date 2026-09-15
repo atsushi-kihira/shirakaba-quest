@@ -13,7 +13,7 @@ import { eq, and, gte, lte, desc, or, inArray, isNull } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
 import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
-import { createConference, getAvailableConferenceTypes } from "../../services/conferenceService.ts";
+import { createConference, getAvailableConferenceTypes, cancelAutoConference } from "../../services/conferenceService.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const schedulerBookingsRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -226,8 +226,9 @@ schedulerBookingsRoutes.patch("/:id/dismiss-followup", async (c) => {
 });
 
 // ---- PATCH /api/scheduler/bookings/:id/reschedule ----
-// 日時・会議URLの記録を手動で更新する（メンバー同士の1to1の「日時・会議URLを編集」と同様、
-// 実際に発行済みのGoogle Meet/Zoomの予定そのものは変更せず、記録の更新のみを行う）
+// 日時・会議URLを更新する。会議種別（Zoom/Google Meet）を指定した場合は新しい日時で会議を発行し直し、
+// 手入力URLに切り替えた場合も含めて、古い自動発行済みの会議（カレンダー予定・Zoomミーティング）は
+// 残さずキャンセルする（日時のみの変更で会議種別に触れない場合は既存の会議をそのまま残す）。
 schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
   const bookingId = c.req.param("id");
   const db = createDb(c.env.DB);
@@ -243,11 +244,27 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
   }
 
   const booking = await db
-    .select({ id: schema.bookings.id, hostMemberId: schema.bookings.hostMemberId, startAtUtc: schema.bookings.startAtUtc, endAtUtc: schema.bookings.endAtUtc, guestName: schema.bookings.guestName, guestEmail: schema.bookings.guestEmail })
+    .select({
+      id: schema.bookings.id, hostMemberId: schema.bookings.hostMemberId,
+      startAtUtc: schema.bookings.startAtUtc, endAtUtc: schema.bookings.endAtUtc,
+      guestName: schema.bookings.guestName, guestEmail: schema.bookings.guestEmail,
+      conferenceType: schema.bookings.conferenceType, conferenceMetaJson: schema.bookings.conferenceMetaJson,
+      hostCalendarEventId: schema.bookings.hostCalendarEventId,
+    })
     .from(schema.bookings)
     .where(and(eq(schema.bookings.id, bookingId), eq(schema.bookings.hostMemberId, memberId)))
     .get();
   if (!booking) return c.json({ error: { code: "not_found", message: "予約が見つかりません" } }, 404);
+
+  // 会議URLを発行し直す・手入力に切り替える場合、古い会議（Zoom/Googleカレンダー）が残らないよう先にキャンセルしておく
+  // （日時のみの変更で会議種別に触れないリクエストでは、既存の会議をそのまま残すため対象外）
+  const isReplacingConference = body.conferenceType === "zoom" || body.conferenceType === "google_meet" || body.conferenceUrl !== undefined;
+  if (isReplacingConference && (booking.conferenceType === "zoom" || booking.conferenceType === "google_meet")) {
+    await cancelAutoConference(
+      db, c.env, booking.hostMemberId,
+      booking.conferenceType, booking.conferenceMetaJson, booking.hostCalendarEventId
+    );
+  }
 
   let generatedConferenceUrl: string | null | undefined;
 
@@ -302,7 +319,12 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
       .set({
         ...(body.startUtc !== undefined && { startAtUtc: body.startUtc }),
         ...(body.endUtc !== undefined && { endAtUtc: body.endUtc }),
-        ...(body.conferenceUrl !== undefined && { conferenceUrl: body.conferenceUrl?.trim() || null, conferenceType: "manual" as const }),
+        ...(body.conferenceUrl !== undefined && {
+          conferenceUrl: body.conferenceUrl?.trim() || null,
+          conferenceType: "manual" as const,
+          conferenceMetaJson: null,
+          hostCalendarEventId: null,
+        }),
         updatedAt: new Date().toISOString(),
       })
       .where(eq(schema.bookings.id, bookingId));
