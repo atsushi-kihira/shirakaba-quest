@@ -5,7 +5,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Loader2, Search, Gift, ChevronRight, ChevronLeft, History, Star, Trash2 } from "lucide-react";
+import { Loader2, Search, Gift, ChevronRight, ChevronLeft, History, Star, Trash2, FileDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 
@@ -75,6 +75,15 @@ export function removeIntroducedCandidate(result: SearchResult, myContactId: str
       ...g,
       results: g.results.filter((r) => !(r.myContactId === myContactId && r.candidateId === candidateId)),
     })),
+  };
+}
+
+// 明らかに間違っている候補を、削除操作の成功後に結果から取り除く（1件・複数件どちらも同じ関数で対応）
+export function removeCards(result: SearchResult, cardIds: Set<string> | string[]): SearchResult {
+  const ids = cardIds instanceof Set ? cardIds : new Set(cardIds);
+  return {
+    ...result,
+    groups: result.groups.map((g) => ({ ...g, results: g.results.filter((r) => !ids.has(r.cardId)) })),
   };
 }
 
@@ -213,14 +222,31 @@ export function ContactCardPreview({ contactId }: { contactId: string }) {
   );
 }
 
-export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced }: {
+export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onCardsRemoved }: {
   result: SearchResult; historyId: string; mode: "for-me" | "giver"; pageSize: number;
   onToggleGoodMatch: (cardId: string, goodMatch: boolean) => void;
   onRemoveTransacted: (candidateId: string) => void;
   onRemoveHidden: (candidateId: string) => void;
   onRemoveIntroduced: (myContactId: string, candidateId: string) => void;
+  onCardsRemoved: (cardIds: string[]) => void;
 }) {
   const { termEnishi } = useSettings();
+  // 「明らかに間違っている」候補をまとめて選んで削除するための選択モード（貢献のご縁のみ）
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelect = (cardId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(cardId) ? next.delete(cardId) : next.add(cardId);
+      return next;
+    });
+  };
+  const removeBulk = useMutation({
+    mutationFn: () => api.patch(`/enishi/history/${historyId}/cards/remove-bulk`, { cardIds: [...selected] }),
+    onSuccess: () => { onCardsRemoved([...selected]); setSelected(new Set()); setSelectMode(false); },
+    onError: (e) => alert(e instanceof ApiError ? e.message : "削除に失敗しました"),
+  });
+
   // ページ番号は「どの検索・履歴を見ているか（historyId）」に紐づけて保持し、別の結果に
   // 切り替わったら1ページ目に戻す。フラグの切替（goodMatch等）ではresultの中身は変わっても
   // historyIdは変わらないので、ページ位置は保持される。
@@ -276,9 +302,35 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
         </p>
       )}
       {mode === "giver" && (
-        <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
-          ※ 「紹介しました」を押した組み合わせはこの検索結果には表示されません。
-        </p>
+        <>
+          <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
+            ※ 「紹介しました」を押した組み合わせはこの検索結果には表示されません。明らかに間違っている候補は削除できます。
+          </p>
+          <div className="flex items-center gap-2 flex-wrap mb-3">
+            <GiverPdfExportButton result={result} />
+            <button
+              onClick={() => { setSelectMode((v) => !v); setSelected(new Set()); }}
+              className="text-xs font-medium px-3 py-2 rounded-xl flex items-center gap-1.5"
+              style={{
+                background: selectMode ? "var(--color-brand)" : "var(--color-paper-200)",
+                color: selectMode ? "white" : "var(--color-ink-600)",
+              }}>
+              <Trash2 size={13} /> {selectMode ? "選択をやめる" : "選択して削除"}
+            </button>
+          </div>
+          {selectMode && (
+            <div className="flex items-center justify-between gap-2 mb-3 px-3 py-2.5 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", border: "1px solid rgba(181,56,75,0.25)" }}>
+              <span className="text-xs font-medium" style={{ color: "var(--color-ink-700)" }}>{selected.size}件選択中</span>
+              <button
+                onClick={() => removeBulk.mutate()}
+                disabled={selected.size === 0 || removeBulk.isPending}
+                className="text-xs font-medium px-3 py-1.5 rounded-full text-white disabled:opacity-40"
+                style={{ background: "var(--color-brand)" }}>
+                {removeBulk.isPending ? "削除中…" : "まとめて削除"}
+              </button>
+            </div>
+          )}
+        </>
       )}
       {totalPages > 1 && (
         <div className="flex items-center justify-between gap-2 mb-3 px-3 py-2 rounded-xl" style={{ background: "var(--color-paper-100)" }}>
@@ -298,7 +350,9 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
           <div className="space-y-3">
             {g.results.map((r) => (
               <ResultRow key={r.cardId} r={r} historyId={historyId} mode={mode}
-                onToggleGoodMatch={onToggleGoodMatch} onRemoveTransacted={onRemoveTransacted} onRemoveHidden={onRemoveHidden} onRemoveIntroduced={onRemoveIntroduced} />
+                onToggleGoodMatch={onToggleGoodMatch} onRemoveTransacted={onRemoveTransacted} onRemoveHidden={onRemoveHidden} onRemoveIntroduced={onRemoveIntroduced}
+                onRemoveCard={(cardId) => onCardsRemoved([cardId])}
+                selectMode={selectMode} selected={selected.has(r.cardId)} onToggleSelect={() => toggleSelect(r.cardId)} />
             ))}
           </div>
         </div>
@@ -322,15 +376,20 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
   );
 }
 
-function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced }: {
+function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onRemoveCard, selectMode, selected, onToggleSelect }: {
   r: ResultCard; historyId: string; mode: "for-me" | "giver";
   onToggleGoodMatch: (cardId: string, goodMatch: boolean) => void;
   onRemoveTransacted: (candidateId: string) => void;
   onRemoveHidden: (candidateId: string) => void;
   onRemoveIntroduced: (myContactId: string, candidateId: string) => void;
+  onRemoveCard: (cardId: string) => void;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const { termEnishi } = useSettings();
   const [showContactCard, setShowContactCard] = useState(false);
+  const [showRemoveModal, setShowRemoveModal] = useState(false);
   const contactIdForCard = mode === "giver" ? r.myContactId : r.candidateId;
 
   const toggleGoodMatch = useMutation({
@@ -352,9 +411,20 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
     onSuccess: () => { if (r.myContactId) onRemoveIntroduced(r.myContactId, r.candidateId); },
     onError: (e) => alert(e instanceof ApiError ? e.message : "「紹介しました」の登録に失敗しました"),
   });
+  const removeCard = useMutation({
+    mutationFn: ({ reason, aiMistake }: { reason: string; aiMistake: boolean }) =>
+      api.patch(`/enishi/history/${historyId}/cards/${r.cardId}/remove`, { reason: reason.trim() || undefined, aiMistake }),
+    onSuccess: () => { setShowRemoveModal(false); onRemoveCard(r.cardId); },
+    onError: (e) => alert(e instanceof ApiError ? e.message : "削除に失敗しました"),
+  });
 
   return (
-    <div className="card-paper rounded-2xl p-4" style={r.goodMatch ? { boxShadow: "0 0 0 1.5px var(--color-accent)" } : undefined}>
+    <div className="card-paper rounded-2xl p-4 flex gap-3" style={r.goodMatch ? { boxShadow: "0 0 0 1.5px var(--color-accent)" } : undefined}>
+      {selectMode && (
+        <input type="checkbox" checked={!!selected} onChange={onToggleSelect}
+          className="mt-1.5 w-4 h-4 shrink-0" style={{ accentColor: "var(--color-brand)" }} />
+      )}
+      <div className="flex-1 min-w-0">
       <div className="flex items-center gap-2 flex-wrap mb-2">
         <span className="w-8 h-8 rounded-full flex items-center justify-center text-base shrink-0" style={{ background: "var(--color-paper-200)" }}>
           {r.counterpart.emoji}
@@ -473,8 +543,92 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
             </span>
           )
         )}
+        {mode === "giver" && !selectMode && (
+          <button
+            onClick={() => setShowRemoveModal(true)}
+            className="ml-auto text-xs font-medium px-3 py-2 rounded-xl flex items-center gap-1.5"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+            <Trash2 size={13} /> 削除
+          </button>
+        )}
+      </div>
+      </div>
+      {showRemoveModal && (
+        <RemoveCardModal
+          isPending={removeCard.isPending}
+          onCancel={() => setShowRemoveModal(false)}
+          onConfirm={(reason, aiMistake) => removeCard.mutate({ reason, aiMistake })}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---- 「明らかに間違っている」候補を1件削除する際の理由入力モーダル ----
+// AIの判断ミスが理由の場合はその内容を今後の検索プロンプトに活かす（buildBadMatchContext）
+function RemoveCardModal({ onCancel, onConfirm, isPending }: {
+  onCancel: () => void;
+  onConfirm: (reason: string, aiMistake: boolean) => void;
+  isPending: boolean;
+}) {
+  const [reason, setReason] = useState("");
+  const [aiMistake, setAiMistake] = useState(false);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.4)" }} onClick={onCancel}>
+      <div className="card-paper p-5 w-full max-w-sm rounded-3xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-bold mb-3 flex items-center gap-1.5" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          <Trash2 size={15} /> この候補を削除しますか？
+        </h3>
+        <label className="flex items-start gap-2 mb-3 text-xs p-2.5 rounded-xl" style={{ color: "var(--color-ink-700)", background: "var(--color-paper-100)" }}>
+          <input type="checkbox" checked={aiMistake} onChange={(e) => setAiMistake(e.target.checked)} className="mt-0.5 shrink-0" style={{ accentColor: "var(--color-brand)" }} />
+          <span>AIの判断が間違っていたため（理由を書いていただくと、今後の検索精度の向上に役立てます）</span>
+        </label>
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)}
+          placeholder={aiMistake ? "どこが間違っていたか教えてください（例：この人自身はお客様ではなく、この人の顧客が対象のはず）" : "削除する理由（任意）"}
+          rows={3}
+          className="w-full rounded-xl px-3 py-2 text-sm mb-3" style={{ border: "1px solid var(--color-paper-300)" }} />
+        <div className="flex gap-2">
+          <button onClick={onCancel} disabled={isPending}
+            className="flex-1 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+            キャンセル
+          </button>
+          <button onClick={() => onConfirm(reason, aiMistake)} disabled={isPending}
+            className="flex-1 py-2.5 rounded-xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+            {isPending ? "削除中…" : "削除する"}
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+// ---- 貢献のご縁の検索結果をPDFで書き出す ----
+function GiverPdfExportButton({ result }: { result: SearchResult }) {
+  const { appTitle } = useSettings();
+  const [isExporting, setIsExporting] = useState(false);
+  const hasAny = result.groups.some((g) => g.results.length > 0);
+  if (!hasAny) return null;
+
+  async function handleExport() {
+    setIsExporting(true);
+    try {
+      const { exportGiverResultsToPdf } = await import("@/lib/enishi-pdf");
+      await exportGiverResultsToPdf(result, appTitle);
+    } catch (e) {
+      console.error(e);
+      alert("PDFの作成に失敗しました。もう一度お試しください。");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  return (
+    <button onClick={handleExport} disabled={isExporting}
+      className="text-xs font-medium px-3 py-2 rounded-xl flex items-center gap-1.5 disabled:opacity-50"
+      style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+      {isExporting ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />}
+      {isExporting ? "作成中…" : "PDFでダウンロード"}
+    </button>
   );
 }
 
@@ -723,7 +877,8 @@ function ForMePanel() {
 
       {searchResponse && (
         <ResultGroups result={searchResponse.data} historyId={searchResponse.historyId} mode="for-me" pageSize={pageSize}
-          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={removeTransacted} onRemoveHidden={removeHidden} onRemoveIntroduced={() => {}} />
+          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={removeTransacted} onRemoveHidden={removeHidden} onRemoveIntroduced={() => {}}
+          onCardsRemoved={() => {}} />
       )}
     </div>
   );
@@ -835,7 +990,10 @@ function GiverPanel() {
   const [specialties, setSpecialties] = useState<Set<string>>(new Set());
   const [relationships, setRelationships] = useState<Set<string>>(new Set());
   const [freeText, setFreeText] = useState("");
-  const [maxHop, setMaxHop] = useState<Hop>("direct");
+  // 「1次（直接）」のみだと、直接の買い手ではなく供給側（サービス提供者）と判定された人脈が
+  // 初期設定では何も表示されなくなってしまうため、「誰かのために探す」検索と同じく
+  // 「2次まで」をデフォルトにする（1次のみで絞りたい場合は引き続き画面上で選択できる）
+  const [maxHop, setMaxHop] = useState<Hop>("2hop");
   const [pageSize, setPageSize] = useState(10);
   const [error, setError] = useState<string | null>(null);
 
@@ -867,6 +1025,10 @@ function GiverPanel() {
 
   function removeIntroduced(myContactId: string, candidateId: string) {
     setSearchResponse((prev) => prev && { ...prev, data: removeIntroducedCandidate(prev.data, myContactId, candidateId) });
+  }
+
+  function handleCardsRemoved(cardIds: string[]) {
+    setSearchResponse((prev) => prev && { ...prev, data: removeCards(prev.data, cardIds) });
   }
 
   const toggle = (set: Set<string>, setFn: (s: Set<string>) => void, v: string) => {
@@ -993,7 +1155,8 @@ function GiverPanel() {
 
       {searchResponse && (
         <ResultGroups result={searchResponse.data} historyId={searchResponse.historyId} mode="giver" pageSize={pageSize}
-          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={() => {}} onRemoveHidden={() => {}} onRemoveIntroduced={removeIntroduced} />
+          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={() => {}} onRemoveHidden={() => {}} onRemoveIntroduced={removeIntroduced}
+          onCardsRemoved={handleCardsRemoved} />
       )}
     </div>
   );

@@ -2,13 +2,14 @@
 // 定例会（繰り返しミーティング）ルート（認証必要）
 // POST   /api/meeting-series              — 作成（候補パターン付き・投票開始）
 // GET    /api/meeting-series              — 自分が関係する定例会一覧
+// GET    /api/meeting-series/hosting-voting-summary — 自分が主催する投票中の定例会一覧（ホーム用）
 // GET    /api/meeting-series/:id          — 詳細（候補パターン・投票状況・確定後は開催回一覧）
 // POST   /api/meeting-series/:id/respond  — 候補パターンへの投票
 // PATCH  /api/meeting-series/:id/confirm  — 1つのパターンを確定し、終了条件までの開催回を一括生成
 // DELETE /api/meeting-series/:id          — 定例会をキャンセル（未来の開催回もあわせてキャンセル）
 // =============================================================
 import { Hono } from "hono";
-import { eq, and, or, inArray, gte } from "drizzle-orm";
+import { eq, and, or, inArray, gte, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -16,7 +17,7 @@ import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { computeOccurrences, type RecurrencePattern } from "../services/recurrence.ts";
-import { getAvailableConferenceTypes, autoCreateConferenceForOccurrence, cancelAutoConference } from "../services/conferenceService.ts";
+import { getAvailableConferenceTypes, autoCreateConferenceForOccurrence, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -335,6 +336,56 @@ meetingSeriesRoutes.get("/conference-types", async (c) => {
 });
 
 // ----------------------------------------------------------------
+// GET /api/meeting-series/hosting-voting-summary — 自分が主催していて、まだ投票中（voting）の定例会一覧（ホーム用）
+// ----------------------------------------------------------------
+meetingSeriesRoutes.get("/hosting-voting-summary", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ data: [] });
+
+  const hosting = await db
+    .select()
+    .from(schema.meetingSeries)
+    .where(and(eq(schema.meetingSeries.hostMemberId, memberId), eq(schema.meetingSeries.status, "voting")))
+    .all();
+  if (hosting.length === 0) return c.json({ data: [] });
+
+  const seriesIds = hosting.map((s) => s.id);
+  const candidates = await db.select({ id: schema.meetingSeriesPatternCandidates.id, seriesId: schema.meetingSeriesPatternCandidates.seriesId })
+    .from(schema.meetingSeriesPatternCandidates).where(inArray(schema.meetingSeriesPatternCandidates.seriesId, seriesIds)).all();
+  const candidateCountBySeriesId = new Map<string, number>();
+  for (const cand of candidates) {
+    candidateCountBySeriesId.set(cand.seriesId, (candidateCountBySeriesId.get(cand.seriesId) ?? 0) + 1);
+  }
+
+  const responses = await db.select({ seriesId: schema.meetingSeriesResponses.seriesId, memberId: schema.meetingSeriesResponses.memberId })
+    .from(schema.meetingSeriesResponses).where(inArray(schema.meetingSeriesResponses.seriesId, seriesIds)).all();
+  const respondedMemberIdsBySeriesId = new Map<string, Set<string>>();
+  for (const r of responses) {
+    const set = respondedMemberIdsBySeriesId.get(r.seriesId) ?? new Set();
+    set.add(r.memberId);
+    respondedMemberIdsBySeriesId.set(r.seriesId, set);
+  }
+
+  const data = await Promise.all(hosting.map(async (s) => {
+    const targetIds = (await resolveSeriesMemberIds(db, s)).filter((tid) => tid !== memberId);
+    const respondedIds = respondedMemberIdsBySeriesId.get(s.id) ?? new Set<string>();
+    const respondedCount = targetIds.filter((tid) => respondedIds.has(tid)).length;
+    return {
+      id: s.id,
+      title: s.title,
+      candidateCount: candidateCountBySeriesId.get(s.id) ?? 0,
+      targetCount: targetIds.length,
+      respondedCount,
+      deadline: s.deadline,
+      createdAt: s.createdAt,
+    };
+  }));
+
+  return c.json({ data });
+});
+
+// ----------------------------------------------------------------
 // GET /api/meeting-series — 自分が関係する定例会一覧
 // ----------------------------------------------------------------
 meetingSeriesRoutes.get("/", async (c) => {
@@ -384,6 +435,33 @@ meetingSeriesRoutes.get("/", async (c) => {
       )
     : new Set<string>();
 
+  // 過去の定例会（終了・キャンセル済み）の期間フィルター用に、最終開催日（生成済みの開催回のうち最も遅い日程）を取得する。
+  // 生成済みの開催回は meetings.series_id で紐づき、実際の日時は confirmed_candidate_id 経由で
+  // meeting_date_candidates にある（辞退・変更・個別キャンセルも反映された実態を使うため、
+  // パターンからの理論上の最終回ではなく、実際に生成された開催回から求める）。
+  const pastSeriesIds = mine.filter((s) => s.status === "ended" || s.status === "cancelled").map((s) => s.id);
+  const lastOccurrenceAtBySeriesId = new Map<string, number>();
+  if (pastSeriesIds.length > 0) {
+    const occurrenceMeetings = await db
+      .select({ id: schema.meetings.id, seriesId: schema.meetings.seriesId, confirmedCandidateId: schema.meetings.confirmedCandidateId })
+      .from(schema.meetings)
+      .where(inArray(schema.meetings.seriesId, pastSeriesIds))
+      .all();
+    const candidateIds = occurrenceMeetings.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
+    const dateCandidates = candidateIds.length > 0
+      ? await db.select({ id: schema.meetingDateCandidates.id, startsAt: schema.meetingDateCandidates.startsAt })
+          .from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, candidateIds)).all()
+      : [];
+    const startsAtByCandidateId = new Map(dateCandidates.map((d) => [d.id, d.startsAt]));
+    for (const m of occurrenceMeetings) {
+      if (!m.seriesId || !m.confirmedCandidateId) continue;
+      const startsAt = startsAtByCandidateId.get(m.confirmedCandidateId);
+      if (startsAt == null) continue;
+      const current = lastOccurrenceAtBySeriesId.get(m.seriesId);
+      if (current == null || startsAt > current) lastOccurrenceAtBySeriesId.set(m.seriesId, startsAt);
+    }
+  }
+
   const data = mine
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((s) => ({
@@ -391,6 +469,8 @@ meetingSeriesRoutes.get("/", async (c) => {
       isHost: s.hostMemberId === memberId,
       hasResponded: myRespondedSeriesIds.has(s.id),
       host: hostMap.get(s.hostMemberId) ?? null,
+      lastOccurrenceAt: lastOccurrenceAtBySeriesId.get(s.id) ?? null,
+      createdAt: s.createdAt,
     }));
 
   return c.json({ data });
@@ -538,6 +618,23 @@ async function generateSeriesOccurrences(
       );
     }
 
+    // 会議ツールの種類（手入力・Zoom）ではGoogleカレンダーに何も記録されないため、この回の日程を
+    // 主催者のカレンダーにブロック予定として登録しておく（google_meetの場合は上で既にMeet付きの
+    // 予定を作成済みなので対象外＝二重に予定が入るのを防ぐ）。1to1と異なり、これまで定例会の各回は
+    // 確定してもカレンダーに何も記録されず、ダブルブッキングに気づけない危険があった。
+    if (!conf?.calendarEventId) {
+      const blocked = await blockHostCalendarForDate({
+        db, env, hostMemberId: series.hostMemberId,
+        summary: `${series.title}（第${i + 1}回・${dateLabel}）`, description: series.description ?? "",
+        startAtUtc: new Date(occ.startsAt * 1000).toISOString(),
+        endAtUtc: new Date(occ.endsAt * 1000).toISOString(),
+        requestId: `series-block-${series.id}-${i + 1}`,
+      });
+      if (blocked.eventId) {
+        conf = conf ? { ...conf, calendarEventId: blocked.eventId } : { conferenceType: "manual", conferenceUrl: null, conferenceMetaJson: null, calendarEventId: blocked.eventId };
+      }
+    }
+
     await db.insert(schema.meetings).values({
       id: meetingId,
       title: `${series.title}（第${i + 1}回・${dateLabel}）`,
@@ -560,6 +657,7 @@ async function generateSeriesOccurrences(
       id: candidateId, meetingId, startsAt: occ.startsAt, endsAt: occ.endsAt,
       sortOrder: 0, isConfirmed: 1, addedByMemberId: series.hostMemberId,
       conferenceUrl: conf?.conferenceUrl ?? null,
+      calendarEventId: conf?.calendarEventId ?? null,
     });
     await db.update(schema.meetings).set({ confirmedCandidateId: candidateId }).where(eq(schema.meetings.id, meetingId));
     for (const mid of inviteeIds) {
@@ -716,6 +814,22 @@ meetingSeriesRoutes.delete("/:id", async (c) => {
         .filter((m) => m.conferenceType === "zoom" || m.conferenceType === "google_meet")
         .map((m) => cancelAutoConference(db, c.env, series.hostMemberId, m.conferenceType, m.conferenceMetaJson, m.calendarEventId))
     ));
+    // カレンダーブロック予定も削除する
+    const toCancelCandidateIds = toCancel.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
+    if (toCancelCandidateIds.length > 0) {
+      const blockedCandidates = await db.select({ id: schema.meetingDateCandidates.id, calendarEventId: schema.meetingDateCandidates.calendarEventId })
+        .from(schema.meetingDateCandidates)
+        .where(and(inArray(schema.meetingDateCandidates.id, toCancelCandidateIds), isNotNull(schema.meetingDateCandidates.calendarEventId)))
+        .all();
+      if (blockedCandidates.length > 0) {
+        c.executionCtx.waitUntil(Promise.all(blockedCandidates.map((cd) =>
+          deleteHostCalendarEvent(db, c.env, series.hostMemberId, cd.calendarEventId!)
+        )));
+        await db.update(schema.meetingDateCandidates)
+          .set({ calendarEventId: null })
+          .where(inArray(schema.meetingDateCandidates.id, blockedCandidates.map((cd) => cd.id)));
+      }
+    }
   }
 
   return c.json({ ok: true, cancelledOccurrences: toCancel.length });

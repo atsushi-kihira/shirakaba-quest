@@ -7,14 +7,13 @@ import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Handshake, Loader2, Search, Check, X, Settings, Lock } from "lucide-react";
-import { api, request } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
-import { GoogleNotConnectedWarning } from "@/components/google-not-connected-warning";
-import { AutoSchedulerShareLinkPanel, useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { InProgressOneOnOneSection, OneOnOneHistorySection } from "./_oneonone-sections";
 import { PrearrangedRequestModal } from "../members/_prearranged-request-modal";
 import { NormalRequestModal } from "../members/_normal-request-modal";
+import { GuestInvitePanel } from "./_guest-invite-panel";
 
 type Member = { id: string; name: string; emoji: string; bgColor: string; connectionStatus: string };
 type MembersResponse = { data: Member[] };
@@ -208,46 +207,25 @@ function MemberOneOnOnePanel({ onDone }: { onDone: () => void }) {
 }
 
 // ----------------------------------------------------------------
-// 外部ゲスト向け: 既存の1on1スケジューラー公開URL（/book/:memberSlug）をそのまま利用
+// 外部ゲスト向け: 相手を指定して招待リンクを発行する
 // ----------------------------------------------------------------
 function GuestOneOnOnePanel() {
-  const { data: shareLinkData, isLoading } = useAutoSchedulerShareLink();
-
-  const { data: googleStatusData } = useQuery<{ data: { connected: boolean } }>({
-    queryKey: ["scheduler", "google-status"],
-    queryFn: () => request("/scheduler/oauth/google/status"),
-  });
-
-  const publicUrl = shareLinkData?.publicUrl ?? null;
-
-  if (isLoading) {
-    return (
-      <div className="flex justify-center py-10">
-        <Loader2 size={22} className="animate-spin" style={{ color: "var(--color-brand)" }} />
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
       <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-        メンバー外の方との1to1は、ご自身のスケジュール公開URL（期限付き）を何らかの手段（メール・チャット等）で直接お送りいただくことで調整できます。
+        メンバー外の方との1to1は、相手を指定して招待リンクを発行し、URLをコピーするかメールで案内して調整できます。
       </p>
 
-      {publicUrl && googleStatusData && !googleStatusData.data.connected && <GoogleNotConnectedWarning />}
+      <GuestInvitePanel />
 
-      <div className="card-paper rounded-2xl p-4 space-y-3">
-        <p className="text-xs font-medium" style={{ color: "var(--color-ink-500)" }}>あなたの公開予約URL</p>
-        <AutoSchedulerShareLinkPanel />
-        <a
-          href={`/scheduler/settings?returnTo=${encodeURIComponent("/meetings/one-on-one?mode=guest")}`}
-          className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-medium"
-          style={{ color: "var(--color-ink-500)" }}
-        >
-          <Settings size={13} />
-          日程調整の基本設定・受付時間を変更する
-        </a>
-      </div>
+      <a
+        href={`/scheduler/settings?returnTo=${encodeURIComponent("/meetings/one-on-one?mode=guest")}`}
+        className="w-full flex items-center justify-center gap-1.5 py-2 text-xs font-medium"
+        style={{ color: "var(--color-ink-500)" }}
+      >
+        <Settings size={13} />
+        日程調整の基本設定・受付時間を変更する
+      </a>
     </div>
   );
 }

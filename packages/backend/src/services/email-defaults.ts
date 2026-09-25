@@ -793,21 +793,21 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
 
   {
     emailKey: "oneonone_prearranged_request",
-    label: "1to1申込通知（日程指定・要回答）",
+    label: "1to1確定通知（日程指定）",
     category: "oneonone",
-    triggerDescription: "メンバーが日時・会議URLを指定して1to1を申し込んだとき（相手に送信、承諾/辞退の回答が必要）",
+    triggerDescription: "メンバーが日時・会議URLを指定して1to1を申し込んだとき（相手に送信。予定は確定済みで、都合が悪い場合のみ辞退が必要）",
     enabled: true,
-    subject: "【{{appTitle}}】{{requesterName}}さんから1to1の申込が届きました（要回答）",
+    subject: "【{{appTitle}}】{{requesterName}}さんとの1to1が確定しました",
     bodyText: `{{responderName}} さん
 
-{{requesterName}}さんから、日時を指定して1to1の申込が届きました。
+{{requesterName}}さんから、日時を指定して1to1の申込が届きました。この日時で予定が確定しています。
 
 ▼ 日時
 {{dateLabel}}
 
-{{conferenceBlock}}{{noteBlock}}このままでよろしければ「承諾する」、都合が合わなければ「断る」を選んでください（ログイン不要です）。
+{{conferenceBlock}}{{noteBlock}}都合が悪い場合のみ、以下のURLから辞退の連絡をしてください（ログイン不要です）。
 
-▼ 回答はこちら
+▼ 内容の確認・辞退はこちら
 {{respondUrl}}
 
 ---
@@ -820,6 +820,54 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
       { key: "conferenceBlock", label: "会議URL（設定済みの場合のみ表示）", example: "🔗 Zoom URL: https://...\n\n" },
       { key: "noteBlock", label: "申込者からのメッセージ（ある場合のみ表示）", example: "💬 メッセージ：よろしくお願いします\n\n" },
       { key: "respondUrl", label: "回答用URL（ログイン不要）", example: "https://app.example.com/oneonone/respond/xxx" },
+    ],
+  },
+
+  {
+    emailKey: "oneonone_guest_invite",
+    label: "1to1招待通知（外部ゲスト向け）",
+    category: "oneonone",
+    triggerDescription: "メンバーが外部ゲストを名前・メールで指定して1to1に招待したとき（招待された本人に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{hostName}}さんから1to1のご招待です",
+    bodyText: `{{guestName}} さん
+
+{{hostName}}さんから1to1のご招待が届きました！
+
+{{noteBlock}}下記のURLから日程をご確認・ご選択ください（会員登録は不要です）。
+
+▼ こちらから
+{{inviteUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "招待された方の名前", example: "田中 一郎" },
+      { key: "hostName", label: "招待した人（主催者）", example: "紀平 篤志" },
+      { key: "inviteUrl", label: "招待URL", example: "https://app.example.com/oneonone/guest/xxx" },
+      { key: "noteBlock", label: "主催者からのメッセージ（ある場合のみ表示）", example: "💬 メッセージ：よろしくお願いします\n\n" },
+    ],
+  },
+  {
+    emailKey: "oneonone_guest_invite_cancelled",
+    label: "1to1招待キャンセル通知（外部ゲスト向け）",
+    category: "oneonone",
+    triggerDescription: "メンバーが、外部ゲストへの未確定の1to1招待を削除（キャンセル）したとき（招待された本人に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{hostName}}さんからの1to1のご招待がキャンセルされました",
+    bodyText: `{{guestName}} さん
+
+{{hostName}}さんからの1to1のご招待は、キャンセルされました。
+
+お手数をおかけしますが、今回のご案内は無効となりましたのでご了承ください。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "招待されていた方の名前", example: "田中 一郎" },
+      { key: "hostName", label: "招待していた人（主催者）", example: "紀平 篤志" },
     ],
   },
 

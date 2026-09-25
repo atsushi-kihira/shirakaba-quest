@@ -259,7 +259,13 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
 // ================================================================
 // 通常ミーティングタブ
 // ================================================================
-type SeriesItem = { id: string; title: string; status: "voting" | "confirmed" | "ended" | "cancelled"; isHost: boolean; host: { id: string; name: string; emoji: string } | null };
+type SeriesItem = {
+  id: string; title: string; status: "voting" | "confirmed" | "ended" | "cancelled";
+  isHost: boolean; host: { id: string; name: string; emoji: string } | null;
+  // 生成済みの開催回のうち最も遅い日程（unix秒）。開催回が1つも生成されていない場合は null
+  lastOccurrenceAt: number | null;
+  createdAt: number;
+};
 
 type Period = "1m" | "6m" | "1y" | "all";
 const PERIOD_LABELS: Record<Period, string> = { "1m": "直近1ヶ月", "6m": "直近6ヶ月", "1y": "直近1年", all: "すべて" };
@@ -276,6 +282,12 @@ function isPastMeeting(m: MeetingItem, nowSec: number): boolean {
 // 期間フィルター・並び替えの基準時刻（確定日時があればそれ、なければ作成日時）
 function meetingSortTime(m: MeetingItem): number {
   return m.confirmedDate?.startsAt ?? m.createdAt;
+}
+
+// 定例会の期間フィルター・並び替えの基準時刻。単発ミーティングと違って開催期間が長いことがあるため、
+// 開始日ではなく最終開催日を基準にする（開催回が1つも生成されていない場合のみ作成日にフォールバック）
+function seriesSortTime(s: SeriesItem): number {
+  return s.lastOccurrenceAt ?? s.createdAt;
 }
 
 const SERIES_STATUS_META: Record<SeriesItem["status"], { label: string; bg: string; color: string }> = {
@@ -308,7 +320,9 @@ function RegularMeetingsTab() {
   const seriesList = seriesData?.data ?? [];
   // 投票中・確定済みの定例会は常時表示、終了・キャンセル済みは「過去のミーティング」に折りたたむ
   const activeSeriesList = seriesList.filter((s) => s.status === "voting" || s.status === "confirmed");
-  const pastSeriesList = seriesList.filter((s) => s.status === "ended" || s.status === "cancelled");
+  const pastSeriesList = seriesList
+    .filter((s) => s.status === "ended" || s.status === "cancelled")
+    .sort((a, b) => seriesSortTime(b) - seriesSortTime(a));
 
   function handleNotifClick(meetingId: string) {
     api.post(`/meetings/${meetingId}/read-notifications`, {})
@@ -327,6 +341,7 @@ function RegularMeetingsTab() {
   const days = PERIOD_DAYS[period];
   const cutoff = days ? nowSec - days * 86400 : null;
   const filteredPastMeetings = pastMeetings.filter((m) => cutoff === null || meetingSortTime(m) >= cutoff);
+  const filteredPastSeriesList = pastSeriesList.filter((s) => cutoff === null || seriesSortTime(s) >= cutoff);
 
   function renderSeriesCard(s: SeriesItem) {
     const meta = SERIES_STATUS_META[s.status];
@@ -550,11 +565,6 @@ function RegularMeetingsTab() {
               </button>
               {showHistory && (
                 <>
-                  {pastSeriesList.length > 0 && (
-                    <div className="space-y-2 mb-3">
-                      {pastSeriesList.map(renderSeriesCard)}
-                    </div>
-                  )}
                   <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1">
                     {(Object.keys(PERIOD_LABELS) as Period[]).map((p) => (
                       <button
@@ -570,11 +580,34 @@ function RegularMeetingsTab() {
                       </button>
                     ))}
                   </div>
-                  {filteredPastMeetings.length === 0 ? (
-                    <p className="text-center text-sm py-6" style={{ color: "var(--color-ink-400)" }}>この期間のミーティングはありません</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {filteredPastMeetings.map(renderMeetingCard)}
+
+                  {pastSeriesList.length > 0 && (
+                    <div className="mb-4">
+                      <h3 className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>
+                        🔁 定例ミーティング
+                      </h3>
+                      {filteredPastSeriesList.length === 0 ? (
+                        <p className="text-center text-sm py-4" style={{ color: "var(--color-ink-400)" }}>この期間の定例ミーティングはありません</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {filteredPastSeriesList.map(renderSeriesCard)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {pastMeetings.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>
+                        📅 通常ミーティング
+                      </h3>
+                      {filteredPastMeetings.length === 0 ? (
+                        <p className="text-center text-sm py-4" style={{ color: "var(--color-ink-400)" }}>この期間のミーティングはありません</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {filteredPastMeetings.map(renderMeetingCard)}
+                        </div>
+                      )}
                     </div>
                   )}
                 </>

@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
+import { NewPostModal, type GraphTeamLite } from "@/screens/collab/_activity-and-records";
 
 type Availability = "yes" | "maybe" | "no";
 
@@ -27,6 +28,7 @@ type Meeting = {
   id: string; title: string; description: string | null;
   host: { id: string; name: string; emoji: string } | null;
   hostMemberId: string; scope: string; teamId: string | null;
+  collabTeamId: string | null;
   status: "open" | "confirmed" | "cancelled";
   confirmedCandidateId: string | null;
   confirmedStartsAt: number | null;
@@ -57,6 +59,9 @@ type DetailResponse = {
     myAttendances: { status: "attended" | "absent"; candidateId: string | null; pointsAwarded: number | null }[];
     attendances: AttendanceRecord[];
     availableConferenceTypes: ("google_meet" | "zoom")[];
+    collabTeamName: string | null;
+    collabTeamType: "power" | "loose" | null;
+    pendingTeamActionItems: { id: string; task: string; assigneeName: string | null; dueDate: string | null }[];
   };
 };
 
@@ -193,6 +198,8 @@ export function MeetingDetailScreen() {
   const [copiedSharedUrl, setCopiedSharedUrl] = useState(false);
   // 出席確認後、活動タイムラインへの投稿を促すプロンプト（パイロット限定・相手が1名の時のみ）
   const [postPromptPartner, setPostPromptPartner] = useState<{ id: string; name: string } | null>(null);
+  // パワーチーム・ゆるいチームのミーティングの場合は、上記の代わりにチーム固定の活動投稿モーダルを開く
+  const [showTeamPostModal, setShowTeamPostModal] = useState(false);
   // 都合が悪い場合の連絡・候補日提案（参加者向け）
   const [showUnavailableForm, setShowUnavailableForm] = useState(false);
   const [unavailableMessage, setUnavailableMessage] = useState("");
@@ -221,6 +228,16 @@ export function MeetingDetailScreen() {
     queryFn: () => api.get<{ data: EventItem[] }>("/events/active"),
     enabled: showEventPicker,
   });
+
+  // パワーチーム・ゆるいチームのミーティングなら、活動投稿モーダルでチーム固定表示・
+  // 担当者選択に使うメンバー一覧を取得する
+  const collabTeamId = data?.data.meeting.collabTeamId ?? null;
+  const { data: collabGraphData } = useQuery({
+    queryKey: ["collab", "graph"],
+    queryFn: () => api.get<{ data: { teams: GraphTeamLite[] } }>("/collab/graph"),
+    enabled: !!collabTeamId,
+  });
+  const meetingTeam: GraphTeamLite | undefined = collabGraphData?.data.teams.find((t) => t.id === collabTeamId);
 
   // サーバーからデータが届いたら myAnswers を初期化（まだ手動編集していない場合のみ）
   useEffect(() => {
@@ -420,12 +437,17 @@ export function MeetingDetailScreen() {
       qc.invalidateQueries({ queryKey: ["meetings", id] });
       qc.invalidateQueries({ queryKey: ["meetings", "pending-attendance"] });
       qc.invalidateQueries({ queryKey: ["ranking", "me"] });
-      // 出席（参加した）を記録した時、相手が1名だけの1to1的なミーティングなら、
-      // 活動タイムラインへの投稿を促す
+      // 出席（参加した）を記録した時、活動タイムラインへの投稿を促す。
+      // パワーチーム・ゆるいチームのミーティング（定例会含む）なら、チーム固定の投稿モーダルを開く。
+      // それ以外（相手が1名だけの1to1的なミーティング）は、従来通りの簡易プロンプトを出す。
       if (variables.status === "attended") {
-        const others = (data?.data.respondents ?? []).filter((r) => r.type === "member" && r.id !== user?.id);
-        if (others.length === 1) {
-          setPostPromptPartner({ id: others[0].id, name: others[0].name });
+        if (data?.data.meeting.scope === "collab_team" && data.data.meeting.collabTeamId) {
+          setShowTeamPostModal(true);
+        } else {
+          const others = (data?.data.respondents ?? []).filter((r) => r.type === "member" && r.id !== user?.id);
+          if (others.length === 1) {
+            setPostPromptPartner({ id: others[0].id, name: others[0].name });
+          }
         }
       }
     },
@@ -439,7 +461,7 @@ export function MeetingDetailScreen() {
     );
   }
 
-  const { meeting, candidates, respondents, externalInvitees, isHost, linkedEvent, myAttendances, attendances, availableConferenceTypes, myDeclined, maxCandidates } = data.data;
+  const { meeting, candidates, respondents, externalInvitees, isHost, linkedEvent, myAttendances, attendances, availableConferenceTypes, myDeclined, maxCandidates, collabTeamName, collabTeamType, pendingTeamActionItems } = data.data;
   const confirmedCandidates = candidates.filter((c) => c.isConfirmed === 1).sort((a, b) => a.startsAt - b.startsAt);
   const candidateSlotsLeft = maxCandidates - candidates.length;
 
@@ -502,7 +524,10 @@ export function MeetingDetailScreen() {
             {meeting.title}
           </h1>
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-            {meeting.host?.emoji} {meeting.host?.name}さん主催 · {scopeLabel[meeting.scope]}
+            {meeting.host?.emoji} {meeting.host?.name}さん主催 ・{" "}
+            {meeting.scope === "collab_team"
+              ? `${collabTeamType === "power" ? "⚡" : "🌿"} ${collabTeamName ?? "チーム"}`
+              : scopeLabel[meeting.scope]}
           </p>
           {meeting.seriesId && (
             <button onClick={() => navigate(`/meetings/series/${meeting.seriesId}`)}
@@ -525,6 +550,27 @@ export function MeetingDetailScreen() {
           </span>
         )}
       </div>
+
+      {/* パワーチーム・ゆるいチームのミーティングで、前回までの未完了アクションがある場合に表示 */}
+      {pendingTeamActionItems.length > 0 && (
+        <div className="mb-4 p-4 rounded-2xl" style={{ background: "rgba(212,160,59,0.10)", border: "1px solid rgba(212,160,59,0.3)" }}>
+          <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-accent)" }}>
+            📋 前回までの未完了アクション（{pendingTeamActionItems.length}件）
+          </p>
+          <div className="flex flex-col gap-1">
+            {pendingTeamActionItems.map((item) => (
+              <p key={item.id} className="text-xs" style={{ color: "var(--color-ink-700)" }}>
+                ・{item.task}
+                {(item.assigneeName || item.dueDate) && (
+                  <span style={{ color: "var(--color-ink-400)" }}>
+                    {" "}（{item.assigneeName ?? "担当未定"}{item.dueDate ? ` ・〜${item.dueDate}` : ""}）
+                  </span>
+                )}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 確定日バナー（複数対応・会議URL管理を含む） */}
       {meeting.status === "confirmed" && confirmedCandidates.length > 0 && (
@@ -1995,6 +2041,22 @@ export function MeetingDetailScreen() {
           partnerId={postPromptPartner.id}
           suggestedBody={`${postPromptPartner.name}さんとミーティングをしました！`}
           onClose={() => setPostPromptPartner(null)}
+        />
+      )}
+
+      {/* 出席確認後（パワーチーム・ゆるいチームのミーティング）：チーム固定の活動投稿モーダル */}
+      {showTeamPostModal && meeting.collabTeamId && (
+        <NewPostModal
+          others={[]}
+          teams={meetingTeam ? [meetingTeam] : [{
+            id: meeting.collabTeamId,
+            name: collabTeamName ?? "チーム",
+            type: collabTeamType ?? "loose",
+            members: [],
+          }]}
+          lockedTeamId={meeting.collabTeamId}
+          initialBody={`「${meeting.title}」のミーティングを実施しました！`}
+          onClose={() => setShowTeamPostModal(false)}
         />
       )}
     </div>

@@ -1,10 +1,10 @@
 // =============================================================
 // 1to1（メンバー向け）共通セクション
-// 「進行中の1to1申込」「1to1の記録」— ミーティング画面・1to1ミーティング画面で共用
+// 「メンバーとの1to1」「1to1の記録」— ミーティング画面・1to1ミーティング画面で共用
 // =============================================================
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, Loader2, Check, X, Calendar, CheckCircle, Clock, Pencil } from "lucide-react";
+import { Trash2, Loader2, Check, X, Calendar, CheckCircle, Clock, Pencil, Copy } from "lucide-react";
 import { api } from "@/lib/api";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateISO, fmtDateTimeFull, fmtTime } from "@/lib/date";
@@ -15,6 +15,7 @@ import {
 } from "@/hooks/use-oneonone-status";
 import { CompleteOneOnOneModal } from "./_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "./_edit-oneonone-schedule-modal";
+import { CandidateSelectionPanel } from "./_candidate-selection-panel";
 import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
 
 type Period = "1m" | "6m" | "1y" | "all";
@@ -22,7 +23,7 @@ const PERIOD_LABELS: Record<Period, string> = { "1m": "直近1ヶ月", "6m": "�
 const PERIOD_DAYS: Record<Period, number | null> = { "1m": 30, "6m": 182, "1y": 365, all: null };
 
 // ----------------------------------------------------------------
-// 進行中の1to1申込（申込中・承諾済み）
+// メンバーとの1to1（申込中・承諾済み）
 // 同じ相手と複数同時に進行中でも構わないが、ここで一覧管理・キャンセルできるようにする
 // ----------------------------------------------------------------
 export function InProgressOneOnOneSection() {
@@ -38,10 +39,6 @@ export function InProgressOneOnOneSection() {
     qc.invalidateQueries({ queryKey: ["ranking", "me"] });
   };
 
-  const acceptMutation = useMutation({
-    mutationFn: (id: string) => api.patch(`/oneonone/${id}/accept`),
-    onSuccess: invalidate,
-  });
   const rejectMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/oneonone/${id}/reject`),
     onSuccess: invalidate,
@@ -70,7 +67,7 @@ export function InProgressOneOnOneSection() {
 
   return (
     <div>
-      <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>⏳ 進行中の1to1申込</h2>
+      <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>👥 メンバーとの1to1</h2>
       <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
         申込中・承諾済みで、まだ完了していない1to1です。不要な場合は削除してください。
       </p>
@@ -79,9 +76,7 @@ export function InProgressOneOnOneSection() {
           const isPendingForMe = s.status === "pending" && s.myRole === "responder";
           const iAmResponder = s.myRole === "responder";
           const iAmRequester = s.myRole === "requester";
-          // 相手（申込者）の予約ページで日程を選べる場合、日程選択＝承諾を意味するため、
-          // 別途「承諾する」ボタンは出さず「予約ページで日程を選ぶ」か「承諾しない」の2択にする
-          const canScheduleInstead = isPendingForMe && !s.scheduledFor && !!s.requesterSchedulerUrl;
+          const hasCandidatesToPick = s.arrangementMethod === "candidates" && !s.selectedCandidateSlotId && (s.candidates?.length ?? 0) > 0;
           const statusLabel = s.status === "pending"
             ? (s.myRole === "requester" ? "📨 相手の承諾待ち" : "📨 あなたの承諾待ち")
             : "🤝 進行中（完了待ち）";
@@ -150,8 +145,13 @@ export function InProgressOneOnOneSection() {
                 </button>
               </div>
 
-              {/* 予約リンク：自分が回答者の間はずっと表示する（承諾後も日程調整に使えるように） */}
-              {iAmResponder && s.requesterSchedulerUrl && !s.scheduledFor && (
+              {/* 候補日提示方式：まだ選んでいなければ候補から選ぶパネルを表示する */}
+              {iAmResponder && hasCandidatesToPick && !s.scheduledFor && (
+                <CandidateSelectionPanel sessionId={s.id} candidates={s.candidates!} availableConferenceTypes={s.availableConferenceTypes} onConfirmed={invalidate} />
+              )}
+
+              {/* 公開予約URL方式の予約リンク：自分が回答者の間はずっと表示する（承諾後も日程調整に使えるように） */}
+              {iAmResponder && s.arrangementMethod !== "candidates" && s.requesterSchedulerUrl && !s.scheduledFor && (
                 <div className="mt-2.5">
                   <a
                     href={s.requesterSchedulerUrl}
@@ -166,8 +166,8 @@ export function InProgressOneOnOneSection() {
                 </div>
               )}
 
-              {/* 自分の申込で相手の承諾待ちの場合：あなたの予約URLを共有できるようにする（日程が決まっていない間のみ） */}
-              {iAmRequester && s.status === "pending" && !s.scheduledFor && (
+              {/* 自分の申込で相手の承諾待ちの場合：あなたの予約URLを共有できるようにする（公開予約URL方式・日程未確定の間のみ） */}
+              {iAmRequester && s.arrangementMethod !== "candidates" && s.status === "pending" && !s.scheduledFor && (
                 <div className="mt-2.5 p-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
                   <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-success)" }}>
                     📅 あなたの予約URL（{s.partner?.name ?? "相手"}さんに直接共有できます）
@@ -176,34 +176,40 @@ export function InProgressOneOnOneSection() {
                 </div>
               )}
 
-              {/* 相手からの申込で回答待ちの場合：承諾/辞退（予約ページで選べる場合は「承諾しない」のみ） */}
+              {/* 候補日提示方式で、自分の申込で相手がまだ選んでいない場合：提示した候補日を確認できるようにする */}
+              {iAmRequester && hasCandidatesToPick && (
+                <div className="mt-2.5 p-3 rounded-2xl" style={{ background: "var(--color-paper-200)" }}>
+                  <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>
+                    🗓 提示した候補日（{s.partner?.name ?? "相手"}さんの選択待ち）
+                  </p>
+                  <div className="space-y-1">
+                    {s.candidates!.map((c) => (
+                      <p key={c.id} className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                        ・{fmtDateTimeFull(c.startAt, tz)}〜{fmtTime(c.endAt, tz)}
+                      </p>
+                    ))}
+                  </div>
+                  {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} />}
+                </div>
+              )}
+
+              {/* 相手からの申込でまだ日程未確定の場合：辞退のみ（承認という操作は廃止済み） */}
               {isPendingForMe && (
                 <div className="mt-2 flex gap-2">
                   <button
                     onClick={() => rejectMutation.mutate(s.id)}
-                    disabled={rejectMutation.isPending || acceptMutation.isPending}
+                    disabled={rejectMutation.isPending}
                     className="flex-1 py-2 rounded-2xl text-sm font-medium flex items-center justify-center gap-1"
                     style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
                   >
                     <X size={14} />
-                    {canScheduleInstead ? "承諾しない" : "断る"}
+                    辞退する
                   </button>
-                  {!canScheduleInstead && (
-                    <button
-                      onClick={() => acceptMutation.mutate(s.id)}
-                      disabled={acceptMutation.isPending || rejectMutation.isPending}
-                      className="flex-1 py-2 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-1"
-                      style={{ background: "var(--color-success)" }}
-                    >
-                      <Check size={14} />
-                      承諾する
-                    </button>
-                  )}
                 </div>
               )}
 
-              {/* 承諾済み：完了ボタン・お互いの完了状況 */}
-              {s.status === "accepted" && (
+              {/* 完了ボタン・お互いの完了状況（相手がまだ承諾していなくても、実際に1to1をしてしまうことはあるため表示する） */}
+              {(s.status === "accepted" || s.status === "pending") && (
                 <div className="mt-2.5 space-y-1.5">
                   <div className="flex items-center gap-1.5 text-xs">
                     {myCompleted ? (
@@ -257,6 +263,35 @@ export function InProgressOneOnOneSection() {
           onClose={() => setEditingSchedule(null)}
         />
       )}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------
+// 候補日提示方式の回答用URL（ログイン不要）をコピーする行。
+// 相手がメールをあまり確認しない場合に、申込者自身がDM等で直接送れるようにするため。
+// ----------------------------------------------------------------
+export function ResponseUrlCopyRow({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  function handleCopy() {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+  return (
+    <div className="mt-2 pt-2 space-y-1.5" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+      <p className="text-[11px]" style={{ color: "var(--color-ink-500)" }}>
+        メールを確認してもらえない場合は、こちらのURLをDM等で直接お送りください（ログイン不要で選べます）
+      </p>
+      <button
+        onClick={handleCopy}
+        className="w-full py-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5"
+        style={{ background: copied ? "var(--color-success)" : "var(--color-paper-100)", color: copied ? "white" : "var(--color-ink-600)" }}
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+        {copied ? "コピーしました" : "回答用URLをコピー"}
+      </button>
     </div>
   );
 }

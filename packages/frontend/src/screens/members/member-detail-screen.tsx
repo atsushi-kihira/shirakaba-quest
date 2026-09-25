@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, Camera } from "lucide-react";
+import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, Camera, Calendar } from "lucide-react";
 import { ImportCardModal } from "@/screens/oneonone/import-card-modal";
 import { PrearrangedRequestModal } from "./_prearranged-request-modal";
 import { NormalRequestModal } from "./_normal-request-modal";
@@ -12,18 +12,20 @@ import { MemberContactsPanel } from "./_member-contacts-panel";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { GoogleNotConnectedWarning } from "@/components/google-not-connected-warning";
 import { AutoSchedulerShareLinkPanel, useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
+import { ResponseUrlCopyRow } from "@/screens/meetings/_oneonone-sections";
 import { api, ApiError } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
-import { fmtDateISO } from "@/lib/date";
+import { fmtDateISO, fmtDateTimeFull, fmtTime } from "@/lib/date";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill, MemberBadge } from "@shared/types";
 
 type MemberResponse  = { data: PublicMember };
 type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
-type OnoSession = { id: string; status: "pending" | "accepted" | "completed" | "rejected" | "cancelled"; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null; requesterSchedulerUrl?: string | null; scheduledFor?: number | null; autoTransitionReason?: "pending_timeout" | "date_passed" | null };
+type OnoCandidateSlot = { id: string; startAt: number; endAt: number };
+type OnoSession = { id: string; status: "pending" | "accepted" | "completed" | "rejected" | "cancelled"; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null; requesterSchedulerUrl?: string | null; scheduledFor?: number | null; autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null; arrangementMethod?: "public_url" | "candidates"; selectedCandidateSlotId?: string | null; responseUrl?: string | null; candidates?: OnoCandidateSlot[] };
 type OnoListResponse = { data: OnoSession[] };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
@@ -54,7 +56,7 @@ export function MemberDetailScreen() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const me = useAuthStore((s) => s.user);
-  const { termUsp } = useSettings();
+  const { termUsp, termBusinessCommunity } = useSettings();
   const tz = useTimezone();
 
   // isSelf はバックエンドの connectionStatus: "self" を使って判定
@@ -273,6 +275,12 @@ export function MemberDetailScreen() {
             <p className="text-sm font-medium mt-1" style={{ color: "var(--color-ink-600)" }}>
               {member.category}
             </p>
+            {member.businessCommunityJoinedDate && (
+              <p className="text-xs mt-1 flex items-center gap-1" style={{ color: "var(--color-ink-400)" }}>
+                <Calendar size={12} />
+                {termBusinessCommunity}入会日：{fmtJoinedDate(member.businessCommunityJoinedDate)}
+              </p>
+            )}
           </div>
         </div>
 
@@ -477,11 +485,12 @@ export function MemberDetailScreen() {
                 <Clock size={16} /> 相手の承諾を待っています...
               </div>
 
-              {/* 自分の公開スケジュールURL（期限付き・メールが届きにくい場合の代替共有用。日程指定済みの申込では不要なので出さない） */}
-              {!activeSession.scheduledFor && mySchedulerUrl && googleStatusData && !googleStatusData.data.connected && (
+              {/* 自分の公開スケジュールURL（期限付き・メールが届きにくい場合の代替共有用。日程指定済みの申込では不要なので出さない。
+                  候補日提示方式の申込には使わない方式のため、その場合はここではなく下の候補日ブロックを表示する） */}
+              {activeSession.arrangementMethod !== "candidates" && !activeSession.scheduledFor && mySchedulerUrl && googleStatusData && !googleStatusData.data.connected && (
                 <GoogleNotConnectedWarning />
               )}
-              {!activeSession.scheduledFor && (
+              {activeSession.arrangementMethod !== "candidates" && !activeSession.scheduledFor && (
                 <div className="rounded-xl p-3" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
                   <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-success)" }}>
                     📅 あなたの予約URL（{member.name}さんに直接共有できます）
@@ -490,6 +499,23 @@ export function MemberDetailScreen() {
                   <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
                     メールが届きにくい場合は、このURLをLINEなどで直接送ってください
                   </p>
+                </div>
+              )}
+
+              {/* 候補日提示方式：まだ相手が選んでいない場合、提示した候補日と回答用URLを確認できるようにする */}
+              {activeSession.arrangementMethod === "candidates" && !activeSession.selectedCandidateSlotId && (
+                <div className="rounded-xl p-3" style={{ background: "var(--color-paper-200)" }}>
+                  <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>
+                    🗓 提示した候補日（{member.name}さんの選択待ち）
+                  </p>
+                  <div className="space-y-1">
+                    {(activeSession.candidates ?? []).map((c) => (
+                      <p key={c.id} className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                        ・{fmtDateTimeFull(c.startAt, tz)}〜{fmtTime(c.endAt, tz)}
+                      </p>
+                    ))}
+                  </div>
+                  {activeSession.responseUrl && <ResponseUrlCopyRow url={activeSession.responseUrl} />}
                 </div>
               )}
 
@@ -569,6 +595,8 @@ export function MemberDetailScreen() {
                       </span>
                     ) : s.status === "cancelled" && s.autoTransitionReason === "pending_timeout" ? (
                       <span style={{ color: "var(--color-ink-400)" }}>自動キャンセル（1週間未回答）</span>
+                    ) : s.status === "cancelled" && s.autoTransitionReason === "candidates_expired" ? (
+                      <span style={{ color: "var(--color-ink-400)" }}>自動キャンセル（候補日が過ぎたため）</span>
                     ) : s.status === "cancelled" ? (
                       <span style={{ color: "var(--color-ink-400)" }}>キャンセル</span>
                     ) : (
@@ -737,6 +765,13 @@ function SkillRow({ skill }: { skill: Skill }) {
       </p>
     </div>
   );
+}
+
+// "YYYY-MM-DD" → "2023年4月1日"（日にちは正確でなくてもよい設定のため、タイムゾーン変換はせず文字列のまま解釈する）
+function fmtJoinedDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-");
+  if (!y || !m || !d) return dateStr;
+  return `${y}年${Number(m)}月${Number(d)}日`;
 }
 
 function InfoRow({ icon, text }: { icon: React.ReactNode; text: string }) {

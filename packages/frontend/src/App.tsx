@@ -58,6 +58,7 @@ import { SchedulerBookingDetailScreen } from "@/screens/scheduler/scheduler-book
 import { PublicBookingPage } from "@/screens/public-booking/public-booking-page";
 import { PublicBookingForm } from "@/screens/public-booking/public-booking-form";
 import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
+import { OneOnOneGuestInvitePage } from "@/screens/public-booking/oneonone-guest-invite-page";
 import { NotificationsScreen } from "@/screens/notifications/notifications-screen";
 import { PrivacyPolicyScreen } from "@/screens/privacy-policy-screen";
 import { TermsOfUseScreen } from "@/screens/terms-of-use-screen";
@@ -109,6 +110,8 @@ export default function App() {
               <Route path="/book/confirmation/:token" element={<PublicBookingConfirmation />} />
               <Route path="/book/:memberSlug/form" element={<PublicBookingForm />} />
               <Route path="/book/:memberSlug" element={<PublicBookingPage />} />
+              {/* 外部ゲスト招待（候補日提示方式）の公開ページ（認証不要） */}
+              <Route path="/oneonone/guest/:token" element={<OneOnOneGuestInvitePage />} />
             </Route>
 
             {/* メンバー向け（要認証） */}

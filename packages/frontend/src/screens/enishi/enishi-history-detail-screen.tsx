@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
-import { ResultGroups, PageSizeSelect, updateCardGoodMatch, removeTransactedCandidate, removeHiddenCandidate, removeIntroducedCandidate } from "./enishi-search-screen";
+import { ResultGroups, PageSizeSelect, updateCardGoodMatch, removeTransactedCandidate, removeHiddenCandidate, removeIntroducedCandidate, removeCards } from "./enishi-search-screen";
 import type { SearchResult } from "./enishi-search-screen";
 
 type HistoryDetail = { id: string; mode: "for-me" | "giver"; title: string; createdAt: number; result: SearchResult };
@@ -47,6 +47,10 @@ export function EnishiHistoryDetailScreen() {
     setResultState((prev) => prev && { ...prev, result: removeIntroducedCandidate(prev.result, myContactId, candidateId) });
   }
 
+  function handleCardsRemoved(cardIds: string[]) {
+    setResultState((prev) => prev && { ...prev, result: removeCards(prev.result, cardIds) });
+  }
+
   return (
     <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-6 max-w-3xl mx-auto">
       <div className="flex items-center justify-between gap-2 mb-1">
@@ -71,7 +75,8 @@ export function EnishiHistoryDetailScreen() {
             <PageSizeSelect value={pageSize} onChange={setPageSize} />
           </div>
           <ResultGroups result={result} historyId={detail.id} mode={detail.mode} pageSize={pageSize}
-            onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={removeTransacted} onRemoveHidden={removeHidden} onRemoveIntroduced={removeIntroduced} />
+            onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={removeTransacted} onRemoveHidden={removeHidden} onRemoveIntroduced={removeIntroduced}
+            onCardsRemoved={handleCardsRemoved} />
         </>
       ) : null}
     </div>

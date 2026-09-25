@@ -351,7 +351,7 @@ export function ExternalContactsTab() {
 
 /** 会社概要（一覧表示用の一言概要・詳細）の入力欄＋「AIで生成」ボタン。1件登録フォーム・編集モーダルで共用する */
 function BusinessSummaryFields({
-  company, name, summary, setSummary, detail, setDetail,
+  company, name, summary, setSummary, detail, setDetail, specialty, setSpecialty,
 }: {
   company: string;
   name: string;
@@ -359,11 +359,14 @@ function BusinessSummaryFields({
   setSummary: (v: string) => void;
   detail: string;
   setDetail: (v: string) => void;
+  // 専門分野は任意（無指定の場合はAIの推定結果を自動反映しない）
+  specialty?: string;
+  setSpecialty?: (v: string) => void;
 }) {
   const [genError, setGenError] = useState("");
 
   const generate = useMutation({
-    mutationFn: () => api.post<{ data: { status: "done" | "not_found" | "error"; summary: string | null; detail: string | null } }>(
+    mutationFn: () => api.post<{ data: { status: "done" | "not_found" | "error"; summary: string | null; detail: string | null; specialty: string | null } }>(
       "/collab/contacts/generate-summary-preview", { company: company.trim(), name: name.trim() }
     ),
     onSuccess: (res) => {
@@ -371,6 +374,10 @@ function BusinessSummaryFields({
         setGenError("");
         setSummary(res.data.summary ?? "");
         setDetail(res.data.detail ?? "");
+        // 専門分野は、本人がまだ入力していない場合のみAIの推定値で埋める（手入力を上書きしない）
+        if (res.data.specialty && setSpecialty && !specialty?.trim()) {
+          setSpecialty(res.data.specialty);
+        }
       } else {
         setGenError("会社概要が見つかりませんでした。お手数ですが手入力をお願いします。");
       }
@@ -382,7 +389,7 @@ function BusinessSummaryFields({
     <>
       <div className="flex items-center justify-between mb-1">
         <label className="block text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>
-          会社概要（人脈をさがす一覧に出る一言概要）
+          専門分野・会社概要をAIで生成
         </label>
         <button type="button" onClick={() => generate.mutate()} disabled={generate.isPending || !company.trim()}
           className="text-xs px-2.5 py-1 rounded-full font-medium disabled:opacity-50 shrink-0"
@@ -390,12 +397,25 @@ function BusinessSummaryFields({
           {generate.isPending ? "生成中…" : "🤖 AIで生成"}
         </button>
       </div>
-      <input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="例: ふるさと納税ポータルサイトの運営"
-        className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
       {!company.trim() && (
         <p className="text-[11px] mb-2" style={{ color: "var(--color-ink-400)" }}>AIで生成するには、先に会社名/屋号を入力してください</p>
       )}
       {genError && <p className="text-[11px] mb-2" style={{ color: "var(--color-brand)" }}>{genError}</p>}
+
+      {setSpecialty && (
+        <>
+          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>専門分野</label>
+          <input value={specialty ?? ""} onChange={(e) => setSpecialty(e.target.value)} placeholder="例: 税務相談"
+            list={SPECIALTY_DATALIST_ID}
+            className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+        </>
+      )}
+
+      <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+        会社概要（人脈をさがす一覧に出る一言概要）
+      </label>
+      <input value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="例: ふるさと納税ポータルサイトの運営"
+        className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
 
       <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>会社概要（詳細）</label>
       <textarea value={detail} onChange={(e) => setDetail(e.target.value)} rows={3}
@@ -528,20 +548,16 @@ function ManualAddSection() {
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: 高橋 健一"
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
 
-          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>専門分野</label>
-          <input value={specialty} onChange={(e) => setSpecialty(e.target.value)} placeholder="例: 税務相談"
-            list={SPECIALTY_DATALIST_ID}
-            className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
-          <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
-            候補から選ぶか、なければ新しい専門分野をそのまま入力してください
-          </p>
-
           <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>会社名/屋号</label>
           <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="例: 高橋会計事務所"
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+          <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
+            ここまでは名刺の情報を手入力してください。この先はAIで自動入力できます
+          </p>
 
           <BusinessSummaryFields company={company} name={name} summary={businessSummary} setSummary={setBusinessSummary}
-            detail={businessSummaryDetail} setDetail={setBusinessSummaryDetail} />
+            detail={businessSummaryDetail} setDetail={setBusinessSummaryDetail}
+            specialty={specialty} setSpecialty={setSpecialty} />
 
           <RelationshipTagsInput relationships={relationships} setRelationships={setRelationships} />
 
@@ -896,6 +912,7 @@ function MyContactsSection() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSpecialties, setSelectedSpecialties] = useState<Set<string>>(new Set());
   const [selectedRelationships, setSelectedRelationships] = useState<Set<string>>(new Set());
+  const [selectedVisibilities, setSelectedVisibilities] = useState<Set<Visibility>>(new Set());
   // ホーム画面の「会社概要を生成できませんでした」通知からのリンク（?summaryIssues=1）で開いた場合、最初から絞り込んだ状態にする
   const [summaryIssueOnly, setSummaryIssueOnly] = useState(() => searchParams.get("summaryIssues") === "1");
   const [sortOrder, setSortOrder] = useState<ContactSortOrder>("newest");
@@ -944,25 +961,35 @@ function MyContactsSection() {
   // 管理（編集・削除・公開範囲の変更）のために非公開の人脈も引き続き表示する。
   const visibleCountContacts = useMemo(() => contacts.filter((ct) => ct.visibility !== "private"), [contacts]);
 
-  // 専門分野・関係性は別々に複数選択でき、それぞれの選択内はOR、両者の間はANDで絞り込む
-  // （例:{専門分野A or 専門分野B} and {関係性A or 関係性B}）。検索ボックスの自由入力はさらにAND。
-  // 「会社概要に問題あり」はさらに別軸のANDで、生成が「見つからず」「エラー」だったものだけに絞り込む。
+  // 専門分野・関係性・公開レベルは別々に複数選択でき、それぞれの選択内はOR、軸同士はANDで絞り込む
+  // （例:{専門分野A or 専門分野B} and {関係性A or 関係性B} and {公開レベルA or 公開レベルB}）。
+  // 検索ボックスの自由入力はさらにAND。「会社概要に問題あり」はさらに別軸のANDで、
+  // 生成が「見つからず」「エラー」だったものだけに絞り込む。
   function computeFilteredContacts(
-    baseContacts: Contact[], q: string, specialties: Set<string>, relationships: Set<string>, issueOnly: boolean
+    baseContacts: Contact[], q: string, specialties: Set<string>, relationships: Set<string>, visibilities: Set<Visibility>, issueOnly: boolean
   ): Contact[] {
     return baseContacts.filter((ct) => {
       if (issueOnly && ct.businessSummaryStatus !== "not_found" && ct.businessSummaryStatus !== "error") return false;
       if (specialties.size > 0 && (!ct.specialty || !specialties.has(ct.specialty))) return false;
       if (relationships.size > 0 && !ct.relationships.some((r) => relationships.has(r))) return false;
+      if (visibilities.size > 0 && !visibilities.has(ct.visibility)) return false;
       if (q.trim() && !matchesSearchQuery([ct.name, ct.specialty, ct.company, ...ct.relationships], q)) return false;
       return true;
     });
   }
 
   const filteredContacts = useMemo(
-    () => sortContacts(computeFilteredContacts(contacts, searchQuery, selectedSpecialties, selectedRelationships, summaryIssueOnly), sortOrder),
-    [contacts, searchQuery, sortOrder, selectedSpecialties, selectedRelationships, summaryIssueOnly]
+    () => sortContacts(computeFilteredContacts(contacts, searchQuery, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly), sortOrder),
+    [contacts, searchQuery, sortOrder, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly]
   );
+
+  const visibilityCounts = useMemo(() => {
+    const counts = new Map<Visibility, number>();
+    for (const ct of contacts) counts.set(ct.visibility, (counts.get(ct.visibility) ?? 0) + 1);
+    return (["full", "existence", "private"] as Visibility[])
+      .map((v): [Visibility, number] => [v, counts.get(v) ?? 0])
+      .filter(([, count]) => count > 0);
+  }, [contacts]);
 
   const specialtyTags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -987,32 +1014,32 @@ function MyContactsSection() {
     [visibleCountContacts]
   );
 
-  const hasActiveFilter = searchQuery.trim() !== "" || selectedSpecialties.size > 0 || selectedRelationships.size > 0 || summaryIssueOnly;
+  const hasActiveFilter = searchQuery.trim() !== "" || selectedSpecialties.size > 0 || selectedRelationships.size > 0 || selectedVisibilities.size > 0 || summaryIssueOnly;
 
   // フィルタ条件が変わるたびに、一致した人脈を自動選択する（一括操作用）。
   // 手動でチェックを外した状態は、フィルタ自体を変えない限り保持される。
-  function applyFilterAndAutoSelect(q: string, specialties: Set<string>, relationships: Set<string>, issueOnly: boolean) {
-    if (!q.trim() && specialties.size === 0 && relationships.size === 0 && !issueOnly) { setSelected(new Set()); return; }
-    const matched = computeFilteredContacts(contacts, q, specialties, relationships, issueOnly);
+  function applyFilterAndAutoSelect(q: string, specialties: Set<string>, relationships: Set<string>, visibilities: Set<Visibility>, issueOnly: boolean) {
+    if (!q.trim() && specialties.size === 0 && relationships.size === 0 && visibilities.size === 0 && !issueOnly) { setSelected(new Set()); return; }
+    const matched = computeFilteredContacts(contacts, q, specialties, relationships, visibilities, issueOnly);
     setSelected(new Set(matched.map((c) => c.id)));
   }
 
   // ホーム画面の通知リンク（?summaryIssues=1）で開いた直後にも、絞り込み結果を自動選択しておく
   useEffect(() => {
-    if (summaryIssueOnly) applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, true);
+    if (summaryIssueOnly) applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, selectedVisibilities, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contacts.length]);
 
   function handleSearchChange(value: string) {
     setSearchQuery(value);
-    applyFilterAndAutoSelect(value, selectedSpecialties, selectedRelationships, summaryIssueOnly);
+    applyFilterAndAutoSelect(value, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly);
   }
 
   function toggleSpecialtyTag(tag: string) {
     setSelectedSpecialties((prev) => {
       const next = new Set(prev);
       if (next.has(tag)) next.delete(tag); else next.add(tag);
-      applyFilterAndAutoSelect(searchQuery, next, selectedRelationships, summaryIssueOnly);
+      applyFilterAndAutoSelect(searchQuery, next, selectedRelationships, selectedVisibilities, summaryIssueOnly);
       return next;
     });
   }
@@ -1021,7 +1048,16 @@ function MyContactsSection() {
     setSelectedRelationships((prev) => {
       const next = new Set(prev);
       if (next.has(tag)) next.delete(tag); else next.add(tag);
-      applyFilterAndAutoSelect(searchQuery, selectedSpecialties, next, summaryIssueOnly);
+      applyFilterAndAutoSelect(searchQuery, selectedSpecialties, next, selectedVisibilities, summaryIssueOnly);
+      return next;
+    });
+  }
+
+  function toggleVisibilityTag(tag: Visibility) {
+    setSelectedVisibilities((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag); else next.add(tag);
+      applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, next, summaryIssueOnly);
       return next;
     });
   }
@@ -1029,7 +1065,7 @@ function MyContactsSection() {
   function toggleSummaryIssueFilter() {
     setSummaryIssueOnly((prev) => {
       const next = !prev;
-      applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, next);
+      applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, selectedVisibilities, next);
       return next;
     });
   }
@@ -1038,6 +1074,7 @@ function MyContactsSection() {
     setSearchQuery("");
     setSelectedSpecialties(new Set());
     setSelectedRelationships(new Set());
+    setSelectedVisibilities(new Set());
     setSummaryIssueOnly(false);
     setSelected(new Set());
   }
@@ -1136,6 +1173,25 @@ function MyContactsSection() {
                       className="text-xs px-2.5 py-1 rounded-full font-medium"
                       style={{ background: active ? "var(--color-accent)" : "var(--color-paper-200)", color: active ? "white" : "var(--color-ink-600)" }}>
                       {tag} {count}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {visibilityCounts.length > 0 && (
+            <div className="mb-2">
+              <p className="text-[11px] mb-1" style={{ color: "var(--color-ink-400)" }}>公開レベルで絞り込み（複数選択可）</p>
+              <div className="flex flex-wrap gap-1.5">
+                {visibilityCounts.map(([v, count]) => {
+                  const active = selectedVisibilities.has(v);
+                  const style = VISIBILITY_STYLE[v];
+                  return (
+                    <button key={v} onClick={() => toggleVisibilityTag(v)}
+                      className="text-xs px-2.5 py-1 rounded-full font-medium"
+                      style={{ background: active ? style.badgeColor : "var(--color-paper-200)", color: active ? "white" : "var(--color-ink-600)" }}>
+                      {VISIBILITY_LABEL[v]} {count}
                     </button>
                   );
                 })}
@@ -1400,17 +1456,16 @@ function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () 
         <input value={name} onChange={(e) => setName(e.target.value)}
           className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
 
-        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>専門分野</label>
-        <input value={specialty} onChange={(e) => setSpecialty(e.target.value)}
-          list={SPECIALTY_DATALIST_ID}
-          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
-
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>会社名/屋号</label>
         <input value={company} onChange={(e) => setCompany(e.target.value)}
           className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+        <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
+          ここまでは名刺の情報を手入力してください。この先はAIで自動入力できます
+        </p>
 
         <BusinessSummaryFields company={company} name={name} summary={businessSummary} setSummary={setBusinessSummary}
-          detail={businessSummaryDetail} setDetail={setBusinessSummaryDetail} />
+          detail={businessSummaryDetail} setDetail={setBusinessSummaryDetail}
+          specialty={specialty} setSpecialty={setSpecialty} />
         <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
           空欄のまま保存すると、次に検索・参照された時にあらためて自動生成されます
         </p>

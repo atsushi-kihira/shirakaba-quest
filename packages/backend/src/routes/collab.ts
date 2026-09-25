@@ -42,6 +42,68 @@ function normalizePair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+type ActionItemInput = {
+  id?: string;
+  task: string;
+  assigneeMemberId?: string | null;
+  dueDate?: string | null;
+  completed?: boolean;
+  visibility?: "team" | "chapter" | "private";
+};
+
+/**
+ * チーム投稿の「次回までのアクション」一覧を反映する（既存分は更新・再紐付け、id無しは新規作成）。
+ * 空白のタスク行は無視する。既存アクションは、投稿のたびに createdByPostId をこの投稿へ
+ * 付け替える（引き継いだ投稿のカードにチェックリストとして表示されるようにするため）。
+ */
+async function applyActionItemsForTeam(
+  db: ReturnType<typeof createDb>,
+  teamId: string,
+  postId: string,
+  items: ActionItemInput[],
+  now: number
+): Promise<void> {
+  for (const item of items) {
+    const task = item.task?.trim();
+    if (!task) continue;
+    const visibility = item.visibility ?? "team";
+    if (item.id) {
+      const existing = await db.select({ id: schema.collabTeamActionItems.id })
+        .from(schema.collabTeamActionItems)
+        .where(and(eq(schema.collabTeamActionItems.id, item.id), eq(schema.collabTeamActionItems.teamId, teamId)))
+        .get();
+      if (!existing) continue;
+      const nowCompleted = item.completed ? 1 : 0;
+      await db.update(schema.collabTeamActionItems)
+        .set({
+          task,
+          assigneeMemberId: item.assigneeMemberId || null,
+          dueDate: item.dueDate || null,
+          visibility,
+          completed: nowCompleted,
+          completedAt: nowCompleted ? now : null,
+          createdByPostId: postId,
+          updatedAt: now,
+        })
+        .where(eq(schema.collabTeamActionItems.id, item.id));
+    } else {
+      await db.insert(schema.collabTeamActionItems).values({
+        id: newId(),
+        teamId,
+        task,
+        assigneeMemberId: item.assigneeMemberId || null,
+        dueDate: item.dueDate || null,
+        visibility,
+        completed: item.completed ? 1 : 0,
+        completedAt: item.completed ? now : null,
+        createdByPostId: postId,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+}
+
 const REACTION_LABEL: Record<string, string> = { shokai: "紹介できそう", join: "私も参加したい" };
 
 /**
@@ -951,6 +1013,151 @@ collabRoutes.patch("/teams/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// ---- GET /api/collab/teams/:id/action-items ---- チームの「次回までのアクション」一覧
+// 完了・未完了の両方を返す（チーム管理パネルでの一覧表示・活動投稿時の引き継ぎ用の絞り込みは呼び出し側で行う）
+collabRoutes.get("/teams/:id/action-items", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const teamId = c.req.param("id");
+  const membership = await db.select().from(schema.collabTeamMembers)
+    .where(and(eq(schema.collabTeamMembers.teamId, teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
+    .get();
+  const isTeamMember = !!membership;
+
+  const items = await db.select().from(schema.collabTeamActionItems)
+    .where(eq(schema.collabTeamActionItems.teamId, teamId))
+    .orderBy(schema.collabTeamActionItems.completed, desc(schema.collabTeamActionItems.createdAt))
+    .all();
+
+  // チームメンバーでない場合（＝「チャプター公開」を頼りに見に来ている場合）は、
+  // 「チャプター公開」指定のアクションだけに絞り込む。ただし、紐づく投稿自体がチーム内限定・非公開なら
+  // アクション側の設定に関わらず見せない（投稿全体が公開されていないのにアクションだけ公開される
+  // ことはないようにする、という以前の対応と同じ考え方）。
+  let visibleItems = items;
+  if (!isTeamMember) {
+    const postIds = [...new Set(items.map((i) => i.createdByPostId).filter((x): x is string => !!x))];
+    const posts = postIds.length > 0
+      ? await db.select({ id: schema.collaborationPosts.id, visibility: schema.collaborationPosts.visibility })
+          .from(schema.collaborationPosts).where(inArray(schema.collaborationPosts.id, postIds)).all()
+      : [];
+    const postVisibilityMap = new Map(posts.map((p) => [p.id, p.visibility]));
+    const rank: Record<"private" | "team" | "chapter", number> = { private: 0, team: 1, chapter: 2 };
+    visibleItems = items.filter((i) => {
+      if (i.visibility !== "chapter") return false;
+      const postVisibility = i.createdByPostId ? postVisibilityMap.get(i.createdByPostId) : undefined;
+      if (!postVisibility) return true; // 投稿に紐づかない（チーム管理パネルから直接追加された）アクションはそのまま扱う
+      return rank[postVisibility as "private" | "team" | "chapter"] >= rank.chapter;
+    });
+  }
+
+  const assigneeIds = [...new Set(visibleItems.map((i) => i.assigneeMemberId).filter((x): x is string => !!x))];
+  const assignees = assigneeIds.length > 0
+    ? await db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji })
+        .from(schema.members).where(inArray(schema.members.id, assigneeIds)).all()
+    : [];
+  const assigneeMap = new Map(assignees.map((a) => [a.id, a]));
+
+  return c.json({
+    data: visibleItems.map((i) => ({
+      id: i.id,
+      task: i.task,
+      assigneeMemberId: i.assigneeMemberId,
+      assignee: i.assigneeMemberId ? assigneeMap.get(i.assigneeMemberId) ?? null : null,
+      dueDate: i.dueDate,
+      visibility: i.visibility,
+      completed: i.completed === 1,
+      createdAt: i.createdAt,
+    })),
+  });
+});
+
+// ---- POST /api/collab/team-action-items ---- アクションの単独追加（チーム管理パネルから）
+collabRoutes.post("/team-action-items", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const body = await c.req.json<{ teamId: string; task: string; assigneeMemberId?: string | null; dueDate?: string | null; visibility?: "team" | "chapter" | "private" }>();
+  if (!body.teamId) return c.json({ error: { code: "invalid_input", message: "チームを指定してください" } }, 400);
+  const task = body.task?.trim();
+  if (!task) return c.json({ error: { code: "invalid_input", message: "やることを入力してください" } }, 400);
+
+  const membership = await db.select().from(schema.collabTeamMembers)
+    .where(and(eq(schema.collabTeamMembers.teamId, body.teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
+    .get();
+  if (!membership) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
+
+  const now = Math.floor(Date.now() / 1000);
+  const id = newId();
+  await db.insert(schema.collabTeamActionItems).values({
+    id,
+    teamId: body.teamId,
+    task,
+    assigneeMemberId: body.assigneeMemberId || null,
+    dueDate: body.dueDate || null,
+    visibility: body.visibility ?? "team",
+    completed: 0,
+    completedAt: null,
+    createdByPostId: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return c.json({ data: { id } }, 201);
+});
+
+// ---- PATCH /api/collab/team-action-items/:id ---- アクションの完了切り替え・編集
+collabRoutes.patch("/team-action-items/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const id = c.req.param("id");
+  const item = await db.select().from(schema.collabTeamActionItems).where(eq(schema.collabTeamActionItems.id, id)).get();
+  if (!item) return c.json({ error: { code: "not_found", message: "アクションが見つかりません" } }, 404);
+
+  const membership = await db.select().from(schema.collabTeamMembers)
+    .where(and(eq(schema.collabTeamMembers.teamId, item.teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
+    .get();
+  if (!membership) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
+
+  const body = await c.req.json<{ completed?: boolean; task?: string; assigneeMemberId?: string | null; dueDate?: string | null; visibility?: "team" | "chapter" | "private" }>();
+  const now = Math.floor(Date.now() / 1000);
+  const patch: Partial<typeof schema.collabTeamActionItems.$inferInsert> = { updatedAt: now };
+  if (typeof body.completed === "boolean") {
+    patch.completed = body.completed ? 1 : 0;
+    patch.completedAt = body.completed ? now : null;
+  }
+  if (typeof body.task === "string" && body.task.trim()) patch.task = body.task.trim();
+  if (body.assigneeMemberId !== undefined) patch.assigneeMemberId = body.assigneeMemberId || null;
+  if (body.dueDate !== undefined) patch.dueDate = body.dueDate || null;
+  if (body.visibility !== undefined) patch.visibility = body.visibility;
+
+  await db.update(schema.collabTeamActionItems).set(patch).where(eq(schema.collabTeamActionItems.id, id));
+  return c.json({ ok: true });
+});
+
+// ---- DELETE /api/collab/team-action-items/:id ----
+collabRoutes.delete("/team-action-items/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const id = c.req.param("id");
+  const item = await db.select().from(schema.collabTeamActionItems).where(eq(schema.collabTeamActionItems.id, id)).get();
+  if (!item) return c.json({ error: { code: "not_found", message: "アクションが見つかりません" } }, 404);
+
+  const membership = await db.select().from(schema.collabTeamMembers)
+    .where(and(eq(schema.collabTeamMembers.teamId, item.teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
+    .get();
+  if (!membership) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
+
+  await db.delete(schema.collabTeamActionItems).where(eq(schema.collabTeamActionItems.id, id));
+  return c.json({ ok: true });
+});
+
 // ---- GET /api/collab/feed ---- 活動タイムライン
 collabRoutes.get("/feed", async (c) => {
   const db = createDb(c.env.DB);
@@ -1029,6 +1236,29 @@ collabRoutes.get("/feed", async (c) => {
     return false;
   });
 
+  // アクション（見えている投稿分のみ）。投稿者本人以外には、投稿本文とは別に
+  // アクションごとの公開レベル（チーム内のみ／非公開）でさらに絞り込んで見せる。
+  const visibleTeamPostIds = visible.filter((p) => p.contextType === "team").map((p) => p.id);
+  const actionItemRows = visibleTeamPostIds.length > 0
+    ? await db.select().from(schema.collabTeamActionItems)
+        .where(inArray(schema.collabTeamActionItems.createdByPostId, visibleTeamPostIds))
+        .orderBy(schema.collabTeamActionItems.createdAt)
+        .all()
+    : [];
+  const actionAssigneeIds = [...new Set(actionItemRows.map((i) => i.assigneeMemberId).filter((x): x is string => !!x))];
+  const actionAssigneeRows = actionAssigneeIds.length > 0
+    ? await db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji })
+        .from(schema.members).where(inArray(schema.members.id, actionAssigneeIds)).all()
+    : [];
+  const actionAssigneeMap = new Map(actionAssigneeRows.map((a) => [a.id, a]));
+  const actionItemsByPost = new Map<string, typeof actionItemRows>();
+  for (const item of actionItemRows) {
+    if (!item.createdByPostId) continue;
+    const arr = actionItemsByPost.get(item.createdByPostId) ?? [];
+    arr.push(item);
+    actionItemsByPost.set(item.createdByPostId, arr);
+  }
+
   // コメント（見えている投稿分のみ）とそのいいねを取得して埋め込む
   const visiblePostIds = visible.map((p) => p.id);
   const comments = visiblePostIds.length > 0
@@ -1080,6 +1310,30 @@ collabRoutes.get("/feed", async (c) => {
         canDelete: cm.authorId === meId,
       };
     });
+    // アクションは、投稿本文とは別に各アクション自身の公開レベルで絞り込む。ただし、
+    // 投稿自体の公開範囲より広くは公開しない（投稿がチーム内／非公開なら、アクションが
+    // 「チャプター公開」に設定されていても、投稿を見られる範囲を超えては見せない）。
+    // 投稿者本人には常にすべて見せる（自分の投稿の管理・編集のため）。
+    const isAuthor = p.authorId === meId;
+    const postActionItems = (actionItemsByPost.get(p.id) ?? [])
+      .filter((i) => {
+        if (isAuthor) return true;
+        const rank: Record<typeof i.visibility, number> = { private: 0, team: 1, chapter: 2 };
+        const effectiveVisibility = rank[i.visibility] <= rank[p.visibility] ? i.visibility : p.visibility;
+        if (effectiveVisibility === "chapter") return true;
+        if (effectiveVisibility === "team") return !!p.teamId && myActiveTeamIds.has(p.teamId);
+        return false; // private
+      })
+      .map((i) => ({
+        id: i.id,
+        task: i.task,
+        assigneeMemberId: i.assigneeMemberId,
+        assignee: i.assigneeMemberId ? actionAssigneeMap.get(i.assigneeMemberId) ?? null : null,
+        dueDate: i.dueDate,
+        visibility: i.visibility,
+        completed: i.completed === 1,
+      }));
+
     return {
       id: p.id,
       authorId: p.authorId,
@@ -1096,6 +1350,7 @@ collabRoutes.get("/feed", async (c) => {
       reactionCounts,
       myReactions,
       comments: postComments,
+      actionItems: postActionItems,
       mine: p.authorId === meId,
       canEdit: p.authorId === meId && p.source === "user",
       canDelete: p.authorId === meId && p.source === "user",
@@ -1359,6 +1614,9 @@ collabRoutes.post("/posts", async (c) => {
     visibility?: "team" | "chapter" | "private";
     isPrivate?: boolean;
     occurredAt?: number; // 活動が起きた日時（未指定なら現在時刻）
+    // チーム投稿の場合のみ：次回までのアクション（Excel的な一覧編集）。
+    // id 付きは既存アクションの更新（担当・期限・完了）、id なしは新規作成。
+    actionItems?: ActionItemInput[];
   }>();
 
   if (body.contextType !== "link" && body.contextType !== "team") {
@@ -1421,6 +1679,10 @@ collabRoutes.post("/posts", async (c) => {
     coMembers.map((memberId) => ({ postId, memberId }))
   );
 
+  if (teamId && body.actionItems) {
+    await applyActionItemsForTeam(db, teamId, postId, body.actionItems, now);
+  }
+
   return c.json({ data: { id: postId } }, 201);
 });
 
@@ -1435,15 +1697,24 @@ collabRoutes.patch("/posts/:id", async (c) => {
   if (!post || post.deletedAt) return c.json({ error: { code: "not_found", message: "投稿が見つかりません" } }, 404);
   if (post.authorId !== meId) return c.json({ error: { code: "forbidden", message: "自分の投稿のみ編集できます" } }, 403);
 
-  const body = await c.req.json<{ body?: string; visibility?: "team" | "chapter" | "private"; isPrivate?: boolean }>();
+  const body = await c.req.json<{
+    body?: string; visibility?: "team" | "chapter" | "private"; isPrivate?: boolean;
+    actionItems?: ActionItemInput[];
+    occurredAt?: number; // 活動が起きた日時。新規投稿時と同様、過去日時への変更も許可する
+  }>();
   const now = Math.floor(Date.now() / 1000);
 
   await db.update(schema.collaborationPosts).set({
     ...(body.body !== undefined && { body: body.body?.trim() || null }),
     ...(body.visibility !== undefined && { visibility: body.visibility }),
     ...(body.isPrivate !== undefined && { isPrivate: body.isPrivate ? 1 : 0 }),
+    ...(typeof body.occurredAt === "number" && body.occurredAt > 0 && { createdAt: body.occurredAt }),
     updatedAt: now,
   }).where(eq(schema.collaborationPosts.id, postId));
+
+  if (post.contextType === "team" && post.teamId && body.actionItems) {
+    await applyActionItemsForTeam(db, post.teamId, postId, body.actionItems, now);
+  }
 
   return c.json({ ok: true });
 });
@@ -1579,11 +1850,17 @@ async function generateAndSaveCompanySummary(
       apiKey: env.ANTHROPIC_API_KEY,
       isDev: env.ENVIRONMENT === "development",
     });
+    // 専門分野は、本人がまだ何も入力していない場合のみAIの推定値で埋める
+    // （手入力済みの値を勝手に上書きしないため）
+    const current = await db.select({ specialty: schema.externalContacts.specialty })
+      .from(schema.externalContacts).where(eq(schema.externalContacts.id, contactId)).get();
+    const shouldFillSpecialty = !!result.specialty && !current?.specialty?.trim();
     await db.update(schema.externalContacts).set({
       businessSummary: result.summary,
       businessSummaryDetail: result.detail,
       businessSummaryStatus: result.status,
       businessSummaryGeneratedAt: Math.floor(Date.now() / 1000),
+      ...(shouldFillSpecialty ? { specialty: result.specialty } : {}),
     }).where(eq(schema.externalContacts.id, contactId));
   } catch (err) {
     console.error("[collab] 会社概要の生成に失敗", contactId, err);

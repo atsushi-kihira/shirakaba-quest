@@ -110,6 +110,22 @@ export const collabTeamMembers = sqliteTable(
   (t) => [uniqueIndex("uniq_collab_team_member").on(t.teamId, t.memberId)]
 );
 
+// チームの「次回までのアクション」。特定の投稿に紐づく一時的なメモではなく、
+// 完了するまでチームに永続する（毎回の活動投稿で未完了分を引き継いで表示する）。
+export const collabTeamActionItems = sqliteTable("collab_team_action_items", {
+  id:               text("id").primaryKey(),
+  teamId:           text("team_id").notNull(),
+  task:             text("task").notNull(),
+  assigneeMemberId: text("assignee_member_id"),
+  dueDate:          text("due_date"), // "YYYY-MM-DD"（任意）
+  visibility:       text("visibility").notNull().default("team"), // 'team' | 'chapter' | 'private'（投稿本文とは別に個別設定できる）
+  completed:        integer("completed").notNull().default(0),
+  completedAt:      integer("completed_at"),
+  createdByPostId:  text("created_by_post_id"), // 起票のきっかけになった投稿（履歴用、任意）
+  createdAt:        integer("created_at").notNull(),
+  updatedAt:        integer("updated_at").notNull(),
+});
+
 // ---- 活動と記録（協働の投稿・シェアストーリー）----
 
 export const collaborationPosts = sqliteTable("collaboration_posts", {
@@ -385,7 +401,7 @@ export const oneOnOneSessions = sqliteTable("one_on_one_sessions", {
   completedAt:          integer("completed_at"),
   responseToken:        text("response_token"),
   manualConferenceUrl:  text("manual_conference_url"),
-  autoTransitionReason: text("auto_transition_reason"), // "pending_timeout" | "date_passed" | null(手動操作)
+  autoTransitionReason: text("auto_transition_reason"), // "candidates_expired" | "date_passed" | null(手動操作)。"pending_timeout"は廃止済み（過去データにのみ残る）
   // 通常申込（相手が公開予約URLで日時を選ぶ方式）で、申込者がこの1件だけに指定したタイトル・所要時間・メッセージ。
   // 公開予約ページ全体の既定値（member_scheduling_settings）は変更せず、このリンク経由の予約にのみ適用する。
   customTitle:            text("custom_title"),
@@ -396,6 +412,50 @@ export const oneOnOneSessions = sqliteTable("one_on_one_sessions", {
   // ホーム画面で振り返りを促さないため、このセッションが対象にする側だけを記録する。
   requesterReviewedAt:    integer("requester_reviewed_at"),
   responderReviewedAt:    integer("responder_reviewed_at"),
+
+  // 日程の決め方: 'public_url'（申込者の公開予約URLから相手が選ぶ・従来方式） | 'candidates'（申込者が2〜5件の候補日を提示し、相手が選ぶ）
+  arrangementMethod:       text("arrangement_method").notNull().default("public_url"),
+  selectedCandidateSlotId: text("selected_candidate_slot_id"), // one_on_one_candidate_slots.id
+  // 会議URLの状態: null（従来通り・URL未確認）| 'none'（あえて「URLなし」を選んだ） | 'unresolved'（自動発行を試みたが失敗した）
+  conferenceUrlStatus:     text("conference_url_status"),
+});
+
+// arrangementMethod='candidates' の1to1申込で、申込者があらかじめ提示する候補日時（2〜5件）
+export const oneOnOneCandidateSlots = sqliteTable("one_on_one_candidate_slots", {
+  id:                text("id").primaryKey(),
+  oneOnOneSessionId: text("one_on_one_session_id").notNull(),
+  startsAt:          integer("starts_at").notNull(), // unix秒（one_on_one_sessions.scheduled_forと同じ単位）
+  endsAt:            integer("ends_at").notNull(),
+  sortOrder:         integer("sort_order").notNull().default(0),
+  createdAt:         integer("created_at").notNull(),
+});
+
+// 外部ゲスト（未登録者）を名前・メールで指定して招待する1to1。
+// one_on_one_sessions は responder_id が NOT NULL（メンバー前提）のため流用せず、別テーブルとして持つ。
+export const oneOnOneGuestInvites = sqliteTable("one_on_one_guest_invites", {
+  id:                    text("id").primaryKey(),
+  hostMemberId:          text("host_member_id").notNull(),
+  guestName:             text("guest_name").notNull(),
+  guestEmail:            text("guest_email").notNull(),
+  token:                 text("token").notNull().unique(), // 発行後ローテーションしない（1人のゲストに送った1本のリンクを維持する）
+  arrangementMethod:     text("arrangement_method").notNull(), // 'public_url' | 'candidates'
+  status:                text("status").notNull().default("pending"), // 'pending' | 'selected' | 'cancelled' | 'expired'
+  expiresAt:             integer("expires_at").notNull(),
+  customTitle:           text("custom_title"),
+  customDurationMinutes: integer("custom_duration_minutes"),
+  customNote:            text("custom_note"),
+  selectedSlotId:        text("selected_slot_id"), // one_on_one_guest_invite_candidate_slots.id
+  resultingBookingId:    text("resulting_booking_id"), // bookings.id
+  createdAt:             integer("created_at").notNull(),
+});
+
+export const oneOnOneGuestInviteCandidateSlots = sqliteTable("one_on_one_guest_invite_candidate_slots", {
+  id:        text("id").primaryKey(),
+  inviteId:  text("invite_id").notNull(),
+  startsAt:  integer("starts_at").notNull(),
+  endsAt:    integer("ends_at").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: integer("created_at").notNull(),
 });
 
 export const quests = sqliteTable("quests", {
@@ -652,6 +712,9 @@ export const meetingDateCandidates = sqliteTable("meeting_date_candidates", {
   isConfirmed:     integer("is_confirmed").notNull().default(0),
   conferenceUrl:   text("conference_url"),
   addedByMemberId: text("added_by_member_id"), // 主催者作成時は主催者ID。あとから追加された候補日はその追加者ID
+  // 確定時に主催者のGoogleカレンダーへブロック予定として登録したイベントID（ダブルブッキング防止用）。
+  // 会議URLの種類（Zoom/Google Meet/手入力）に関わらず、日程が確定した時点で作成する。
+  calendarEventId: text("calendar_event_id"),
 });
 
 export const meetingInvitees = sqliteTable("meeting_invitees", {
@@ -871,12 +934,15 @@ export const bookings = sqliteTable("bookings", {
   conferenceUrl:        text("conference_url"),
   conferenceMetaJson:   text("conference_meta_json"),
   oneOnOneSessionId:    text("one_on_one_session_id"),
-  source:               text("source").notNull().default("public"),
+  source:               text("source").notNull().default("public"), // 'public' | 'prearranged' | 'guest_invite'
   createdAt:            text("created_at").notNull(),
   updatedAt:            text("updated_at").notNull(),
   externalContactId:    text("external_contact_id"),
   guestFollowupDismissedAt: text("guest_followup_dismissed_at"),
   guestFollowupOutcome: text("guest_followup_outcome"), // 'not_held' | 'no_add'（"人脈に追加する"を選んだ場合は externalContactId が入るため null のまま）
+  guestInviteId:        text("guest_invite_id"), // one_on_one_guest_invites.id（ゲスト招待経由の予約の場合）
+  // 会議URLの状態: null（従来通り） | 'none'（あえて「URLなし」を選んだ） | 'unresolved'（自動発行を試みたが失敗した）
+  conferenceUrlStatus:  text("conference_url_status"),
 });
 
 export const bookingEvents = sqliteTable("booking_events", {

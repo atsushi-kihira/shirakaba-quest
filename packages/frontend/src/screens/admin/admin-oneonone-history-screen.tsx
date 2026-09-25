@@ -21,7 +21,7 @@ type OneOnOneHistoryItem = {
   requestedAt: number;
   scheduledFor: number | null;
   completedAt: number | null;
-  autoTransitionReason: "pending_timeout" | "date_passed" | null;
+  autoTransitionReason: "pending_timeout" | "candidates_expired" | "date_passed" | null;
 };
 
 const STATUS_LABEL: Record<OneOnOneHistoryItem["status"], string> = {
@@ -319,6 +319,7 @@ function HistoryDeletePanel() {
                       {h.partnerName}さん ・ {STATUS_LABEL[h.status]}
                       {h.autoTransitionReason === "date_passed" && "（自動完了）"}
                       {h.autoTransitionReason === "pending_timeout" && "（自動キャンセル）"}
+                      {h.autoTransitionReason === "candidates_expired" && "（候補日超過のため自動キャンセル）"}
                     </p>
                     <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
                       申込: {fmtDateISO(h.requestedAt, tz)}

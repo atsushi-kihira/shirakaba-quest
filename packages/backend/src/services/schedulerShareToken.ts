@@ -108,3 +108,59 @@ export async function resolveSettingsByShareToken(db: Db, token: string): Promis
 
   return { status: "ok", settings };
 }
+
+export type ResolvedGuestInvite = {
+  id: string;
+  status: string;
+  guestName: string;
+  guestEmail: string;
+  customTitle: string | null;
+  customDurationMinutes: number | null;
+};
+
+export type ResolvedPublicBookingToken =
+  | { status: "not_found" }
+  | { status: "link_expired" }
+  | { status: "ok"; settings: typeof schema.memberSchedulingSettings.$inferSelect; guestInvite: ResolvedGuestInvite | null };
+
+/**
+ * 公開予約ページのURLトークンから設定を解決する。汎用の公開URL（scheduler_share_links）に加えて、
+ * 外部ゲスト招待（公開予約URL方式）自身の固定トークンも解決できる。招待経由の場合、招待ごとに
+ * 発行され続ける固定URLになる（コピーのたびに切り替わる汎用リンクとは異なり、ローテーションしない）。
+ */
+export async function resolvePublicBookingToken(db: Db, token: string): Promise<ResolvedPublicBookingToken> {
+  const shareResult = await resolveSettingsByShareToken(db, token);
+  if (shareResult.status === "ok") {
+    return { status: "ok", settings: shareResult.settings, guestInvite: null };
+  }
+
+  const invite = await db
+    .select()
+    .from(schema.oneOnOneGuestInvites)
+    .where(and(eq(schema.oneOnOneGuestInvites.token, token), eq(schema.oneOnOneGuestInvites.arrangementMethod, "public_url")))
+    .get();
+  if (!invite || invite.status === "cancelled") return { status: "not_found" };
+
+  const now = Math.floor(Date.now() / 1000);
+  if (invite.expiresAt <= now) return { status: "link_expired" };
+
+  const settings = await db
+    .select()
+    .from(schema.memberSchedulingSettings)
+    .where(eq(schema.memberSchedulingSettings.memberId, invite.hostMemberId))
+    .get();
+  if (!settings || !settings.isPublic) return { status: "not_found" };
+
+  return {
+    status: "ok",
+    settings,
+    guestInvite: {
+      id: invite.id,
+      status: invite.status,
+      guestName: invite.guestName,
+      guestEmail: invite.guestEmail,
+      customTitle: invite.customTitle,
+      customDurationMinutes: invite.customDurationMinutes,
+    },
+  };
+}

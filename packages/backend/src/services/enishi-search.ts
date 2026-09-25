@@ -159,6 +159,9 @@ async function callClaude(apiKey: string, prompt: string): Promise<string> {
       // 候補が多いプロンプトでは内部の思考にトークンを大きく消費してしまう。この用途は
       // 単純な照合・JSON出力なので、effort: "low" で思考の深さを抑え、本文用のトークンを
       // 確保する（実際にmax_tokensで打ち切られ本文が空になる不具合を確認したための対策）。
+      // 注: effort: "medium" も試したが、実データ（人脈796件規模）で応答に約4分かかり
+      // 実用にならなかったため、プロンプト側の指示（direct判定の自己チェック・具体例）を
+      // 強化する方針で対応し、effort は low のまま維持する。
       thinking: { type: "adaptive" },
       output_config: { effort: "low" },
       messages: [{ role: "user", content: prompt }],
@@ -227,17 +230,81 @@ async function runClaudeMatching(apiKey: string, prompt: string, label: string):
   return { matches: [], failed: true };
 }
 
+// direct（金の卵）と判定された候補は、「本人の説明文が、金の卵と同じテーマを扱う"サービス提供者"
+// として書かれているだけなのに、本人自身をそのニーズを持つ当事者（買い手）と誤判定してしまう」
+// ケースが一次判定（effort: low、候補全体を一括処理）で一定数見つかっている。direct判定は件数が
+// 少なく（多くの検索で0〜数件）、誤判定の実害も大きい（見当違いの紹介につながる）ため、
+// direct判定の分だけに絞って高精度な二次チェックを行う。対象件数が少ないため、ここだけeffortを
+// 上げても全体の応答速度への影響は小さい（候補全体にeffort: mediumを適用すると応答が数分かかり
+// 実用にならないことを確認済みのため、一次判定はeffort: lowのまま維持している）。
+type DirectCheckItem = { key: string; personDescription: string; eggDescription: string };
+
+async function verifyDirectMatches(apiKey: string, items: DirectCheckItem[]): Promise<Set<string>> {
+  if (items.length === 0) return new Set();
+
+  const prompt = `次の各ペアについて、「本人の説明」を読み、本人自身が「金の卵の説明」に当てはまる当事者（悩み・ニーズを持つ買い手本人）と言えそうかを判定してください。判定に迷う場合や情報が不足している場合は true（一次判定を維持）としてください。false と判定するのは、明確な根拠がある場合に限ります。
+
+# false と判定してよい場合（限定的）
+本人の説明が、金の卵とまったく同じ具体的なサービス・商品を「事業として提供する側」だと明確に書かれており、かつ金の卵の説明文自体が「そのサービスを外部から調達したい・依頼したい」という文脈である場合。つまり、本人がそのサービスの"供給元"であり、金の卵はその"顧客"を探しているという、直接の競合・重複関係が明確なケースに限ります。
+
+# true と判定すべき場合（それ以外はすべてこちら）
+- 本人の事業内容やテーマが金の卵と似ている・重なる部分があっても、明確な供給元／競合関係とまでは言えない場合。
+- 本人が何らかの事業者であっても、個人としてまたは自社の経営課題として金の卵の悩みを抱えている可能性がある場合（例：経営コンサルタントも、自社の別の経営課題では困っている当事者になり得る）。
+- 判定材料が乏しく、falseと断定できない場合。
+
+# 判定対象
+${items.map((it) => `- id: ${it.key}\n  本人の説明: ${it.personDescription}\n  金の卵の説明: ${it.eggDescription}`).join("\n")}
+
+出力は次のJSON形式のみ。1文字目から必ず「{」で始めること（前置きの説明は書かない）:
+{"results":[{"id":"...","isDirectBuyer":true|false}]}`;
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: "claude-sonnet-5",
+        max_tokens: 4000,
+        thinking: { type: "adaptive" },
+        output_config: { effort: "medium" },
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!res.ok) return new Set(items.map((i) => i.key)); // フェイルセーフ: 検証呼び出し自体が失敗した場合は一次判定を維持する
+
+    const data = await res.json() as { content: Array<{ type: string; text?: string }> };
+    const text = data.content.filter((c) => c.type === "text" && c.text).map((c) => c.text).join("\n");
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return new Set(items.map((i) => i.key));
+
+    const parsed = JSON.parse(jsonMatch[0]) as { results?: { id?: string; isDirectBuyer?: boolean }[] };
+    const survivors = new Set<string>();
+    for (const r of parsed.results ?? []) {
+      if (r.id && r.isDirectBuyer) survivors.add(r.id);
+    }
+    return survivors;
+  } catch (err) {
+    console.error("[enishi-search] direct判定の二次チェックに失敗（フェイルセーフで一次判定を維持）", err);
+    return new Set(items.map((i) => i.key));
+  }
+}
+
 function buildInstructions(count: number, maxHop: Hop, perspective: "for-me" | "giver"): string {
+  const selfCheck = `# direct判定の参考：見当違いの紹介を避けるための注意点
+候補者本人の説明文（専門分野・事業内容）が、金の卵と全く同じ具体的なサービス・商品を「事業として提供する側」だと明確に書かれており、かつ金の卵の説明文自体が「そのサービスを外部から調達したい」という文脈である場合（＝候補者と金の卵が直接の競合・供給元と顧客の関係になる場合）は、候補者自身ではなく候補者の既存の顧客・取引先の方が買い手候補としてふさわしいため、2hop（金のガチョウ）として扱うことを検討してください。
+ただし、これはあくまで「両者が全く同じサービスの供給元・顧客の関係」という明確なケースに限った注意点です。事業内容やテーマが部分的に重なる・似ている程度（例：どちらも「組織づくり」「チームビルディング」等の言葉を含む）では、direct（金の卵）の対象から外すべきではありません。候補者が何らかの事業を営んでいても、その候補者自身が別の経営課題やニーズを抱える当事者であることは十分あり得るため、判断に迷う場合は direct の対象に含めてください（除外しすぎるより、多少ノイズが混じる方が実用上望ましい）。`;
   const hopExplain = perspective === "for-me"
-    ? `- direct: 候補（他メンバーの人脈）の説明が、指定された「金の卵」の説明にそのまま合致する（その人脈自体が狙いたい相手）。
-- 2hop: 候補の説明が、指定された「金のガチョウ」の説明に合致する（その人脈経由で、いずれ卵に辿り着けそうという想定）。
+    ? `- direct: 候補（他メンバーの人脈）「本人」が、指定された「金の卵」の説明に当てはまり、本人自身が買い手（顧客）になり得る場合。候補と金の卵が全く同じサービスの供給元・顧客の関係になる（＝候補自身は仲介者・供給元であり、買い手にはならない）と明確に判断できる場合のみ、direct ではなく 2hop として扱うこと。
+- 2hop: 候補の説明が、指定された「金のガチョウ」の説明に合致する（その人脈経由で、いずれ卵に辿り着けそうという想定）。上記の理由でdirectから2hopに回したケースもここに含める。
 - 3hop: 候補の説明からは直接ガチョウには見えないが、業種・立場から見て「ガチョウ像に当てはまる人物を知っていそう／紹介できそう」と推測できる（例：商工会議所職員、業界団体の事務局など、多くの経営者・専門家と接点を持つ立場）。根拠が弱くても、もっともらしい推測であれば採用してよい。`
-    : `- direct: あなたの人脈の説明が、指定されたメンバーの「金の卵」の説明にそのまま合致する（お客様候補として直接紹介できそう）。
-- 2hop: あなたの人脈の説明が、指定されたメンバーの「金のガチョウ」の説明に合致する（紹介元・継続的な卵の供給源になりそう）。
+    : `- direct: あなたの人脈「本人」が、指定されたメンバーの「金の卵」の説明に当てはまり、本人自身がそのメンバーの顧客になり得る場合。あなたの人脈と金の卵が全く同じサービスの供給元・顧客の関係になる（＝その人脈自身は仲介者・供給元であり、買い手にはならない）と明確に判断できる場合のみ、direct ではなく 2hop（金のガチョウ）として扱うこと。
+- 2hop: あなたの人脈の説明が、指定されたメンバーの「金のガチョウ」の説明に合致する（紹介元・継続的な卵の供給源になりそう）。上記の理由でdirectから2hopに回したケースもここに含める。
 - 3hop: あなたの人脈からは直接ガチョウには見えないが、業種・立場から見て「ガチョウ像に当てはまる人物を知っていそう」と推測できる。`;
 
   return `あなたはBNIチャプターの紹介マッチングを支援するAIです。
 以下の「さがす対象」と「候補一覧」を照らし合わせ、有望な紹介の道筋を最大${count}件、JSON形式のみで出力してください。
+
+${selfCheck}
 
 # 到達方法（hop）の判定基準
 ${hopExplain}
@@ -450,6 +517,7 @@ ${formatForMeCandidates(candidates)}${params.goodMatchContext ?? ""}`;
     const candidateMap = new Map(candidates.map((c) => [c.candidateId, c]));
     const targetMap = new Map(targets.map((t) => [t.id, t]));
     const cards: EnishiResultCard[] = [];
+    const directChecks: DirectCheckItem[] = [];
     for (const m of matches) {
       const cand = candidateMap.get(m.candidateId);
       const target = targetMap.get(m.matchedTargetId);
@@ -460,6 +528,13 @@ ${formatForMeCandidates(candidates)}${params.goodMatchContext ?? ""}`;
       const type = target.kind;
       if ((m.hop === "direct") !== (type === "egg")) continue;
       const intermediaryLabel = cand.name ?? `${cand.specialty ?? "人脈"}（属性のみ）`;
+      if (type === "egg") {
+        directChecks.push({
+          key: String(cards.length),
+          personDescription: [cand.name, cand.company, cand.specialty, cand.businessSummary].filter(Boolean).join(" / "),
+          eggDescription: target.description,
+        });
+      }
 
       // 自分自身の人脈がヒットした場合：なかまに仲介してもらう必要がなく、すでに直接の接点がある
       if (cand.isOwn) {
@@ -499,11 +574,17 @@ ${formatForMeCandidates(candidates)}${params.goodMatchContext ?? ""}`;
       });
     }
 
+    const directSurvivors = await verifyDirectMatches(apiKey, directChecks);
+    const rejectedIndices = new Set(
+      directChecks.filter((d) => !directSurvivors.has(d.key)).map((d) => Number(d.key))
+    );
+    const verifiedCards = cards.filter((_, idx) => !rejectedIndices.has(idx));
+
     // なかま経由の結果を優先し、自分自身の人脈（isOwnContact）は表示件数の上限に達したときに
     // 後回しになるようにする（自分の人脈も検索対象に含めているが、新しい出会いにつながる
     // なかま経由のご縁の方を優先して見せたいため）。
     const sorted = HOP_ORDER.flatMap((h) => {
-      const hopCards = cards.filter((c) => c.hop === h);
+      const hopCards = verifiedCards.filter((c) => c.hop === h);
       return [...hopCards.filter((c) => !c.isOwnContact), ...hopCards.filter((c) => c.isOwnContact)];
     }).slice(0, count);
     return {
@@ -535,8 +616,9 @@ ${formatForMeCandidates(candidates)}${params.goodMatchContext ?? ""}`;
   const usedContactsBreakdown = myContactsTruncated ? computeSpecialtyBreakdown(filteredContacts) : undefined;
 
   let candidates = await collectGiverCandidates(db, params.meId, params.targetMemberIds);
-  const truncated = candidates.length > MAX_CANDIDATES || myContactsTruncated;
-  if (candidates.length > MAX_CANDIDATES) candidates = candidates.slice(0, MAX_CANDIDATES);
+  const candidatesTruncated = candidates.length > MAX_CANDIDATES;
+  if (candidatesTruncated) candidates = candidates.slice(0, MAX_CANDIDATES);
+  const truncated = candidatesTruncated || myContactsTruncated;
   if (candidates.length === 0) return { groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: [] })), truncated: false };
 
   const myContactsForPrompt: { id: string; description: string }[] = filteredContacts.map((c) => ({
@@ -554,27 +636,48 @@ ${formatForMeCandidates(candidates)}${params.goodMatchContext ?? ""}`;
     candidateId: schema.enishiIntroducedContacts.candidateId,
   }).from(schema.enishiIntroducedContacts).where(eq(schema.enishiIntroducedContacts.memberId, params.meId)).all();
   const introducedKeys = new Set(introducedRows.map((r) => `${r.myContactId}|${r.candidateId}`));
-  const relevantIntroduced = introducedRows.filter((r) =>
-    filteredContacts.some((c) => c.id === r.myContactId) && candidates.some((c) => c.candidateId === r.candidateId)
-  );
-  const excludedPairsSection = relevantIntroduced.length > 0
-    ? `\n\n# 除外リスト（既に紹介済みのため、以下の組み合わせは結果に含めないこと）\n${relevantIntroduced.map((r) => `- 人脈id: ${r.myContactId} / 候補id: ${r.candidateId}`).join("\n")}`
-    : "";
 
-  const prompt = `${buildInstructions(count, maxHop, "giver")}
+  // 貢献先メンバーが複数（最大5名）指定された場合、その全員分の金の卵・金のガチョウを1回のAI呼び出しに
+  // まとめると、対象の一部が判定困難（例：個人の特性ベースの記述で本人の説明文と照合しにくい）な場合に、
+  // AIがバッチ全体に対して結果0件を返してしまう不具合が実運用で確認された（単独メンバーなら見つかる
+  // マッチも、他のメンバーと同時に照合すると消えてしまう）。そのため、貢献先メンバーごとに候補を分割し、
+  // それぞれ独立したAI呼び出しで照合したうえで結果をマージする。
+  const candidatesByMember = new Map<string, GiverCandidate[]>();
+  for (const c of candidates) {
+    const list = candidatesByMember.get(c.memberId) ?? [];
+    list.push(c);
+    candidatesByMember.set(c.memberId, list);
+  }
+
+  const matchResults = await Promise.all(
+    [...candidatesByMember.entries()].map(([memberId, memberCandidates]) => {
+      const relevantIntroduced = introducedRows.filter((r) =>
+        filteredContacts.some((c) => c.id === r.myContactId) && memberCandidates.some((c) => c.candidateId === r.candidateId)
+      );
+      const excludedPairsSection = relevantIntroduced.length > 0
+        ? `\n\n# 除外リスト（既に紹介済みのため、以下の組み合わせは結果に含めないこと）\n${relevantIntroduced.map((r) => `- 人脈id: ${r.myContactId} / 候補id: ${r.candidateId}`).join("\n")}`
+        : "";
+
+      const prompt = `${buildInstructions(count, maxHop, "giver")}
 
 # さがす対象（あなたの人脈。絞り込み済み）
 ${myContactsForPrompt.map((t) => `- id: ${t.id} / 説明: ${t.description}`).join("\n")}
 
 # 候補一覧（なかまの金の卵・金のガチョウ）
-${formatGiverCandidates(candidates)}${excludedPairsSection}${params.goodMatchContext ?? ""}`;
+${formatGiverCandidates(memberCandidates)}${excludedPairsSection}${params.goodMatchContext ?? ""}`;
 
-  const { matches, failed: aiCallFailed } = await runClaudeMatching(apiKey, prompt, "giver");
+      return runClaudeMatching(apiKey, prompt, `giver:${memberId}`);
+    })
+  );
+
+  const matches = matchResults.flatMap((r) => r.matches);
+  const aiCallFailed = matchResults.some((r) => r.failed);
 
   // 上のプロンプトでAIに除外を依頼済みだが、指示に従わない場合の保険としてここでも念のため除外する
   const candidateMap = new Map(candidates.map((c) => [c.candidateId, c]));
   const myContactMap = new Map(filteredContacts.map((c) => [c.id, c]));
   const cards: EnishiResultCard[] = [];
+  const directChecks: DirectCheckItem[] = [];
   for (const m of matches) {
     const cand = candidateMap.get(m.candidateId);
     const myContact = myContactMap.get(m.matchedTargetId);
@@ -585,6 +688,13 @@ ${formatGiverCandidates(candidates)}${excludedPairsSection}${params.goodMatchCon
     // AIの判定が内部矛盾しているため破棄する（例：ガチョウにマッチしたのに1次のエッグとして返す）。
     const type = cand.kind;
     if ((m.hop === "direct") !== (type === "egg")) continue;
+    if (type === "egg") {
+      directChecks.push({
+        key: String(cards.length),
+        personDescription: [myContact.name, myContact.company, myContact.specialty, myContact.businessSummary].filter(Boolean).join(" / "),
+        eggDescription: cand.description,
+      });
+    }
     const path = m.hop === "direct"
       ? [`あなたの人脈：${myContact.name}`, `${cand.memberName}さんの金の卵`]
       : m.hop === "2hop"
@@ -603,7 +713,13 @@ ${formatGiverCandidates(candidates)}${excludedPairsSection}${params.goodMatchCon
     });
   }
 
-  const sorted = HOP_ORDER.flatMap((h) => cards.filter((c) => c.hop === h)).slice(0, count);
+  const directSurvivors = await verifyDirectMatches(apiKey, directChecks);
+  const rejectedIndices = new Set(
+    directChecks.filter((d) => !directSurvivors.has(d.key)).map((d) => Number(d.key))
+  );
+  const verifiedCards = cards.filter((_, idx) => !rejectedIndices.has(idx));
+
+  const sorted = HOP_ORDER.flatMap((h) => verifiedCards.filter((c) => c.hop === h)).slice(0, count);
   return {
     groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: sorted.filter((c) => c.hop === h) })),
     truncated,

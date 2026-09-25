@@ -2,10 +2,9 @@
 // 1to1 ルート
 // GET    /api/oneonone                → 自分の1to1セッション一覧
 // POST   /api/oneonone                → 申込
-// PATCH  /api/oneonone/:id/accept     → 承諾
-// PATCH  /api/oneonone/:id/reject     → 拒否
+// PATCH  /api/oneonone/:id/reject     → 辞退（承認という操作は廃止済み。誰でもいつでも辞退できる）
 // PATCH  /api/oneonone/:id/cancel     → キャンセル（申込者: pending/accepted、承諾者: accepted）
-// PATCH  /api/oneonone/:id/complete   → 完了押下（双方で確定）
+// PATCH  /api/oneonone/:id/complete   → 完了押下（どちらか一方の押下で確定）
 // PATCH  /api/oneonone/:id/uncomplete → 完了取り消し
 // DELETE /api/oneonone/:id            → 記録削除（completed/rejected/cancelled）
 // =============================================================
@@ -22,12 +21,38 @@ import { getActiveShareLink, ensureActiveShareLink } from "../services/scheduler
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { touchCollaborationLink } from "../services/collab-link.ts";
 import { generateRawToken } from "../services/auth.ts";
-import { createConference, getAvailableConferenceTypes, cancelAutoConference } from "../services/conferenceService.ts";
+import { createConference, getAvailableConferenceTypes, cancelAutoConference, isGoogleCalendarConnected } from "../services/conferenceService.ts";
+import { createConferenceForOneOnOneSession } from "../services/oneOnOneConference.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 oneOnOneRoutes.use("*", authMiddleware);
+
+const MIN_ONEONONE_CANDIDATES = 2;
+const MAX_ONEONONE_CANDIDATES = 5;
+
+type CandidateSlotInput = { startAtUtc: string; endAtUtc: string };
+
+/** 候補日リストの共通バリデーション（2〜5件・時系列・未来日時） */
+function validateCandidateSlots(candidateSlots: CandidateSlotInput[] | undefined): { error: string } | { slots: { startsAt: number; endsAt: number }[] } {
+  if (!candidateSlots || candidateSlots.length < MIN_ONEONONE_CANDIDATES || candidateSlots.length > MAX_ONEONONE_CANDIDATES) {
+    return { error: `候補日は${MIN_ONEONONE_CANDIDATES}〜${MAX_ONEONONE_CANDIDATES}件で指定してください` };
+  }
+  const slots: { startsAt: number; endsAt: number }[] = [];
+  for (const slot of candidateSlots) {
+    const startMs = new Date(slot.startAtUtc).getTime();
+    const endMs = new Date(slot.endAtUtc).getTime();
+    if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
+      return { error: "候補日時の指定が正しくありません" };
+    }
+    if (startMs <= Date.now()) {
+      return { error: "過去の日時は候補日にできません" };
+    }
+    slots.push({ startsAt: Math.floor(startMs / 1000), endsAt: Math.floor(endMs / 1000) });
+  }
+  return { slots };
+}
 
 // ---- GET /api/oneonone ----
 oneOnOneRoutes.get("/", async (c) => {
@@ -166,16 +191,51 @@ oneOnOneRoutes.get("/", async (c) => {
     return tryHost(session.requesterId, session.responderId) ?? tryHost(session.responderId, session.requesterId);
   }
 
+  // 「候補日提示」方式のセッションの候補日一覧をまとめて取得（相手がまだ選んでいない場合の選択UI用）
+  const candidateSessionIds = sessions
+    .filter((s) => s.arrangementMethod === "candidates" && !s.selectedCandidateSlotId && (s.status === "pending" || s.status === "accepted"))
+    .map((s) => s.id);
+  const candidateSlotRows = candidateSessionIds.length > 0
+    ? await db
+        .select()
+        .from(schema.oneOnOneCandidateSlots)
+        .where(inArray(schema.oneOnOneCandidateSlots.oneOnOneSessionId, candidateSessionIds))
+        .orderBy(schema.oneOnOneCandidateSlots.sortOrder)
+        .all()
+    : [];
+  const candidatesBySessionId = new Map<string, typeof candidateSlotRows>();
+  for (const slot of candidateSlotRows) {
+    const list = candidatesBySessionId.get(slot.oneOnOneSessionId) ?? [];
+    list.push(slot);
+    candidatesBySessionId.set(slot.oneOnOneSessionId, list);
+  }
+
+  // 候補日未選択のセッションについて、申込者（requester）が連携済みの会議ツールをまとめて取得
+  // （相手が候補を選ぶと同時に、その場で会議ツールを選んで会議URLを発行できるようにするため）
+  const candidateRequesterIds = [...new Set(
+    sessions.filter((s) => candidatesBySessionId.has(s.id)).map((s) => s.requesterId)
+  )];
+  const availableConferenceTypesByRequesterId = new Map(
+    await Promise.all(candidateRequesterIds.map(async (id) => [id, await getAvailableConferenceTypes(db, id)] as const))
+  );
+
   const result = sessions.map((s) => {
     const partnerId = s.requesterId === userId ? s.responderId : s.requesterId;
     const baseSchedulerUrl = schedulerUrlMap.get(s.requesterId) ?? null;
     const conference = conferenceBySessionId.get(s.id) ?? findFallbackConference(s);
-    // responseToken は未ログインでの承諾/辞退用の秘密情報のため、認証済みAPIレスポンスにも含めない
+    // responseToken は未ログインでの候補日選択用の秘密情報のため、認証済みAPIレスポンスにそのまま含めない。
+    // ただし、申込者自身が相手に送ったURLを見失った際に再取得できるよう、申込者本人にだけ
+    // 完成済みのURL（responseUrl）を返す（相手や第三者には見せない）
     const { responseToken: _responseToken, manualConferenceUrl, ...sessionWithoutToken } = s;
+    const isRequester = s.requesterId === userId;
+    const responseUrl = isRequester && s.arrangementMethod === "candidates" && s.status === "pending" && _responseToken
+      ? `${getFrontendUrl(c.env)}/oneonone/respond/${_responseToken}`
+      : null;
     return {
       ...sessionWithoutToken,
       partner: memberMap.get(partnerId) ?? null,
-      myRole: s.requesterId === userId ? "requester" : "responder",
+      myRole: isRequester ? "requester" : "responder",
+      responseUrl,
       // 予約ページにこの1to1申込のIDを持たせ、予約確定時に紐づけられるようにする
       requesterSchedulerUrl: baseSchedulerUrl ? `${baseSchedulerUrl}?oneOnOneId=${s.id}` : null,
       // scheduledFor が未設定でも、予約(booking)が見つかればその開始日時を使う
@@ -185,10 +245,108 @@ oneOnOneRoutes.get("/", async (c) => {
       // 予約が紐づいていればその会議URLを、なければ手動入力された会議URLを使う
       conferenceType: conference?.conferenceType ?? (manualConferenceUrl ? "manual_entry" : null),
       conferenceUrl: conference?.conferenceUrl ?? manualConferenceUrl ?? null,
+      // startAt/endAt は unix秒（oneOnOneSessions.scheduledForと同じ単位。bookingsの*AtUtcとは異なりISO文字列ではない）
+      candidates: (candidatesBySessionId.get(s.id) ?? []).map((slot) => ({
+        id: slot.id,
+        startAt: slot.startsAt,
+        endAt: slot.endsAt,
+      })),
+      // 候補日提示方式・未選択のセッションのみ、申込者の連携済み会議ツール一覧を返す（相手が選ぶ際に使う）
+      availableConferenceTypes: availableConferenceTypesByRequesterId.get(s.requesterId) ?? [],
     };
   });
 
   return c.json({ data: result });
+});
+
+// ---- GET /api/oneonone/conference-reminders ----
+// ホーム画面向け: 日時は確定しているのに会議URLが「未解決」（自動発行の失敗等）のままの1to1・予約を返す。
+// ホストが明示的に「URLなし」を選んだもの（conferenceUrlStatus="none"）は対象外にする。
+oneOnOneRoutes.get("/conference-reminders", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!userId) return c.json({ data: [] });
+
+  const sessions = await db
+    .select()
+    .from(schema.oneOnOneSessions)
+    .where(
+      and(
+        or(eq(schema.oneOnOneSessions.requesterId, userId), eq(schema.oneOnOneSessions.responderId, userId)),
+        or(eq(schema.oneOnOneSessions.status, "pending"), eq(schema.oneOnOneSessions.status, "accepted")),
+        isNotNull(schema.oneOnOneSessions.scheduledFor)
+      )
+    )
+    .all();
+
+  const sessionIds = sessions.map((s) => s.id);
+  const linkedBookings = sessionIds.length > 0
+    ? await db
+        .select({
+          oneOnOneSessionId: schema.bookings.oneOnOneSessionId,
+          conferenceUrl: schema.bookings.conferenceUrl,
+          conferenceUrlStatus: schema.bookings.conferenceUrlStatus,
+        })
+        .from(schema.bookings)
+        .where(and(inArray(schema.bookings.oneOnOneSessionId, sessionIds), eq(schema.bookings.status, "confirmed")))
+        .all()
+    : [];
+  const bookingBySessionId = new Map(
+    linkedBookings.filter((b) => b.oneOnOneSessionId).map((b) => [b.oneOnOneSessionId as string, b])
+  );
+
+  const memberIds = [...new Set(sessions.flatMap((s) => [s.requesterId, s.responderId]))].filter((id) => id !== userId);
+  const members = memberIds.length > 0
+    ? await db.select({ id: schema.members.id, name: schema.members.name }).from(schema.members).where(inArray(schema.members.id, memberIds)).all()
+    : [];
+  const memberNameMap = new Map(members.map((m) => [m.id, m.name]));
+
+  const sessionReminders = sessions
+    .filter((s) => {
+      const booking = bookingBySessionId.get(s.id);
+      const effectiveUrl = booking?.conferenceUrl ?? s.manualConferenceUrl ?? null;
+      const effectiveStatus = booking?.conferenceUrlStatus ?? s.conferenceUrlStatus ?? null;
+      return !effectiveUrl && effectiveStatus !== "none";
+    })
+    .map((s) => ({
+      id: s.id,
+      kind: "one_on_one" as const,
+      partnerName: memberNameMap.get(s.requesterId === userId ? s.responderId : s.requesterId) ?? "メンバー",
+      scheduledFor: s.scheduledFor,
+    }));
+
+  // 1to1に紐づかない予約（公開予約URL・外部ゲスト招待経由）で、自分がホストのもの
+  const hostBookings = await db
+    .select({
+      id: schema.bookings.id,
+      guestName: schema.bookings.guestName,
+      startAtUtc: schema.bookings.startAtUtc,
+      conferenceType: schema.bookings.conferenceType,
+      conferenceUrl: schema.bookings.conferenceUrl,
+      conferenceUrlStatus: schema.bookings.conferenceUrlStatus,
+    })
+    .from(schema.bookings)
+    .where(
+      and(
+        eq(schema.bookings.hostMemberId, userId),
+        eq(schema.bookings.status, "confirmed"),
+        isNull(schema.bookings.oneOnOneSessionId),
+        eq(schema.bookings.conferenceType, "manual"),
+        isNull(schema.bookings.conferenceUrl)
+      )
+    )
+    .all();
+
+  const bookingReminders = hostBookings
+    .filter((b) => b.conferenceUrlStatus !== "none")
+    .map((b) => ({
+      id: b.id,
+      kind: "booking" as const,
+      partnerName: b.guestName,
+      scheduledFor: Math.floor(new Date(b.startAtUtc).getTime() / 1000),
+    }));
+
+  return c.json({ data: [...sessionReminders, ...bookingReminders] });
 });
 
 // ---- PATCH /api/oneonone/:id/schedule ----
@@ -215,10 +373,13 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
 
   const body = await c.req.json<{
     scheduledForUtc?: string | null; endAtUtc?: string; conferenceUrl?: string | null;
-    conferenceType?: "zoom" | "google_meet" | "manual";
+    conferenceType?: "zoom" | "google_meet" | "manual" | "none";
   }>();
 
-  const update: { scheduledFor?: number | null; manualConferenceUrl?: string | null; status?: "accepted"; respondedAt?: number } = {};
+  const update: {
+    scheduledFor?: number | null; manualConferenceUrl?: string | null; status?: "accepted"; respondedAt?: number;
+    conferenceUrlStatus?: string | null;
+  } = {};
   if (body.scheduledForUtc !== undefined) {
     if (body.scheduledForUtc === null) {
       update.scheduledFor = null;
@@ -287,6 +448,9 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
       zoomClientSecret: c.env.ZOOM_CLIENT_SECRET,
     });
     generatedConferenceUrl = conferenceResult.conferenceUrl;
+    // 自動発行が失敗して manual にフォールバックした場合は "unresolved"（未解決）として記録し、
+    // ホーム画面のリマインダー対象にする。成功時はクリアする。
+    update.conferenceUrlStatus = conferenceResult.urlStatus === "unresolved" ? "unresolved" : null;
 
     if (existingBooking) {
       await db.update(schema.bookings).set({
@@ -296,6 +460,7 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
         conferenceUrl: conferenceResult.conferenceUrl,
         conferenceMetaJson: conferenceResult.conferenceMetaJson,
         hostCalendarEventId: conferenceResult.calendarEventId,
+        conferenceUrlStatus: update.conferenceUrlStatus,
         updatedAt: new Date().toISOString(),
       }).where(eq(schema.bookings.id, existingBooking.id));
     } else {
@@ -317,6 +482,7 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
         conferenceType: conferenceResult.conferenceType,
         conferenceUrl: conferenceResult.conferenceUrl,
         conferenceMetaJson: conferenceResult.conferenceMetaJson,
+        conferenceUrlStatus: update.conferenceUrlStatus,
         oneOnOneSessionId: sessionId,
         source: "prearranged",
         createdAt: new Date().toISOString(),
@@ -325,9 +491,13 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
     }
     // 実URLは bookings 側で管理するため、手入力欄は空にしておく（GET /oneonone は bookings を優先表示する）
     update.manualConferenceUrl = null;
-  } else if (body.conferenceUrl !== undefined) {
-    update.manualConferenceUrl = body.conferenceUrl?.trim() || null;
-    // 手入力に切り替えた場合、既存の連携済み予約があれば表示上の会議URLも合わせておく
+  } else if (body.conferenceType === "none" || body.conferenceUrl !== undefined) {
+    // "none": ホストが明示的に「会議URLなし」を選んだ。空の手入力URLも同じ意味として扱う
+    // （どちらも「あえてURLを設定しない」という同じ意図であり、区別する理由がないため）。
+    const trimmed = body.conferenceType === "none" ? "" : (body.conferenceUrl?.trim() ?? "");
+    update.manualConferenceUrl = trimmed || null;
+    update.conferenceUrlStatus = trimmed ? null : "none";
+    // 手入力/URLなしに切り替えた場合、既存の連携済み予約があれば表示上の会議URLも合わせておく
     const existingBooking = await db
       .select({
         id: schema.bookings.id,
@@ -339,7 +509,7 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
       .where(and(eq(schema.bookings.oneOnOneSessionId, sessionId), eq(schema.bookings.status, "confirmed")))
       .get();
     if (existingBooking) {
-      // 自動発行済みの会議（Zoom/Googleカレンダー）から手入力URLに切り替える場合、古い会議を残さずキャンセルする
+      // 自動発行済みの会議（Zoom/Googleカレンダー）から手入力URL/URLなしに切り替える場合、古い会議を残さずキャンセルする
       if (existingBooking.conferenceType === "zoom" || existingBooking.conferenceType === "google_meet") {
         await cancelAutoConference(
           db, c.env, session.requesterId,
@@ -351,6 +521,7 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
         conferenceUrl: update.manualConferenceUrl,
         conferenceMetaJson: null,
         hostCalendarEventId: null,
+        conferenceUrlStatus: update.conferenceUrlStatus,
         updatedAt: new Date().toISOString(),
       }).where(eq(schema.bookings.id, existingBooking.id));
     }
@@ -369,6 +540,104 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
   return c.json({ data: { id: sessionId, scheduledFor: update.scheduledFor, conferenceUrl: generatedConferenceUrl ?? update.manualConferenceUrl } });
 });
 
+// ---- PATCH /api/oneonone/:id/select-candidate ----
+// 「候補日提示」方式の1to1で、相手（responder）が申込者の提示した候補から1つを選んで日時を確定する。
+// 日時を選んだこの瞬間に、申込者（requester）が連携済みの会議ツールから相手が選んだものを使って
+// 会議URLもその場で発行する（連携ツールが1つだけ・0個の場合は選択不要、2つ以上の場合は指定が必要）。
+oneOnOneRoutes.patch("/:id/select-candidate", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  const sessionId = c.req.param("id");
+  if (!userId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const session = await db
+    .select()
+    .from(schema.oneOnOneSessions)
+    .where(eq(schema.oneOnOneSessions.id, sessionId))
+    .get();
+
+  if (!session) return c.json({ error: { code: "not_found", message: "セッションが見つかりません" } }, 404);
+  if (session.responderId !== userId) return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
+  if (session.status !== "pending" && session.status !== "accepted") {
+    return c.json({ error: { code: "invalid_status", message: "この1to1は日時を選べない状態です" } }, 400);
+  }
+  if (session.arrangementMethod !== "candidates") {
+    return c.json({ error: { code: "bad_request", message: "この1to1は候補日提示方式ではありません" } }, 400);
+  }
+  if (session.selectedCandidateSlotId) {
+    return c.json({ error: { code: "already_selected", message: "既に日時を選択済みです" } }, 400);
+  }
+
+  const body = await c.req.json<{ candidateSlotId?: string; conferenceType?: "google_meet" | "zoom" }>();
+  if (!body.candidateSlotId) {
+    return c.json({ error: { code: "bad_request", message: "候補日を指定してください" } }, 400);
+  }
+
+  const slot = await db
+    .select()
+    .from(schema.oneOnOneCandidateSlots)
+    .where(and(eq(schema.oneOnOneCandidateSlots.id, body.candidateSlotId), eq(schema.oneOnOneCandidateSlots.oneOnOneSessionId, sessionId)))
+    .get();
+  if (!slot) return c.json({ error: { code: "not_found", message: "候補日が見つかりません" } }, 404);
+
+  const availableTypes = await getAvailableConferenceTypes(db, session.requesterId);
+  const resolvedConferenceType: "google_meet" | "zoom" | null = availableTypes.length === 0
+    ? null
+    : availableTypes.length === 1
+      ? availableTypes[0]
+      : (body.conferenceType && availableTypes.includes(body.conferenceType) ? body.conferenceType : null);
+  if (availableTypes.length >= 2 && !resolvedConferenceType) {
+    return c.json({ error: { code: "bad_request", message: "会議ツールを選択してください" } }, 400);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const update: { selectedCandidateSlotId: string; scheduledFor: number; status?: "accepted"; respondedAt?: number; conferenceUrlStatus?: string | null } = {
+    selectedCandidateSlotId: slot.id,
+    scheduledFor: slot.startsAt,
+  };
+  // 候補から選ぶ行為自体が「承諾」を意味する（公開予約URL経由の確定と同様の扱い）
+  if (session.status === "pending") {
+    update.status = "accepted";
+    update.respondedAt = now;
+  }
+
+  let conferenceUrl: string | null = null;
+  let resultConferenceType: string | null = null;
+  if (resolvedConferenceType) {
+    const [requester, responder] = await Promise.all([
+      db.select({ name: schema.members.name, email: schema.members.email }).from(schema.members).where(eq(schema.members.id, session.requesterId)).get(),
+      db.select({ name: schema.members.name, email: schema.members.email }).from(schema.members).where(eq(schema.members.id, session.responderId)).get(),
+    ]);
+    if (requester && responder) {
+      try {
+        const conferenceResult = await createConferenceForOneOnOneSession({
+          db, env: c.env, sessionId,
+          requesterId: session.requesterId, requesterName: requester.name, requesterEmail: requester.email,
+          responderId: session.responderId, responderName: responder.name, responderEmail: responder.email,
+          conferenceType: resolvedConferenceType,
+          startAtUtc: new Date(slot.startsAt * 1000).toISOString(),
+          endAtUtc: new Date(slot.endsAt * 1000).toISOString(),
+        });
+        conferenceUrl = conferenceResult.conferenceUrl;
+        resultConferenceType = conferenceResult.conferenceType;
+        update.conferenceUrlStatus = conferenceResult.conferenceUrlStatus;
+      } catch (err) {
+        // 会議URLの自動発行に失敗しても、日時の確定（承諾）自体は成立させる。
+        // URLは「未解決」としてホーム画面のリマインダー対象にし、後から手動で入力できるようにする。
+        console.error("[oneonone] select-candidate 会議URL発行失敗", err);
+        update.conferenceUrlStatus = "unresolved";
+      }
+    }
+  }
+
+  await db.update(schema.oneOnOneSessions).set(update).where(eq(schema.oneOnOneSessions.id, sessionId));
+  await db.update(schema.connections)
+    .set({ oneOnOneAcceptedAt: now })
+    .where(and(eq(schema.connections.fromMemberId, session.requesterId), eq(schema.connections.toMemberId, session.responderId)));
+
+  return c.json({ data: { status: update.status ?? session.status, scheduledFor: slot.startsAt, conferenceType: resultConferenceType, conferenceUrl } });
+});
+
 // ---- POST /api/oneonone ----
 oneOnOneRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
@@ -385,12 +654,33 @@ oneOnOneRoutes.post("/", async (c) => {
     durationMinutes?: number;
     note?: string;
     notifyByEmail?: boolean;
+    arrangementMethod: "public_url" | "candidates";
+    candidateSlots?: CandidateSlotInput[];
   }>();
   const { responderId, notifyByEmail } = body;
 
   if (requesterId === responderId) {
     return c.json({ error: { code: "self_request", message: "自分自身に1to1は申し込めません" } }, 400);
   }
+
+  if (body.arrangementMethod !== "public_url" && body.arrangementMethod !== "candidates") {
+    return c.json({ error: { code: "bad_request", message: "日程の決め方の指定が正しくありません" } }, 400);
+  }
+  if (body.arrangementMethod === "public_url" && !(await isGoogleCalendarConnected(db, requesterId))) {
+    return c.json({
+      error: { code: "not_connected", message: "公開予約URLを使うにはGoogleカレンダーとの連携が必要です。先に「マイページ→日程調整設定→外部サービス連携」で連携してください。" },
+    }, 400);
+  }
+  let candidateSlotsToInsert: { startsAt: number; endsAt: number }[] = [];
+  if (body.arrangementMethod === "candidates") {
+    const validated = validateCandidateSlots(body.candidateSlots);
+    if ("error" in validated) return c.json({ error: { code: "bad_request", message: validated.error } }, 400);
+    candidateSlotsToInsert = validated.slots;
+  }
+  // 「候補日提示」方式は、相手がメールをあまり確認しない場合でも申込者自身が
+  // 直接URLを送れるよう、未ログインで候補を選べる公開ページ用のトークンを発行する
+  // （公開予約URL方式は既に申込者のスケジューラー公開URLがこの役割を果たすため不要）
+  const responseToken = body.arrangementMethod === "candidates" ? generateRawToken() : null;
 
   let customDurationMinutes: number | null = null;
   if (body.durationMinutes !== undefined) {
@@ -425,7 +715,22 @@ oneOnOneRoutes.post("/", async (c) => {
     customTitle,
     customDurationMinutes,
     customNote,
+    arrangementMethod: body.arrangementMethod,
+    responseToken,
   });
+
+  if (candidateSlotsToInsert.length > 0) {
+    await db.insert(schema.oneOnOneCandidateSlots).values(
+      candidateSlotsToInsert.map((slot, i) => ({
+        id: newId(),
+        oneOnOneSessionId: id,
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+        sortOrder: i,
+        createdAt: now,
+      }))
+    );
+  }
 
   // 接続レコードを準備（なければ作成）
   await ensureConnection(db, requesterId, responderId, now);
@@ -448,14 +753,18 @@ oneOnOneRoutes.post("/", async (c) => {
 
       const design = await db.select().from(schema.cardDesigns).get();
 
-      // 申込者のスケジューラー公開URLを取得（設定済みの場合は候補日リンクをメールに含める。
-      // 招待メールを送るこの時点で、期限内のリンクが無ければ新しく発行する）
-      const schedulerLink = await ensureActiveShareLink(db, c.env, requesterId);
-      const schedulerUrl = schedulerLink ? `${schedulerLink.publicUrl}?oneOnOneId=${id}` : null;
-
-      const schedulerBlockText = schedulerUrl
-        ? `📅 日程を予約する\n${schedulerUrl}\n\n`
-        : "";
+      // 「候補日提示」方式の場合、公開予約URLは使わず、ログイン不要の回答URL（候補日を選ぶだけ）を案内する
+      let schedulerBlockText = "";
+      if (body.arrangementMethod === "candidates") {
+        const respondUrl = `${getFrontendUrl(c.env)}/oneonone/respond/${responseToken}`;
+        schedulerBlockText = `📅 以下のリンクから、候補日時をお選びください（ログイン不要）\n${respondUrl}\n\n`;
+      } else {
+        // 申込者のスケジューラー公開URLを取得（設定済みの場合は候補日リンクをメールに含める。
+        // 招待メールを送るこの時点で、期限内のリンクが無ければ新しく発行する）
+        const schedulerLink = await ensureActiveShareLink(db, c.env, requesterId);
+        const schedulerUrl = schedulerLink ? `${schedulerLink.publicUrl}?oneOnOneId=${id}` : null;
+        schedulerBlockText = schedulerUrl ? `📅 日程を予約する\n${schedulerUrl}\n\n` : "";
+      }
       const titleBlockText = customTitle ? `📌 タイトル：${customTitle}\n\n` : "";
       const noteBlockText = customNote ? `💬 メッセージ：${customNote}\n\n` : "";
       await new MailService(db, c.env).send("oneonone_request", responder.email, {
@@ -471,7 +780,8 @@ oneOnOneRoutes.post("/", async (c) => {
     }
   }
 
-  return c.json({ data: { id, status: "pending" } }, 201);
+  const responseUrl = responseToken ? `${getFrontendUrl(c.env)}/oneonone/respond/${responseToken}` : null;
+  return c.json({ data: { id, status: "pending", arrangementMethod: body.arrangementMethod, responseUrl } }, 201);
 });
 
 // ---- POST /api/oneonone/prearranged ----
@@ -568,15 +878,23 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
         zoomClientSecret: c.env.ZOOM_CLIENT_SECRET,
       });
 
+  // 承認という操作は廃止したため、日時指定申込は最初から確定（accepted）扱いとする。
+  // 相手は都合が悪ければいつでも辞退（/reject）できる。
   await db.insert(schema.oneOnOneSessions).values({
     id: sessionId,
     requesterId,
     responderId: body.responderId,
-    status: "pending",
+    status: "accepted",
     requestedAt: now,
+    respondedAt: now,
     scheduledFor: Math.floor(new Date(body.startAtUtc).getTime() / 1000),
     responseToken,
   });
+
+  // manual選択時、URLを空で申し込んだ場合は「あえてURLなし」の意図として扱う（zoom/google_meetの自動発行失敗はurlStatus="unresolved"）
+  const prearrangedConferenceUrlStatus = body.conferenceType === "manual"
+    ? (conferenceResult.conferenceUrl ? null : "none")
+    : (conferenceResult.urlStatus === "unresolved" ? "unresolved" : null);
 
   await db.insert(schema.bookings).values({
     id: bookingId,
@@ -596,6 +914,7 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
     conferenceType: conferenceResult.conferenceType,
     conferenceUrl: conferenceResult.conferenceUrl,
     conferenceMetaJson: conferenceResult.conferenceMetaJson,
+    conferenceUrlStatus: prearrangedConferenceUrlStatus,
     oneOnOneSessionId: sessionId,
     source: "prearranged",
     createdAt: new Date().toISOString(),
@@ -606,7 +925,7 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
   await ensureConnection(db, body.responderId, requesterId, now);
   await db
     .update(schema.connections)
-    .set({ oneOnOneRequestedAt: now })
+    .set({ oneOnOneRequestedAt: now, oneOnOneAcceptedAt: now })
     .where(and(eq(schema.connections.fromMemberId, requesterId), eq(schema.connections.toMemberId, body.responderId)));
 
   // 通知（メールは申込者が希望した場合のみ。Web Pushはその選択に関わらず常に送る）
@@ -637,39 +956,12 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
     }
   }
 
-  return c.json({ data: { id: sessionId, status: "pending", conferenceUrl: conferenceResult.conferenceUrl } }, 201);
-});
-
-// ---- PATCH /api/oneonone/:id/accept ----
-oneOnOneRoutes.patch("/:id/accept", async (c) => {
-  const db = createDb(c.env.DB);
-  const userId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
-  const sessionId = c.req.param("id");
-  if (!userId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
-
-  const session = await db
-    .select()
-    .from(schema.oneOnOneSessions)
-    .where(eq(schema.oneOnOneSessions.id, sessionId))
-    .get();
-
-  if (!session) return c.json({ error: { code: "not_found", message: "セッションが見つかりません" } }, 404);
-  if (session.responderId !== userId) return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
-  if (session.status !== "pending") return c.json({ error: { code: "invalid_status", message: "承諾できない状態です" } }, 400);
-
-  const now = Math.floor(Date.now() / 1000);
-  await db.update(schema.oneOnOneSessions)
-    .set({ status: "accepted", respondedAt: now })
-    .where(eq(schema.oneOnOneSessions.id, sessionId));
-
-  await db.update(schema.connections)
-    .set({ oneOnOneAcceptedAt: now })
-    .where(and(eq(schema.connections.fromMemberId, session.requesterId), eq(schema.connections.toMemberId, session.responderId)));
-
-  return c.json({ data: { status: "accepted" } });
+  return c.json({ data: { id: sessionId, status: "accepted", conferenceUrl: conferenceResult.conferenceUrl } }, 201);
 });
 
 // ---- PATCH /api/oneonone/:id/reject ----
+// 承認という操作は廃止したため、これは「辞退する」の意味で使う。ステータスを問わず
+// pending/accepted であればいつでも辞退できる（すでに完了・辞退・キャンセル済みのものは不可）。
 oneOnOneRoutes.patch("/:id/reject", async (c) => {
   const db = createDb(c.env.DB);
   const userId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
@@ -684,6 +976,9 @@ oneOnOneRoutes.patch("/:id/reject", async (c) => {
 
   if (!session) return c.json({ error: { code: "not_found", message: "セッションが見つかりません" } }, 404);
   if (session.responderId !== userId) return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
+  if (session.status !== "pending" && session.status !== "accepted") {
+    return c.json({ error: { code: "invalid_status", message: "この1to1はすでに処理されています" } }, 400);
+  }
 
   const now = Math.floor(Date.now() / 1000);
   await db.update(schema.oneOnOneSessions)
@@ -725,25 +1020,14 @@ oneOnOneRoutes.patch("/:id/complete", async (c) => {
     return c.json({ error: { code: "already_completed", message: "既に完了済みです" } }, 400);
   }
 
-  const updateData = isRequester
-    ? { requesterCompletedAt: now }
-    : { responderCompletedAt: now };
-
+  // どちらか一方が完了を記録した時点で1to1は完了したものとする（双方の押下を待たない）。
+  // 表示上の整合性のため、完了を押した側だけでなく両者の completedAt をこの時刻で揃える。
   await db.update(schema.oneOnOneSessions)
-    .set(updateData)
+    .set({ requesterCompletedAt: now, responderCompletedAt: now })
     .where(eq(schema.oneOnOneSessions.id, sessionId));
 
-  // 双方完了チェック
-  const bothDone = isRequester
-    ? !!session.responderCompletedAt
-    : !!session.requesterCompletedAt;
-
-  if (bothDone) {
-    await applyOneOnOneCompletion(db, session, now);
-    return c.json({ data: { status: "completed", bothCompleted: true } });
-  }
-
-  return c.json({ data: { status: "waiting_partner", bothCompleted: false } });
+  await applyOneOnOneCompletion(db, session, now);
+  return c.json({ data: { status: "completed", bothCompleted: true } });
 });
 
 // ---- PATCH /api/oneonone/:id/uncomplete ---- 完了を取り消す
@@ -774,13 +1058,10 @@ oneOnOneRoutes.patch("/:id/uncomplete", async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const wasFullyCompleted = session.status === "completed";
 
-  // 自分の完了フラグをリセット
-  const updateData = isRequester
-    ? { requesterCompletedAt: null, status: "accepted" as const }
-    : { responderCompletedAt: null, status: "accepted" as const };
-
+  // どちらか一方の完了取り消しで、1to1全体を未完了に戻す（完了は元々どちらか一方の押下だけで
+  // 成立しており、双方の completedAt を揃えて記録しているため、取り消し時も双方リセットする）
   await db.update(schema.oneOnOneSessions)
-    .set(updateData)
+    .set({ requesterCompletedAt: null, responderCompletedAt: null, status: "accepted" })
     .where(eq(schema.oneOnOneSessions.id, sessionId));
 
   // 双方完了済み（completed）だった場合、両者のポイントを取り消す
@@ -1009,24 +1290,51 @@ async function applyOneOnOneCompletion(
   await checkAndAwardBadges(db, session.responderId, schema);
 }
 
-const PENDING_TIMEOUT_SECONDS = 7 * 24 * 60 * 60;
 const COMPLETED_GRACE_SECONDS = 7 * 24 * 60 * 60;
 
-// 放置された1to1を自動的に遷移させる（申込中1週間→キャンセル、承諾済み+実施日から1週間→完了）
+// 放置された1to1を自動的に遷移させる（候補日提示で誰も選ばないまま候補日が全て過ぎた→自動削除、
+// 承諾済み+実施日から1週間→自動完了）。承認という操作自体は廃止したため、日時未定のまま
+// 一定期間で自動キャンセルする、という仕組みはもう存在しない（申込者・相手はいつでも
+// 自分の意思でキャンセル・辞退できる）。
 // Cron等の定期実行基盤がないため、他の遅延更新（events.ts の /active）と同様、
 // 一覧取得のたびに軽量なスイープを行う方式を採用する
 async function sweepStaleOneOnOneSessions(db: ReturnType<typeof createDb>) {
   const now = Math.floor(Date.now() / 1000);
 
-  // 1) 申込中のまま1週間放置 → 自動キャンセル
-  await db.update(schema.oneOnOneSessions)
-    .set({ status: "cancelled", respondedAt: now, autoTransitionReason: "pending_timeout" })
+  // 1) 候補日提示方式で、まだ誰も候補を選んでおらず、提示した候補日がすべて過ぎてしまった
+  //    申込み → 自動キャンセル（実施しようがなくなったものを一覧から消す。日時未定のまま
+  //    経過日数だけで機械的にキャンセルする、ということはしない）
+  const unselectedCandidateSessions = await db
+    .select({ id: schema.oneOnOneSessions.id })
+    .from(schema.oneOnOneSessions)
     .where(
       and(
         eq(schema.oneOnOneSessions.status, "pending"),
-        sql`${schema.oneOnOneSessions.requestedAt} < ${now - PENDING_TIMEOUT_SECONDS}`
+        eq(schema.oneOnOneSessions.arrangementMethod, "candidates"),
+        isNull(schema.oneOnOneSessions.selectedCandidateSlotId)
       )
-    );
+    )
+    .all();
+  if (unselectedCandidateSessions.length > 0) {
+    const candidateSessionIds = unselectedCandidateSessions.map((s) => s.id);
+    const lastSlotBySession = await db
+      .select({
+        sessionId: schema.oneOnOneCandidateSlots.oneOnOneSessionId,
+        lastStartsAt: sql<number>`MAX(${schema.oneOnOneCandidateSlots.startsAt})`,
+      })
+      .from(schema.oneOnOneCandidateSlots)
+      .where(inArray(schema.oneOnOneCandidateSlots.oneOnOneSessionId, candidateSessionIds))
+      .groupBy(schema.oneOnOneCandidateSlots.oneOnOneSessionId)
+      .all();
+    const expiredSessionIds = lastSlotBySession
+      .filter((r) => r.lastStartsAt < now)
+      .map((r) => r.sessionId);
+    if (expiredSessionIds.length > 0) {
+      await db.update(schema.oneOnOneSessions)
+        .set({ status: "cancelled", respondedAt: now, autoTransitionReason: "candidates_expired" })
+        .where(inArray(schema.oneOnOneSessions.id, expiredSessionIds));
+    }
+  }
 
   // 2) 承諾済みで実施日から1週間経過 → 自動完了（双方の完了フラグも立てた上で通常完了と同じ副作用を適用）
   const acceptedSessions = await db

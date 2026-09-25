@@ -157,13 +157,13 @@ export function PrearrangedRequestModal({
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>会議ツール</label>
             <div className="space-y-1.5">
-              <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: zoomConnected ? "var(--color-ink-700)" : "var(--color-ink-300)" }}>
-                <input type="radio" checked={conferenceType === "zoom"} disabled={!zoomConnected} onChange={() => setConferenceType("zoom")} />
-                🎥 Zoom{!zoomConnected && "（未連携）"}
-              </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: googleConnected ? "var(--color-ink-700)" : "var(--color-ink-300)" }}>
                 <input type="radio" checked={conferenceType === "google_meet"} disabled={!googleConnected} onChange={() => setConferenceType("google_meet")} />
                 📅 Google Meet{!googleConnected && "（未連携）"}
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: zoomConnected ? "var(--color-ink-700)" : "var(--color-ink-300)" }}>
+                <input type="radio" checked={conferenceType === "zoom"} disabled={!zoomConnected} onChange={() => setConferenceType("zoom")} />
+                🎥 Zoom{!zoomConnected && "（未連携）"}
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--color-ink-700)" }}>
                 <input type="radio" checked={conferenceType === "manual"} onChange={() => setConferenceType("manual")} />

@@ -141,15 +141,15 @@ export function EditBookingScheduleModal({
                 style={{ background: mode === "manual" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "manual" ? "white" : "var(--color-ink-600)" }}>
                 手入力
               </button>
-              <button type="button" onClick={() => zoomConnected && setMode("zoom")} disabled={!zoomConnected}
-                className="py-2 rounded-xl text-xs font-medium transition disabled:opacity-40"
-                style={{ background: mode === "zoom" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "zoom" ? "white" : "var(--color-ink-600)" }}>
-                Zoomで生成
-              </button>
               <button type="button" onClick={() => googleConnected && setMode("google_meet")} disabled={!googleConnected}
                 className="py-2 rounded-xl text-xs font-medium transition disabled:opacity-40"
                 style={{ background: mode === "google_meet" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "google_meet" ? "white" : "var(--color-ink-600)" }}>
                 Meetで生成
+              </button>
+              <button type="button" onClick={() => zoomConnected && setMode("zoom")} disabled={!zoomConnected}
+                className="py-2 rounded-xl text-xs font-medium transition disabled:opacity-40"
+                style={{ background: mode === "zoom" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "zoom" ? "white" : "var(--color-ink-600)" }}>
+                Zoomで生成
               </button>
               <button type="button" onClick={() => { setMode("none"); setConferenceUrl(""); }}
                 className="py-2 rounded-xl text-xs font-medium transition"

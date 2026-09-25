@@ -10,6 +10,7 @@ import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { AddContactFromBookingModal } from "@/components/add-contact-from-booking-modal";
 import { EditBookingScheduleModal } from "./_edit-booking-schedule-modal";
+import { PendingGuestInvitesList, type GuestInviteListItem } from "./_guest-invite-panel";
 
 type ExternalBooking = {
   id: string;
@@ -67,11 +68,28 @@ export function ExternalGuestOneOnOneSection() {
     queryFn: () => api.get<{ data: ExternalBooking[] }>("/scheduler/bookings"),
   });
 
+  // まだ相手が候補を選んでいない・未確定の招待（日程が確定するまではbookingsに現れないため別途取得する）
+  const { data: guestInvitesData, isLoading: guestInvitesLoading } = useQuery({
+    queryKey: ["oneonone", "guest-invites"],
+    queryFn: () => api.get<{ data: GuestInviteListItem[] }>("/oneonone/guest-invites"),
+  });
+  const pendingInvites = (guestInvitesData?.data ?? []).filter((i) => i.status === "pending" && i.inviteUrl);
+
   const dismissMutation = useMutation({
     mutationFn: ({ bookingId, outcome }: { bookingId: string; outcome: "not_held" | "no_add" }) =>
       api.patch(`/scheduler/bookings/${bookingId}/dismiss-followup`, { outcome }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["scheduler", "bookings"] });
+    },
+  });
+
+  // 招待した相手が、実は（あるいはその後）メンバーになっていた場合に、
+  // 「メンバーとの1to1」へ移動する
+  const linkToMemberMutation = useMutation({
+    mutationFn: (bookingId: string) => api.post(`/scheduler/bookings/${bookingId}/link-to-member`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["scheduler", "bookings"] });
+      qc.invalidateQueries({ queryKey: ["oneonone"] });
     },
   });
 
@@ -90,8 +108,11 @@ export function ExternalGuestOneOnOneSection() {
   });
 
   const nowMs = Date.now();
-  // 真の外部ゲストの予約のみ（在籍中メンバーとの予約や、内部の1to1に紐づく予約は除外）
-  const external = (data?.data ?? []).filter((b) => b.isExternalGuest && !b.oneOnOneSessionId);
+  // ゲスト招待経由の予約（内部の1to1セッションに紐づかないもの）はすべてここに表示する。
+  // 招待した相手のメールアドレスが後から/たまたま既存メンバーと一致した場合でも、
+  // oneOnOneSessionId が無い（＝メンバー同士の1to1一覧には出てこない）ため、
+  // isExternalGuest で絞り込むと表示先を失ってしまう不具合があったため、絞り込みをやめた。
+  const external = (data?.data ?? []).filter((b) => !b.oneOnOneSessionId);
 
   const needsAction = external.filter((b) =>
     b.status === "confirmed" && !b.externalContactId && !b.guestFollowupDismissedAt
@@ -104,14 +125,21 @@ export function ExternalGuestOneOnOneSection() {
     .filter((b) => !needsAction.includes(b) && !upcoming.includes(b))
     .sort((a, b) => new Date(b.startAtUtc).getTime() - new Date(a.startAtUtc).getTime());
 
-  if (isLoading || external.length === 0) return null;
+  if (isLoading || guestInvitesLoading) return null;
+  if (external.length === 0 && pendingInvites.length === 0) return null;
 
   return (
     <div>
       <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>🌐 {termExternalGuest}との1to1</h2>
       <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
-        公開予約URLで日程調整した、会員ではない{termExternalGuest}との1to1です。
+        {termExternalGuest}（会員ではない方）との1to1です。まだ日程が確定していない招待も含みます。
       </p>
+
+      {pendingInvites.length > 0 && (
+        <div className="mb-3">
+          <PendingGuestInvitesList invites={pendingInvites} />
+        </div>
+      )}
 
       {needsAction.length > 0 && (
         <div className="space-y-2 mb-3">
@@ -125,6 +153,14 @@ export function ExternalGuestOneOnOneSection() {
                   ? "実施予定時刻を過ぎています。1to1は完了しましたか？"
                   : "1to1は完了しましたか？"}
               </p>
+              {!b.isExternalGuest && (
+                <button onClick={() => linkToMemberMutation.mutate(b.id)}
+                  disabled={linkToMemberMutation.isPending}
+                  className="w-full mb-1.5 py-2 rounded-2xl text-xs font-medium disabled:opacity-50"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                  {b.guestName}さんはメンバーです・メンバーとの1to1に移動する
+                </button>
+              )}
               <div className="space-y-1.5">
                 <button onClick={() => setAddContactTarget(b)}
                   className="w-full py-2 rounded-2xl text-xs font-medium text-white"
@@ -185,10 +221,6 @@ export function ExternalGuestOneOnOneSection() {
                     <Pencil size={11} />
                     日時・会議URLを編集
                   </button>
-                  <Link to={`/scheduler/bookings/${b.id}`}
-                    className="text-xs mt-1 flex items-center gap-0.5" style={{ color: "var(--color-ink-400)" }}>
-                    予約詳細を見る<ChevronRight size={12} />
-                  </Link>
                 </div>
                 <button
                   onClick={() => { if (confirm("この1to1予定を削除しますか？")) removeMutation.mutate(b); }}
@@ -200,6 +232,14 @@ export function ExternalGuestOneOnOneSection() {
                   <Trash2 size={14} />
                 </button>
               </div>
+              {!b.isExternalGuest && (
+                <button onClick={() => linkToMemberMutation.mutate(b.id)}
+                  disabled={linkToMemberMutation.isPending}
+                  className="w-full mt-2 py-2 rounded-2xl text-xs font-medium disabled:opacity-50"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                  {b.guestName}さんはメンバーです・メンバーとの1to1に移動する
+                </button>
+              )}
               <button
                 onClick={() => setManuallyCompleted((prev) => new Set(prev).add(b.id))}
                 className="w-full mt-2 py-2.5 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2"

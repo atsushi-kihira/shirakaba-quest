@@ -17,9 +17,16 @@ export type OneOnOneSession = {
   myRole: "requester" | "responder";
   partner: { id: string; name: string; emoji: string; bgColor: string } | null;
   requesterSchedulerUrl?: string | null;
+  // 候補日提示方式で自分が申込者(requester)の場合のみ、未ログインで相手が候補を選べる回答用URL
+  responseUrl?: string | null;
   conferenceType?: string | null;
   conferenceUrl?: string | null;
-  autoTransitionReason?: "pending_timeout" | "date_passed" | null;
+  autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null;
+  arrangementMethod?: "public_url" | "candidates";
+  selectedCandidateSlotId?: string | null;
+  candidates?: { id: string; startAt: number; endAt: number }[];
+  // 候補日未選択の間のみ、申込者(requester)が連携済みの会議ツール一覧（相手が選ぶ際に使う）
+  availableConferenceTypes?: ("google_meet" | "zoom")[];
 };
 
 export function useOneOnOneSessions() {

@@ -26,12 +26,20 @@ const HISTORY_LIST_LIMIT = 100;
 // 「良いご縁だった」の過去実績をプロンプトに含める際、遡って調べる履歴件数・実際に含める件数の上限
 const GOOD_MATCH_HISTORY_SCAN_LIMIT = 50;
 const GOOD_MATCH_CONTEXT_LIMIT = 15;
+// 「AIの判断ミス」として削除された過去の誤りをプロンプトに含める際、遡って調べる履歴件数・実際に含める件数の上限
+const BAD_MATCH_HISTORY_SCAN_LIMIT = 50;
+const BAD_MATCH_CONTEXT_LIMIT = 15;
 // 検索で実際にAIへ依頼する件数の上限（常にこの上限まで検索し、履歴にはすべて保存する。
 // 画面側の「表示件数」はこの結果を何件ずつページ分割して見せるかだけを制御する表示設定であり、
 // 表示件数を変えるたびに再検索が走らないようにするため、検索自体は常にこの固定値で行う）。
 const MAX_RESULTS = 30;
 
-type HistoryCard = EnishiResultCard & { cardId: string; goodMatch: boolean; transacted: boolean; introduced: boolean };
+type HistoryCard = EnishiResultCard & {
+  cardId: string; goodMatch: boolean; transacted: boolean; introduced: boolean;
+  // 利用者が「明らかに間違っている」と判断してリストから削除したカードの記録。
+  // removedAsAiMistakeがtrueのものは、後日の検索プロンプトに反面教師として渡し、同じ誤りを学習・回避させる。
+  removed: boolean; removedReason: string | null; removedAsAiMistake: boolean;
+};
 type HistoryResult = Omit<EnishiSearchResult, "groups"> & { groups: { hop: Hop; label: string; results: HistoryCard[] }[] };
 
 // 検索結果の各カードに、履歴保存用の識別子（cardId）・「良いご縁だった」フラグの初期値・
@@ -48,9 +56,16 @@ function augmentResultWithCards(result: EnishiSearchResult, transactedIds: Set<s
         ...r, cardId: `c${counter++}`, goodMatch: false,
         transacted: transactedIds.has(r.candidateId),
         introduced: r.myContactId ? introducedKeys.has(`${r.myContactId}|${r.candidateId}`) : false,
+        removed: false, removedReason: null, removedAsAiMistake: false,
       })),
     })),
   };
+}
+
+// 「削除済み（removed: true）」のカードを画面表示・PDF出力から取り除く（履歴データそのものからは
+// 削除しない。AIの判断ミス学習のため、後から buildBadMatchContext が過去の履歴を読み返せるように残す）。
+function stripRemovedCards(result: HistoryResult): HistoryResult {
+  return { ...result, groups: result.groups.map((g) => ({ ...g, results: g.results.filter((r) => !r.removed) })) };
 }
 
 async function fetchTransactedContactIds(db: ReturnType<typeof createDb>, meId: string): Promise<Set<string>> {
@@ -127,6 +142,43 @@ async function buildGoodMatchContext(
   return `
 
 # 参考：あなたが過去に「良いご縁だった」と評価した組み合わせ（同じ組み合わせが再度候補に挙がる場合は積極的に採用し、似た傾向のパターンも参考にしてください）
+${lines.join("\n")}`;
+}
+
+// 自分の過去の検索履歴から「AIの判断ミスだった」として削除済みのカードを集め、プロンプトに追記する
+// 反面教師の情報を組み立てる（本人の履歴のみを対象にするため、他のユーザーには影響しない）。
+async function buildBadMatchContext(
+  db: ReturnType<typeof createDb>, meId: string, mode: "for-me" | "giver"
+): Promise<string | undefined> {
+  const rows = await db.select({ resultJson: schema.enishiSearchHistory.resultJson })
+    .from(schema.enishiSearchHistory)
+    .where(and(eq(schema.enishiSearchHistory.memberId, meId), eq(schema.enishiSearchHistory.mode, mode)))
+    .orderBy(desc(schema.enishiSearchHistory.createdAt))
+    .limit(BAD_MATCH_HISTORY_SCAN_LIMIT)
+    .all();
+
+  const badCards: { counterpartName: string; matchedTargetLabel: string; why: string; reason: string }[] = [];
+  for (const row of rows) {
+    if (badCards.length >= BAD_MATCH_CONTEXT_LIMIT) break;
+    try {
+      const parsed = JSON.parse(row.resultJson) as HistoryResult;
+      for (const g of parsed.groups ?? []) {
+        for (const r of g.results ?? []) {
+          if (r.removedAsAiMistake && r.counterpart?.name && r.matchedTargetLabel) {
+            badCards.push({ counterpartName: r.counterpart.name, matchedTargetLabel: r.matchedTargetLabel, why: r.why ?? "", reason: r.removedReason?.trim() || "（詳細未記入）" });
+          }
+        }
+      }
+    } catch {
+      // 壊れたJSON（想定外）は無視して次の履歴へ
+    }
+  }
+  if (badCards.length === 0) return undefined;
+  const lines = badCards.slice(0, BAD_MATCH_CONTEXT_LIMIT)
+    .map((c) => `- ${c.counterpartName}さん / ${c.matchedTargetLabel} / AIが挙げた根拠「${c.why}」→ 利用者が誤りと判断して削除。理由: ${c.reason}`);
+  return `
+
+# 参考：あなたが過去に「AIの判断ミス」として削除した組み合わせ（同じ理由で誤った判定を繰り返さないよう注意してください）
 ${lines.join("\n")}`;
 }
 
@@ -440,12 +492,15 @@ enishiRoutes.post("/search/giver", async (c) => {
     return c.json({ error: { code: "no_contacts", message: "貢献のご縁をさがすには、まず外部人脈を登録してください" } }, 400);
   }
 
-  const goodMatchContext = await buildGoodMatchContext(db, meId, "giver");
+  const [goodMatchContext, badMatchContext] = await Promise.all([
+    buildGoodMatchContext(db, meId, "giver"),
+    buildBadMatchContext(db, meId, "giver"),
+  ]);
   const result = await runEnishiSearch({
     db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
     mode: "giver", meId, myContacts, targetMemberIds,
     specialties: body.specialties ?? [], relationships: body.relationships ?? [], freeText: body.freeText?.trim() ?? "",
-    maxHop: body.maxHop, count, goodMatchContext,
+    maxHop: body.maxHop, count, goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
   });
 
   const targetMembers = await db.select({ id: schema.members.id, name: schema.members.name })
@@ -529,6 +584,7 @@ enishiRoutes.get("/history/:id", async (c) => {
       })),
     })),
   };
+  result = stripRemovedCards(result);
 
   return c.json({ data: { id: row.id, mode: row.mode, title: row.title, createdAt: row.createdAt, result } });
 });
@@ -879,6 +935,38 @@ enishiRoutes.delete("/history/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// ---- PATCH /api/enishi/history/:id/cards/remove-bulk ---- 明らかに間違っている候補をまとめて削除（理由は記入しない一括操作）
+// ":cardId" より先に登録し、"remove-bulk" が :cardId に食われないようにする
+enishiRoutes.patch("/history/:id/cards/remove-bulk", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const historyId = c.req.param("id");
+  const row = await db.select().from(schema.enishiSearchHistory).where(eq(schema.enishiSearchHistory.id, historyId)).get();
+  if (!row || row.memberId !== meId) return c.json({ error: { code: "not_found", message: "指定された検索履歴が見つかりません" } }, 404);
+
+  const { cardIds } = await c.req.json<{ cardIds?: string[] }>();
+  const ids = new Set(cardIds ?? []);
+  if (ids.size === 0) return c.json({ error: { code: "invalid_input", message: "削除する候補を選択してください" } }, 400);
+
+  let result: HistoryResult;
+  try {
+    result = JSON.parse(row.resultJson);
+  } catch {
+    return c.json({ error: { code: "internal_error", message: "検索結果の読み込みに失敗しました" } }, 500);
+  }
+
+  for (const g of result.groups) {
+    for (const r of g.results) {
+      if (ids.has(r.cardId)) { r.removed = true; r.removedReason = null; r.removedAsAiMistake = false; }
+    }
+  }
+
+  await db.update(schema.enishiSearchHistory).set({ resultJson: JSON.stringify(result) }).where(eq(schema.enishiSearchHistory.id, historyId));
+  return c.json({ ok: true });
+});
+
 // ---- PATCH /api/enishi/history/:id/cards/:cardId ---- 「良いご縁だった」フラグの切替（本人の履歴のみ操作可能）
 enishiRoutes.patch("/history/:id/cards/:cardId", async (c) => {
   const db = createDb(c.env.DB);
@@ -909,4 +997,41 @@ enishiRoutes.patch("/history/:id/cards/:cardId", async (c) => {
 
   await db.update(schema.enishiSearchHistory).set({ resultJson: JSON.stringify(result) }).where(eq(schema.enishiSearchHistory.id, historyId));
   return c.json({ data: result });
+});
+
+// ---- PATCH /api/enishi/history/:id/cards/:cardId/remove ---- 明らかに間違っている候補を1件削除（理由の記入可・任意でAIの判断ミスとして学習）
+enishiRoutes.patch("/history/:id/cards/:cardId/remove", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const historyId = c.req.param("id");
+  const cardId = c.req.param("cardId");
+  const row = await db.select().from(schema.enishiSearchHistory).where(eq(schema.enishiSearchHistory.id, historyId)).get();
+  if (!row || row.memberId !== meId) return c.json({ error: { code: "not_found", message: "指定された検索履歴が見つかりません" } }, 404);
+
+  const body = await c.req.json<{ reason?: string; aiMistake?: boolean }>();
+
+  let result: HistoryResult;
+  try {
+    result = JSON.parse(row.resultJson);
+  } catch {
+    return c.json({ error: { code: "internal_error", message: "検索結果の読み込みに失敗しました" } }, 500);
+  }
+
+  let found = false;
+  for (const g of result.groups) {
+    for (const r of g.results) {
+      if (r.cardId === cardId) {
+        r.removed = true;
+        r.removedReason = body.reason?.trim() || null;
+        r.removedAsAiMistake = !!body.aiMistake;
+        found = true;
+      }
+    }
+  }
+  if (!found) return c.json({ error: { code: "not_found", message: "指定された結果が見つかりません" } }, 404);
+
+  await db.update(schema.enishiSearchHistory).set({ resultJson: JSON.stringify(result) }).where(eq(schema.enishiSearchHistory.id, historyId));
+  return c.json({ ok: true });
 });

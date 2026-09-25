@@ -13,6 +13,8 @@ import { fmtDateISO, fmtDateTimeFull, fmtTime } from "@/lib/date";
 import { ImportCardModal } from "./import-card-modal";
 import { CompleteOneOnOneModal } from "../meetings/_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-modal";
+import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candidate-selection-panel";
+import { ResponseUrlCopyRow } from "../meetings/_oneonone-sections";
 import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
 
 type Session = {
@@ -33,12 +35,21 @@ type Session = {
     category: string;
   } | null;
   requesterSchedulerUrl?: string | null;
+  responseUrl?: string | null;
   scheduledFor?: number | null;
   scheduledForEndUtc?: number | null;
   conferenceType?: string | null;
   conferenceUrl?: string | null;
-  autoTransitionReason?: "pending_timeout" | "date_passed" | null;
+  autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null;
+  arrangementMethod?: "public_url" | "candidates";
+  selectedCandidateSlotId?: string | null;
+  candidates?: CandidateSlot[];
+  availableConferenceTypes?: ("google_meet" | "zoom")[];
 };
+
+function hasCandidatesToPick(s: Session): boolean {
+  return s.arrangementMethod === "candidates" && !s.selectedCandidateSlotId && (s.candidates?.length ?? 0) > 0;
+}
 
 type SessionsResponse = { data: Session[] };
 
@@ -57,15 +68,6 @@ export function OneOnOneScreen() {
     // 外部の予約ページで日程確定してから戻ってきた直後でも必ず最新状態を取得する
     refetchOnMount: "always",
     refetchOnWindowFocus: true,
-  });
-
-  const acceptMutation = useMutation({
-    mutationFn: (id: string) => api.patch(`/oneonone/${id}/accept`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["oneonone"] });
-      // 承諾すると「申込」タブからは消えるため、続きが見える「進行中」タブへ自動で移動する
-      setTab("active");
-    },
   });
 
   const rejectMutation = useMutation({
@@ -182,13 +184,13 @@ export function OneOnOneScreen() {
                     📬 受け取った申込
                   </h2>
                   {pendingReceived.map((s) => {
-                    // 相手（申込者）の予約ページで日程を選べる場合、日程選択＝承諾を意味するため、
-                    // 別途「承諾する」ボタンは出さず「予約ページで日程を選ぶ」か「承諾しない」の2択にする
-                    const canScheduleInstead = !s.scheduledFor && !!s.requesterSchedulerUrl;
+                    const candidatesToPick = hasCandidatesToPick(s);
                     return (
                       <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                         {s.scheduledFor ? (
                           <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                        ) : candidatesToPick ? (
+                          <CandidateSelectionPanel sessionId={s.id} candidates={s.candidates!} availableConferenceTypes={s.availableConferenceTypes} onConfirmed={() => qc.invalidateQueries({ queryKey: ["oneonone"] })} />
                         ) : (
                           s.requesterSchedulerUrl && (
                             <a
@@ -206,24 +208,13 @@ export function OneOnOneScreen() {
                         <div className="flex gap-2 mt-3">
                           <button
                             onClick={() => rejectMutation.mutate(s.id)}
-                            disabled={rejectMutation.isPending || acceptMutation.isPending}
+                            disabled={rejectMutation.isPending}
                             className="flex-1 py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1"
                             style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
                           >
                             <X size={14} />
-                            {canScheduleInstead ? "承諾しない" : "断る"}
+                            辞退する
                           </button>
-                          {!canScheduleInstead && (
-                            <button
-                              onClick={() => acceptMutation.mutate(s.id)}
-                              disabled={acceptMutation.isPending || rejectMutation.isPending}
-                              className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-1"
-                              style={{ background: "var(--color-success)" }}
-                            >
-                              <Check size={14} />
-                              承諾する
-                            </button>
-                          )}
                         </div>
                       </SessionCard>
                     );
@@ -240,6 +231,20 @@ export function OneOnOneScreen() {
                     <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       {s.scheduledFor ? (
                         <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                      ) : s.arrangementMethod === "candidates" ? (
+                        <div className="mt-3 p-3 rounded-2xl" style={{ background: "var(--color-paper-200)" }}>
+                          <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>
+                            🗓 提示した候補日（{s.partner?.name ?? "相手"}さんの選択待ち）
+                          </p>
+                          <div className="space-y-1">
+                            {(s.candidates ?? []).map((c) => (
+                              <p key={c.id} className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                                ・{fmtDateTimeFull(c.startAt, tz)}〜{fmtTime(c.endAt, tz)}
+                              </p>
+                            ))}
+                          </div>
+                          {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} />}
+                        </div>
                       ) : (
                         <div className="mt-3 p-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
                           <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-success)" }}>
@@ -285,6 +290,8 @@ export function OneOnOneScreen() {
                     <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       {s.scheduledFor ? (
                         <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                      ) : hasCandidatesToPick(s) ? (
+                        <CandidateSelectionPanel sessionId={s.id} candidates={s.candidates!} availableConferenceTypes={s.availableConferenceTypes} onConfirmed={() => qc.invalidateQueries({ queryKey: ["oneonone"] })} />
                       ) : (
                         <button
                           onClick={() => setEditingSchedule(s)}

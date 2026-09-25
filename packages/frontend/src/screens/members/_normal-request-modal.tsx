@@ -1,14 +1,19 @@
 // =============================================================
-// 「1to1を申し込む」モーダル（通常申込：相手が公開予約URLで日時を選ぶ方式）
-// タイトル・所要時間・メッセージ・メール通知の可否を指定できる。
-// 日時・会議ツールはここでは選ばない（相手が予約ページで選ぶため）。
+// 「1to1を申し込む」モーダル（通常申込）
+// タイトル・所要時間・メッセージ・メール通知の可否に加え、日程の決め方
+// （公開予約URL／候補日提示）を選べる。候補日提示の場合、ここで2〜5件の候補日時を用意する。
 // =============================================================
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, Handshake, ExternalLink } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
+import { SchedulingMethodSelector, type SchedulingMethod } from "../meetings/_scheduling-method-selector";
+import {
+  CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload,
+  emptyCandidateRow, type CandidateRow,
+} from "../meetings/_candidate-date-entry";
 
 const DURATION_OPTIONS = [30, 45, 60, 90];
 
@@ -25,10 +30,26 @@ export function NormalRequestModal({
 }) {
   const qc = useQueryClient();
   const { data: previewShareData, generate: previewGenerate } = useAutoSchedulerShareLink();
+  const { data: googleStatusData } = useQuery<{ data: { connected: boolean } }>({
+    queryKey: ["scheduler", "google-status"],
+    queryFn: () => api.get("/scheduler/oauth/google/status"),
+  });
+  const googleConnected = googleStatusData?.data.connected ?? false;
+
   const [title, setTitle] = useState(`${responderName}さんとの1to1`);
   const [duration, setDuration] = useState(30);
   const [note, setNote] = useState("");
   const [notifyByEmail, setNotifyByEmail] = useState(true);
+  // 日程の決め方: 初期値はカレンダー連携状況が分かるまで未確定。連携済みなら「公開予約URLを使う」、
+  // 未連携なら「候補日を選んで提示する」を既定にする（連携状況の読み込み後に一度だけ反映する）
+  const [schedulingMethod, setSchedulingMethod] = useState<SchedulingMethod>("candidates");
+  const didSetDefaultMethod = useRef(false);
+  useEffect(() => {
+    if (didSetDefaultMethod.current || googleStatusData === undefined) return;
+    didSetDefaultMethod.current = true;
+    setSchedulingMethod(googleStatusData.data.connected ? "public_url" : "candidates");
+  }, [googleStatusData]);
+  const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(), emptyCandidateRow()]);
   const [error, setError] = useState("");
 
   const submitMutation = useMutation({
@@ -38,6 +59,8 @@ export function NormalRequestModal({
       durationMinutes: duration,
       note: note.trim() || undefined,
       notifyByEmail,
+      arrangementMethod: schedulingMethod,
+      candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows) : undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["oneonone"] });
@@ -45,6 +68,15 @@ export function NormalRequestModal({
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : "エラーが発生しました"),
   });
+
+  function handleSubmit() {
+    setError("");
+    if (schedulingMethod === "candidates" && !isValidCandidateSet(candidateRows)) {
+      setError("候補日時を2〜5件、正しく入力してください（終了時刻は開始時刻より後にしてください）");
+      return;
+    }
+    submitMutation.mutate();
+  }
 
   // 相手からどう見えるかを事前に確認できるよう、自分の予約ページを新しいタブで開く
   const previewUrl = previewShareData?.publicUrl ?? null;
@@ -71,22 +103,33 @@ export function NormalRequestModal({
           </button>
         </div>
 
-        <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
-          {responderName}さんに申込が届き、あなたの予約ページから空いている日時を選んでもらいます。
+        <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+          {responderName}さんに申込が届きます。
         </p>
-        <a
-          href={previewUrl ?? "#"}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={handleCalendarPreviewClick}
-          className="inline-flex items-center gap-1.5 text-xs font-medium mb-4"
-          style={{ color: "var(--color-brand)" }}
-        >
-          <ExternalLink size={13} />
-          📅 カレンダーページを表示（相手からの見え方を確認）
-        </a>
 
         <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>日程の決め方</label>
+            <SchedulingMethodSelector method={schedulingMethod} onChange={setSchedulingMethod} googleConnected={googleConnected} copy="member" />
+            {schedulingMethod === "public_url" ? (
+              <a
+                href={previewUrl ?? "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={handleCalendarPreviewClick}
+                className="inline-flex items-center gap-1.5 text-xs font-medium mt-2"
+                style={{ color: "var(--color-brand)" }}
+              >
+                <ExternalLink size={13} />
+                📅 カレンダーページを表示（相手からの見え方を確認）
+              </a>
+            ) : (
+              <div className="mt-2.5">
+                <CandidateDateEntry candidates={candidateRows} onChange={setCandidateRows} googleConnected={googleConnected} />
+              </div>
+            )}
+          </div>
+
           <div>
             <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>ミーティングのタイトル</label>
             <input
@@ -148,7 +191,7 @@ export function NormalRequestModal({
           )}
 
           <button
-            onClick={() => { setError(""); submitMutation.mutate(); }}
+            onClick={handleSubmit}
             disabled={submitMutation.isPending}
             className="w-full py-3.5 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
             style={{ background: "var(--color-brand)" }}

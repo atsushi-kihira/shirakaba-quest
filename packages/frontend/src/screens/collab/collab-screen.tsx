@@ -72,7 +72,9 @@ type GraphResponse = {
 const STAGE_META: Record<Stage, { label: string; color: string; dash?: string; width: number }> = {
   one:   { label: "1to1のみ", color: "var(--color-ink-300)", dash: "4 3", width: 1.5 },
   seed:  { label: "協働の芽", color: "var(--color-accent)", dash: "4 3", width: 2 },
-  loose: { label: "緩いチーム", color: "var(--color-success)", width: 3 },
+  // 緩いチーム同士の線・チームの塊からはみ出したメンバーをつなぐ線は、どちらも同じ
+  // 細い点線で表現する（マップ上の見た目と揃える）
+  loose: { label: "緩いチーム", color: "var(--color-success)", dash: "3 3", width: 1.2 },
 };
 
 const STALLED_META: Record<Stalled, { label: string; color: string } | null> = {
@@ -340,14 +342,15 @@ function GraphCanvas({
     if (total === 0) return [];
     const otherIds = new Set(others.map((n) => n.id));
 
-    // パワーチームのメンバーは角度をまとめて隣接させ、無関係なメンバーのアイコンが
-    // チームの塊（teamBlobs）の中に紛れ込まないようにする。グループ間には隙間を空ける。
-    // 複数のパワーチームに所属するメンバーは、先に見つかったチームのグループに入れる。
+    // パワーチーム・ゆるいチームのメンバーは角度をまとめて隣接させ、無関係なメンバーの
+    // アイコンがチームの塊（teamBlobs）の中に紛れ込まないようにする。グループ間には
+    // 隙間を空ける。複数のチームに所属するメンバーは、先に見つかったチームのグループに入れる。
     type Group = { ids: string[]; isTeam: boolean };
     const groups: Group[] = [];
     const grouped = new Set<string>();
     const powerTeams = graph.teams.filter((t) => t.type === "power" && !t.archived);
-    for (const team of powerTeams) {
+    const looseTeams = graph.teams.filter((t) => t.type === "loose" && !t.archived);
+    for (const team of [...powerTeams, ...looseTeams]) {
       const memberIds = team.members.map((m) => m.id).filter((id) => !grouped.has(id) && otherIds.has(id));
       if (memberIds.length === 0) continue;
       memberIds.forEach((id) => grouped.add(id));
@@ -404,9 +407,31 @@ function GraphCanvas({
     return map;
   }, [positions, meId]);
 
+  // 緩いチームの塊（円）で表現する関係は、線でも二重に表現しない（パワーチームと同じ扱いにする）。
+  // 緩いチームの現役メンバー同士のペアは、たとえ実際の1to1関係の段階が"loose"でなくても
+  // バックエンド側で強制的にloose扱いの線が引かれるため、その分だけ線描画から除外する。
+  const loosePairKeysCovered = useMemo(() => {
+    const set = new Set<string>();
+    for (const team of graph.teams) {
+      if (team.type !== "loose" || team.archived) continue;
+      const activeIds = team.members.filter((m) => m.status === "active").map((m) => m.id);
+      for (let i = 0; i < activeIds.length; i++) {
+        for (let j = i + 1; j < activeIds.length; j++) {
+          const [lo, hi] = [activeIds[i], activeIds[j]].sort();
+          set.add(`${lo}:${hi}`);
+        }
+      }
+    }
+    return set;
+  }, [graph.teams]);
+
   // 全員が見る関係線（自分が絡むものも、第三者同士のものも含む）
   const renderEdges = useMemo(() => {
     return graph.edges
+      .filter((e) => {
+        const [lo, hi] = [e.memberAId, e.memberBId].sort();
+        return !loosePairKeysCovered.has(`${lo}:${hi}`);
+      })
       .map((e) => {
         const pa = positionById.get(e.memberAId);
         const pb = positionById.get(e.memberBId);
@@ -414,9 +439,9 @@ function GraphCanvas({
         return { ...e, pa, pb };
       })
       .filter((e): e is GraphEdge & { pa: { x: number; y: number }; pb: { x: number; y: number } } => !!e);
-  }, [graph.edges, positionById]);
+  }, [graph.edges, positionById, loosePairKeysCovered]);
 
-  // 塊（ぼかし背景）で表示するのはパワーチームのみ。緩いチームは関係線（凡例の実線）で表現する
+  // 塊（ぼかし背景）はパワーチーム・緩いチームの両方で表示する。
   // チームメンバーの実際の位置だけを包む凸包（＋パディング）を計算する。
   // 中心から半径だけで円を描くと、メンバー同士の距離のバラつき（「私」との関係の近さで
   // 半径が決まるため、同じチームでもメンバーごとに輪の位置が大きく異なりうる）によって
@@ -441,39 +466,121 @@ function GraphCanvas({
     return [...lower, ...upper];
   }
 
-  const teamBlobs = useMemo(() => {
-    type TeamBlob = { team: GraphTeam; cx: number; labelY: number; path: string | null; circle: { cx: number; cy: number; r: number } | null };
-    const PAD = 32;
-    return graph.teams.filter((team) => team.type === "power" && !team.archived).map((team): TeamBlob | null => {
-      const pts = team.members
-        .map((m) => positionById.get(m.id))
-        .filter((p): p is { x: number; y: number } => !!p);
-      if (pts.length === 0) return null;
-      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-      const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  // 円（または凸包）が実際に無関係な人のアイコンを内側に巻き込んでいないかを判定する。
+  // アイコン自体に半径があるため、境界ぎりぎりも「巻き込み」として扱う余白を持たせる。
+  const NODE_R = 20;
+  function pointInPolygon(pt: { x: number; y: number }, poly: { x: number; y: number }[]): boolean {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      const intersect = (yi > pt.y) !== (yj > pt.y) && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi;
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
 
-      if (pts.length === 1) {
-        return { team, cx, labelY: pts[0].y - 40 - 6, path: null, circle: { cx: pts[0].x, cy: pts[0].y, r: 40 } };
+  type Shape = { cx: number; cy: number; labelY: number; circle: { cx: number; cy: number; r: number } | null; polygon: { x: number; y: number }[] | null };
+
+  function computeShape(pts: { x: number; y: number }[]): Shape {
+    const PAD = 32;
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+    const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+    if (pts.length === 1) {
+      return { cx, cy, labelY: pts[0].y - 40 - 6, circle: { cx: pts[0].x, cy: pts[0].y, r: 40 }, polygon: null };
+    }
+    if (pts.length === 2) {
+      // 2点だけの場合は凸包が線分になってしまうため、2点を包むカプセル状の円として扱う
+      const mcx = (pts[0].x + pts[1].x) / 2;
+      const mcy = (pts[0].y + pts[1].y) / 2;
+      const half = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) / 2;
+      const r = half + PAD;
+      return { cx: mcx, cy: mcy, labelY: mcy - r - 6, circle: { cx: mcx, cy: mcy, r }, polygon: null };
+    }
+    const hull = convexHull(pts);
+    const polygon = hull.map((p) => {
+      const dx = p.x - cx, dy = p.y - cy;
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: p.x + (dx / len) * PAD, y: p.y + (dy / len) * PAD };
+    });
+    const labelY = Math.min(...polygon.map((p) => p.y)) - 6;
+    return { cx, cy, labelY, circle: null, polygon };
+  }
+
+  function shapeContains(shape: Shape, pt: { x: number; y: number }): boolean {
+    if (shape.circle) return Math.hypot(pt.x - shape.circle.cx, pt.y - shape.circle.cy) < shape.circle.r + NODE_R;
+    if (shape.polygon) return pointInPolygon(pt, shape.polygon);
+    return false;
+  }
+
+  const teamBlobs = useMemo(() => {
+    type TeamBlob = {
+      team: GraphTeam; cx: number; labelY: number; path: string | null;
+      circle: { cx: number; cy: number; r: number } | null;
+      tethers: { from: { x: number; y: number }; to: { x: number; y: number } }[];
+    };
+    // パワーチームを優先する：パワーチームの塊は従来通り無条件で描く（調整の対象にしない）。
+    // ゆるいチームは、無関係な人を巻き込んでしまう場合のみ、はみ出しの原因になっている
+    // メンバーを塊から外し、そのメンバーは細い線で塊（一番近いメンバー）とつなぐことで
+    // 「チームであること」は示しつつ、無関係な人を丸の中に入れないようにする。
+    const allTeams = graph.teams.filter((team) => (team.type === "power" || team.type === "loose") && !team.archived);
+    const ordered = [...allTeams.filter((t) => t.type === "power"), ...allTeams.filter((t) => t.type === "loose")];
+
+    return ordered.map((team): TeamBlob | null => {
+      const memberIds = team.members.map((m) => m.id).filter((id) => positionById.has(id));
+      if (memberIds.length === 0) return null;
+      const memberIdSet = new Set(memberIds);
+
+      if (team.type === "power" || memberIds.length === 1) {
+        const pts = memberIds.map((id) => positionById.get(id)!);
+        const shape = computeShape(pts);
+        return { team, cx: shape.cx, labelY: shape.labelY, circle: shape.circle, tethers: [], path: shape.polygon ? `M ${shape.polygon.map((p) => `${p.x} ${p.y}`).join(" L ")} Z` : null };
       }
-      if (pts.length === 2) {
-        // 2点だけの場合は凸包が線分になってしまうため、2点を包むカプセル状の円として扱う
-        const mcx = (pts[0].x + pts[1].x) / 2;
-        const mcy = (pts[0].y + pts[1].y) / 2;
-        const half = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) / 2;
-        const r = half + PAD;
-        return { team, cx: mcx, labelY: mcy - r - 6, path: null, circle: { cx: mcx, cy: mcy, r } };
+
+      const foreignPts = graph.nodes
+        .filter((n) => !memberIdSet.has(n.id))
+        .map((n) => positionById.get(n.id))
+        .filter((p): p is { x: number; y: number } => !!p);
+
+      let coreIds = [...memberIds];
+      const excludedIds: string[] = [];
+      while (coreIds.length > 1) {
+        const corePts = coreIds.map((id) => positionById.get(id)!);
+        const shape = computeShape(corePts);
+        const hasViolation = foreignPts.some((p) => shapeContains(shape, p));
+        if (!hasViolation) break;
+        // 中心から最も遠いメンバーが塊を膨らませている可能性が高いため、そのメンバーを外して再計算する
+        const cx = corePts.reduce((s, p) => s + p.x, 0) / corePts.length;
+        const cy = corePts.reduce((s, p) => s + p.y, 0) / corePts.length;
+        let farIdx = 0, farDist = -1;
+        coreIds.forEach((id, i) => {
+          const p = positionById.get(id)!;
+          const d = Math.hypot(p.x - cx, p.y - cy);
+          if (d > farDist) { farDist = d; farIdx = i; }
+        });
+        excludedIds.push(coreIds[farIdx]);
+        coreIds.splice(farIdx, 1);
       }
-      const hull = convexHull(pts);
-      const padded = hull.map((p) => {
-        const dx = p.x - cx, dy = p.y - cy;
-        const len = Math.hypot(dx, dy) || 1;
-        return { x: p.x + (dx / len) * PAD, y: p.y + (dy / len) * PAD };
+
+      const corePts = coreIds.map((id) => positionById.get(id)!);
+      const shape = computeShape(corePts);
+      const tethers = excludedIds.map((id) => {
+        const p = positionById.get(id)!;
+        // 最も近いコアメンバーへ細い線でつなぐ
+        let nearest = corePts[0];
+        let nearestDist = Infinity;
+        for (const cp of corePts) {
+          const d = Math.hypot(p.x - cp.x, p.y - cp.y);
+          if (d < nearestDist) { nearestDist = d; nearest = cp; }
+        }
+        return { from: p, to: nearest };
       });
-      const path = `M ${padded.map((p) => `${p.x} ${p.y}`).join(" L ")} Z`;
-      const labelY = Math.min(...padded.map((p) => p.y)) - 6;
-      return { team, cx, labelY, path, circle: null };
+
+      return {
+        team, cx: shape.cx, labelY: shape.labelY, circle: shape.circle, tethers,
+        path: shape.polygon ? `M ${shape.polygon.map((p) => `${p.x} ${p.y}`).join(" L ")} Z` : null,
+      };
     }).filter((b): b is TeamBlob => !!b);
-  }, [graph.teams, positionById]);
+  }, [graph.teams, graph.nodes, positionById]);
 
   const pendingByMemberId = useMemo(() => {
     const map = new Map<string, boolean>();
@@ -561,6 +668,13 @@ function GraphCanvas({
                 filter="url(#collab-blob-blur)" />
             ) : null
           ))}
+          {/* 丸に入れると無関係な人を巻き込んでしまうメンバーは、丸から外して細い線でチームとつなぐ */}
+          {teamBlobs.flatMap(({ team, tethers }) =>
+            tethers.map((t, i) => (
+              <line key={`tether-${team.id}-${i}`} x1={t.from.x} y1={t.from.y} x2={t.to.x} y2={t.to.y}
+                stroke={STAGE_META.loose.color} strokeWidth={STAGE_META.loose.width} strokeDasharray={STAGE_META.loose.dash} opacity={0.75} />
+            ))
+          )}
           {teamBlobs.map(({ team, cx, labelY }) => (
             <text key={`blob-label-${team.id}`} x={cx} textAnchor="middle" y={labelY}
               fontSize="11" fontWeight={700} fill={TEAM_TYPE_META[team.type].color}
@@ -651,13 +765,23 @@ function GraphCanvas({
 
       <div className="absolute bottom-3 left-3 rounded-2xl px-3 py-2 flex flex-col gap-1"
         style={{ background: "rgba(250,245,232,0.9)", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" }}>
-        {(Object.keys(STAGE_META) as Stage[]).map((s) => (
-          <div key={s} className="flex items-center gap-1.5 text-xs" style={{ color: "var(--color-ink-600)" }}>
-            <svg width="20" height="8"><line x1="0" y1="4" x2="20" y2="4"
-              stroke={STAGE_META[s].color} strokeWidth={STAGE_META[s].width} strokeDasharray={STAGE_META[s].dash} /></svg>
-            {STAGE_META[s].label}
-          </div>
-        ))}
+        {/* 1to1のみ：線ではなくアイコンの縁取りだけで示すため、線の代わりにテキストで示す */}
+        <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--color-ink-600)" }}>
+          <span className="w-5 text-center text-[9px] font-medium" style={{ color: STAGE_META.one.color }}>アイコン</span>
+          {STAGE_META.one.label}
+        </div>
+        <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--color-ink-600)" }}>
+          <svg width="20" height="8"><line x1="0" y1="4" x2="20" y2="4"
+            stroke={STAGE_META.seed.color} strokeWidth={STAGE_META.seed.width} strokeDasharray={STAGE_META.seed.dash} /></svg>
+          {STAGE_META.seed.label}
+        </div>
+        {/* 緩いチーム：関係線（点線）とチームの塊（丸）は同じ意味なので1行にまとめる */}
+        <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--color-ink-600)" }}>
+          <svg width="20" height="8"><line x1="0" y1="4" x2="20" y2="4"
+            stroke={STAGE_META.loose.color} strokeWidth={STAGE_META.loose.width} strokeDasharray={STAGE_META.loose.dash} /></svg>
+          <span className="w-3 h-3 rounded-full inline-block" style={{ background: TEAM_TYPE_META.loose.color, opacity: 0.5 }} />
+          緩いチーム
+        </div>
         <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--color-ink-600)" }}>
           <span className="w-3 h-3 rounded-full inline-block" style={{ background: TEAM_TYPE_META.power.color, opacity: 0.5 }} />
           パワーチーム
@@ -1272,6 +1396,120 @@ function ContactSearchPanel({
   );
 }
 
+type TeamActionItem = {
+  id: string; task: string; assigneeMemberId: string | null;
+  assignee: { id: string; name: string; emoji: string } | null;
+  dueDate: string | null; visibility: "team" | "chapter" | "private"; completed: boolean; createdAt: number;
+};
+
+const ACTION_VISIBILITY_SHORT_LABEL: Record<TeamActionItem["visibility"], string> = { chapter: "📢公開", team: "🏠チーム内", private: "🔒非公開" };
+
+function TeamActionItemsChecklist({ teamId, members, canEdit }: { teamId: string; members: TeamMember[]; canEdit: boolean }) {
+  const qc = useQueryClient();
+  const queryKey = ["collab", "team-action-items", teamId];
+  const { data } = useQuery<{ data: TeamActionItem[] }>({
+    queryKey,
+    queryFn: () => api.get(`/collab/teams/${teamId}/action-items`),
+  });
+  const items = data?.data ?? [];
+  const activeMembers = members.filter((m) => m.status === "active");
+
+  const toggle = useMutation({
+    mutationFn: ({ id, completed }: { id: string; completed: boolean }) => api.patch(`/collab/team-action-items/${id}`, { completed }),
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api.delete(`/collab/team-action-items/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey }),
+  });
+
+  const [newTask, setNewTask] = useState("");
+  const [newAssignee, setNewAssignee] = useState("");
+  const [newDueDate, setNewDueDate] = useState("");
+  const [newVisibility, setNewVisibility] = useState<TeamActionItem["visibility"]>("team");
+  const add = useMutation({
+    mutationFn: () => api.post("/collab/team-action-items", {
+      teamId, task: newTask.trim(),
+      assigneeMemberId: newAssignee || undefined,
+      dueDate: newDueDate || undefined,
+      visibility: newVisibility,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey });
+      setNewTask(""); setNewAssignee(""); setNewDueDate(""); setNewVisibility("team");
+    },
+  });
+
+  return (
+    <div className="mb-3 pb-3" style={{ borderBottom: "1px solid var(--color-paper-300)" }}>
+      <p className="text-xs font-semibold mb-1.5" style={{ color: "var(--color-ink-600)" }}>📋 次回までのアクション</p>
+      {items.length > 0 && (
+        <div className="flex flex-col gap-1.5 mb-2">
+          {items.map((item) => (
+            <div key={item.id} className="flex items-start gap-1.5 text-xs">
+              <input type="checkbox" checked={item.completed} disabled={!canEdit} className="mt-0.5 shrink-0"
+                onChange={(e) => toggle.mutate({ id: item.id, completed: e.target.checked })} />
+              <div className="flex-1 min-w-0">
+                <span style={{
+                  color: item.completed ? "var(--color-ink-400)" : "var(--color-ink-700)",
+                  textDecoration: item.completed ? "line-through" : "none",
+                }}>
+                  {item.task}
+                </span>
+                <span className="ml-1.5" style={{ color: "var(--color-ink-400)" }}>
+                  {item.assignee && `${item.assignee.emoji}${item.assignee.name} ・ `}
+                  {item.dueDate && `〜${item.dueDate} ・ `}
+                  {ACTION_VISIBILITY_SHORT_LABEL[item.visibility]}
+                </span>
+              </div>
+              {canEdit && (
+                <button onClick={() => remove.mutate(item.id)} className="shrink-0" style={{ color: "var(--color-ink-300)" }} aria-label="削除">
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {!canEdit && items.length === 0 && (
+        <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>アクションはありません</p>
+      )}
+      {canEdit && (
+        <div className="rounded-xl p-2 space-y-1.5" style={{ background: "var(--color-paper-100)" }}>
+          <div className="flex items-center gap-1.5">
+            <input type="text" value={newTask} onChange={(e) => setNewTask(e.target.value)}
+              placeholder="新しいアクションを追加"
+              className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-xs outline-none border"
+              style={{ borderColor: "var(--color-paper-300)", background: "#fff", color: "var(--color-ink-900)" }} />
+            <button onClick={() => newTask.trim() && add.mutate()} disabled={!newTask.trim() || add.isPending}
+              className="p-1.5 rounded-lg shrink-0 disabled:opacity-40" style={{ background: "var(--color-brand)", color: "white" }} aria-label="追加">
+              <Plus size={13} />
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select value={newAssignee} onChange={(e) => setNewAssignee(e.target.value)}
+              className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-xs outline-none border"
+              style={{ borderColor: "var(--color-paper-300)", background: "#fff", color: "var(--color-ink-700)" }}>
+              <option value="">👤 担当者</option>
+              {activeMembers.map((m) => <option key={m.id} value={m.id}>{m.emoji} {m.name}</option>)}
+            </select>
+            <input type="date" value={newDueDate} onChange={(e) => setNewDueDate(e.target.value)}
+              className="w-[124px] shrink-0 px-2 py-1.5 rounded-lg text-xs outline-none border"
+              style={{ borderColor: "var(--color-paper-300)", background: "#fff", color: "var(--color-ink-700)" }} />
+          </div>
+          <select value={newVisibility} onChange={(e) => setNewVisibility(e.target.value as TeamActionItem["visibility"])}
+            className="w-full px-2 py-1.5 rounded-lg text-xs outline-none border"
+            style={{ borderColor: "var(--color-paper-300)", background: "#fff", color: "var(--color-ink-700)" }}>
+            <option value="team">🏠 チーム内のみ</option>
+            <option value="chapter">📢 チャプター公開</option>
+            <option value="private">🔒 非公開</option>
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CollabTeamsList({ teams, meId, candidateMembers }: {
   teams: GraphTeam[]; meId: string; candidateMembers: { id: string; name: string; emoji: string; bgColor: string }[];
 }) {
@@ -1424,6 +1662,7 @@ function CollabTeamsList({ teams, meId, candidateMembers }: {
                     );
                   })}
                 </div>
+                <TeamActionItemsChecklist teamId={t.id} members={t.members} canEdit={t.myStatus === "active"} />
                 <div className="flex flex-wrap gap-2">
                   {t.myStatus === "active" && (
                     <button onClick={() => { if (confirm(`「${t.name}」から脱退しますか？`)) leave.mutate(t.id); }}

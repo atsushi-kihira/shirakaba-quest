@@ -28,6 +28,10 @@ export type ConferenceResult = {
   conferenceUrl: string | null;
   conferenceMetaJson: string | null;
   calendarEventId: string | null;
+  // 会議発行を試みたが（未連携・一時的なAPI失敗等で）自動発行できず manual にフォールバックした場合に立てる。
+  // ホストが最初から明示的に「会議URLなし」を選んだ場合と区別するためのフラグ（呼び出し元は
+  // このフラグが立っているときだけ conferenceUrlStatus="unresolved" を保存し、ホーム画面リマインダーの対象にする）
+  urlStatus?: "unresolved";
 };
 
 export type CreateConferenceArgs = {
@@ -111,6 +115,20 @@ export async function getValidGoogleAccessToken(
     calendarId: cred.primaryCalendarId,
     busyCalendars: parseBusyCalendars(cred.busyCalendars, cred.primaryCalendarId),
   };
+}
+
+/**
+ * 「軸1（日程の決め方）」用: このメンバーがGoogleカレンダー連携済みかどうかだけを判定する。
+ * getAvailableConferenceTypes（軸2・会議URL自動発行の可否）とは別の関心事のため、専用の軽量ヘルパーとして分ける。
+ * トークンのリフレッシュは行わない（連携の有無だけを見る軽量チェックのため）。
+ */
+export async function isGoogleCalendarConnected(db: Db, memberId: string): Promise<boolean> {
+  const cred = await db
+    .select({ memberId: schema.googleCredentials.memberId })
+    .from(schema.googleCredentials)
+    .where(eq(schema.googleCredentials.memberId, memberId))
+    .get();
+  return !!cred;
 }
 
 /** Zoom アクセストークンを取得（必要に応じてリフレッシュ） */
@@ -265,14 +283,14 @@ export async function createConference(args: CreateConferenceArgs): Promise<Conf
         };
       }
     }
-    // Zoom 失敗 → manual にフォールバック
-    return { conferenceType: "manual", conferenceUrl: null, conferenceMetaJson: null, calendarEventId: null };
+    // Zoom 失敗 → manual にフォールバック（自動発行の失敗であり、意図的な選択ではない）
+    return { conferenceType: "manual", conferenceUrl: null, conferenceMetaJson: null, calendarEventId: null, urlStatus: "unresolved" };
   }
 
   const googleCred = await getValidGoogleAccessToken(db, hostMemberId, tokenKey, clientId, clientSecret);
 
   if (googleCred.status !== "ok") {
-    return { conferenceType: "manual", conferenceUrl: null, conferenceMetaJson: null, calendarEventId: null };
+    return { conferenceType: "manual", conferenceUrl: null, conferenceMetaJson: null, calendarEventId: null, urlStatus: "unresolved" };
   }
 
   const withMeet = requestedType === "google_meet";
@@ -304,6 +322,7 @@ export async function createConference(args: CreateConferenceArgs): Promise<Conf
     conferenceUrl: null,
     conferenceMetaJson: null,
     calendarEventId: result.eventId,
+    urlStatus: "unresolved",
   };
 }
 
@@ -438,4 +457,66 @@ export async function getAvailableConferenceTypes(
   if (googleCred) types.push("google_meet");
   if (zoomCred) types.push("zoom");
   return types;
+}
+
+export type CalendarBlockEnv = {
+  SCHEDULER_TOKEN_KEY: string;
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+};
+
+/**
+ * 複数人ミーティング・定例会の日程確定時に、主催者のGoogleカレンダーへ予定をブロックする
+ * （1to1と異なり、これまで日程確定だけではカレンダーに何も記録されず、ダブルブッキングの危険があった）。
+ * 会議ツールの種類に関わらず（手入力・Zoom・Google Meetいずれでも）呼び出す。
+ * Google未連携・失敗時は eventId: null を返すのみで、呼び出し元の処理は継続させる（致命的にしない）。
+ */
+export async function blockHostCalendarForDate(opts: {
+  db: Db;
+  env: CalendarBlockEnv;
+  hostMemberId: string;
+  summary: string;
+  description: string;
+  startAtUtc: string;
+  endAtUtc: string;
+  requestId: string;
+  withMeet?: boolean;
+}): Promise<{ eventId: string | null; meetUrl: string | null }> {
+  try {
+    if (!opts.env.GOOGLE_OAUTH_CLIENT_ID || !opts.env.GOOGLE_OAUTH_CLIENT_SECRET) return { eventId: null, meetUrl: null };
+    const cred = await getValidGoogleAccessToken(opts.db, opts.hostMemberId, opts.env.SCHEDULER_TOKEN_KEY, opts.env.GOOGLE_OAUTH_CLIENT_ID, opts.env.GOOGLE_OAUTH_CLIENT_SECRET);
+    if (cred.status !== "ok") return { eventId: null, meetUrl: null };
+    const host = await opts.db.select({ email: schema.members.email }).from(schema.members).where(eq(schema.members.id, opts.hostMemberId)).get();
+    const result = await insertCalendarEvent({
+      accessToken: cred.accessToken,
+      calendarId: cred.calendarId,
+      summary: opts.summary,
+      description: opts.description,
+      startAtUtc: opts.startAtUtc,
+      endAtUtc: opts.endAtUtc,
+      attendeeEmails: host?.email ? [host.email] : [],
+      requestId: opts.requestId,
+      withMeet: opts.withMeet ?? false,
+    });
+    return { eventId: result.eventId, meetUrl: result.meetUrl };
+  } catch (e) {
+    console.error("blockHostCalendarForDate failed:", e);
+    return { eventId: null, meetUrl: null };
+  }
+}
+
+/** blockHostCalendarForDate で作成したブロック予定を削除する（未確定に戻す・日時変更・キャンセル時） */
+export async function deleteHostCalendarEvent(
+  db: Db,
+  env: CalendarBlockEnv,
+  hostMemberId: string,
+  calendarEventId: string
+): Promise<void> {
+  try {
+    if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET) return;
+    const cred = await getValidGoogleAccessToken(db, hostMemberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
+    if (cred.status === "ok") await deleteCalendarEvent(cred.accessToken, cred.calendarId, calendarEventId);
+  } catch (e) {
+    console.error("deleteHostCalendarEvent failed:", e);
+  }
 }

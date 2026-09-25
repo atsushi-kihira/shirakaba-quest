@@ -5,6 +5,7 @@
 // PATCH  /api/scheduler/bookings/:id/dismiss-followup → 人脈化プロンプトを今回は表示しない
 // GET    /api/scheduler/bookings/:id      → 予約詳細
 // POST   /api/scheduler/bookings/:id/cancel → ホストからキャンセル
+// POST   /api/scheduler/bookings/:id/link-to-member → ビジターがメンバーになっていた場合、メンバーとの1to1へ移動する
 // DELETE /api/scheduler/bookings          → 記録の一括削除（body: { ids: string[] }）
 // DELETE /api/scheduler/bookings/:id      → 記録の削除
 
@@ -14,6 +15,7 @@ import { createDb, schema } from "../../db/index.ts";
 import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
 import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
 import { createConference, getAvailableConferenceTypes, cancelAutoConference } from "../../services/conferenceService.ts";
+import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const schedulerBookingsRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -237,8 +239,8 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
 
   const body = await c.req.json<{
     startUtc?: string; endUtc?: string; conferenceUrl?: string | null;
-    conferenceType?: "zoom" | "google_meet" | "manual";
-  }>().catch(() => ({}) as { startUtc?: string; endUtc?: string; conferenceUrl?: string | null; conferenceType?: "zoom" | "google_meet" | "manual" });
+    conferenceType?: "zoom" | "google_meet" | "manual" | "none";
+  }>().catch(() => ({}) as { startUtc?: string; endUtc?: string; conferenceUrl?: string | null; conferenceType?: "zoom" | "google_meet" | "manual" | "none" });
   if (body.startUtc && body.endUtc && new Date(body.endUtc).getTime() <= new Date(body.startUtc).getTime()) {
     return c.json({ error: { code: "bad_request", message: "終了日時は開始日時より後にしてください" } }, 400);
   }
@@ -256,9 +258,9 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
     .get();
   if (!booking) return c.json({ error: { code: "not_found", message: "予約が見つかりません" } }, 404);
 
-  // 会議URLを発行し直す・手入力に切り替える場合、古い会議（Zoom/Googleカレンダー）が残らないよう先にキャンセルしておく
+  // 会議URLを発行し直す・手入力/URLなしに切り替える場合、古い会議（Zoom/Googleカレンダー）が残らないよう先にキャンセルしておく
   // （日時のみの変更で会議種別に触れないリクエストでは、既存の会議をそのまま残すため対象外）
-  const isReplacingConference = body.conferenceType === "zoom" || body.conferenceType === "google_meet" || body.conferenceUrl !== undefined;
+  const isReplacingConference = body.conferenceType === "zoom" || body.conferenceType === "google_meet" || body.conferenceType === "none" || body.conferenceUrl !== undefined;
   if (isReplacingConference && (booking.conferenceType === "zoom" || booking.conferenceType === "google_meet")) {
     await cancelAutoConference(
       db, c.env, booking.hostMemberId,
@@ -302,6 +304,8 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
       zoomClientSecret: c.env.ZOOM_CLIENT_SECRET,
     });
     generatedConferenceUrl = conferenceResult.conferenceUrl;
+    // 自動発行が失敗して manual にフォールバックした場合は "unresolved" として記録し、成功時はクリアする
+    const conferenceUrlStatus = conferenceResult.urlStatus === "unresolved" ? "unresolved" : null;
 
     await db.update(schema.bookings)
       .set({
@@ -311,19 +315,23 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
         conferenceUrl: conferenceResult.conferenceUrl,
         conferenceMetaJson: conferenceResult.conferenceMetaJson,
         hostCalendarEventId: conferenceResult.calendarEventId,
+        conferenceUrlStatus,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(schema.bookings.id, bookingId));
   } else {
+    // "none": ホストが明示的に「会議URLなし」を選んだ。空の手入力URLも同じ意味として扱う
+    const isNoneChoice = body.conferenceType === "none" || (body.conferenceUrl !== undefined && !body.conferenceUrl?.trim());
     await db.update(schema.bookings)
       .set({
         ...(body.startUtc !== undefined && { startAtUtc: body.startUtc }),
         ...(body.endUtc !== undefined && { endAtUtc: body.endUtc }),
-        ...(body.conferenceUrl !== undefined && {
-          conferenceUrl: body.conferenceUrl?.trim() || null,
+        ...((body.conferenceType === "none" || body.conferenceUrl !== undefined) && {
+          conferenceUrl: body.conferenceType === "none" ? null : (body.conferenceUrl?.trim() || null),
           conferenceType: "manual" as const,
           conferenceMetaJson: null,
           hostCalendarEventId: null,
+          conferenceUrlStatus: isNoneChoice ? "none" : null,
         }),
         updatedAt: new Date().toISOString(),
       })
@@ -369,6 +377,81 @@ schedulerBookingsRoutes.get("/", async (c) => {
   }));
 
   return c.json({ data: masked });
+});
+
+// ---- POST /api/scheduler/bookings/:id/link-to-member ----
+// ビジター（外部ゲスト）として予約した相手が、実は（あるいはその後）メンバーだった場合に、
+// この予約を「メンバーとの1to1」として扱えるよう one_on_one_sessions を新規作成して紐づける。
+// 承認という操作は廃止済みのため、作成と同時に accepted（確定済み）として登録する。
+schedulerBookingsRoutes.post("/:id/link-to-member", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const bookingId = c.req.param("id");
+  const booking = await db.select().from(schema.bookings).where(eq(schema.bookings.id, bookingId)).get();
+  if (!booking) return c.json({ error: { code: "not_found", message: "予約が見つかりません" } }, 404);
+  if (booking.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
+  if (booking.oneOnOneSessionId) {
+    return c.json({ error: { code: "already_linked", message: "既にメンバーとの1to1として登録されています" } }, 400);
+  }
+  if (booking.status !== "confirmed") {
+    return c.json({ error: { code: "invalid_status", message: "確定済みの予約のみ移動できます" } }, 400);
+  }
+  if (!booking.guestMemberId) {
+    return c.json({ error: { code: "not_a_member", message: "この相手はメンバーとして見つかりませんでした" } }, 400);
+  }
+  const guestMember = await db
+    .select({ id: schema.members.id, status: schema.members.status })
+    .from(schema.members)
+    .where(eq(schema.members.id, booking.guestMemberId))
+    .get();
+  if (!guestMember || guestMember.status !== "active") {
+    return c.json({ error: { code: "not_a_member", message: "この相手は現在メンバーではないため移動できません" } }, 400);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const sessionId = newId();
+  const requestedAtMs = new Date(booking.createdAt).getTime();
+  const requestedAt = Number.isFinite(requestedAtMs) ? Math.floor(requestedAtMs / 1000) : now;
+  const scheduledFor = Math.floor(new Date(booking.startAtUtc).getTime() / 1000);
+
+  await db.insert(schema.oneOnOneSessions).values({
+    id: sessionId,
+    requesterId: booking.hostMemberId,
+    responderId: guestMember.id,
+    status: "accepted",
+    requestedAt,
+    respondedAt: now,
+    scheduledFor,
+    arrangementMethod: "public_url",
+    customNote: booking.guestMessage,
+  });
+
+  await db.update(schema.bookings)
+    .set({ oneOnOneSessionId: sessionId, updatedAt: new Date().toISOString() })
+    .where(eq(schema.bookings.id, bookingId));
+
+  // connections（協働マップ等で使う関係レコード）が無ければ作成し、双方向とも申込・承諾済みとして記録する
+  for (const [fromId, toId] of [
+    [booking.hostMemberId, guestMember.id],
+    [guestMember.id, booking.hostMemberId],
+  ]) {
+    const existing = await db.select({ id: schema.connections.id }).from(schema.connections)
+      .where(and(eq(schema.connections.fromMemberId, fromId), eq(schema.connections.toMemberId, toId))).get();
+    if (existing) {
+      await db.update(schema.connections)
+        .set({ oneOnOneRequestedAt: requestedAt, oneOnOneAcceptedAt: now })
+        .where(eq(schema.connections.id, existing.id));
+    } else {
+      await db.insert(schema.connections).values({
+        id: newId(), fromMemberId: fromId, toMemberId: toId, status: "none",
+        oneOnOneRequestedAt: requestedAt, oneOnOneAcceptedAt: now,
+      });
+    }
+  }
+
+  return c.json({ data: { oneOnOneSessionId: sessionId } });
 });
 
 // ---- GET /api/scheduler/bookings/:id ----
@@ -455,14 +538,22 @@ schedulerBookingsRoutes.delete("/", async (c) => {
   }
 
   const owned = await db
-    .select({ id: schema.bookings.id })
+    .select()
     .from(schema.bookings)
     .where(and(inArray(schema.bookings.id, ids), eq(schema.bookings.hostMemberId, memberId)))
     .all();
-  const ownedIds = owned.map((b) => b.id);
-  if (ownedIds.length === 0) {
+  if (owned.length === 0) {
     return c.json({ data: { deletedCount: 0 } });
   }
+  const ownedIds = owned.map((b) => b.id);
+
+  // まだ確定中の予約をレコードごと削除する場合、Googleカレンダー予定・Zoomミーティングが
+  // 残ったままにならないよう、削除前に自動発行済みの会議を後始末する
+  await Promise.all(
+    owned
+      .filter((b) => b.status === "confirmed")
+      .map((b) => cancelAutoConference(db, c.env, b.hostMemberId, b.conferenceType, b.conferenceMetaJson, b.hostCalendarEventId))
+  );
 
   await db.delete(schema.bookingEvents).where(inArray(schema.bookingEvents.bookingId, ownedIds));
   await db.delete(schema.bookings).where(inArray(schema.bookings.id, ownedIds));
@@ -478,13 +569,19 @@ schedulerBookingsRoutes.delete("/:id", async (c) => {
   if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
 
   const booking = await db
-    .select({ id: schema.bookings.id })
+    .select()
     .from(schema.bookings)
     .where(and(eq(schema.bookings.id, bookingId), eq(schema.bookings.hostMemberId, memberId)))
     .get();
 
   if (!booking) {
     return c.json({ error: { code: "not_found", message: "予約が見つかりません" } }, 404);
+  }
+
+  // まだ確定中の予約をレコードごと削除する場合、Googleカレンダー予定・Zoomミーティングが
+  // 残ったままにならないよう、削除前に自動発行済みの会議を後始末する
+  if (booking.status === "confirmed") {
+    await cancelAutoConference(db, c.env, booking.hostMemberId, booking.conferenceType, booking.conferenceMetaJson, booking.hostCalendarEventId);
   }
 
   await db.delete(schema.bookingEvents).where(eq(schema.bookingEvents.bookingId, bookingId));

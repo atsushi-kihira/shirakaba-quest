@@ -1,5 +1,5 @@
 // PB-02 予約フォーム（ゲスト情報入力）
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, ArrowLeft, Video, User, Mail, MessageSquare, Building2 } from "lucide-react";
@@ -14,6 +14,7 @@ type MemberMeta = {
   availableConferenceTypes: string[];
   respondentName?: string | null;
   respondentEmail?: string | null;
+  guestInviteId?: string | null;
 };
 
 async function fetchPublic<T>(path: string): Promise<T> {
@@ -73,15 +74,36 @@ export function PublicBookingForm() {
     enabled: !!memberSlug,
   });
 
-  // 1to1申込に紐づくリンクの場合、申込に記録されている本人の登録情報を使う（編集不可で表示）
-  const identityLocked = !!oneOnOneId && !!meta?.respondentName;
+  // 1to1申込（メンバー本人）に紐づくリンクの場合、申込に記録されている登録情報を正として固定する
+  // （編集不可で表示）。外部ゲスト招待の場合は、招待時に分かっていた名前・メールを入力済みの状態で
+  // 表示するが、本人がその場で修正できるようにする（通常は修正不要）。
+  // どちらの場合も、名前とメールは別々に判定する（メールが未登録なら相手が自分で入力できるようにする）。
+  const nameLocked = !!oneOnOneId && !!meta?.respondentName;
+  const emailLocked = !!oneOnOneId && !!meta?.respondentEmail;
+  const isTrackedLink = !!oneOnOneId || !!meta?.guestInviteId;
+  const shouldPrefillName = isTrackedLink && !!meta?.respondentName;
+  const shouldPrefillEmail = isTrackedLink && !!meta?.respondentEmail;
 
   useEffect(() => {
-    if (identityLocked) {
-      setGuestName(meta?.respondentName ?? "");
-      setGuestEmail(meta?.respondentEmail ?? "");
+    if (shouldPrefillName) setGuestName(meta?.respondentName ?? "");
+  }, [shouldPrefillName, meta?.respondentName]);
+  useEffect(() => {
+    if (shouldPrefillEmail) setGuestEmail(meta?.respondentEmail ?? "");
+  }, [shouldPrefillEmail, meta?.respondentEmail]);
+
+  // 会議ツールが2種類連携されている場合、何も選ばれていないまま送信すると
+  // 先頭固定の候補が黙って選ばれてしまう。ここで最初の選択肢を画面上も
+  // 明示的に選択済みにしておき、利用者が「選ばずに決まった」と感じないようにする
+  // （既定はZoomを優先する）。
+  const didSetDefaultConferenceType = useRef(false);
+  useEffect(() => {
+    if (didSetDefaultConferenceType.current) return;
+    const availTypes = meta?.availableConferenceTypes ?? [];
+    if (availTypes.length >= 2) {
+      didSetDefaultConferenceType.current = true;
+      setConferenceType(availTypes.includes("zoom") ? "zoom" : availTypes[0]);
     }
-  }, [identityLocked, meta?.respondentName, meta?.respondentEmail]);
+  }, [meta?.availableConferenceTypes]);
 
   const bookMutation = useMutation({
     mutationFn: (opts?: { addAsNew?: boolean; replaceBookingId?: string }) => {
@@ -91,7 +113,7 @@ export function PublicBookingForm() {
         ? "manual"
         : availTypes.length === 1
           ? availTypes[0]
-          : conferenceType ?? availTypes[0];
+          : conferenceType ?? (availTypes.includes("zoom") ? "zoom" : availTypes[0]);
       return bookSlot(memberSlug, {
         startUtc: slotUtc,
         endUtc,
@@ -133,8 +155,8 @@ export function PublicBookingForm() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!identityLocked) {
-      if (!guestName.trim()) { setError("お名前を入力してください"); return; }
+    if (!nameLocked && !guestName.trim()) { setError("お名前を入力してください"); return; }
+    if (!emailLocked) {
       if (!guestEmail.trim()) { setError("メールアドレスを入力してください"); return; }
       const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRe.test(guestEmail)) { setError("メールアドレスの形式が正しくありません"); return; }
@@ -221,10 +243,10 @@ export function PublicBookingForm() {
               onChange={(e) => setGuestName(e.target.value)}
               placeholder="山田 太郎"
               className="w-full px-4 py-3 rounded-xl border text-sm disabled:opacity-70"
-              style={{ borderColor: "var(--color-paper-300)", background: identityLocked ? "var(--color-paper-100)" : "white" }}
+              style={{ borderColor: "var(--color-paper-300)", background: nameLocked ? "var(--color-paper-100)" : "white" }}
               required
-              disabled={identityLocked}
-              readOnly={identityLocked}
+              disabled={nameLocked}
+              readOnly={nameLocked}
             />
           </div>
 
@@ -239,13 +261,13 @@ export function PublicBookingForm() {
               onChange={(e) => setGuestEmail(e.target.value)}
               placeholder="taro@example.com"
               className="w-full px-4 py-3 rounded-xl border text-sm disabled:opacity-70"
-              style={{ borderColor: "var(--color-paper-300)", background: identityLocked ? "var(--color-paper-100)" : "white" }}
+              style={{ borderColor: "var(--color-paper-300)", background: emailLocked ? "var(--color-paper-100)" : "white" }}
               required
-              disabled={identityLocked}
-              readOnly={identityLocked}
+              disabled={emailLocked}
+              readOnly={emailLocked}
             />
             <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
-              {identityLocked
+              {emailLocked
                 ? "1to1の申込に登録されている情報のため、編集できません"
                 : "予約確認メールをこのアドレスに送ります"}
             </p>

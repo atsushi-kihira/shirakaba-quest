@@ -8,42 +8,15 @@
 import { Hono } from "hono";
 import { eq, and, gte, lt } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
-import { newId, generateUrlSafeToken } from "../../services/auth.ts";
 import { listEvents } from "../../services/googleClient.ts";
 import { calculateSlots } from "../../services/slotCalculator.ts";
-import { createConference, getValidGoogleAccessToken, getAvailableConferenceTypes } from "../../services/conferenceService.ts";
-import { sendCancellationMail } from "../../services/schedulerMailer.ts";
-import { MailService } from "../../services/mailer.ts";
-import { deleteCalendarEvent } from "../../services/googleClient.ts";
-import { getFrontendUrl } from "../../services/frontendUrl.ts";
+import { getValidGoogleAccessToken, getAvailableConferenceTypes } from "../../services/conferenceService.ts";
 import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
-import { resolveSettingsByShareToken } from "../../services/schedulerShareToken.ts";
+import { resolvePublicBookingToken } from "../../services/schedulerShareToken.ts";
+import { createBookingForConfirmedSlot, formatBookingDateRange } from "../../services/bookingCreation.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const publicBookingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
-
-function formatBookingDateRange(startUtc: string, endUtc: string, tz = "Asia/Tokyo"): string {
-  const fmt = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: tz,
-    year: "numeric", month: "long", day: "numeric",
-    weekday: "short", hour: "2-digit", minute: "2-digit",
-  });
-  const startStr = fmt.format(new Date(startUtc));
-  const endTime = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: tz, hour: "2-digit", minute: "2-digit",
-  }).format(new Date(endUtc));
-  return `${startStr}〜${endTime}`;
-}
-
-function buildConferenceText(conferenceType: string, conferenceUrl: string | null): string {
-  if (conferenceType === "google_meet" && conferenceUrl) {
-    return `📹 Google Meet: ${conferenceUrl}`;
-  }
-  if (conferenceType === "zoom" && conferenceUrl) {
-    return `📹 Zoom: ${conferenceUrl}`;
-  }
-  return "📹 会議URLは主催者から別途ご連絡します。";
-}
 
 // ---- GET /api/scheduler/public/:memberSlug ----
 publicBookingRoutes.get("/:memberSlug", async (c) => {
@@ -51,7 +24,7 @@ publicBookingRoutes.get("/:memberSlug", async (c) => {
   const { oneOnOneId } = c.req.query();
   const db = createDb(c.env.DB);
 
-  const resolved = await resolveSettingsByShareToken(db, memberSlug);
+  const resolved = await resolvePublicBookingToken(db, memberSlug);
   if (resolved.status === "not_found") {
     return c.json({ error: { code: "not_found", message: "この予約ページは存在しないか、公開されていません" } }, 404);
   }
@@ -120,6 +93,34 @@ publicBookingRoutes.get("/:memberSlug", async (c) => {
     }
   }
 
+  // 外部ゲスト招待（公開予約URL方式）専用の固定URL経由なら、招待時に入力された名前・メールでロックする
+  let guestInviteId: string | null = null;
+  let guestInviteStatus: string | null = null;
+  if (resolved.guestInvite) {
+    const invite = resolved.guestInvite;
+    guestInviteId = invite.id;
+    guestInviteStatus = invite.status;
+    if (invite.status === "pending") {
+      respondentName = invite.guestName || null;
+      respondentEmail = invite.guestEmail || null;
+      if (invite.customTitle) effectiveDisplayTitle = invite.customTitle;
+      if (invite.customDurationMinutes) effectiveDurationMinutes = invite.customDurationMinutes;
+    } else if (invite.status === "selected") {
+      // すでにこの招待から予約済みなら、二重予約を防ぐため確定内容を伝える
+      const booking = await db
+        .select({
+          startAtUtc: schema.bookings.startAtUtc,
+          endAtUtc: schema.bookings.endAtUtc,
+          conferenceType: schema.bookings.conferenceType,
+          conferenceUrl: schema.bookings.conferenceUrl,
+        })
+        .from(schema.bookings)
+        .where(and(eq(schema.bookings.guestInviteId, guestInviteId), eq(schema.bookings.status, "confirmed")))
+        .get();
+      if (booking) existingBooking = booking;
+    }
+  }
+
   return c.json({
     data: {
       memberSlug,
@@ -135,6 +136,8 @@ publicBookingRoutes.get("/:memberSlug", async (c) => {
       existingBooking,
       respondentName,
       respondentEmail,
+      guestInviteId,
+      guestInviteStatus,
     },
   });
 });
@@ -146,7 +149,7 @@ publicBookingRoutes.get("/:memberSlug/slots", async (c) => {
   const timezone = tz ?? "Asia/Tokyo";
   const db = createDb(c.env.DB);
 
-  const resolved = await resolveSettingsByShareToken(db, memberSlug);
+  const resolved = await resolvePublicBookingToken(db, memberSlug);
   if (resolved.status === "not_found") {
     return c.json({ error: { code: "not_found", message: "予約ページが見つかりません" } }, 404);
   }
@@ -166,6 +169,8 @@ publicBookingRoutes.get("/:memberSlug/slots", async (c) => {
     if (session && session.requesterId === settings.memberId && session.customDurationMinutes) {
       effectiveDurationMinutes = session.customDurationMinutes;
     }
+  } else if (resolved.guestInvite?.customDurationMinutes) {
+    effectiveDurationMinutes = resolved.guestInvite.customDurationMinutes;
   }
 
   // 日付範囲のデフォルト: 今から maxAdvanceDays 日後まで、最大 7 日
@@ -344,7 +349,7 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
     return c.json({ error: { code: "bad_request", message: "必須項目が不足しています" } }, 400);
   }
 
-  const resolved = await resolveSettingsByShareToken(db, memberSlug);
+  const resolved = await resolvePublicBookingToken(db, memberSlug);
   if (resolved.status === "not_found") {
     return c.json({ error: { code: "not_found", message: "予約ページが見つかりません" } }, 404);
   }
@@ -381,22 +386,21 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
     return c.json({ error: { code: "not_found", message: "ホストが見つかりません" } }, 404);
   }
 
-  const bookingId = newId();
-  const cancellationToken = generateUrlSafeToken();
-  const rescheduleToken = generateUrlSafeToken();
-  const now = new Date().toISOString();
   const timezone = body.timezone ?? "Asia/Tokyo";
   const requestedType = body.conferenceType ?? "google_meet";
-  const frontendUrl = getFrontendUrl(c.env);
 
   // 1to1申込からの予約なら、申込に記録されている「相手（回答者）」の登録情報を正として使う。
   // メール未ログインでリンクを開いた場合、外部ゲストと同様に名前・メールを手入力させると
   // 入力ミスや別アドレス使用によって本人と紐づかなくなるため、セッションIDから直接本人を特定する
-  // （ホスト=申込者であることは必ず確認し、合致しなければ外部ゲストの入力にフォールバックする）
+  // （ホスト=申込者であることは必ず確認し、合致しなければ外部ゲストの入力にフォールバックする）。
+  // 外部ゲスト招待（guestInviteId）の場合も同様に本人情報をロックするが、招待されたのは
+  // 未登録者であることが前提のため、identifiedGuest.id は null になりうる
+  // （その場合でも下でメール一致のメンバー検索は別途行い、guestMemberId を正しく設定する）。
   let linkedOneOnOneId: string | null = null;
   let linkedOneOnOneWasPending = false;
   let linkedOneOnOneCustomTitle: string | null = null;
-  let identifiedGuest: { id: string; name: string; email: string } | null = null;
+  let linkedGuestInviteId: string | null = null;
+  let identifiedGuest: { id: string | null; name: string; email: string } | null = null;
 
   if (body.oneOnOneSessionId) {
     const session = await db
@@ -441,30 +445,51 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
         }
       }
     }
+  } else if (resolved.guestInvite) {
+    const invite = resolved.guestInvite;
+    if (invite.status !== "pending") {
+      return c.json({
+        error: { code: "already_booked", message: "この招待はすでに日程が確定しているか、無効になっています。" },
+      }, 409);
+    }
+    linkedGuestInviteId = invite.id;
+    linkedOneOnOneCustomTitle = invite.customTitle;
+    // 招待されたのは未登録者である前提だが、メール一致のメンバーが見つかる可能性もあるため、
+    // id は null のままにしておき、下のメール一致検索に委ねる。招待時にメールを案内しなかった
+    // 場合は guestEmail が空文字のことがあり、その場合はゲストが自分で入力した値を優先する
+    identifiedGuest = { id: null, name: invite.guestName, email: invite.guestEmail };
   }
 
-  // 1to1申込に紐づかない場合は、外部ゲストとして名前・メールアドレスの入力を必須とする
-  if (!identifiedGuest) {
-    if (!body.guestName || !body.guestEmail) {
-      return c.json({ error: { code: "bad_request", message: "必須項目が不足しています" } }, 400);
-    }
-    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRe.test(body.guestEmail)) {
-      return c.json({ error: { code: "bad_request", message: "メールアドレスの形式が正しくありません" } }, 400);
-    }
+  // ゲストがメンバーの場合は guestMemberId を設定する。1to1申込経由（identifiedGuest.id が非null）なら
+  // 本人が既に特定済みなのでメール検索は不要。ゲスト招待経由・通常の外部ゲストはメール一致で検索する。
+  // 1to1申込経由（メンバー本人）は登録情報を正として固定するが、外部ゲスト招待は招待時に入力
+  // された名前・メールを「入力済み表示」として見せているだけなので、本人がその場で修正した場合は
+  // その内容を優先する（未入力だった場合のフォールバックも兼ねる）。
+  const rawGuestName = linkedGuestInviteId
+    ? (body.guestName || identifiedGuest?.name || "")
+    : (identifiedGuest?.name || body.guestName || "");
+  const rawGuestEmail = linkedGuestInviteId
+    ? (body.guestEmail || identifiedGuest?.email || "")
+    : (identifiedGuest?.email || body.guestEmail || "");
+  const guestName = rawGuestName.trim();
+  const guestEmail = rawGuestEmail.trim();
+
+  if (!guestName || !guestEmail) {
+    return c.json({ error: { code: "bad_request", message: "必須項目が不足しています" } }, 400);
+  }
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRe.test(guestEmail)) {
+    return c.json({ error: { code: "bad_request", message: "メールアドレスの形式が正しくありません" } }, 400);
   }
 
-  // ゲストがメンバーの場合は guestMemberId を設定（1to1申込に紐づく場合は上で特定済みの本人情報を優先する）
-  const guestMemberRecord = identifiedGuest
+  const guestMemberRecord = identifiedGuest?.id
     ? null
     : await db
         .select({ id: schema.members.id, name: schema.members.name })
         .from(schema.members)
-        .where(eq(schema.members.email, body.guestEmail!))
+        .where(eq(schema.members.email, guestEmail))
         .get();
 
-  const guestName = identifiedGuest?.name ?? body.guestName!;
-  const guestEmail = identifiedGuest?.email ?? body.guestEmail!;
   const guestMemberId = identifiedGuest?.id ?? guestMemberRecord?.id ?? null;
 
   // 1to1申込に紐づかない、汎用の公開予約URL（マイページの「あなたの予約URL」等）から
@@ -515,57 +540,33 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
     }
   }
 
-  // 1to1申込に紐づく予約の場合、会議名が分かりやすいよう「申込者さんと相手さんの1to1」という形式にする
+  // 1to1申込・ゲスト招待に紐づく予約の場合、会議名が分かりやすいよう「申込者さんと相手さんの1to1」という形式にする
   // （ホスト側の予約ページ表示名や、ゲストがフォームに入力した名前だと「自分との1to1」のように見えてしまうため）
-  const conferenceSummary = linkedOneOnOneId
+  const conferenceSummary = (linkedOneOnOneId || linkedGuestInviteId)
     ? (linkedOneOnOneCustomTitle || `${member.name}さんと${guestName}さんの1to1`)
     : `${settings.displayTitle}（${guestName}）`;
+  const bookingDisplayTitle = linkedOneOnOneCustomTitle || settings.displayTitle;
 
-  // 会議 URL 発行 + Calendar 登録
-  const conferenceResult = await createConference({
+  const bookingResult = await createBookingForConfirmedSlot({
     db,
-    tokenKey: c.env.SCHEDULER_TOKEN_KEY,
+    env: c.env,
     hostMemberId: settings.memberId,
-    bookingId,
-    requestedType,
-    summary: conferenceSummary,
-    description: [
-      `ゲスト: ${guestName} <${guestEmail}>`,
-      body.guestMessage ? `メッセージ: ${body.guestMessage}` : "",
-    ].filter(Boolean).join("\n"),
-    startAtUtc: body.startUtc,
-    endAtUtc: body.endUtc,
+    hostName: member.name,
     hostEmail: member.email,
-    guestEmail,
-    clientId: c.env.GOOGLE_OAUTH_CLIENT_ID,
-    clientSecret: c.env.GOOGLE_OAUTH_CLIENT_SECRET,
-    zoomClientId: c.env.ZOOM_CLIENT_ID,
-    zoomClientSecret: c.env.ZOOM_CLIENT_SECRET,
-  });
-
-  await db.insert(schema.bookings).values({
-    id: bookingId,
-    hostMemberId: settings.memberId,
     guestMemberId,
     guestName,
     guestEmail,
-    guestMessage: body.guestMessage ?? null,
-    guestCompany: body.guestCompany?.trim() || null,
+    guestMessage: body.guestMessage,
+    guestCompany: body.guestCompany,
     startAtUtc: body.startUtc,
     endAtUtc: body.endUtc,
     timezone,
-    status: "confirmed",
-    cancellationReason: null,
-    cancellationToken,
-    rescheduleToken,
-    hostCalendarEventId: conferenceResult.calendarEventId,
-    conferenceType: conferenceResult.conferenceType,
-    conferenceUrl: conferenceResult.conferenceUrl,
-    conferenceMetaJson: conferenceResult.conferenceMetaJson,
+    requestedConferenceType: requestedType,
+    conferenceSummary,
+    displayTitle: bookingDisplayTitle,
     oneOnOneSessionId: linkedOneOnOneId,
-    source: "public",
-    createdAt: now,
-    updatedAt: now,
+    guestInviteId: linkedGuestInviteId,
+    source: linkedGuestInviteId ? "guest_invite" : "public",
   });
 
   // 1to1申込に、確定した日時を反映する
@@ -582,56 +583,20 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
       .where(eq(schema.oneOnOneSessions.id, linkedOneOnOneId));
   }
 
-  // 監査ログ
-  await db.insert(schema.bookingEvents).values({
-    id: newId(),
-    bookingId,
-    eventType: "created",
-    actorKind: "guest",
-    actorId: null,
-    payloadJson: JSON.stringify({ guestEmail }),
-    occurredAt: now,
-  });
-
-  // メール送信用変数を準備
-  const appTitleBook = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
-  const dateRange = formatBookingDateRange(body.startUtc, body.endUtc, timezone);
-  const conferenceInfo = buildConferenceText(conferenceResult.conferenceType, conferenceResult.conferenceUrl);
-  const cancellationUrl = `${frontendUrl}/book/confirmation/${cancellationToken}`;
-  const bookingUrl = `${frontendUrl}/scheduler/bookings/${bookingId}`;
-  const guestMessageBlock = body.guestMessage ? `💬 メッセージ：${body.guestMessage}` : "";
-  const bookingDisplayTitle = linkedOneOnOneCustomTitle || settings.displayTitle;
-
-  const mailerBook = new MailService(db, c.env);
-  await Promise.allSettled([
-    mailerBook.send("scheduler_booking_guest", guestEmail, {
-      appTitle: appTitleBook,
-      guestName,
-      hostName: member.name,
-      displayTitle: bookingDisplayTitle,
-      dateRange,
-      conferenceInfo,
-      cancellationUrl,
-    }),
-    ...(member.email ? [mailerBook.send("scheduler_booking_host", member.email, {
-      appTitle: appTitleBook,
-      hostName: member.name,
-      guestName,
-      guestEmail,
-      displayTitle: bookingDisplayTitle,
-      dateRange,
-      conferenceInfo,
-      guestMessageBlock,
-      bookingUrl,
-    })] : []),
-  ]);
+  // ゲスト招待に、確定した予約を反映する
+  if (linkedGuestInviteId) {
+    await db
+      .update(schema.oneOnOneGuestInvites)
+      .set({ status: "selected", resultingBookingId: bookingResult.bookingId })
+      .where(eq(schema.oneOnOneGuestInvites.id, linkedGuestInviteId));
+  }
 
   return c.json({
     data: {
-      bookingId,
-      cancellationToken,
-      conferenceType: conferenceResult.conferenceType,
-      conferenceUrl: conferenceResult.conferenceUrl,
+      bookingId: bookingResult.bookingId,
+      cancellationToken: bookingResult.cancellationToken,
+      conferenceType: bookingResult.conferenceType,
+      conferenceUrl: bookingResult.conferenceUrl,
       startAtUtc: body.startUtc,
       endAtUtc: body.endUtc,
     },
@@ -705,11 +670,9 @@ publicBookingRoutes.post("/booking/:token/cancel", async (c) => {
     return c.json({ error: { code: "already_cancelled", message: "この予約は既にキャンセル済みです" } }, 409);
   }
 
-  const now = new Date().toISOString();
-  await db
-    .update(schema.bookings)
-    .set({ status: "cancelled", cancellationReason: body.reason ?? null, updatedAt: now })
-    .where(eq(schema.bookings.id, booking.id));
+  // 状態更新・自動発行済み会議（Googleカレンダー予定 / Zoomミーティング）の後始末・
+  // キャンセル通知メールをまとめて行う共通処理を使う（ホスト側キャンセルと同じロジック）
+  await cancelConfirmedBooking(db, c.env, booking, { reason: body.reason ?? null, actorKind: "guest", actorId: null });
 
   // 1to1申込に紐づいていた予約なら、確定日時の表示をクリアする
   if (booking.oneOnOneSessionId) {
@@ -718,69 +681,6 @@ publicBookingRoutes.post("/booking/:token/cancel", async (c) => {
       .set({ scheduledFor: null })
       .where(eq(schema.oneOnOneSessions.id, booking.oneOnOneSessionId));
   }
-
-  // Google Calendar から削除
-  if (booking.hostCalendarEventId) {
-    const googleCred = await getValidGoogleAccessToken(
-      db, booking.hostMemberId,
-      c.env.SCHEDULER_TOKEN_KEY,
-      c.env.GOOGLE_OAUTH_CLIENT_ID,
-      c.env.GOOGLE_OAUTH_CLIENT_SECRET
-    );
-    if (googleCred.status === "ok") {
-      await deleteCalendarEvent(googleCred.accessToken, googleCred.calendarId, booking.hostCalendarEventId).catch(() => {});
-    }
-  }
-
-  await db.insert(schema.bookingEvents).values({
-    id: newId(),
-    bookingId: booking.id,
-    eventType: "cancelled",
-    actorKind: "guest",
-    actorId: null,
-    payloadJson: JSON.stringify({ reason: body.reason }),
-    occurredAt: now,
-  });
-
-  const host = await db
-    .select({ name: schema.members.name, email: schema.members.email })
-    .from(schema.members)
-    .where(eq(schema.members.id, booking.hostMemberId))
-    .get();
-
-  const settings = await db
-    .select({ displayTitle: schema.memberSchedulingSettings.displayTitle })
-    .from(schema.memberSchedulingSettings)
-    .where(eq(schema.memberSchedulingSettings.memberId, booking.hostMemberId))
-    .get();
-
-  const isDev = c.env.ENVIRONMENT === "development";
-  const displayTitle = settings?.displayTitle ?? "1on1 ミーティング";
-
-  await Promise.allSettled([
-    sendCancellationMail({
-      to: booking.guestEmail,
-      recipientName: booking.guestName,
-      otherPartyName: host?.name ?? "",
-      displayTitle,
-      startAtUtc: booking.startAtUtc,
-      cancellationReason: body.reason ?? null,
-      apiKey: c.env.SENDGRID_API_KEY,
-      fromEmail: c.env.SENDGRID_FROM_EMAIL,
-      isDev,
-    }),
-    host ? sendCancellationMail({
-      to: host.email,
-      recipientName: host.name,
-      otherPartyName: booking.guestName,
-      displayTitle,
-      startAtUtc: booking.startAtUtc,
-      cancellationReason: body.reason ?? null,
-      apiKey: c.env.SENDGRID_API_KEY,
-      fromEmail: c.env.SENDGRID_FROM_EMAIL,
-      isDev,
-    }) : Promise.resolve(),
-  ]);
 
   return c.json({ data: { cancelled: true } });
 });

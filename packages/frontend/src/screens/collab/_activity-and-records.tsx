@@ -1,11 +1,12 @@
 // =============================================================
 // 活動と記録（協働の投稿・シェアストーリー）
 // =============================================================
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Heart, Pencil, Plus, Search, Send, Star, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useCollabAlerts } from "@/hooks/use-collab-alerts";
+import { useAuthStore } from "@/stores/auth-store";
 
 type PostMember = { id: string; name: string; emoji: string; bgColor: string };
 type Comment = {
@@ -19,6 +20,11 @@ type Comment = {
   likedByMe: boolean;
   mine: boolean;
   canDelete: boolean;
+};
+type PostActionItem = {
+  id: string; task: string; assigneeMemberId: string | null;
+  assignee: { id: string; name: string; emoji: string } | null;
+  dueDate: string | null; visibility: "team" | "chapter" | "private"; completed: boolean;
 };
 type Post = {
   id: string;
@@ -36,12 +42,14 @@ type Post = {
   reactionCounts: Record<string, number>;
   myReactions: string[];
   comments: Comment[];
+  actionItems: PostActionItem[];
   mine: boolean;
   canEdit: boolean;
   canDelete: boolean;
 };
 
-type GraphTeamLite = { id: string; name: string; type: "loose" | "power" };
+type TeamMemberLite = { id: string; name: string; emoji: string; bgColor: string; status: "active" | "pending" | "declined" };
+export type GraphTeamLite = { id: string; name: string; type: "loose" | "power"; members: TeamMemberLite[] };
 type GraphNodeLite = { id: string; name: string; emoji: string; bgColor: string; isMe: boolean };
 type GraphResponse = { data: { nodes: GraphNodeLite[]; teams: GraphTeamLite[] } };
 
@@ -198,6 +206,13 @@ function nowForDateTimeLocal(): string {
 /** <input type="datetime-local"> の値 → unix秒 */
 function dateTimeLocalToUnix(value: string): number {
   return Math.floor(new Date(value).getTime() / 1000);
+}
+
+/** unix秒 → <input type="datetime-local"> 用の "YYYY-MM-DDTHH:mm" 文字列にする */
+function unixToDateTimeLocal(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function useCollabGraphLite() {
@@ -398,7 +413,7 @@ function ActivityTimeline() {
         <NewPostModal others={others} teams={teams} onClose={() => setShowNewPost(false)} />
       )}
       {editingPost && (
-        <EditPostModal post={editingPost} onClose={() => setEditingPost(null)} />
+        <EditPostModal post={editingPost} teams={teams} onClose={() => setEditingPost(null)} />
       )}
     </div>
   );
@@ -432,10 +447,12 @@ function PostCard({ post, tags, activeTag, onTagClick, onReact, onDelete, onProm
           <span className={`w-7 h-7 rounded-full flex items-center justify-center text-sm shrink-0 ${author.bgColor}`}>{author.emoji}</span>
         )}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate flex items-center gap-1.5" style={{ color: "var(--color-ink-700)" }}>
-            {post.members.filter((m) => m.id !== post.authorId).length > 0
-              ? `${author?.name ?? "だれか"} × ${post.members.filter((m) => m.id !== post.authorId).map((m) => m.name).join("・")}`
-              : author?.name ?? "だれか"}
+          <p className="text-sm font-medium flex items-center gap-1.5" style={{ color: "var(--color-ink-700)" }}>
+            <span className="truncate">
+              {post.members.filter((m) => m.id !== post.authorId).length > 0
+                ? `${author?.name ?? "だれか"} × ${post.members.filter((m) => m.id !== post.authorId).map((m) => m.name).join("・")}`
+                : author?.name ?? "だれか"}
+            </span>
             {post.mine && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style={{ background: "var(--color-ink-700)", color: "white" }}>
                 自分
@@ -464,6 +481,25 @@ function PostCard({ post, tags, activeTag, onTagClick, onReact, onDelete, onProm
       <p className="text-sm mb-2" style={{ color: "var(--color-ink-800)" }}>
         {post.body ?? "（内容は非公開です）"}
       </p>
+
+      {post.actionItems.length > 0 && (
+        <div className="rounded-xl p-2.5 mb-2 space-y-1" style={{ background: "var(--color-paper-100)" }}>
+          <p className="text-[11px] font-semibold" style={{ color: "var(--color-ink-600)" }}>📋 次回までのアクション</p>
+          {post.actionItems.map((item) => (
+            <p key={item.id} className="text-xs" style={{
+              color: item.completed ? "var(--color-ink-400)" : "var(--color-ink-700)",
+              textDecoration: item.completed ? "line-through" : "none",
+            }}>
+              {item.completed ? "✅" : "☐"} {item.task}
+              {(item.assignee || item.dueDate) && (
+                <span style={{ color: "var(--color-ink-400)", textDecoration: "none" }}>
+                  {" "}（{item.assignee ? `${item.assignee.emoji}${item.assignee.name}` : "担当未定"}{item.dueDate ? ` ・〜${item.dueDate}` : ""}）
+                </span>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
 
       {tags.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
@@ -630,27 +666,152 @@ function ReactionButton({ label, emoji, active, count, onClick }: { label: strin
   );
 }
 
-function NewPostModal({ others, teams, onClose }: { others: GraphNodeLite[]; teams: GraphTeamLite[]; onClose: () => void }) {
+export type ActionVisibility = "chapter" | "team" | "private";
+export const ACTION_VISIBILITY_LABEL: Record<ActionVisibility, string> = { chapter: "📢 チャプター公開", team: "🏠 チーム内のみ", private: "🔒 非公開" };
+type ActionItemRow = { id?: string; task: string; assigneeMemberId: string; dueDate: string; completed: boolean; visibility: ActionVisibility };
+function emptyActionRow(): ActionItemRow {
+  return { task: "", assigneeMemberId: "", dueDate: "", completed: false, visibility: "team" };
+}
+type ExistingActionItem = { id: string; task: string; assigneeMemberId: string | null; dueDate: string | null; completed: boolean; visibility: ActionVisibility };
+
+// チームの「次回までのアクション」をExcel的に複数行まとめて編集する（活動投稿の新規作成・編集の両方で使う）
+function ActionItemsEditor({ items, onChange, teamMembers }: {
+  items: ActionItemRow[];
+  onChange: (rows: ActionItemRow[]) => void;
+  teamMembers: TeamMemberLite[];
+}) {
+  function addRow() {
+    onChange([...items, emptyActionRow()]);
+  }
+  function removeRow(i: number) {
+    onChange(items.filter((_, idx) => idx !== i));
+  }
+  function updateRow(i: number, patch: Partial<ActionItemRow>) {
+    onChange(items.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+
+  return (
+    <div className="rounded-2xl p-3.5 mb-3" style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
+      <p className="text-xs font-semibold mb-2.5" style={{ color: "var(--color-ink-700)" }}>📋 次回までのアクション（任意）</p>
+      <div className="space-y-2.5">
+        {items.map((row, i) => (
+          <div key={i} className="rounded-xl p-2 space-y-1.5" style={{ background: "#fff", border: "1px solid var(--color-paper-300)" }}>
+            <div className="flex items-center gap-1.5">
+              <input type="checkbox" checked={row.completed} onChange={(e) => updateRow(i, { completed: e.target.checked })} className="shrink-0" />
+              <input type="text" value={row.task} onChange={(e) => updateRow(i, { task: e.target.value })}
+                placeholder="やること"
+                className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-xs outline-none border"
+                style={{
+                  borderColor: "var(--color-paper-300)",
+                  color: row.completed ? "var(--color-ink-400)" : "var(--color-ink-900)",
+                  textDecoration: row.completed ? "line-through" : "none",
+                }} />
+              <button type="button" onClick={() => removeRow(i)}
+                className="p-1 rounded-lg shrink-0" style={{ color: "var(--color-ink-400)" }} aria-label="この行を削除">
+                <Trash2 size={13} />
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 pl-[22px]">
+              <select value={row.assigneeMemberId} onChange={(e) => updateRow(i, { assigneeMemberId: e.target.value })}
+                className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-xs outline-none border"
+                style={{ borderColor: "var(--color-paper-300)", color: "var(--color-ink-700)" }}>
+                <option value="">👤 担当者</option>
+                {teamMembers.map((m) => <option key={m.id} value={m.id}>{m.emoji} {m.name}</option>)}
+              </select>
+              <input type="date" value={row.dueDate} onChange={(e) => updateRow(i, { dueDate: e.target.value })}
+                className="w-[132px] shrink-0 px-2 py-1.5 rounded-lg text-xs outline-none border"
+                style={{ borderColor: "var(--color-paper-300)", color: "var(--color-ink-700)" }} />
+            </div>
+            <div className="pl-[22px]">
+              <select value={row.visibility} onChange={(e) => updateRow(i, { visibility: e.target.value as ActionVisibility })}
+                className="w-full px-2 py-1.5 rounded-lg text-xs outline-none border"
+                style={{ borderColor: "var(--color-paper-300)", color: "var(--color-ink-700)" }}>
+                {(Object.keys(ACTION_VISIBILITY_LABEL) as ActionVisibility[]).map((v) => (
+                  <option key={v} value={v}>{ACTION_VISIBILITY_LABEL[v]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button type="button" onClick={addRow}
+        className="mt-2.5 flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full"
+        style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+        <Plus size={12} />
+        行を追加
+      </button>
+    </div>
+  );
+}
+
+export function NewPostModal({
+  others, teams, onClose, lockedTeamId, initialBody,
+}: {
+  others: GraphNodeLite[];
+  teams: GraphTeamLite[];
+  onClose: () => void;
+  // ミーティング完了を契機に開く場合、チームが既に分かっているので固定表示にし、
+  // 「なかまと」タブへの切り替えやチーム選択自体をさせない
+  lockedTeamId?: string;
+  initialBody?: string;
+}) {
   const qc = useQueryClient();
-  const [mode, setMode] = useState<"link" | "team">("link");
+  const meId = useAuthStore((s) => s.user?.id);
+  const myTeams = teams.filter((t) => t.members.some((m) => m.id === meId && m.status === "active"));
+  const [mode, setMode] = useState<"link" | "team">(lockedTeamId ? "team" : "link");
   const [partnerId, setPartnerId] = useState("");
-  const [teamId, setTeamId] = useState("");
-  const [body, setBody] = useState("");
+  const [teamId, setTeamId] = useState(lockedTeamId ?? "");
+  const [body, setBody] = useState(initialBody ?? "");
   const [visibility, setVisibility] = useState<"chapter" | "private" | "team">("chapter");
   const [occurredAtLocal, setOccurredAtLocal] = useState(() => nowForDateTimeLocal());
+  const [actionItems, setActionItems] = useState<ActionItemRow[]>([emptyActionRow()]);
   const [error, setError] = useState("");
+
+  const activeTeam = teams.find((t) => t.id === teamId);
+  const teamMembers = activeTeam?.members.filter((m) => m.status === "active") ?? [];
+
+  // このチームの「次回までのアクション」のうち未完了分を取得し、初回のみ引き継いで事前入力する
+  const { data: existingActionItemsData } = useQuery<{ data: ExistingActionItem[] }>({
+    queryKey: ["collab", "team-action-items", teamId],
+    queryFn: () => api.get(`/collab/teams/${teamId}/action-items`),
+    enabled: mode === "team" && !!teamId,
+  });
+  const loadedActionItemsForTeam = useRef<string | null>(null);
+  useEffect(() => {
+    if (mode !== "team" || !teamId || !existingActionItemsData) return;
+    if (loadedActionItemsForTeam.current === teamId) return;
+    loadedActionItemsForTeam.current = teamId;
+    const incomplete = existingActionItemsData.data.filter((i) => !i.completed);
+    setActionItems([
+      ...incomplete.map((i) => ({ id: i.id, task: i.task, assigneeMemberId: i.assigneeMemberId ?? "", dueDate: i.dueDate ?? "", completed: false, visibility: i.visibility })),
+      emptyActionRow(),
+    ]);
+  }, [mode, teamId, existingActionItemsData]);
 
   const create = useMutation({
     mutationFn: () => api.post("/collab/posts", {
       contextType: mode,
       partnerId: mode === "link" ? partnerId : undefined,
       teamId: mode === "team" ? teamId : undefined,
+      // チーム投稿は、投稿者だけでなくチームメンバー全員を掲載する
+      memberIds: mode === "team" ? teamMembers.map((m) => m.id) : undefined,
       body: body.trim() || undefined,
       visibility,
       occurredAt: dateTimeLocalToUnix(occurredAtLocal),
+      actionItems: mode === "team"
+        ? actionItems.filter((r) => r.task.trim()).map((r) => ({
+            id: r.id,
+            task: r.task.trim(),
+            assigneeMemberId: r.assigneeMemberId || undefined,
+            dueDate: r.dueDate || undefined,
+            completed: r.completed,
+            visibility: r.visibility,
+          }))
+        : undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collab", "feed"] });
+      if (teamId) qc.invalidateQueries({ queryKey: ["collab", "team-action-items", teamId] });
       onClose();
     },
     onError: (e: Error) => setError(e.message || "投稿に失敗しました"),
@@ -671,20 +832,27 @@ function NewPostModal({ others, teams, onClose }: { others: GraphNodeLite[]; tea
           <button onClick={onClose}><X size={18} style={{ color: "var(--color-ink-400)" }} /></button>
         </div>
 
-        <div className="flex gap-2 mb-3">
-          <button onClick={() => setMode("link")}
-            className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
-            style={{ background: mode === "link" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "link" ? "white" : "var(--color-ink-600)" }}>
-            なかまと
-          </button>
-          <button onClick={() => setMode("team")}
-            className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
-            style={{ background: mode === "team" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "team" ? "white" : "var(--color-ink-600)" }}>
-            チームで
-          </button>
-        </div>
+        {!lockedTeamId && (
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => setMode("link")}
+              className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
+              style={{ background: mode === "link" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "link" ? "white" : "var(--color-ink-600)" }}>
+              なかまと
+            </button>
+            <button onClick={() => setMode("team")}
+              className="flex-1 py-2 rounded-2xl text-sm font-medium transition"
+              style={{ background: mode === "team" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "team" ? "white" : "var(--color-ink-600)" }}>
+              チームで
+            </button>
+          </div>
+        )}
 
-        {mode === "link" ? (
+        {lockedTeamId ? (
+          <div className="w-full px-3 py-2 rounded-xl border text-sm mb-3 flex items-center gap-1.5"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
+            {activeTeam ? (activeTeam.type === "power" ? "⚡" : "🌿") : "🏠"} {activeTeam?.name ?? "チーム"}
+          </div>
+        ) : mode === "link" ? (
           <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
             <option value="">相手を選択...</option>
@@ -694,17 +862,21 @@ function NewPostModal({ others, teams, onClose }: { others: GraphNodeLite[]; tea
           <select value={teamId} onChange={(e) => setTeamId(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
             <option value="">チームを選択...</option>
-            {teams.map((t) => <option key={t.id} value={t.id}>{t.type === "power" ? "⚡" : "🌿"} {t.name}</option>)}
+            {myTeams.map((t) => <option key={t.id} value={t.id}>{t.type === "power" ? "⚡" : "🌿"} {t.name}</option>)}
           </select>
         )}
 
         <textarea value={body} onChange={(e) => setBody(e.target.value)}
           placeholder="どんな活動をしましたか？（任意）"
-          className="w-full px-3 py-2 rounded-xl border text-sm resize-none mb-1" rows={3}
+          className="w-full px-3 py-2 rounded-xl border text-sm resize-none mb-1" rows={6}
           style={{ borderColor: "var(--color-paper-300)" }} />
         <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
           💡 本文に「#タグ名」と書くと、あとでそのタグから投稿を探せるようになります
         </p>
+
+        {mode === "team" && teamId && (
+          <ActionItemsEditor items={actionItems} onChange={setActionItems} teamMembers={teamMembers} />
+        )}
 
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>活動した日時</label>
         <input type="datetime-local" value={occurredAtLocal} onChange={(e) => setOccurredAtLocal(e.target.value)}
@@ -729,18 +901,43 @@ function NewPostModal({ others, teams, onClose }: { others: GraphNodeLite[]; tea
   );
 }
 
-function EditPostModal({ post, onClose }: { post: Post; onClose: () => void }) {
+function EditPostModal({ post, teams, onClose }: { post: Post; teams: GraphTeamLite[]; onClose: () => void }) {
   const qc = useQueryClient();
   const [body, setBody] = useState(post.body ?? "");
   const [visibility, setVisibility] = useState<"chapter" | "private" | "team">(
     post.visibility === "team" ? "team" : post.visibility === "private" ? "private" : "chapter"
   );
+  const [actionItems, setActionItems] = useState<ActionItemRow[]>(
+    post.actionItems.map((i) => ({
+      id: i.id, task: i.task, assigneeMemberId: i.assigneeMemberId ?? "", dueDate: i.dueDate ?? "",
+      completed: i.completed, visibility: i.visibility,
+    }))
+  );
+  const [occurredAtLocal, setOccurredAtLocal] = useState(() => unixToDateTimeLocal(post.createdAt));
   const [error, setError] = useState("");
 
+  const activeTeam = teams.find((t) => t.id === post.teamId);
+  const teamMembers = activeTeam?.members.filter((m) => m.status === "active") ?? [];
+
   const update = useMutation({
-    mutationFn: () => api.patch(`/collab/posts/${post.id}`, { body: body.trim() || undefined, visibility }),
+    mutationFn: () => api.patch(`/collab/posts/${post.id}`, {
+      body: body.trim() || undefined,
+      visibility,
+      occurredAt: dateTimeLocalToUnix(occurredAtLocal),
+      actionItems: post.contextType === "team"
+        ? actionItems.filter((r) => r.task.trim()).map((r) => ({
+            id: r.id,
+            task: r.task.trim(),
+            assigneeMemberId: r.assigneeMemberId || undefined,
+            dueDate: r.dueDate || undefined,
+            completed: r.completed,
+            visibility: r.visibility,
+          }))
+        : undefined,
+    }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collab", "feed"] });
+      if (post.teamId) qc.invalidateQueries({ queryKey: ["collab", "team-action-items", post.teamId] });
       onClose();
     },
     onError: (e: Error) => setError(e.message || "更新に失敗しました"),
@@ -756,11 +953,19 @@ function EditPostModal({ post, onClose }: { post: Post; onClose: () => void }) {
 
         <textarea value={body} onChange={(e) => setBody(e.target.value)}
           placeholder="どんな活動をしましたか？（任意）"
-          className="w-full px-3 py-2 rounded-xl border text-sm resize-none mb-1" rows={3}
+          className="w-full px-3 py-2 rounded-xl border text-sm resize-none mb-1" rows={6}
           style={{ borderColor: "var(--color-paper-300)" }} />
         <p className="text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
           💡 本文に「#タグ名」と書くと、あとでそのタグから投稿を探せるようになります
         </p>
+
+        {post.contextType === "team" && (
+          <ActionItemsEditor items={actionItems} onChange={setActionItems} teamMembers={teamMembers} />
+        )}
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>活動した日時</label>
+        <input type="datetime-local" value={occurredAtLocal} onChange={(e) => setOccurredAtLocal(e.target.value)}
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
 
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>発信範囲</label>
         <select value={visibility} onChange={(e) => setVisibility(e.target.value as typeof visibility)}

@@ -5,8 +5,9 @@
 // DELETE /api/admin/meetings/:id      — 削除
 // =============================================================
 import { Hono } from "hono";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
+import { cancelAutoConference, deleteHostCalendarEvent } from "../../services/conferenceService.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminMeetingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -83,6 +84,19 @@ adminMeetingRoutes.patch("/:id/hold", async (c) => {
     .set({ status: "cancelled", updatedAt: now })
     .where(eq(schema.meetings.id, id));
 
+  // Googleカレンダー予定・Zoomミーティングが残ったままにならないよう後始末する
+  if (meeting.hostMemberId) {
+    await cancelAutoConference(db, c.env, meeting.hostMemberId, meeting.conferenceType, meeting.conferenceMetaJson, meeting.calendarEventId);
+    const blockedCandidates = await db
+      .select({ calendarEventId: schema.meetingDateCandidates.calendarEventId })
+      .from(schema.meetingDateCandidates)
+      .where(and(eq(schema.meetingDateCandidates.meetingId, id), isNotNull(schema.meetingDateCandidates.calendarEventId)))
+      .all();
+    await Promise.all(
+      blockedCandidates.map((cd) => deleteHostCalendarEvent(db, c.env, meeting.hostMemberId!, cd.calendarEventId!))
+    );
+  }
+
   return c.json({ ok: true });
 });
 
@@ -94,6 +108,20 @@ adminMeetingRoutes.delete("/:id", async (c) => {
   const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
   if (!meeting) {
     return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  }
+
+  // 関連データを削除する前に、Googleカレンダー予定・Zoomミーティングが残ったままに
+  // ならないよう後始末する（削除後は calendarEventId を辿れなくなるため必ず先に行う）
+  if (meeting.hostMemberId) {
+    await cancelAutoConference(db, c.env, meeting.hostMemberId, meeting.conferenceType, meeting.conferenceMetaJson, meeting.calendarEventId);
+    const blockedCandidates = await db
+      .select({ calendarEventId: schema.meetingDateCandidates.calendarEventId })
+      .from(schema.meetingDateCandidates)
+      .where(and(eq(schema.meetingDateCandidates.meetingId, id), isNotNull(schema.meetingDateCandidates.calendarEventId)))
+      .all();
+    await Promise.all(
+      blockedCandidates.map((cd) => deleteHostCalendarEvent(db, c.env, meeting.hostMemberId!, cd.calendarEventId!))
+    );
   }
 
   // 関連データを削除

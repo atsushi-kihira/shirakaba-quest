@@ -9,6 +9,8 @@ import { memberRoutes } from "./routes/members.ts";
 import { rankingRoutes } from "./routes/ranking.ts";
 import { oneOnOneRoutes } from "./routes/oneonone.ts";
 import { oneOnOnePublicRoutes } from "./routes/oneonone-public.ts";
+import { oneOnOneGuestInviteRoutes } from "./routes/oneonone-guest-invites.ts";
+import { oneOnOneGuestInvitePublicRoutes } from "./routes/oneonone-guest-invites-public.ts";
 import { questRoutes } from "./routes/quests.ts";
 import { badgeRoutes } from "./routes/badges.ts";
 import { seasonRoutes } from "./routes/seasons.ts";
@@ -65,6 +67,8 @@ app.route("/api/register", registerRoutes);
 app.route("/api/members", memberRoutes);
 app.route("/api/ranking", rankingRoutes);
 app.route("/api/oneonone/public", oneOnOnePublicRoutes); // 認証なし（メール経由の承諾/辞退用）
+app.route("/api/oneonone/guest", oneOnOneGuestInvitePublicRoutes); // 認証なし（外部ゲスト招待リンク用）
+app.route("/api/oneonone/guest-invites", oneOnOneGuestInviteRoutes);
 app.route("/api/oneonone", oneOnOneRoutes);
 app.route("/api/quests", questRoutes);
 app.route("/api", badgeRoutes);

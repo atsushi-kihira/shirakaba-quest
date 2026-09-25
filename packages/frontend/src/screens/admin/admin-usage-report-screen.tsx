@@ -181,7 +181,7 @@ export function AdminUsageReportScreen() {
             </div>
             {mostActive && (
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-400)" }}>
-                カッコ内は「{mostActive.name}」を除いた合計です（管理者操作やデータ整備を含み件数が突出しやすいため）。
+                カッコ内は「{mostActive.name}」を除いた合計です（最も活発に利用しているメンバーの件数だけで全体の傾向が見えにくくならないよう、参考として併記しています）。
               </p>
             )}
           </div>

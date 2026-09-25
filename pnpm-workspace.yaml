@@ -2,6 +2,7 @@ packages:
   - 'packages/*'
   - 'shared'
 allowBuilds:
+  core-js: true
   esbuild: true
   sharp: true
   workerd: true

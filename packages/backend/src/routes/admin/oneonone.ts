@@ -9,6 +9,7 @@
 import { Hono } from "hono";
 import { eq, and, or, gte, lte, inArray } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
+import { cancelAutoConference } from "../../services/conferenceService.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminOneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -21,9 +22,20 @@ function chunkIds(ids: string[]): string[][] {
   return chunks;
 }
 
-// 指定した1to1セッション群を、紐づく予約・ポイント履歴もあわせて削除する
-async function deleteSessionsCascade(db: ReturnType<typeof createDb>, sessionIds: string[]): Promise<void> {
+// 指定した1to1セッション群を、紐づく予約・ポイント履歴もあわせて削除する。
+// まだ確定中の予約が含まれる場合、Googleカレンダー予定・Zoomミーティングが残ったままに
+// ならないよう、削除前に自動発行済みの会議を後始末する。
+async function deleteSessionsCascade(db: ReturnType<typeof createDb>, env: Env, sessionIds: string[]): Promise<void> {
   for (const chunk of chunkIds(sessionIds)) {
+    const confirmedBookings = await db
+      .select()
+      .from(schema.bookings)
+      .where(and(inArray(schema.bookings.oneOnOneSessionId, chunk), eq(schema.bookings.status, "confirmed")))
+      .all();
+    await Promise.all(
+      confirmedBookings.map((b) => cancelAutoConference(db, env, b.hostMemberId, b.conferenceType, b.conferenceMetaJson, b.hostCalendarEventId))
+    );
+
     await db.delete(schema.bookings).where(inArray(schema.bookings.oneOnOneSessionId, chunk));
     await db.delete(schema.pointTransactions).where(
       and(
@@ -105,7 +117,7 @@ adminOneOnOneRoutes.post("/reset-season", async (c) => {
   const targets = await db.select({ id: schema.oneOnOneSessions.id })
     .from(schema.oneOnOneSessions).where(and(...conditions)).all();
 
-  await deleteSessionsCascade(db, targets.map((t) => t.id));
+  await deleteSessionsCascade(db, c.env, targets.map((t) => t.id));
 
   console.log(`[ADMIN] Season 1to1 history reset by ${adminId}, season=${seasonId}, ${targets.length} sessions deleted`);
   return c.json({ ok: true, deletedCount: targets.length });
@@ -122,7 +134,7 @@ adminOneOnOneRoutes.delete("/sessions", async (c) => {
     return c.json({ error: { code: "invalid_input", message: "削除する履歴を選択してください" } }, 400);
   }
 
-  await deleteSessionsCascade(db, uniqueIds);
+  await deleteSessionsCascade(db, c.env, uniqueIds);
 
   console.log(`[ADMIN] 1to1 sessions deleted by ${adminId}: ${uniqueIds.length}`);
   return c.json({ ok: true, deletedCount: uniqueIds.length });
@@ -142,7 +154,7 @@ adminOneOnOneRoutes.post("/reset-all", async (c) => {
         )).all()
     : await db.select({ id: schema.oneOnOneSessions.id }).from(schema.oneOnOneSessions).all();
 
-  await deleteSessionsCascade(db, targets.map((t) => t.id));
+  await deleteSessionsCascade(db, c.env, targets.map((t) => t.id));
 
   console.log(`[ADMIN] All-time 1to1 history reset by ${adminId}, ${targets.length} sessions deleted`);
   return c.json({ ok: true, deletedCount: targets.length });

@@ -12,6 +12,7 @@ import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateISO } from "@/lib/date";
 import { CompleteOneOnOneModal } from "../meetings/_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-modal";
+import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candidate-selection-panel";
 
 type Session = {
   id: string;
@@ -28,7 +29,11 @@ type Session = {
   scheduledFor?: number | null;
   conferenceType?: string | null;
   conferenceUrl?: string | null;
-  autoTransitionReason?: "pending_timeout" | "date_passed" | null;
+  autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null;
+  arrangementMethod?: "public_url" | "candidates";
+  selectedCandidateSlotId?: string | null;
+  candidates?: CandidateSlot[];
+  availableConferenceTypes?: ("google_meet" | "zoom")[];
 };
 
 type SessionsResponse = { data: Session[] };
@@ -61,11 +66,6 @@ export function OneOnOneSessionDetailScreen() {
     qc.invalidateQueries({ queryKey: ["ranking", "me"] });
   };
 
-  const acceptMutation = useMutation({
-    mutationFn: (id: string) => api.patch(`/oneonone/${id}/accept`),
-    onSuccess: () => { invalidate(); showToast("承諾しました", true); },
-    onError: (e) => showToast(e instanceof ApiError ? e.message : "エラーが発生しました", false),
-  });
   const rejectMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/oneonone/${id}/reject`),
     onSuccess: () => { invalidate(); navigate("/oneonone"); },
@@ -108,7 +108,8 @@ export function OneOnOneSessionDetailScreen() {
   const myCompleted = session.myRole === "requester" ? session.requesterCompletedAt : session.responderCompletedAt;
   const partnerCompleted = session.myRole === "requester" ? session.responderCompletedAt : session.requesterCompletedAt;
   const isPendingForMe = session.status === "pending" && session.myRole === "responder";
-  const canScheduleInstead = isPendingForMe && !session.scheduledFor && !!session.requesterSchedulerUrl;
+  const candidatesToPick = session.myRole === "responder" && session.arrangementMethod === "candidates" && !session.selectedCandidateSlotId && (session.candidates?.length ?? 0) > 0;
+  const canScheduleInstead = isPendingForMe && !session.scheduledFor && (candidatesToPick || !!session.requesterSchedulerUrl);
   const conferenceLabel = session.conferenceType === "zoom" ? "Zoom" : session.conferenceType === "google_meet" ? "Google Meet" : "会議";
 
   return (
@@ -170,7 +171,9 @@ export function OneOnOneSessionDetailScreen() {
             )}
           </div>
         ) : (
-          canScheduleInstead ? (
+          candidatesToPick ? (
+            <CandidateSelectionPanel sessionId={session.id} candidates={session.candidates!} availableConferenceTypes={session.availableConferenceTypes} onConfirmed={invalidate} />
+          ) : canScheduleInstead ? (
             <a href={session.requesterSchedulerUrl!} target="_blank" rel="noopener noreferrer"
               className="mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-medium"
               style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)", border: "1px solid rgba(90,140,92,0.25)" }}>
@@ -192,21 +195,12 @@ export function OneOnOneSessionDetailScreen() {
           isPendingForMe ? (
             <div className="flex gap-2 mt-3">
               <button onClick={() => rejectMutation.mutate(session.id)}
-                disabled={rejectMutation.isPending || acceptMutation.isPending}
+                disabled={rejectMutation.isPending}
                 className="flex-1 py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
                 <X size={14} />
-                {canScheduleInstead ? "承諾しない" : "断る"}
+                辞退する
               </button>
-              {!canScheduleInstead && (
-                <button onClick={() => acceptMutation.mutate(session.id)}
-                  disabled={acceptMutation.isPending || rejectMutation.isPending}
-                  className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-1"
-                  style={{ background: "var(--color-success)" }}>
-                  <Check size={14} />
-                  承諾する
-                </button>
-              )}
             </div>
           ) : (
             <div className="mt-3 flex items-center gap-1 text-xs" style={{ color: "var(--color-ink-400)" }}>
@@ -216,8 +210,8 @@ export function OneOnOneSessionDetailScreen() {
           )
         )}
 
-        {/* 承諾済み：完了ボタン・お互いの完了状況 */}
-        {session.status === "accepted" && (
+        {/* 完了ボタン・お互いの完了状況（相手がまだ承諾していなくても、実際に1to1をしてしまうことはあるため表示する） */}
+        {(session.status === "accepted" || session.status === "pending") && (
           <div className="mt-3 space-y-2">
             <div className="flex items-center gap-2 text-xs">
               {myCompleted ? (
@@ -248,12 +242,14 @@ export function OneOnOneSessionDetailScreen() {
                 相手が完了を記録すると +1pt が双方に加算されます
               </p>
             )}
-            <button onClick={() => { if (confirm("この1to1をキャンセルしますか？")) cancelMutation.mutate(session.id); }}
-              disabled={cancelMutation.isPending}
-              className="w-full py-2 rounded-2xl text-xs font-medium disabled:opacity-50"
-              style={{ background: "transparent", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}>
-              この1to1をキャンセルする
-            </button>
+            {session.status === "accepted" && (
+              <button onClick={() => { if (confirm("この1to1をキャンセルしますか？")) cancelMutation.mutate(session.id); }}
+                disabled={cancelMutation.isPending}
+                className="w-full py-2 rounded-2xl text-xs font-medium disabled:opacity-50"
+                style={{ background: "transparent", color: "var(--color-ink-400)", border: "1px solid var(--color-paper-300)" }}>
+                この1to1をキャンセルする
+              </button>
+            )}
           </div>
         )}
 
@@ -284,6 +280,7 @@ export function OneOnOneSessionDetailScreen() {
             <X size={12} />
             {session.status === "rejected" ? "辞退済み" : "キャンセル済み"}
             {session.autoTransitionReason === "pending_timeout" && "（1週間未回答のため自動キャンセル）"}
+            {session.autoTransitionReason === "candidates_expired" && "（提示した候補日が過ぎたため自動キャンセル）"}
           </div>
         )}
       </div>

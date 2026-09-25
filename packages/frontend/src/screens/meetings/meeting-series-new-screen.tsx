@@ -5,8 +5,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Loader2, ChevronLeft, CalendarDays, Pencil } from "lucide-react";
+import { Plus, Trash2, Loader2, ChevronLeft, CalendarDays, Pencil, GripVertical } from "lucide-react";
 import { api } from "@/lib/api";
+import { useDragReorder } from "@/hooks/use-drag-reorder";
+import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { MeetingCandidatePicker } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 
@@ -24,7 +26,7 @@ type PatternCandidate = {
   note: string;
 };
 
-type FixedDateRow = { date: string; time: string; endTime: string };
+type FixedDateRow = { id: string; date: string; time: string; endTime: string };
 
 const DOW_OPTIONS = ["日", "月", "火", "水", "木", "金", "土"];
 const WEEK_OPTIONS: { value: number; label: string }[] = [
@@ -39,7 +41,7 @@ function emptyCandidate(): PatternCandidate {
 }
 
 function emptyFixedDateRow(): FixedDateRow {
-  return { date: "", time: "19:00", endTime: "20:00" };
+  return { id: crypto.randomUUID(), date: "", time: "19:00", endTime: "20:00" };
 }
 
 function todayDateStr(): string {
@@ -127,13 +129,14 @@ export function MeetingSeriesNewScreen() {
   function removeFixedDate(i: number) {
     setFixedDates(fixedDates.filter((_, idx) => idx !== i));
   }
+  const fixedDateDrag = useDragReorder(fixedDates, setFixedDates);
   function updateFixedDate(i: number, field: keyof FixedDateRow, value: string) {
     setFixedDates(fixedDates.map((d, idx) => (idx === i ? { ...d, [field]: value } : d)));
   }
   // カレンダー上のドラッグ/クリックで選んだ範囲を確定日として追加する
   function addCalendarFixedDate(date: string, startTime: string, endTime: string) {
     if (fixedDates.filter((d) => d.date).length >= MAX_FIXED_DATES) return;
-    const newRow: FixedDateRow = { date, time: startTime, endTime };
+    const newRow: FixedDateRow = { id: crypto.randomUUID(), date, time: startTime, endTime };
     const emptyIdx = fixedDates.findIndex((d) => !d.date);
     if (emptyIdx >= 0) {
       setFixedDates(fixedDates.map((d, i) => (i === emptyIdx ? newRow : d)));
@@ -368,10 +371,38 @@ export function MeetingSeriesNewScreen() {
               </div>
             )}
 
-            <div className="space-y-2">
-              {fixedDates.map((d, i) => (
-                <div key={i} className="card-paper rounded-2xl px-4 py-3">
+            <div className="space-y-2" data-drag-list>
+              {(() => {
+                const draggingIndex = fixedDates.findIndex((d) => d.id === fixedDateDrag.dragId);
+                return fixedDates.map((d, i) => (
+                  <div key={d.id}>
+                    <DropInsertionLine show={fixedDateDrag.dragId !== null && fixedDateDrag.gapIndex === i && i !== draggingIndex && i !== draggingIndex + 1} />
+                    <div
+                      ref={(el) => fixedDateDrag.registerRow(d.id, el)}
+                      data-drag-row
+                      className="card-paper rounded-2xl px-4 py-3"
+                      style={{
+                        position: "relative",
+                        opacity: fixedDateDrag.dragId === d.id ? 0.9 : 1,
+                        boxShadow: fixedDateDrag.dragId === d.id ? "0 10px 24px rgba(0,0,0,0.18)" : undefined,
+                        zIndex: fixedDateDrag.dragId === d.id ? 10 : undefined,
+                        transform: fixedDateDrag.dragId === d.id ? `translateY(${fixedDateDrag.dragOffsetY}px) scale(1.02)` : undefined,
+                      }}
+                    >
                   <div className="flex items-center gap-2 mb-2">
+                    {fixedDates.length > 1 && (
+                      <span
+                        onPointerDown={(e) => fixedDateDrag.handlePointerDown(d.id, e)}
+                        onPointerMove={fixedDateDrag.handlePointerMove}
+                        onPointerUp={fixedDateDrag.handlePointerUp}
+                        onPointerCancel={fixedDateDrag.handlePointerUp}
+                        className="p-2 -ml-2 touch-none cursor-grab active:cursor-grabbing"
+                        style={{ color: "var(--color-ink-300)" }}
+                        aria-label="並び替え"
+                      >
+                        <GripVertical size={14} />
+                      </span>
+                    )}
                     <span className="text-xs font-medium" style={{ color: "var(--color-ink-500)" }}>確定日 {i + 1}</span>
                     {fixedDates.length > 1 && (
                       <button onClick={() => removeFixedDate(i)} className="ml-auto p-1 rounded-xl hover:opacity-70" style={{ color: "var(--color-ink-400)" }}>
@@ -390,8 +421,11 @@ export function MeetingSeriesNewScreen() {
                       className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
                       style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
                   </div>
-                </div>
-              ))}
+                    </div>
+                  </div>
+                ));
+              })()}
+              <DropInsertionLine show={fixedDateDrag.dragId !== null && fixedDateDrag.gapIndex === fixedDates.length && fixedDates.findIndex((d) => d.id === fixedDateDrag.dragId) !== fixedDates.length - 1} />
 
               <button onClick={addFixedDate} disabled={fixedDates.length >= MAX_FIXED_DATES}
                 className="w-full py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-2 transition hover:opacity-80 disabled:opacity-50"

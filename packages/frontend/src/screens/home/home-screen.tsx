@@ -4,12 +4,13 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar, X, Handshake, Sparkles, MessageSquarePlus, Lock } from "lucide-react";
+import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar, X, Handshake, Sparkles, MessageSquarePlus, Lock, LinkIcon, Clock } from "lucide-react";
 import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { AddContactFromBookingModal } from "@/components/add-contact-from-booking-modal";
 import { InfoTooltip } from "@/components/info-tooltip";
+import { EditOneOnOneScheduleModal } from "@/screens/meetings/_edit-oneonone-schedule-modal";
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
@@ -28,6 +29,8 @@ type OnoSession = {
   partner: { id: string; name: string; emoji: string; bgColor: string; category: string } | null;
 };
 type OnoListResponse  = { data: OnoSession[] };
+type ConferenceReminder = { id: string; kind: "one_on_one" | "booking"; partnerName: string; scheduledFor: number };
+type ConferenceRemindersResponse = { data: ConferenceReminder[] };
 type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string; reward: number; skillCount: number; isSolved: boolean; isThisWeek: boolean }> };
 type UpcomingMeeting  = { id: string; title: string; host: { name: string; emoji: string } | null; isHost: boolean; confirmedDate: { startsAt: number; endsAt: number | null } | null };
 type UpcomingMeetingsResponse = { data: UpcomingMeeting[] };
@@ -42,6 +45,11 @@ type MeetingSeriesListItem = {
 };
 type PendingAttendance = { id: string; title: string; confirmedStartsAt: number };
 type PendingAttendanceResponse = { data: PendingAttendance[] };
+type HostingOpenSummaryItem = {
+  id: string; title: string; candidateCount: number;
+  targetCount: number; respondedCount: number;
+  deadline: number | null; createdAt: number;
+};
 type UpcomingBooking = {
   id: string;
   startAtUtc: string;
@@ -99,6 +107,7 @@ export function HomeScreen() {
   const [openReactionNotif, setOpenReactionNotif] = useState<CollabReactionNotification | null>(null);
   const [commentTarget, setCommentTarget] = useState<PendingConfirmation | null>(null);
   const [addContactTarget, setAddContactTarget] = useState<GuestFollowup | null>(null);
+  const [editingConferenceReminder, setEditingConferenceReminder] = useState<ConferenceReminder | null>(null);
 
   const dismissGuestFollowup = useMutation({
     mutationFn: ({ bookingId, outcome }: { bookingId: string; outcome: "not_held" | "no_add" }) =>
@@ -218,6 +227,20 @@ export function HomeScreen() {
     staleTime: 30_000,
   });
 
+  // 自分が主催していて、まだ日程が確定していないミーティング・定例会（日程調整中であることを忘れないためのリマインダー用）
+  const { data: hostingOpenMeetingsData } = useQuery({
+    queryKey: ["meetings", "hosting-open-summary"],
+    queryFn: () => api.get<{ data: HostingOpenSummaryItem[] }>("/meetings/hosting-open-summary"),
+    enabled: !!user,
+    staleTime: 30_000,
+  });
+  const { data: hostingVotingSeriesData } = useQuery({
+    queryKey: ["meeting-series", "hosting-voting-summary"],
+    queryFn: () => api.get<{ data: HostingOpenSummaryItem[] }>("/meeting-series/hosting-voting-summary"),
+    enabled: !!user,
+    staleTime: 30_000,
+  });
+
   const { data: upcomingBookingsData } = useQuery({
     queryKey: ["scheduler", "bookings", "upcoming"],
     queryFn: () => api.get<UpcomingBookingsResponse>("/scheduler/bookings/upcoming"),
@@ -256,6 +279,14 @@ export function HomeScreen() {
   const { data: guestFollowupsData } = useQuery({
     queryKey: ["scheduler", "bookings", "guest-followups"],
     queryFn: () => api.get<GuestFollowupsResponse>("/scheduler/bookings/guest-followups"),
+    enabled: !!user && user.userType === "member",
+    staleTime: 30_000,
+  });
+
+  // 日時は確定しているのに会議URLが未解決（自動発行の失敗等）のままの1to1・予約
+  const { data: conferenceRemindersData } = useQuery({
+    queryKey: ["oneonone", "conference-reminders"],
+    queryFn: () => api.get<ConferenceRemindersResponse>("/oneonone/conference-reminders"),
     enabled: !!user && user.userType === "member",
     staleTime: 30_000,
   });
@@ -302,12 +333,15 @@ export function HomeScreen() {
   const meetingNotifications = meetingNotifsData?.data ?? [];
   const pendingAttendances = pendingAttendanceData?.data ?? [];
   const upcomingBookings = upcomingBookingsData?.data ?? [];
+  const hostingOpenMeetings = hostingOpenMeetingsData?.data ?? [];
+  const hostingVotingSeries = hostingVotingSeriesData?.data ?? [];
   const collabReactionNotifs = collabReactionNotifsData?.data ?? [];
   const introRequests = (introRequestsData?.data ?? []).filter((r) => r.status === "pending");
   const summaryIssues = summaryIssuesData?.data ?? [];
   const pendingConfirmations = (pendingConfirmationsData?.data ?? [])
     .filter((p) => !locallyReviewedPartnerIds.has(p.partnerId));
   const guestFollowups = guestFollowupsData?.data ?? [];
+  const conferenceReminders = conferenceRemindersData?.data ?? [];
   const nowSec = Math.floor(Date.now() / 1000);
   // 招待済みだが未回答のオープンミーティング（自分が主催者ではないもの）
   // registration_deadline が過ぎている場合は表示しない
@@ -474,6 +508,47 @@ export function HomeScreen() {
           </div>
           <ChevronRight size={18} className="mt-0.5 shrink-0" />
         </Link>
+      )}
+
+      {/* 会議URL未設定リマインダー：日時は確定しているのに会議URLが未解決（自動発行失敗等）のもの。
+          主催者が「URLなし」を明示的に選んだ場合はサーバ側で除外済みなのでここには出ない */}
+      {conferenceReminders.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold flex items-center gap-1.5" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+            🔗 会議URLが未設定の1to1があります
+          </h2>
+          {conferenceReminders.map((r) => (
+            r.kind === "one_on_one" ? (
+              <button
+                key={r.id}
+                onClick={() => setEditingConferenceReminder(r)}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-left transition active:opacity-80"
+                style={{ background: "rgba(212,160,59,0.14)", border: "1px solid rgba(212,160,59,0.35)" }}
+              >
+                <LinkIcon size={18} style={{ color: "var(--color-ink-600)" }} className="shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{r.partnerName}さんとの1to1</p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>会議URLがまだ設定されていません。タップして入力する</p>
+                </div>
+                <ChevronRight size={16} className="shrink-0" style={{ color: "var(--color-ink-400)" }} />
+              </button>
+            ) : (
+              <Link
+                key={r.id}
+                to={`/scheduler/bookings/${r.id}`}
+                className="flex items-center gap-3 px-4 py-3 rounded-2xl transition active:opacity-80"
+                style={{ background: "rgba(212,160,59,0.14)", border: "1px solid rgba(212,160,59,0.35)" }}
+              >
+                <LinkIcon size={18} style={{ color: "var(--color-ink-600)" }} className="shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{r.partnerName}さんとの予約</p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>会議URLがまだ設定されていません。タップして確認する</p>
+                </div>
+                <ChevronRight size={16} className="shrink-0" style={{ color: "var(--color-ink-400)" }} />
+              </Link>
+            )
+          ))}
+        </section>
       )}
 
       {/* 進行中の1to1（ローディング中） */}
@@ -837,6 +912,62 @@ export function HomeScreen() {
         </section>
       )}
 
+      {/* 自分が主催していて、まだ日程が確定していないミーティング・定例会 */}
+      {(hostingOpenMeetings.length > 0 || hostingVotingSeries.length > 0) && (
+        <section>
+          <h2 className="text-sm font-semibold mb-2 flex items-center gap-1.5" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
+            <Clock size={14} />
+            主催中の日程調整、まだ確定していません
+          </h2>
+          <div className="space-y-2">
+            {hostingOpenMeetings.map((m) => (
+              <Link
+                key={m.id}
+                to={`/meetings/${m.id}`}
+                className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                style={{ borderLeft: "3px solid var(--color-brand)" }}
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+                  style={{ background: "rgba(181,56,75,0.1)" }}>
+                  📅
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                    {m.title}
+                  </p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                    回答 {m.respondedCount}/{m.targetCount}件 ・ 候補日{m.candidateCount}件
+                  </p>
+                </div>
+                <ChevronRight size={16} style={{ color: "var(--color-brand)" }} />
+              </Link>
+            ))}
+            {hostingVotingSeries.map((s) => (
+              <Link
+                key={s.id}
+                to={`/meetings/series/${s.id}`}
+                className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                style={{ borderLeft: "3px solid var(--color-brand)" }}
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+                  style={{ background: "rgba(181,56,75,0.1)" }}>
+                  🔁
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                    {s.title}
+                  </p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                    回答 {s.respondedCount}/{s.targetCount}件 ・ 候補パターン{s.candidateCount}件
+                  </p>
+                </div>
+                <ChevronRight size={16} style={{ color: "var(--color-brand)" }} />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* 近日ミーティング */}
       {upcomingMeetings.length > 0 && (
         <section>
@@ -1124,6 +1255,15 @@ export function HomeScreen() {
           guestName={addContactTarget.guestName}
           guestCompany={addContactTarget.guestCompany}
           onClose={() => setAddContactTarget(null)}
+        />
+      )}
+
+      {editingConferenceReminder && editingConferenceReminder.kind === "one_on_one" && (
+        <EditOneOnOneScheduleModal
+          sessionId={editingConferenceReminder.id}
+          currentScheduledFor={editingConferenceReminder.scheduledFor}
+          currentConferenceUrl={null}
+          onClose={() => setEditingConferenceReminder(null)}
         />
       )}
     </div>

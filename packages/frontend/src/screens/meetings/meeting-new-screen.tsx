@@ -4,9 +4,11 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Loader2, ChevronLeft, CalendarDays, Pencil, Sparkles, X } from "lucide-react";
+import { Plus, Trash2, Loader2, ChevronLeft, CalendarDays, Pencil, Sparkles, X, GripVertical } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { useDragReorder } from "@/hooks/use-drag-reorder";
+import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
@@ -21,6 +23,7 @@ type MembersResponse = { data: Member[] };
 type MeetingTypesResponse = { data: MeetingTypeDef[] };
 
 type Candidate = {
+  id: string;    // 並び替え用の内部ID（送信はしない）
   date: string;  // YYYY-MM-DD
   time: string;  // HH:MM (optional)
   endTime: string;
@@ -32,7 +35,7 @@ function toUnixTimestamp(date: string, time: string): number {
 }
 
 function emptyCandidate(): Candidate {
-  return { date: "", time: "09:00", endTime: "10:00" };
+  return { id: crypto.randomUUID(), date: "", time: "09:00", endTime: "10:00" };
 }
 
 function isoToJstDateTime(iso: string): { date: string; time: string } {
@@ -137,6 +140,8 @@ export function MeetingNewScreen() {
     setCandidates(candidates.filter((_, idx) => idx !== i));
   }
 
+  const candidateDrag = useDragReorder(candidates, setCandidates);
+
   function updateCandidate(i: number, field: keyof Candidate, value: string) {
     setCandidates(candidates.map((c, idx) => idx === i ? { ...c, [field]: value } : c));
   }
@@ -144,7 +149,7 @@ export function MeetingNewScreen() {
   // カレンダー上のドラッグ/クリックで選んだ範囲を候補日として追加する
   function addCalendarCandidate(date: string, startTime: string, endTime: string) {
     if (candidates.filter((c) => c.date).length >= MAX_CANDIDATES) return;
-    const newCandidate: Candidate = { date, time: startTime, endTime };
+    const newCandidate: Candidate = { id: crypto.randomUUID(), date, time: startTime, endTime };
     const emptyIdx = candidates.findIndex((c) => !c.date);
     if (emptyIdx >= 0) {
       setCandidates(candidates.map((c, i) => i === emptyIdx ? newCandidate : c));
@@ -173,7 +178,7 @@ export function MeetingNewScreen() {
         const { date, time } = isoToJstDateTime(slot.startUtc);
         const { time: endTime } = isoToJstDateTime(slot.endUtc);
         if (next.some((c) => c.date === date && c.time === time)) continue;
-        const newCandidate: Candidate = { date, time, endTime };
+        const newCandidate: Candidate = { id: crypto.randomUUID(), date, time, endTime };
         const emptyIdx = next.findIndex((c) => !c.date);
         next = emptyIdx >= 0
           ? next.map((c, i) => (i === emptyIdx ? newCandidate : c))
@@ -521,10 +526,38 @@ export function MeetingNewScreen() {
             </div>
           )}
 
-          <div className="space-y-2">
-            {candidates.map((cand, i) => (
-              <div key={i} className="card-paper rounded-2xl px-4 py-3">
+          <div className="space-y-2" data-drag-list>
+            {(() => {
+              const draggingIndex = candidates.findIndex((c) => c.id === candidateDrag.dragId);
+              return candidates.map((cand, i) => (
+                <div key={cand.id}>
+                  <DropInsertionLine show={candidateDrag.dragId !== null && candidateDrag.gapIndex === i && i !== draggingIndex && i !== draggingIndex + 1} />
+                  <div
+                    ref={(el) => candidateDrag.registerRow(cand.id, el)}
+                    data-drag-row
+                    className="card-paper rounded-2xl px-4 py-3"
+                    style={{
+                      position: "relative",
+                      opacity: candidateDrag.dragId === cand.id ? 0.9 : 1,
+                      boxShadow: candidateDrag.dragId === cand.id ? "0 10px 24px rgba(0,0,0,0.18)" : undefined,
+                      zIndex: candidateDrag.dragId === cand.id ? 10 : undefined,
+                      transform: candidateDrag.dragId === cand.id ? `translateY(${candidateDrag.dragOffsetY}px) scale(1.02)` : undefined,
+                    }}
+                  >
                 <div className="flex items-center gap-2 mb-2">
+                  {candidates.length > 1 && (
+                    <span
+                      onPointerDown={(e) => candidateDrag.handlePointerDown(cand.id, e)}
+                      onPointerMove={candidateDrag.handlePointerMove}
+                      onPointerUp={candidateDrag.handlePointerUp}
+                      onPointerCancel={candidateDrag.handlePointerUp}
+                      className="p-2 -ml-2 touch-none cursor-grab active:cursor-grabbing"
+                      style={{ color: "var(--color-ink-300)" }}
+                      aria-label="並び替え"
+                    >
+                      <GripVertical size={14} />
+                    </span>
+                  )}
                   <span className="text-xs font-medium" style={{ color: "var(--color-ink-500)" }}>
                     {meetingMode === "confirmed" ? "確定日" : "候補"} {i + 1}
                   </span>
@@ -561,8 +594,11 @@ export function MeetingNewScreen() {
                     style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
                   />
                 </div>
-              </div>
-            ))}
+                  </div>
+                </div>
+              ));
+            })()}
+            <DropInsertionLine show={candidateDrag.dragId !== null && candidateDrag.gapIndex === candidates.length && candidates.findIndex((c) => c.id === candidateDrag.dragId) !== candidates.length - 1} />
 
             <button
               onClick={addCandidate}
