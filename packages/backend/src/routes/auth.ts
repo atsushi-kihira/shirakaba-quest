@@ -131,6 +131,9 @@ authRoutes.post("/verify-otp", async (c) => {
   });
 
   // ユーザー情報を返す（パスワード等センシティブなものは除く）
+  // status は isApprovedMember() の判定に使われるため必須。これを省くと、
+  // ログイン直後に承認済み専用画面へ遷移した際、/auth/me の再取得が
+  // 完了するまでの一瞬「未承認」と誤判定されてホームへ弾かれてしまう。
   const userInfo = found.userType === "member"
     ? {
         id: found.user.id,
@@ -138,6 +141,7 @@ authRoutes.post("/verify-otp", async (c) => {
         email: (found.user as typeof schema.members.$inferSelect).email,
         emoji: (found.user as typeof schema.members.$inferSelect).emoji,
         bgColor: (found.user as typeof schema.members.$inferSelect).bgColor,
+        status: (found.user as typeof schema.members.$inferSelect).status,
       }
     : {
         id: found.user.id,

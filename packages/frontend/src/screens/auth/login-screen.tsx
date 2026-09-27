@@ -16,7 +16,9 @@ type Step = "email" | "otp";
 type VerifyResponse = {
   token: string;
   userType: "member" | "admin";
-  user: Pick<PublicMember, "id" | "name" | "email" | "emoji" | "bgColor">;
+  user: Pick<PublicMember, "id" | "name" | "email" | "emoji" | "bgColor"> & {
+    status?: string | null;
+  };
 };
 
 export function LoginScreen() {
@@ -25,9 +27,18 @@ export function LoginScreen() {
   const setAuth = useAuthStore((s) => s.setAuth);
   const { characterImageUrl, appTitle, appLogo, isLoading: settingsLoading } = useSettings();
 
-  // /admin からのリダイレクト時は管理者ログインモード
-  const redirectTo = searchParams.get("redirect") ?? null;
-  const isAdminMode = redirectTo === "/admin";
+  // 元々アクセスしようとしていたURL。同一オリジンの相対パスのみ許可し、
+  // 外部サイトへの誘導（オープンリダイレクト）に使われないようにする。
+  const rawRedirectTo = searchParams.get("redirect");
+  const redirectTo =
+    rawRedirectTo &&
+    rawRedirectTo.startsWith("/") &&
+    !rawRedirectTo.startsWith("//") &&
+    !rawRedirectTo.includes("://")
+      ? rawRedirectTo
+      : null;
+  // /admin 配下からのリダイレクト時は管理者ログインモード
+  const isAdminMode = redirectTo?.startsWith("/admin") ?? false;
 
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
@@ -98,6 +109,7 @@ export function LoginScreen() {
         email: res.user.email ?? "",
         emoji: res.user.emoji,
         bgColor: res.user.bgColor,
+        status: res.user.status ?? null,
       });
       // redirect パラメータがあればそこへ、なければ種別に応じてデフォルト遷移
       navigate(redirectTo ?? (res.userType === "admin" ? "/admin" : "/home"));
