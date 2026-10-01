@@ -1,0 +1,433 @@
+<title>白樺クエスト デモ操作マニュアル</title>
+<style>
+  :root {
+    --paper: #FAF5E8;
+    --paper-alt: #F2E9D2;
+    --card: #FFFDF7;
+    --ink-900: #3B2F22;
+    --ink-700: #5B4A37;
+    --ink-500: #8A765D;
+    --ink-300: #C9B993;
+    --border: #E4D5B3;
+    --brand: #B5384B;
+    --brand-ink: #7A2534;
+    --brand-tint: #F6E3E6;
+    --gold: #C8912E;
+    --gold-tint: #FBF0DA;
+    --success: #4C7A4E;
+    --success-tint: #E7F0E5;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #211a13;
+      --paper-alt: #2a2118;
+      --card: #2c2318;
+      --ink-900: #f3e9d8;
+      --ink-700: #d9c8ac;
+      --ink-500: #a99878;
+      --ink-300: #5b4c37;
+      --border: #4a3d2a;
+      --brand: #e2657a;
+      --brand-ink: #f3aab6;
+      --brand-tint: #3a2129;
+      --gold: #e0b25c;
+      --gold-tint: #362c19;
+      --success: #8fc191;
+      --success-tint: #1f2c1f;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #211a13;
+    --paper-alt: #2a2118;
+    --card: #2c2318;
+    --ink-900: #f3e9d8;
+    --ink-700: #d9c8ac;
+    --ink-500: #a99878;
+    --ink-300: #5b4c37;
+    --border: #4a3d2a;
+    --brand: #e2657a;
+    --brand-ink: #f3aab6;
+    --brand-tint: #3a2129;
+    --gold: #e0b25c;
+    --gold-tint: #362c19;
+    --success: #8fc191;
+    --success-tint: #1f2c1f;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink-900);
+    font-family: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", sans-serif;
+    line-height: 1.75;
+    padding-bottom: 64px;
+  }
+  h1, h2, h3 { font-family: "Klee One", "Klee One", sans-serif; text-wrap: balance; margin: 0; }
+  a { color: inherit; }
+
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+
+  header.hero {
+    background: linear-gradient(180deg, var(--paper-alt), var(--paper));
+    border-bottom: 1px solid var(--border);
+    padding: 36px 0 22px;
+  }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+    color: var(--brand-ink); background: var(--brand-tint);
+    padding: 5px 12px; border-radius: 999px; margin-bottom: 14px;
+  }
+  h1.title { font-size: clamp(24px, 5vw, 32px); font-weight: 600; color: var(--ink-900); }
+  .subtitle { margin-top: 10px; color: var(--ink-700); font-size: 15px; max-width: 60ch; }
+
+  nav.jump {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--paper) 92%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border);
+  }
+  .jump-inner {
+    max-width: 880px; margin: 0 auto; padding: 10px 20px;
+    display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
+  }
+  .jump-inner::-webkit-scrollbar { display: none; }
+  .jump a {
+    flex: none; text-decoration: none; font-size: 12.5px; font-weight: 700;
+    color: var(--ink-700); background: var(--card); border: 1px solid var(--border);
+    padding: 7px 13px; border-radius: 999px; white-space: nowrap;
+    transition: background .15s, color .15s, border-color .15s;
+  }
+  .jump a:hover { background: var(--brand-tint); color: var(--brand-ink); border-color: var(--brand-tint); }
+
+  main { padding-top: 6px; }
+
+  section.step {
+    padding: 40px 0 8px;
+    border-bottom: 1px solid var(--border);
+    scroll-margin-top: 56px;
+  }
+  section.step:last-of-type { border-bottom: none; }
+
+  .step-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 6px; }
+  .step-num {
+    flex: none; width: 40px; height: 40px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Klee One", sans-serif; font-weight: 700; font-size: 17px;
+    background: var(--brand); color: #fff;
+  }
+  .step-head h2 { font-size: 20px; font-weight: 600; padding-top: 6px; }
+  .step-lede { color: var(--ink-700); font-size: 14px; margin: 4px 0 20px 54px; max-width: 62ch; }
+
+  .entry {
+    margin: 0 0 18px 54px;
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--gold-tint); border: 1px solid var(--border);
+    color: var(--ink-900); font-size: 13.5px; font-weight: 700;
+    padding: 8px 14px; border-radius: 10px;
+  }
+  .entry code {
+    font-family: inherit; background: var(--card); border: 1px solid var(--border);
+    padding: 1px 7px; border-radius: 6px; font-weight: 700; font-size: 13px;
+  }
+
+  ol.steps {
+    list-style: none; counter-reset: s; margin: 0 0 20px 54px; padding: 0;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  ol.steps > li {
+    counter-increment: s;
+    position: relative; padding-left: 30px;
+    font-size: 14.5px; color: var(--ink-900);
+  }
+  ol.steps > li::before {
+    content: counter(s);
+    position: absolute; left: 0; top: 0;
+    width: 21px; height: 21px; border-radius: 999px;
+    background: var(--card); border: 1.5px solid var(--brand);
+    color: var(--brand-ink); font-weight: 700; font-size: 11.5px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  ol.steps > li b { font-weight: 700; }
+  ol.steps > li .sub { display: block; color: var(--ink-500); font-size: 13px; margin-top: 2px; }
+
+  .cards {
+    margin: 0 0 20px 54px; display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 14px 16px;
+  }
+  .card .tag {
+    display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .03em;
+    color: var(--success); background: var(--success-tint);
+    padding: 3px 9px; border-radius: 999px; margin-bottom: 8px;
+  }
+  .card.alt .tag { color: var(--brand-ink); background: var(--brand-tint); }
+  .card h3 { font-size: 14.5px; font-weight: 700; margin-bottom: 6px; }
+  .card p { margin: 0; font-size: 13.5px; color: var(--ink-700); }
+
+  .note {
+    margin: 4px 0 22px 54px;
+    display: flex; gap: 9px; align-items: flex-start;
+    background: var(--paper-alt); border: 1px dashed var(--border);
+    border-radius: 12px; padding: 12px 14px;
+    font-size: 13.5px; color: var(--ink-700); max-width: 62ch;
+  }
+  .note .ico { flex: none; font-size: 15px; line-height: 1; }
+
+  .tabbar {
+    margin: 0 0 22px 54px;
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .tabbar span {
+    font-size: 12.5px; font-weight: 700; color: var(--ink-700);
+    background: var(--card); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 999px;
+  }
+
+  footer {
+    max-width: 880px; margin: 30px auto 0; padding: 20px;
+    color: var(--ink-500); font-size: 12.5px; border-top: 1px solid var(--border);
+  }
+
+  @media (max-width: 520px) {
+    .step-lede, .entry, ol.steps, .cards, .note, .tabbar { margin-left: 0; }
+    .step-num { width: 34px; height: 34px; font-size: 14px; border-radius: 10px; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@600&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">🃏 デモセッション用</span>
+    <h1 class="title">白樺クエスト 操作マニュアル</h1>
+    <p class="subtitle">アカウント登録からリファーラルさがしまで、デモで見せる6つの操作を順番にまとめています。上のタブから該当の項目へすぐに移動できます。</p>
+  </div>
+</header>
+
+<nav class="jump">
+  <div class="jump-inner">
+    <a href="#s1">① アカウント登録</a>
+    <a href="#s2">② ログイン</a>
+    <a href="#s3">③ Google/Zoom連携</a>
+    <a href="#s4">④ 1to1の主催</a>
+    <a href="#s5">⑤ 複数人ミーティング</a>
+    <a href="#s6">⑥ 協働・パワーチーム</a>
+    <a href="#s7">⑦ リファーラルさがし</a>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <section class="step" id="s1">
+    <div class="step-head">
+      <span class="step-num">1</span>
+      <h2>アカウント登録</h2>
+    </div>
+    <p class="step-lede">新しく招待されたメンバーが、自分の名刺カードから登録する流れです。なりすまし防止のため、最後は管理者の承認待ちになります。</p>
+
+    <span class="entry">🔗 入口：<code>/register</code>（招待リンクまたはログイン画面の「新規登録」）</span>
+
+    <ol class="steps">
+      <li><b>名刺カードを撮影する</b><span class="sub">配布された物理カードをカメラで撮影、またはギャラリーから画像を選択</span></li>
+      <li><b>AIが自動で読み取る（OCR）</b><span class="sub">表面の「USP・SKILLs」3項目を自動で読み取る。読み取れなかった場合は次のステップで手入力できる</span></li>
+      <li><b>読み取り内容を確認・修正する</b><span class="sub">スキル名・課題シーン・結果の文章を必要に応じて編集</span></li>
+      <li><b>氏名・ふりがな・メールアドレスなど基本情報を入力する</b></li>
+      <li><b>事業内容・カテゴリー、金の卵／金のガチョウ（任意）を入力する</b><span class="sub">「どんな人を紹介してほしいか」「どんな人脈が欲しいか」を登録しておくと⑥のリファーラルさがしで使われる</span></li>
+      <li><b>メールに届いた確認コードを入力する</b></li>
+      <li><b>管理者の承認を待つ</b><span class="sub">管理画面の「メンバー管理」で承認されると利用開始</span></li>
+    </ol>
+
+    <div class="note"><span class="ico">💡</span>デモでは、実際に手元のカードを撮影して読み取り精度を見せると分かりやすいです。承認待ちの状態が伝わるよう「まだこの時点ではログインできない」ことも一言添えると親切です。</div>
+  </section>
+
+  <section class="step" id="s2">
+    <div class="step-head">
+      <span class="step-num">2</span>
+      <h2>ログイン</h2>
+    </div>
+    <p class="step-lede">パスワードは存在しません。メールで届く確認コードだけでログインする、パスワードレス方式です。</p>
+
+    <span class="entry">🔗 入口：<code>/login</code></span>
+
+    <ol class="steps">
+      <li><b>メールアドレスを入力する</b></li>
+      <li><b>届いた確認コードを入力する</b><span class="sub">数分で失効するため、その場でメールを確認してもらう</span></li>
+      <li><b>ホーム画面が表示される</b><span class="sub">やること・直近の1to1・現在のポイントなどがまとめて確認できる</span></li>
+    </ol>
+
+    <div class="note"><span class="ico">💡</span>「パスワードを覚える必要がない」点が、IT が苦手な方にも安心なポイントとして強調しやすいです。</div>
+  </section>
+
+  <section class="step" id="s3">
+    <div class="step-head">
+      <span class="step-num">3</span>
+      <h2>Google/Zoom連携の設定</h2>
+    </div>
+    <p class="step-lede">1to1・ミーティングの日程調整を自動化するには、事前にこの連携が必要です。「Googleカレンダーで選んでもらう」方式や、会議URLの自動発行を使う場合は必須になります。</p>
+
+    <span class="entry">🔗 入口：マイページ → 「日程調整設定」 → 「🔗 外部サービス連携」（<code>/scheduler/integrations</code>）</span>
+
+    <div class="cards">
+      <div class="card">
+        <span class="tag">Google連携</span>
+        <h3>📅 Googleカレンダー</h3>
+        <p>連携すると、空き時間の自動確認・Google Meet URLの自動発行・Googleカレンダーへの予定自動登録ができるようになる。「連携する」からGoogleアカウントの認可画面へ進む。</p>
+      </div>
+      <div class="card alt">
+        <span class="tag">Zoom連携</span>
+        <h3>🎥 Zoom</h3>
+        <p>連携すると、Zoomミーティング URLの自動発行ができるようになる。「連携する」からZoomアカウントの認可画面へ進む。</p>
+      </div>
+    </div>
+
+    <ol class="steps">
+      <li><b>マイページを開く</b></li>
+      <li><b>「日程調整設定」をタップする</b></li>
+      <li><b>「🔗 外部サービス連携」を開く</b></li>
+      <li><b>Google・Zoomそれぞれの「連携する」から認可画面に進み、許可する</b></li>
+      <li><b>連携が完了すると、④1to1・⑤ミーティングで自動化された選択肢が使えるようになる</b></li>
+    </ol>
+
+    <div class="note"><span class="ico">💡</span>デモではこの連携を先に済ませておくと、④・⑤で「公開予約URLを使う」「AIで探す」「会議URL自動発行」までスムーズに見せられます。連携なしでも、候補日を手動で提示する方式・会議URLの手入力で進行することは可能です。</div>
+  </section>
+
+  <section class="step" id="s4">
+    <div class="step-head">
+      <span class="step-num">4</span>
+      <h2>1to1の主催</h2>
+    </div>
+    <p class="step-lede">「なかま」タブからメンバーを選び、1to1を申し込みます。日程の決め方は2種類あり、その場で選べます。</p>
+
+    <span class="entry">🔗 入口：なかま → 対象メンバー詳細 → 「🤝 1to1を申し込む」</span>
+
+    <div class="cards">
+      <div class="card">
+        <span class="tag">方式A</span>
+        <h3>📅 Googleカレンダーで選んでもらう</h3>
+        <p>「公開予約URLを使う」を選択。自分のGoogleカレンダーと連携済みの場合のみ選べる。自分の空き時間がそのままURLになり、相手がその中から都合の良い枠を選ぶ。</p>
+      </div>
+      <div class="card alt">
+        <span class="tag">方式B</span>
+        <h3>🗓 候補日を伝えて選んでもらう</h3>
+        <p>「候補日を選んで提示する」を選択。自分で2〜5件の候補日時を用意（カレンダーから選ぶ／手入力の両方に対応）し、相手はその中から1つ選ぶだけでよい。</p>
+      </div>
+    </div>
+
+    <ol class="steps">
+      <li><b>日程の決め方（方式A／B）を選ぶ</b></li>
+      <li><b>（方式Bの場合）候補日時を2〜5件入力する</b></li>
+      <li><b>送信すると相手に通知される</b><span class="sub">相手が枠・候補日を選んだ時点で日程が確定し、会議ツール（Zoom／Google Meet）と連携していればURLも自動発行される</span></li>
+      <li><b>実施後、どちらか一方が「完了」を記録する</b><span class="sub">両方の記録は不要。どちらかが完了を押した時点でポイントが加算される</span></li>
+    </ol>
+
+    <div class="note"><span class="ico">💡</span>すでに口頭やメールで日程調整済みの相手には、詳細画面の「📅 すでに日程調整済み？日時を指定して申し込む」から直接確定できます。この場合、相手は都合が悪いときだけ辞退すればよく、承諾操作は不要です。</div>
+  </section>
+
+  <section class="step" id="s5">
+    <div class="step-head">
+      <span class="step-num">5</span>
+      <h2>複数人でのミーティングの主催</h2>
+    </div>
+    <p class="step-lede">パワーチームでの定例会や、複数人での打ち合わせを主催する流れです。候補日は手動でもAIでも設定できます。</p>
+
+    <span class="entry">🔗 入口：ミーティング → 新規作成</span>
+
+    <ol class="steps">
+      <li><b>対象範囲を選ぶ</b><span class="sub">全員／チーム／パワーチーム・ゆるいチーム／個別に選択、のいずれか</span></li>
+      <li><b>候補日を設定する（下記いずれか、または両方を併用）</b></li>
+    </ol>
+
+    <div class="cards">
+      <div class="card">
+        <span class="tag">手動設定</span>
+        <h3>🖊 カレンダーで自分で決める</h3>
+        <p>カレンダー上で時間帯をクリック（選択中の長さで追加）またはドラッグ（30分単位）して候補日を追加する。自分の予定を見ながら設定できる。</p>
+      </div>
+      <div class="card alt">
+        <span class="tag">AI設定</span>
+        <h3>✨ 「AIで探す」で自動提案</h3>
+        <p>対象メンバー全員の空き状況をもとに、AIが候補日時を自動で提案。すでに手動で追加した候補があれば「追加する」か「入れ替える」かを選べる。</p>
+      </div>
+    </div>
+
+    <ol class="steps">
+      <li><b>参加者が候補日に○／△／✗で回答する</b></li>
+      <li><b>主催者が候補から確定日を選ぶ（複数日程の確定も可）</b><span class="sub">全員の回答を待つ必要はなく、主催者の判断で確定できる</span></li>
+      <li><b>確定すると全員に通知される</b><span class="sub">会議ツール連携があればURLも自動発行、主催者のカレンダーにもダブルブッキング防止のブロック予定が入る</span></li>
+    </ol>
+
+    <div class="note"><span class="ico">💡</span>「全員の承諾を待たなくてよい」「主催者がその場で確定できる」点は、1to1と共通する今回の改善ポイントとして触れると分かりやすいです。</div>
+  </section>
+
+  <section class="step" id="s6">
+    <div class="step-head">
+      <span class="step-num">6</span>
+      <h2>協働機能の概要〜パワーチーム活動の記録〜アクションのフォロー</h2>
+    </div>
+    <p class="step-lede">メンバー同士の関係性を可視化し、パワーチームでの活動と「次回までのアクション」を記録・引き継ぐ機能です。</p>
+
+    <span class="entry">🔗 入口：協働タブ</span>
+
+    <div class="tabbar">
+      <span>🕸 関係マップ</span>
+      <span>🌊 活動タイムライン</span>
+      <span>⚡ パワーチーム管理</span>
+    </div>
+
+    <ol class="steps">
+      <li><b>協働マップで関係性を確認する</b><span class="sub">誰と誰がつながっているか、パワーチーム・ゆるいチームの塊が円で表示される</span></li>
+      <li><b>条件を満たしたら「⚡ パワーチームを宣言」する</b></li>
+      <li><b>活動タイムラインから「＋ 活動を投稿する」</b><span class="sub">「どんな活動をしたか」の本文に加え、「📋 次回までのアクション」を1件ずつではなくExcelのような一覧形式でまとめて入力できる（誰が・何を・いつまでに）</span></li>
+      <li><b>アクションが完了したらチェックを入れる</b><span class="sub">完了したものは取消線で表示。未完了のものは次回の同チームミーティングの案内や活動投稿時に自動で引き継がれる</span></li>
+      <li><b>アクションだけ個別に公開範囲を設定できる</b><span class="sub">活動本文はチャプター全体に公開しつつ、アクションだけチーム内限定にする、といった使い分けが可能</span></li>
+    </ol>
+
+    <div class="note"><span class="ico">💡</span>チーム管理パネルからもアクションの追加・確認ができます。「投稿を待たずにその場でアクションだけ足せる」点を見せると伝わりやすいです。</div>
+  </section>
+
+  <section class="step" id="s7">
+    <div class="step-head">
+      <span class="step-num">7</span>
+      <h2>リファーラルさがし（ご縁さがし）</h2>
+    </div>
+    <p class="step-lede">なかまの人脈をAIが横断的に検索し、有望な紹介の道筋を提案する機能です。2つの視点があります。</p>
+
+    <span class="entry">🔗 入口：ご縁タブ（✨アイコン）</span>
+
+    <div class="cards">
+      <div class="card">
+        <span class="tag">視点A</span>
+        <h3>🔍 私のためのご縁</h3>
+        <p>自分の「金の卵・金のガチョウ」（欲しい相手像）に対して、なかまの人脈の中から候補をAIが探す。</p>
+      </div>
+      <div class="card alt">
+        <span class="tag">視点B</span>
+        <h3>🎁 貢献のためのご縁</h3>
+        <p>自分の人脈を、なかま（最大5名まで指定可）の「金の卵・金のガチョウ」に紹介できないか、AIが探す。</p>
+      </div>
+    </div>
+
+    <ol class="steps">
+      <li><b>視点（私のため／貢献のため）を選ぶ</b></li>
+      <li><b>到達方法（どこまで人脈を辿るか）を選ぶ</b><span class="sub">1次（直接）／2次／3次 — 遠くまで辿るほど候補は広がるが確度は下がる</span></li>
+      <li><b>「この条件でさがす」を実行する</b><span class="sub">AIが人脈データを照合し、有望な紹介の道筋と根拠を提示する</span></li>
+      <li><b>結果から直接アクションにつなげる</b><span class="sub">「1to1を組む」「紹介する」のボタンからそのまま次の行動に移れる</span></li>
+    </ol>
+
+    <div class="note"><span class="ico">💡</span>実データで検索すると数十件ヒットする実例を見せると説得力があります。0件だった場合は「対象の登録内容が少ない」ことが多い旨を補足すると安心してもらえます。</div>
+  </section>
+
+</main>
+
+<footer class="wrap">
+  白樺クエスト デモ操作マニュアル ・ 社内デモセッション用の参照資料です
+</footer>

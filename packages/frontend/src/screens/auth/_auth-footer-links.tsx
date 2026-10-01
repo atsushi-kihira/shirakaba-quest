@@ -3,13 +3,23 @@
 export function AuthFooterLinks() {
   return (
     <div className="mt-8 flex flex-col items-center gap-2">
-      <a
-        href="/zoom-integration"
-        className="text-xs underline hover:opacity-70 transition"
-        style={{ color: "var(--color-ink-400)" }}
-      >
-        Zoom連携ガイド
-      </a>
+      <div className="flex items-center gap-3 text-xs" style={{ color: "var(--color-ink-400)" }}>
+        <a
+          href="/manual.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:opacity-70 transition"
+        >
+          操作マニュアル
+        </a>
+        <span aria-hidden="true">|</span>
+        <a
+          href="/zoom-integration"
+          className="underline hover:opacity-70 transition"
+        >
+          Zoom連携ガイド
+        </a>
+      </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 justify-center text-xs" style={{ color: "var(--color-ink-400)" }}>
         <span>
           運営：

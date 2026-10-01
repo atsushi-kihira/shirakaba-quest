@@ -4,7 +4,7 @@
 // =============================================================
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Home, Users, ScrollText, Trophy, User, Calendar, Handshake, Sparkles, Lock } from "lucide-react";
+import { Home, Users, ScrollText, Trophy, User, Calendar, Handshake, Sparkles, Lock, BookOpen } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { useOneOnOneSessions, filterActionableOneOnOne, filterInFlightOneOnOneForBadge } from "@/hooks/use-oneonone-status";
@@ -133,6 +133,12 @@ export function AppLayout() {
           </NavLink>
           );
         })}
+        <a href="/manual.html" target="_blank" rel="noopener noreferrer"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium transition hover:opacity-80 mt-auto"
+          style={{ color: "var(--color-ink-500)" }}>
+          <BookOpen size={18} />
+          操作マニュアル
+        </a>
       </nav>
 
       {/* メインコンテンツ */}
