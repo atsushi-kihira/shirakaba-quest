@@ -133,7 +133,7 @@ export function AppLayout() {
           </NavLink>
           );
         })}
-        <a href="/manual.html" target="_blank" rel="noopener noreferrer"
+        <a href="/manual" target="_blank" rel="noopener noreferrer"
           className="flex items-center gap-3 px-3 py-2.5 rounded-2xl text-sm font-medium transition hover:opacity-80 mt-auto"
           style={{ color: "var(--color-ink-500)" }}>
           <BookOpen size={18} />

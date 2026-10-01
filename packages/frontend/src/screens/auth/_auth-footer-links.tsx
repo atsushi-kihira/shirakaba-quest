@@ -5,7 +5,7 @@ export function AuthFooterLinks() {
     <div className="mt-8 flex flex-col items-center gap-2">
       <div className="flex items-center gap-3 text-xs" style={{ color: "var(--color-ink-400)" }}>
         <a
-          href="/manual.html"
+          href="/manual"
           target="_blank"
           rel="noopener noreferrer"
           className="underline hover:opacity-70 transition"
