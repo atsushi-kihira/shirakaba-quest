@@ -1,17 +1,23 @@
 // =============================================================
 // 管理画面 — チーム管理
 // =============================================================
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus, Pencil, UserPlus, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Plus, Trash2, Shuffle, Bot, Users, Crown, UserMinus, Pencil, UserPlus, ChevronDown, ChevronUp, X, GripVertical } from "lucide-react";
 import { api } from "@/lib/api";
+import { useDragReorder } from "@/hooks/use-drag-reorder";
+import { DropInsertionLine } from "@/components/drop-insertion-line";
 import type { Team } from "@shared/types";
 
 type TeamsResponse = { data: Team[] };
 type MembersResponse = { data: Array<{ id: string; name: string; emoji: string; bgColor: string; status: string }> };
 type TeamRankingResponse = { data: Array<{ rank: number; team: { id: string; name: string; emblemEmoji: string }; totalPoints: number }> };
 
-const DEFAULT_EMOJIS = ["🦊", "🐻", "🐝", "🦉", "🐢", "🐧", "🦁", "🐯"];
+// バックエンド（routes/admin/teams.ts の DEFAULT_TEAM_EMOJIS）と合わせる
+const DEFAULT_EMOJIS = [
+  "🦊", "🐻", "🐝", "🦉", "🐢", "🐧", "🦁", "🐯",
+  "🐺", "🦅", "🐬", "🐙", "🦄", "🐨", "🐼", "🦔",
+];
 
 export function AdminTeamsScreen() {
   const qc = useQueryClient();
@@ -35,8 +41,22 @@ export function AdminTeamsScreen() {
     enabled: tab === "ranking",
   });
 
-  const teams = data?.data ?? [];
   const allMembers = (membersData?.data ?? []).filter((m) => m.status === "active");
+
+  const reorderTeams = useMutation({
+    mutationFn: (order: string[]) => api.put("/admin/teams/reorder", { order }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "teams"] }),
+  });
+
+  // ドラッグ中・確定直後は、サーバーの再取得を待たずに新しい並びをそのまま表示する
+  // （再取得が終わると teams（サーバー由来）がこの並びと一致するため、以降は上書きされない）
+  const [orderOverride, setOrderOverride] = useState<Team[] | null>(null);
+  useEffect(() => { setOrderOverride(null); }, [data]);
+  const teams = orderOverride ?? data?.data ?? [];
+  const drag = useDragReorder(teams, (next) => {
+    setOrderOverride(next);
+    reorderTeams.mutate(next.map((t) => t.id));
+  });
 
   // チームに所属しているメンバーIDのセット
   const assignedMemberIds = new Set(teams.flatMap((t) => t.members.map((m) => m.memberId)));
@@ -97,16 +117,39 @@ export function AdminTeamsScreen() {
               ギルドがまだありません。自動振り分けか手動で作ってみましょう。
             </div>
           ) : (
-            <div className="space-y-3">
-              {teams.map((team) => (
-                <TeamCard
-                  key={team.id}
-                  team={team}
-                  onDelete={() => deleteTeam.mutate(team.id)}
-                  allMembers={allMembers}
-                  teams={teams}
-                />
-              ))}
+            <div className="space-y-3" data-drag-list>
+              {teams.map((team, i) => {
+                const draggingIndex = teams.findIndex((t) => t.id === drag.dragId);
+                return (
+                  <div key={team.id}>
+                    <DropInsertionLine show={drag.dragId !== null && drag.gapIndex === i && i !== draggingIndex && i !== draggingIndex + 1} />
+                    <div
+                      ref={(el) => drag.registerRow(team.id, el)}
+                      data-drag-row
+                      style={{
+                        position: "relative",
+                        opacity: drag.dragId === team.id ? 0.9 : 1,
+                        zIndex: drag.dragId === team.id ? 10 : undefined,
+                        transform: drag.dragId === team.id ? `translateY(${drag.dragOffsetY}px) scale(1.01)` : undefined,
+                      }}
+                    >
+                      <TeamCard
+                        team={team}
+                        onDelete={() => deleteTeam.mutate(team.id)}
+                        allMembers={allMembers}
+                        teams={teams}
+                        dragHandleProps={{
+                          onPointerDown: (e) => drag.handlePointerDown(team.id, e),
+                          onPointerMove: drag.handlePointerMove,
+                          onPointerUp: drag.handlePointerUp,
+                          onPointerCancel: drag.handlePointerUp,
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <DropInsertionLine show={drag.dragId !== null && drag.gapIndex === teams.length && teams.findIndex((t) => t.id === drag.dragId) !== teams.length - 1} />
             </div>
           )}
 
@@ -260,25 +303,36 @@ function UnassignedMembersSection({
 }
 
 // ---- チームカード ----
+type DragHandleProps = {
+  onPointerDown: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onPointerUp: () => void;
+  onPointerCancel: () => void;
+};
+
 function TeamCard({
   team,
   onDelete,
   allMembers,
   teams,
+  dragHandleProps,
 }: {
   team: Team;
   onDelete: () => void;
   allMembers: Array<{ id: string; name: string; emoji: string; bgColor: string }>;
   teams: Team[];
+  dragHandleProps: DragHandleProps;
 }) {
   const qc = useQueryClient();
   const [showMembers, setShowMembers] = useState(false);
   const [showAddMember, setShowAddMember] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(team.name);
+  const [editEmoji, setEditEmoji] = useState(team.emblemEmoji);
 
   const editTeam = useMutation({
-    mutationFn: ({ name }: { name: string }) => api.patch(`/admin/teams/${team.id}`, { name }),
+    mutationFn: ({ name, emblemEmoji }: { name: string; emblemEmoji: string }) =>
+      api.patch(`/admin/teams/${team.id}`, { name, emblemEmoji }),
     onSuccess: () => {
       setEditing(false);
       qc.invalidateQueries({ queryKey: ["admin", "teams"] });
@@ -297,40 +351,70 @@ function TeamCard({
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "teams"] }),
   });
 
+  function startEditing() {
+    setEditing(true);
+    setEditName(team.name);
+    setEditEmoji(team.emblemEmoji);
+  }
+  function cancelEditing() {
+    setEditing(false);
+    setEditName(team.name);
+    setEditEmoji(team.emblemEmoji);
+  }
+
   return (
     <div className="card-paper p-4">
       <div className="flex items-center gap-3 mb-2">
-        <span className="text-3xl">{team.emblemEmoji}</span>
+        <span
+          {...dragHandleProps}
+          className="p-1.5 -ml-1.5 touch-none cursor-grab active:cursor-grabbing shrink-0"
+          style={{ color: "var(--color-ink-300)" }}
+          aria-label="並び替え"
+        >
+          <GripVertical size={16} />
+        </span>
+        <span className="text-3xl shrink-0">{editing ? editEmoji : team.emblemEmoji}</span>
         <div className="flex-1 min-w-0">
           {editing ? (
-            <div className="flex items-center gap-2">
-              <input
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                className="flex-1 px-2 py-1 rounded-xl border text-sm"
-                style={{ borderColor: "var(--color-brand)", outline: "none" }}
-                autoFocus
-                onKeyDown={(e) => { if (e.key === "Enter") editTeam.mutate({ name: editName.trim() }); if (e.key === "Escape") { setEditing(false); setEditName(team.name); }}}
-              />
-              <button
-                onClick={() => editTeam.mutate({ name: editName.trim() })}
-                disabled={!editName.trim() || editTeam.isPending}
-                className="px-2.5 py-1 rounded-xl text-xs font-medium text-white disabled:opacity-50"
-                style={{ background: "var(--color-brand)" }}
-              >保存</button>
-              <button
-                onClick={() => { setEditing(false); setEditName(team.name); }}
-                className="px-2.5 py-1 rounded-xl text-xs"
-                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
-              >取消</button>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="flex-1 px-2 py-1 rounded-xl border text-sm"
+                  style={{ borderColor: "var(--color-brand)", outline: "none" }}
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === "Enter") editTeam.mutate({ name: editName.trim(), emblemEmoji: editEmoji }); if (e.key === "Escape") cancelEditing(); }}
+                />
+                <button
+                  onClick={() => editTeam.mutate({ name: editName.trim(), emblemEmoji: editEmoji })}
+                  disabled={!editName.trim() || editTeam.isPending}
+                  className="px-2.5 py-1 rounded-xl text-xs font-medium text-white disabled:opacity-50"
+                  style={{ background: "var(--color-brand)" }}
+                >保存</button>
+                <button
+                  onClick={cancelEditing}
+                  className="px-2.5 py-1 rounded-xl text-xs"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+                >取消</button>
+              </div>
+              <div className="flex gap-1 flex-wrap">
+                {DEFAULT_EMOJIS.map((e) => (
+                  <button key={e} type="button" onClick={() => setEditEmoji(e)}
+                    className="text-lg w-8 h-8 rounded-full flex items-center justify-center"
+                    style={{ outline: editEmoji === e ? "2px solid var(--color-brand)" : "none", background: editEmoji === e ? "var(--color-paper-200)" : "transparent" }}>
+                    {e}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-1.5">
               <p className="font-semibold" style={{ color: "var(--color-ink-800)" }}>{team.name}</p>
               <button
-                onClick={() => { setEditing(true); setEditName(team.name); }}
+                onClick={startEditing}
                 className="p-1 rounded-lg hover:opacity-70"
-                title="ギルド名を編集"
+                title="ギルド名・アイコンを編集"
               >
                 <Pencil size={12} style={{ color: "var(--color-ink-400)" }} />
               </button>

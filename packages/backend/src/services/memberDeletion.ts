@@ -162,7 +162,7 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
   await db.delete(m.meetingSeriesResponses).where(eq(m.meetingSeriesResponses.memberId, memberId));
 
   // ---- スケジューラー（日程調整）関連は本人専用データのため全削除 ----
-  await db.delete(m.googleCredentials).where(eq(m.googleCredentials.memberId, memberId));
+  await db.delete(m.googleCalendarAccounts).where(eq(m.googleCalendarAccounts.memberId, memberId));
   await db.delete(m.zoomCredentials).where(eq(m.zoomCredentials.memberId, memberId));
   await db.delete(m.memberSchedulingSettings).where(eq(m.memberSchedulingSettings.memberId, memberId));
   await db.delete(m.schedulerShareLinks).where(eq(m.schedulerShareLinks.memberId, memberId));

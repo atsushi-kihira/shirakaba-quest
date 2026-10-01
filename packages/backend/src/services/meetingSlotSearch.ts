@@ -329,14 +329,14 @@ export async function searchCommonFreeSlots(params: SlotSearchParams): Promise<S
   const idsToCheck = allTargetIds.slice(0, cap);
   const excludedForCapMemberIds = allTargetIds.slice(cap);
 
-  // Google連携済みかどうかを一括判定
+  // Google連携済みかどうかを一括判定（1メンバーが複数アカウントを連携できるため重複排除する）
   const credRows = idsToCheck.length > 0
-    ? await db.select({ memberId: schema.googleCredentials.memberId })
-        .from(schema.googleCredentials)
-        .where(inArray(schema.googleCredentials.memberId, idsToCheck))
+    ? await db.select({ memberId: schema.googleCalendarAccounts.memberId })
+        .from(schema.googleCalendarAccounts)
+        .where(inArray(schema.googleCalendarAccounts.memberId, idsToCheck))
         .all()
     : [];
-  const connectedMemberIds = credRows.map((r) => r.memberId);
+  const connectedMemberIds = [...new Set(credRows.map((r) => r.memberId))];
   const unconnectedMemberIds = idsToCheck.filter((id) => !connectedMemberIds.includes(id));
 
   const fromUtc = new Date(localTimeToUtcMs(searchFromLocal, "00:00", TIMEZONE));

@@ -21,7 +21,7 @@ teamRoutes.get("/", async (c) => {
   const userType  = c.get("userType");
   const viewerId  = (await resolveEffectiveMemberId(db, rawUserId, userType)) ?? rawUserId;
 
-  const teams = await db.select().from(schema.teams).all();
+  const teams = await db.select().from(schema.teams).orderBy(schema.teams.sortOrder).all();
   const allTeamMembers = await db.select().from(schema.teamMembers).all();
 
   const memberIds = [...new Set(allTeamMembers.map((tm) => tm.memberId))];

@@ -15,9 +15,8 @@ export const schedulerRoutes = new Hono<{ Bindings: Env; Variables: Variables }>
 
 // ---- 認証必須パスのミドルウェア設定 ----
 schedulerRoutes.use("/oauth/google/start", authMiddleware);
-schedulerRoutes.use("/oauth/google/disconnect", authMiddleware);
 schedulerRoutes.use("/oauth/google/status", authMiddleware);
-schedulerRoutes.use("/oauth/google/calendars", authMiddleware);
+schedulerRoutes.use("/oauth/google/accounts/*", authMiddleware);
 schedulerRoutes.use("/oauth/zoom/start", authMiddleware);
 schedulerRoutes.use("/oauth/zoom/disconnect", authMiddleware);
 schedulerRoutes.use("/oauth/zoom/status", authMiddleware);

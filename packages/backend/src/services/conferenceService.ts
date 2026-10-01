@@ -4,7 +4,7 @@ import { insertCalendarEvent, deleteCalendarEvent, refreshGoogleToken, TokenRefr
 import { decryptToken, encryptToken } from "./tokenCrypto.ts";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 export type BusyCalendar = { id: string; summary: string };
 
@@ -60,21 +60,20 @@ export type GoogleAccessTokenResult =
   | { status: "refresh_failed" }
   | { status: "ok"; accessToken: string; calendarId: string; busyCalendars: BusyCalendar[] };
 
-/** Google 認証情報を取得しトークンをリフレッシュ（必要な場合） */
-export async function getValidGoogleAccessToken(
+type GoogleCredRow = typeof schema.googleCalendarAccounts.$inferSelect;
+
+// invalid_grant相当（400/401 = トークン失効・再連携が必要）の場合のみ連携情報を削除する。
+// 5xx・ネットワークエラー等の一時的な失敗まで削除すると、Google側の一時的な不調だけで
+// 連携が丸ごと切れてしまい、ユーザーが気づかないまま予約カレンダーが「全部空き」に
+// なってしまう（実際にこの不具合が発生した）。一時的な失敗は連携情報を残し、次回リクエスト時に
+// 再試行できるようにする。
+async function refreshGoogleCredIfNeeded(
   db: Db,
-  memberId: string,
+  cred: GoogleCredRow,
   tokenKey: string,
   clientId: string,
   clientSecret: string
 ): Promise<GoogleAccessTokenResult> {
-  const cred = await db
-    .select()
-    .from(schema.googleCredentials)
-    .where(eq(schema.googleCredentials.memberId, memberId))
-    .get();
-  if (!cred) return { status: "not_connected" };
-
   let accessToken = await decryptToken(cred.accessTokenEnc, tokenKey);
   const expiresAt = new Date(cred.accessTokenExpiresAt).getTime();
 
@@ -87,22 +86,17 @@ export async function getValidGoogleAccessToken(
       const newExpiry = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
       const newEncrypted = await encryptToken(accessToken, tokenKey);
       await db
-        .update(schema.googleCredentials)
+        .update(schema.googleCalendarAccounts)
         .set({
           accessTokenEnc: newEncrypted,
           accessTokenExpiresAt: newExpiry,
           lastRefreshedAt: new Date().toISOString(),
         })
-        .where(eq(schema.googleCredentials.memberId, memberId));
+        .where(eq(schema.googleCalendarAccounts.id, cred.id));
     } catch (err) {
-      console.error(`Google token refresh failed for member ${memberId}:`, err);
-      // invalid_grant 相当（400/401 = トークン失効・再連携が必要）の場合のみ連携情報を削除する。
-      // 5xx・ネットワークエラー等の一時的な失敗まで削除すると、Google側の一時的な不調だけで
-      // 連携が丸ごと切れてしまい、ユーザーが気づかないまま予約カレンダーが「全部空き」に
-      // なってしまう（実際にこの不具合が発生した）。一時的な失敗は連携情報を残し、次回リクエスト時に
-      // 再試行できるようにする。
+      console.error(`Google token refresh failed for account ${cred.id} (member ${cred.memberId}):`, err);
       if (err instanceof TokenRefreshError && (err.status === 400 || err.status === 401)) {
-        await db.delete(schema.googleCredentials).where(eq(schema.googleCredentials.memberId, memberId));
+        await db.delete(schema.googleCalendarAccounts).where(eq(schema.googleCalendarAccounts.id, cred.id));
         return { status: "not_connected" };
       }
       return { status: "refresh_failed" };
@@ -118,15 +112,59 @@ export async function getValidGoogleAccessToken(
 }
 
 /**
+ * Google 認証情報を取得しトークンをリフレッシュ（必要な場合）。
+ * 1メンバーが複数のGoogleアカウントを連携できるため、常にそのメンバーの
+ * デフォルトアカウント（isDefault=1）を使う——会議URL発行・ダブルブッキング防止の
+ * ブロック予定作成など、自動処理は常にこの1件だけを対象にする。
+ */
+export async function getValidGoogleAccessToken(
+  db: Db,
+  memberId: string,
+  tokenKey: string,
+  clientId: string,
+  clientSecret: string
+): Promise<GoogleAccessTokenResult> {
+  const cred = await db
+    .select()
+    .from(schema.googleCalendarAccounts)
+    .where(and(eq(schema.googleCalendarAccounts.memberId, memberId), eq(schema.googleCalendarAccounts.isDefault, 1)))
+    .get();
+  if (!cred) return { status: "not_connected" };
+  return refreshGoogleCredIfNeeded(db, cred, tokenKey, clientId, clientSecret);
+}
+
+/**
+ * Google 認証情報を取得しトークンをリフレッシュ（必要な場合）。デフォルトに限らず、
+ * 指定したアカウントIDを対象にする版（連携設定画面で、各アカウントのカレンダー一覧を
+ * 取得・更新する等、自動処理以外の用途で使う）。
+ */
+export async function getValidGoogleAccessTokenForAccount(
+  db: Db,
+  accountId: string,
+  memberId: string,
+  tokenKey: string,
+  clientId: string,
+  clientSecret: string
+): Promise<GoogleAccessTokenResult> {
+  const cred = await db
+    .select()
+    .from(schema.googleCalendarAccounts)
+    .where(and(eq(schema.googleCalendarAccounts.id, accountId), eq(schema.googleCalendarAccounts.memberId, memberId)))
+    .get();
+  if (!cred) return { status: "not_connected" };
+  return refreshGoogleCredIfNeeded(db, cred, tokenKey, clientId, clientSecret);
+}
+
+/**
  * 「軸1（日程の決め方）」用: このメンバーがGoogleカレンダー連携済みかどうかだけを判定する。
  * getAvailableConferenceTypes（軸2・会議URL自動発行の可否）とは別の関心事のため、専用の軽量ヘルパーとして分ける。
  * トークンのリフレッシュは行わない（連携の有無だけを見る軽量チェックのため）。
  */
 export async function isGoogleCalendarConnected(db: Db, memberId: string): Promise<boolean> {
   const cred = await db
-    .select({ memberId: schema.googleCredentials.memberId })
-    .from(schema.googleCredentials)
-    .where(eq(schema.googleCredentials.memberId, memberId))
+    .select({ memberId: schema.googleCalendarAccounts.memberId })
+    .from(schema.googleCalendarAccounts)
+    .where(eq(schema.googleCalendarAccounts.memberId, memberId))
     .get();
   return !!cred;
 }
@@ -442,9 +480,9 @@ export async function getAvailableConferenceTypes(
 ): Promise<("google_meet" | "zoom")[]> {
   const [googleCred, zoomCred] = await Promise.all([
     db
-      .select({ memberId: schema.googleCredentials.memberId })
-      .from(schema.googleCredentials)
-      .where(eq(schema.googleCredentials.memberId, hostMemberId))
+      .select({ memberId: schema.googleCalendarAccounts.memberId })
+      .from(schema.googleCalendarAccounts)
+      .where(eq(schema.googleCalendarAccounts.memberId, hostMemberId))
       .get(),
     db
       .select({ memberId: schema.zoomCredentials.memberId })

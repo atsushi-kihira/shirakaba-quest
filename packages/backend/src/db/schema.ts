@@ -537,6 +537,7 @@ export const teams = sqliteTable("teams", {
   name:        text("name").notNull(),
   emblemEmoji: text("emblem_emoji").notNull().default("🦊"),
   seasonId:    text("season_id"),
+  sortOrder:   integer("sort_order").notNull().default(0), // 管理画面での表示順（ドラッグ&ドロップで並び替え可能）
   createdAt:   integer("created_at").notNull(),
   updatedAt:   integer("updated_at").notNull(),
 });
@@ -842,10 +843,16 @@ export const meetingAttendances = sqliteTable("meeting_attendances", {
 
 // ---- スケジューラー（1on1日程調整機能 Phase 1）----
 
-export const googleCredentials = sqliteTable("google_credentials", {
-  memberId:             text("member_id").primaryKey(),
+// 1メンバーが複数のGoogleアカウントを連携できる（例: 個人用・仕事用）。
+// 自動で予定を作成・ブロックする処理（会議URL発行、ダブルブッキング防止等）は、
+// 常にそのメンバーの isDefault=1 の1件だけを使う（メンバーに必ず0〜1件、
+// 連携が1件以上あれば常にちょうど1件が isDefault=1 になるようアプリ側で維持する）。
+export const googleCalendarAccounts = sqliteTable("google_calendar_accounts", {
+  id:                   text("id").primaryKey(),
+  memberId:             text("member_id").notNull(),
   googleAccountEmail:   text("google_account_email").notNull(),
-  primaryCalendarId:    text("primary_calendar_id").notNull(), // 会議イベントの作成先（書き込み用）。常に "primary"
+  isDefault:            integer("is_default").notNull().default(0),
+  primaryCalendarId:    text("primary_calendar_id").notNull(), // 会議イベントの作成先（書き込み用）。初期値は "primary"
   // 空き状況判定（freeBusy）の対象カレンダー一覧。JSON配列 [{id, summary}]。
   // 未設定（null）の場合は primaryCalendarId のみを対象にする（連携直後のデフォルト動作）。
   busyCalendars:        text("busy_calendars"),

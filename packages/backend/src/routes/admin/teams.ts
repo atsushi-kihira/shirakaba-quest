@@ -3,6 +3,7 @@
 // GET    /api/admin/teams
 // POST   /api/admin/teams
 // POST   /api/admin/teams/auto-assign
+// PUT    /api/admin/teams/reorder
 // PATCH  /api/admin/teams/:id
 // DELETE /api/admin/teams/:id
 // POST   /api/admin/teams/:id/members
@@ -17,12 +18,23 @@ import { randomAssign, aiAssign } from "../../services/team-assign.ts";
 import type { Env, Variables } from "../../types.ts";
 import type { Skill } from "@shared/types";
 
+// ギルド作成時に選べる絵文字の既定セット（手動作成・自動振り分けの両方で使う）
+export const DEFAULT_TEAM_EMOJIS = [
+  "🦊", "🐻", "🐝", "🦉", "🐢", "🐧", "🦁", "🐯",
+  "🐺", "🦅", "🐬", "🐙", "🦄", "🐨", "🐼", "🦔",
+];
+
 export const adminTeamRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+async function nextSortOrder(db: ReturnType<typeof createDb>): Promise<number> {
+  const row = await db.select({ max: sql<number>`max(${schema.teams.sortOrder})` }).from(schema.teams).get();
+  return (row?.max ?? -1) + 1;
+}
 
 // GET /api/admin/teams
 adminTeamRoutes.get("/", async (c) => {
   const db = createDb(c.env.DB);
-  const teams = await db.select().from(schema.teams).orderBy(sql`${schema.teams.createdAt} DESC`).all();
+  const teams = await db.select().from(schema.teams).orderBy(schema.teams.sortOrder).all();
   const allTeamMembers = await db.select().from(schema.teamMembers).all();
 
   const members = await db.select({
@@ -60,11 +72,27 @@ adminTeamRoutes.post("/", async (c) => {
     name: body.name.trim(),
     emblemEmoji: body.emblemEmoji ?? "🦊",
     seasonId: body.seasonId ?? null,
+    sortOrder: await nextSortOrder(db),
     createdAt: now,
     updatedAt: now,
   });
 
   return c.json({ data: { id } }, 201);
+});
+
+// PUT /api/admin/teams/reorder — ギルドの表示順を一括更新する
+adminTeamRoutes.put("/reorder", async (c) => {
+  const db = createDb(c.env.DB);
+  const now = Math.floor(Date.now() / 1000);
+  const { order } = await c.req.json<{ order: string[] }>();
+
+  await Promise.all(
+    (order ?? []).map((id, idx) =>
+      db.update(schema.teams).set({ sortOrder: idx, updatedAt: now }).where(eq(schema.teams.id, id))
+    )
+  );
+
+  return c.json({ ok: true });
 });
 
 // POST /api/admin/teams/auto-assign
@@ -103,12 +131,12 @@ adminTeamRoutes.post("/auto-assign", async (c) => {
     assignments = randomAssign(membersForAssign, body.teamSize, body.leaderIds ?? []);
   }
 
-  const DEFAULT_EMOJIS = ["🦊", "🐻", "🐝", "🦉", "🐢", "🐧", "🦁", "🐯"];
   const createdTeams = [];
+  let sortOrder = await nextSortOrder(db);
 
   for (const assignment of assignments) {
     const teamId = newId();
-    const emoji = body.teamEmojis?.[assignment.teamIndex] ?? DEFAULT_EMOJIS[assignment.teamIndex % DEFAULT_EMOJIS.length];
+    const emoji = body.teamEmojis?.[assignment.teamIndex] ?? DEFAULT_TEAM_EMOJIS[assignment.teamIndex % DEFAULT_TEAM_EMOJIS.length];
     const name  = body.teamNames?.[assignment.teamIndex] ?? `チーム ${assignment.teamIndex + 1}`;
 
     await db.insert(schema.teams).values({
@@ -116,6 +144,7 @@ adminTeamRoutes.post("/auto-assign", async (c) => {
       name,
       emblemEmoji: emoji,
       seasonId: body.seasonId ?? null,
+      sortOrder: sortOrder++,
       createdAt: now,
       updatedAt: now,
     });
