@@ -99,6 +99,18 @@ type GiverParams = {
   maxHop: Hop; count: number;
   goodMatchContext?: string;
 };
+// 人脈検索：誰かに貢献する・紹介の道筋をさがすものではなく、純粋に「条件に合う人物」を
+// 全メンバーの外部人脈から横断検索するモード。到達方法（hop）の概念は存在しないため、
+// 内部的には常に maxHop: "direct" の単一グループとして扱う（型・履歴まわりの既存実装を再利用するため）。
+type ContactSearchParams = {
+  db: Db; apiKey: string; isDev: boolean;
+  mode: "contact-search"; meId: string;
+  specialties: string[]; // 空配列 = 専門分野を問わずすべて対象
+  freeText: string; // 検索条件（自由記述）。AIへの指示本体になる
+  includeOwnContacts: boolean; // false の場合、自分自身の人脈は検索対象から除外する
+  maxHop: Hop; count: number;
+  goodMatchContext?: string;
+};
 
 function hopsUpTo(maxHop: Hop): Hop[] {
   const idx = HOP_ORDER.indexOf(maxHop);
@@ -321,6 +333,29 @@ ${hopExplain}
 {"results":[{"candidateId":"...","matchedTargetId":"...","hop":"direct|2hop|3hop","type":"egg|goose","dealDescription":"...","why":"..."}]}`;
 }
 
+// 人脈検索（純粋な横断検索）用のプロンプト。他モードと異なり「さがす対象」は金の卵/ガチョウではなく
+// 自由記述の検索条件そのものであり、hop（到達方法）の概念も存在しない。
+function buildContactSearchInstructions(count: number, freeText: string): string {
+  return `あなたはBNIチャプターの人脈検索を支援するAIです。
+これは紹介の道筋をさがすものではなく、指定された条件に合う人物を人脈データベースから横断的に見つけ出す、純粋な検索機能です。
+以下の「検索条件」に合致する人物を、候補一覧の中から最大${count}件、関連性が高い順にJSON形式のみで出力してください。
+
+# 検索条件
+${freeText}
+
+# 出力ルール
+- 候補一覧に存在する candidateId のみを使うこと。存在しないIDや実名を作り出さないこと。
+- 候補として渡された情報以外の個人情報（連絡先など）を推測・記載しないこと。
+- 検索条件に明確に合致しない候補は出力しないこと（無理に${count}件まで埋めようとしなくてよい）。
+- dealDescription（1文、日本語）: その人物がどんな立場・事業をしている人かの要約。
+- why（1文、日本語）: 検索条件のどの点に合致したかの根拠。
+- matchedTargetId は常に "query"、hop は常に "direct"、type は常に "egg" を指定すること（内部処理用の固定値）。
+- 数値スコアは一切出力しないこと。
+- 候補が多い場合でも、1件ずつの検討過程やリストの読み上げを本文として書き出さないこと。内部で判断した上で、結論のJSONだけを出力すること。
+- 出力は次のJSON形式のみ。1文字目から必ず「{」で始めること（前置きの説明・検討過程・コードブロック記法は一切書かない）:
+{"results":[{"candidateId":"...","matchedTargetId":"query","hop":"direct","type":"egg","dealDescription":"...","why":"..."}]}`;
+}
+
 // ---- モード別: 候補収集 ----
 
 type ForMeCandidate = {
@@ -454,7 +489,28 @@ function formatTargets(targets: EnishiTarget[]): string {
 }
 
 // ---- 開発用モック ----
-function devMockResult(maxHop: Hop, mode: "for-me" | "giver"): EnishiSearchResult {
+function devMockResult(maxHop: Hop, mode: "for-me" | "giver" | "contact-search"): EnishiSearchResult {
+  if (mode === "contact-search") {
+    return {
+      groups: [{
+        hop: "direct", label: "検索結果",
+        results: [{
+          hop: "direct", type: "egg",
+          matchedTargetLabel: "検索条件（開発モック）",
+          counterpart: { memberId: "dev-member", name: "開発モック 太郎", emoji: "🧪", bgColor: "bg-stone-100" },
+          path: ["あなた", "開発モック 太郎さん", "候補の人脈（属性のみ・開発モック）"],
+          contactPathIndex: 2,
+          dealDescription: "これは開発環境用のモックデータです。本番環境ではAIが実際の候補データから検索します。",
+          why: "開発モックのため根拠は生成されていません。",
+          privacyNote: "相手はなかまの人脈です。実名・連絡先は伏せています。",
+          linkedMemberId: "dev-member",
+          actionLabel: "開発モック 太郎さんに紹介をお願いする",
+          candidateId: "dev-candidate",
+        }],
+      }],
+      truncated: false,
+    };
+  }
   const groups = hopsUpTo(maxHop).map((hop) => ({
     hop, label: HOP_LABEL[hop],
     results: hop === "direct" ? [{
@@ -478,12 +534,72 @@ function devMockResult(maxHop: Hop, mode: "for-me" | "giver"): EnishiSearchResul
 }
 
 // ---- メイン ----
-export async function runEnishiSearch(params: ForMeParams | GiverParams): Promise<EnishiSearchResult> {
+export async function runEnishiSearch(params: ForMeParams | GiverParams | ContactSearchParams): Promise<EnishiSearchResult> {
   const { db, apiKey, isDev, maxHop, count } = params;
 
   if (isDev || !apiKey || apiKey === "dev-not-set") {
     await new Promise((r) => setTimeout(r, 500));
     return devMockResult(maxHop, params.mode);
+  }
+
+  if (params.mode === "contact-search") {
+    const { specialties, freeText, includeOwnContacts } = params;
+    const allCandidates = await collectForMeCandidates(db, params.meId);
+    let candidates = includeOwnContacts ? allCandidates : allCandidates.filter((cnd) => !cnd.isOwn);
+    if (specialties.length > 0) candidates = candidates.filter((cnd) => cnd.specialty && specialties.includes(cnd.specialty));
+    if (candidates.length === 0) {
+      return { groups: [{ hop: "direct", label: "検索結果", results: [] }], truncated: false };
+    }
+    const candidatesTruncated = candidates.length > MAX_CANDIDATES;
+    if (candidatesTruncated) candidates = sampleContactsFairlyBySpecialty(candidates, MAX_CANDIDATES);
+
+    const prompt = `${buildContactSearchInstructions(count, freeText)}
+
+# 候補一覧（外部人脈）
+${formatForMeCandidates(candidates)}${params.goodMatchContext ?? ""}`;
+
+    const { matches, failed: aiCallFailed } = await runClaudeMatching(apiKey, prompt, "contact-search");
+
+    const candidateMap = new Map(candidates.map((cnd) => [cnd.candidateId, cnd]));
+    const cards: EnishiResultCard[] = [];
+    for (const m of matches) {
+      const cand = candidateMap.get(m.candidateId);
+      if (!cand) continue;
+      const intermediaryLabel = cand.name ?? `${cand.specialty ?? "人脈"}（属性のみ）`;
+
+      if (cand.isOwn) {
+        cards.push({
+          hop: "direct", type: "egg",
+          matchedTargetLabel: freeText,
+          counterpart: { memberId: "", name: intermediaryLabel, emoji: "👤", bgColor: "bg-stone-100" },
+          path: ["あなた", `${intermediaryLabel}（あなた自身の人脈）`],
+          contactPathIndex: 1,
+          dealDescription: m.dealDescription, why: m.why,
+          privacyNote: "これはあなた自身が登録した人脈です。すでに接点があるので、まずは直接連絡してみましょう。",
+          linkedMemberId: "",
+          actionLabel: `${intermediaryLabel}さんに直接連絡してみる`,
+          isOwnContact: true,
+          candidateId: cand.candidateId,
+        });
+        continue;
+      }
+
+      cards.push({
+        hop: "direct", type: "egg",
+        matchedTargetLabel: freeText,
+        counterpart: { memberId: cand.ownerMemberId, name: cand.ownerName, emoji: cand.ownerEmoji, bgColor: cand.ownerBgColor },
+        path: ["あなた", `${cand.ownerName}さん`, `${intermediaryLabel}（人脈）`],
+        contactPathIndex: 2,
+        dealDescription: m.dealDescription, why: m.why,
+        privacyNote: cand.visibility === "full" ? null : "相手はなかまの人脈です。実名・連絡先は伏せています。まずはご本人に相談してみましょう。",
+        linkedMemberId: cand.ownerMemberId,
+        actionLabel: `${cand.ownerName}さんに紹介をお願いする`,
+        candidateId: cand.candidateId,
+      });
+    }
+
+    const sorted = cards.slice(0, count);
+    return { groups: [{ hop: "direct", label: "検索結果", results: sorted }], truncated: candidatesTruncated, aiCallFailed };
   }
 
   if (params.mode === "for-me") {

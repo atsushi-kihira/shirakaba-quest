@@ -6,9 +6,11 @@
 // GET  /api/enishi/contributors   → 金の卵・ガチョウを登録しているメンバー一覧（貢献のご縁の対象選択用）
 // POST /api/enishi/search/for-me  → 私のご縁（自分の卵/ガチョウ × なかまの人脈）
 // POST /api/enishi/search/giver   → 貢献のご縁（自分の人脈 × 指定したメンバーの卵/ガチョウ）
+// GET  /api/enishi/contacts/specialties → 人脈検索の専門分野フィルタ候補（全メンバーの外部人脈から集計）
+// POST /api/enishi/search/contacts → 人脈検索（紹介の道筋ではなく、条件に合う人物の横断検索）
 // =============================================================
 import { Hono } from "hono";
-import { and, eq, desc, inArray, ne } from "drizzle-orm";
+import { and, eq, desc, inArray, ne, or } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -108,10 +110,15 @@ function buildGiverTitle(targetMemberNames: string[], createdAt: number, resultC
   return `${formatHistoryDate(createdAt)} 貢献のご縁：${shown || "なかま"}${suffix}へ（${resultCount}件ヒット）`;
 }
 
+function buildContactSearchTitle(freeText: string, createdAt: number, resultCount: number): string {
+  const short = freeText.length > 20 ? `${freeText.slice(0, 20)}…` : freeText;
+  return `${formatHistoryDate(createdAt)} 人脈検索：${short}（${resultCount}件ヒット）`;
+}
+
 // 自分の過去の検索履歴から「良いご縁だった」とチェック済みのカードを集め、プロンプトに追記する
 // 参考情報を組み立てる（本人の履歴のみを対象にするため、他のユーザーには影響しない）。
 async function buildGoodMatchContext(
-  db: ReturnType<typeof createDb>, meId: string, mode: "for-me" | "giver"
+  db: ReturnType<typeof createDb>, meId: string, mode: "for-me" | "giver" | "contact-search"
 ): Promise<string | undefined> {
   const rows = await db.select({ resultJson: schema.enishiSearchHistory.resultJson })
     .from(schema.enishiSearchHistory)
@@ -148,7 +155,7 @@ ${lines.join("\n")}`;
 // 自分の過去の検索履歴から「AIの判断ミスだった」として削除済みのカードを集め、プロンプトに追記する
 // 反面教師の情報を組み立てる（本人の履歴のみを対象にするため、他のユーザーには影響しない）。
 async function buildBadMatchContext(
-  db: ReturnType<typeof createDb>, meId: string, mode: "for-me" | "giver"
+  db: ReturnType<typeof createDb>, meId: string, mode: "for-me" | "giver" | "contact-search"
 ): Promise<string | undefined> {
   const rows = await db.select({ resultJson: schema.enishiSearchHistory.resultJson })
     .from(schema.enishiSearchHistory)
@@ -185,7 +192,7 @@ ${lines.join("\n")}`;
 async function saveSearchHistory(
   db: ReturnType<typeof createDb>,
   meId: string,
-  mode: "for-me" | "giver",
+  mode: "for-me" | "giver" | "contact-search",
   title: string,
   params: unknown,
   result: EnishiSearchResult,
@@ -519,6 +526,57 @@ enishiRoutes.post("/search/giver", async (c) => {
   return c.json({ data: augmented, historyId });
 });
 
+// ---- GET /api/enishi/contacts/specialties ---- 人脈検索の専門分野フィルタ候補（検索対象になり得る全メンバーの外部人脈から集計）
+enishiRoutes.get("/contacts/specialties", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const rows = await db.select({ specialty: schema.externalContacts.specialty })
+    .from(schema.externalContacts)
+    .where(or(
+      and(ne(schema.externalContacts.ownerMemberId, meId), ne(schema.externalContacts.visibility, "private")),
+      eq(schema.externalContacts.ownerMemberId, meId)
+    ))
+    .all();
+  const specialties = [...new Set(rows.map((r) => r.specialty?.trim()).filter((s): s is string => !!s))]
+    .sort((a, b) => a.localeCompare(b, "ja"));
+  return c.json({ data: specialties });
+});
+
+// ---- POST /api/enishi/search/contacts ---- 人脈検索：条件に合う人物を全メンバーの外部人脈から横断検索（紹介の道筋ではなく単純な検索）
+enishiRoutes.post("/search/contacts", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const body = await c.req.json<{ specialties?: string[]; freeText?: string; includeOwnContacts?: boolean }>();
+  const freeText = body.freeText?.trim() ?? "";
+  if (!freeText) {
+    return c.json({ error: { code: "invalid_input", message: "検索条件を入力してください" } }, 400);
+  }
+  const specialties = [...new Set(body.specialties ?? [])];
+  const includeOwnContacts = body.includeOwnContacts ?? true;
+  const count = MAX_RESULTS;
+
+  const [goodMatchContext, badMatchContext] = await Promise.all([
+    buildGoodMatchContext(db, meId, "contact-search"),
+    buildBadMatchContext(db, meId, "contact-search"),
+  ]);
+  const result = await runEnishiSearch({
+    db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
+    mode: "contact-search", meId, specialties, freeText, includeOwnContacts,
+    maxHop: "direct", count, goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
+  });
+
+  const now = Math.floor(Date.now() / 1000);
+  const title = buildContactSearchTitle(freeText, now, countResults(result));
+  const { historyId, result: augmented } = await saveSearchHistory(
+    db, meId, "contact-search", title, { specialties, freeText, includeOwnContacts, count }, result, now
+  );
+  return c.json({ data: augmented, historyId });
+});
+
 // ---- GET /api/enishi/history ---- 検索履歴一覧（新しい順・自分の分のみ）
 enishiRoutes.get("/history", async (c) => {
   const db = createDb(c.env.DB);
@@ -545,7 +603,7 @@ enishiRoutes.get("/history", async (c) => {
     } catch {
       // 壊れたJSON（想定外）は無視
     }
-    return { id: r.id, mode: r.mode as "for-me" | "giver", title: r.title, createdAt: r.createdAt, hasGoodMatch };
+    return { id: r.id, mode: r.mode as "for-me" | "giver" | "contact-search", title: r.title, createdAt: r.createdAt, hasGoodMatch };
   });
 
   return c.json({ data });

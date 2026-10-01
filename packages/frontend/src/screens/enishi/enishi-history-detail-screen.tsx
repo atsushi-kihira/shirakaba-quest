@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { ResultGroups, PageSizeSelect, updateCardGoodMatch, removeTransactedCandidate, removeHiddenCandidate, removeIntroducedCandidate, removeCards } from "./enishi-search-screen";
 import type { SearchResult } from "./enishi-search-screen";
 
-type HistoryDetail = { id: string; mode: "for-me" | "giver"; title: string; createdAt: number; result: SearchResult };
+type HistoryDetail = { id: string; mode: "for-me" | "giver" | "contact-search"; title: string; createdAt: number; result: SearchResult };
 
 export function EnishiHistoryDetailScreen() {
   const { id } = useParams<{ id: string }>();

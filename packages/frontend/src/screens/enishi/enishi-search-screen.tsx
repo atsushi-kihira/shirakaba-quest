@@ -5,7 +5,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Loader2, Search, Gift, ChevronRight, ChevronLeft, History, Star, Trash2, FileDown } from "lucide-react";
+import { Loader2, Search, Gift, Users, ChevronRight, ChevronLeft, History, Star, Trash2, FileDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 
@@ -88,7 +88,7 @@ export function removeCards(result: SearchResult, cardIds: Set<string> | string[
 }
 
 export function EnishiSearchScreen() {
-  const [mode, setMode] = useState<"for-me" | "giver">("for-me");
+  const [mode, setMode] = useState<"for-me" | "giver" | "contact-search">("for-me");
   const { termEnishi } = useSettings();
 
   return (
@@ -105,7 +105,7 @@ export function EnishiSearchScreen() {
         </Link>
       </div>
       <p className="text-sm mt-1 mb-5" style={{ color: "var(--color-ink-500)" }}>
-        2つの視点で、なかまを通じて{termEnishi}をさがせます。視点ごとに「さがす条件」を設定してください。
+        3つの視点で、なかまを通じて{termEnishi}をさがせます。視点ごとに「さがす条件」を設定してください。
       </p>
 
       <div className="flex gap-2 p-1.5 rounded-2xl mb-5" style={{ background: "var(--color-paper-200)" }}>
@@ -121,9 +121,15 @@ export function EnishiSearchScreen() {
           <span className="flex items-center gap-1.5"><Gift size={15} /> 貢献のための{termEnishi}</span>
           <span className="text-[10px] font-normal opacity-90">なかまの卵/ガチョウ × 自分の人脈</span>
         </button>
+        <button onClick={() => setMode("contact-search")}
+          className="flex-1 py-3 rounded-xl text-sm font-medium transition flex flex-col items-center gap-0.5"
+          style={{ background: mode === "contact-search" ? "var(--color-brand)" : "transparent", color: mode === "contact-search" ? "white" : "var(--color-ink-600)" }}>
+          <span className="flex items-center gap-1.5"><Users size={15} /> 人脈検索</span>
+          <span className="text-[10px] font-normal opacity-90">条件に合う人を全員の人脈からさがす</span>
+        </button>
       </div>
 
-      {mode === "for-me" ? <ForMePanel /> : <GiverPanel />}
+      {mode === "for-me" ? <ForMePanel /> : mode === "giver" ? <GiverPanel /> : <ContactSearchPanel />}
     </div>
   );
 }
@@ -223,7 +229,7 @@ export function ContactCardPreview({ contactId }: { contactId: string }) {
 }
 
 export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onCardsRemoved }: {
-  result: SearchResult; historyId: string; mode: "for-me" | "giver"; pageSize: number;
+  result: SearchResult; historyId: string; mode: "for-me" | "giver" | "contact-search"; pageSize: number;
   onToggleGoodMatch: (cardId: string, goodMatch: boolean) => void;
   onRemoveTransacted: (candidateId: string) => void;
   onRemoveHidden: (candidateId: string) => void;
@@ -296,7 +302,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
   return (
     <div className="mt-5">
       <UsedContactsBreakdownNotice result={result} />
-      {mode === "for-me" && (
+      {(mode === "for-me" || mode === "contact-search") && (
         <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
           ※ 「この{termEnishi}で繋がりました」「今後の表示は不要です」を押した人脈はこの検索結果には表示されません。
         </p>
@@ -377,7 +383,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
 }
 
 function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onRemoveCard, selectMode, selected, onToggleSelect }: {
-  r: ResultCard; historyId: string; mode: "for-me" | "giver";
+  r: ResultCard; historyId: string; mode: "for-me" | "giver" | "contact-search";
   onToggleGoodMatch: (cardId: string, goodMatch: boolean) => void;
   onRemoveTransacted: (candidateId: string) => void;
   onRemoveHidden: (candidateId: string) => void;
@@ -430,17 +436,21 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
           {r.counterpart.emoji}
         </span>
         <b className="text-sm" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>{r.counterpart.name}さん</b>
-        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>{HOP_LABEL[r.hop]}</span>
-        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1"
-          style={{ background: r.type === "egg" ? "var(--color-paper-200)" : "#e7f0dc", color: r.type === "egg" ? "var(--color-accent)" : "var(--color-success)" }}>
-          {r.type === "egg" ? "🥚 卵型" : "🪙 ガチョウ型"}
-        </span>
+        {mode !== "contact-search" && (
+          <>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>{HOP_LABEL[r.hop]}</span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1"
+              style={{ background: r.type === "egg" ? "var(--color-paper-200)" : "#e7f0dc", color: r.type === "egg" ? "var(--color-accent)" : "var(--color-success)" }}>
+              {r.type === "egg" ? "🥚 卵型" : "🪙 ガチョウ型"}
+            </span>
+          </>
+        )}
         {r.isOwnContact && (
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
             👤 あなたの人脈
           </span>
         )}
-        {mode === "for-me" && (
+        {(mode === "for-me" || mode === "contact-search") && (
           <button onClick={() => toggleGoodMatch.mutate(!r.goodMatch)} disabled={toggleGoodMatch.isPending}
             className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 disabled:opacity-50"
             style={{
@@ -484,7 +494,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
 
       <p className="text-xs" style={{ color: "var(--color-ink-800)" }}>{r.dealDescription}</p>
       <p className="text-[11px] mt-2 rounded-lg px-2.5 py-1.5" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-600)" }}>
-        {r.type === "egg" ? "🥚" : "🪙"} <b style={{ color: "var(--color-brand)" }}>なぜこの人？</b> {r.why}
+        {mode === "contact-search" ? "🔎" : r.type === "egg" ? "🥚" : "🪙"} <b style={{ color: "var(--color-brand)" }}>なぜこの人？</b> {r.why}
       </p>
       {r.privacyNote && (
         <p className="text-[11px] mt-2 rounded-lg px-2.5 py-1.5" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-600)" }}>
@@ -498,7 +508,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
           style={{ background: "var(--color-brand)" }}>
           {r.actionLabel} <ChevronRight size={13} />
         </Link>
-        {mode === "for-me" && (
+        {(mode === "for-me" || mode === "contact-search") && (
           r.candidateId ? (
             <>
               <button
@@ -543,7 +553,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
             </span>
           )
         )}
-        {mode === "giver" && !selectMode && (
+        {(mode === "giver" || mode === "contact-search") && !selectMode && (
           <button
             onClick={() => setShowRemoveModal(true)}
             className="ml-auto text-xs font-medium px-3 py-2 rounded-xl flex items-center gap-1.5"
@@ -1156,6 +1166,126 @@ function GiverPanel() {
       {searchResponse && (
         <ResultGroups result={searchResponse.data} historyId={searchResponse.historyId} mode="giver" pageSize={pageSize}
           onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={() => {}} onRemoveHidden={() => {}} onRemoveIntroduced={removeIntroduced}
+          onCardsRemoved={handleCardsRemoved} />
+      )}
+    </div>
+  );
+}
+
+// ---- 人脈検索 ----
+// 誰かに貢献する・紹介の道筋をさがすものではなく、条件に合う人物を全メンバーの外部人脈から
+// 純粋に横断検索する視点。到達方法（次数）の概念はない。
+
+function useContactSearchSpecialtyOptions(): string[] {
+  const { data } = useQuery({
+    queryKey: ["enishi", "contacts", "specialties"],
+    queryFn: () => api.get<{ data: string[] }>("/enishi/contacts/specialties"),
+  });
+  return data?.data ?? [];
+}
+
+function ContactSearchPanel() {
+  const specialtyOptions = useContactSearchSpecialtyOptions();
+
+  const [specialties, setSpecialties] = useState<Set<string>>(new Set());
+  const [freeText, setFreeText] = useState("");
+  const [includeOwnContacts, setIncludeOwnContacts] = useState(true);
+  const [pageSize, setPageSize] = useState(10);
+  const [error, setError] = useState<string | null>(null);
+  const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
+
+  const search = useMutation({
+    mutationFn: () => api.post<SearchResponse>("/enishi/search/contacts", {
+      specialties: [...specialties], freeText, includeOwnContacts,
+    }),
+    onSuccess: setSearchResponse,
+    onError: (e) => setError(e instanceof ApiError ? e.message : "検索に失敗しました"),
+  });
+
+  function toggleGoodMatch(cardId: string, goodMatch: boolean) {
+    setSearchResponse((prev) => prev && { ...prev, data: updateCardGoodMatch(prev.data, cardId, goodMatch) });
+  }
+  function removeTransacted(candidateId: string) {
+    setSearchResponse((prev) => prev && { ...prev, data: removeTransactedCandidate(prev.data, candidateId) });
+  }
+  function removeHidden(candidateId: string) {
+    setSearchResponse((prev) => prev && { ...prev, data: removeHiddenCandidate(prev.data, candidateId) });
+  }
+  function handleCardsRemoved(cardIds: string[]) {
+    setSearchResponse((prev) => prev && { ...prev, data: removeCards(prev.data, cardIds) });
+  }
+
+  const toggleSpecialty = (v: string) => {
+    setSpecialties((prev) => {
+      const next = new Set(prev);
+      next.has(v) ? next.delete(v) : next.add(v);
+      return next;
+    });
+  };
+
+  return (
+    <div>
+      <AlreadyConnectedSection />
+
+      <div className="card-paper rounded-2xl p-4 mb-4">
+        <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>① 専門分野で絞り込む</h2>
+        {specialtyOptions.length > 0 ? (
+          <>
+            <div className="flex flex-wrap gap-2 mb-2">
+              <button onClick={() => setSpecialties(new Set())}
+                className="text-xs font-medium px-3 py-1.5 rounded-full"
+                style={{
+                  background: specialties.size === 0 ? "var(--color-accent)" : "white",
+                  border: `1px solid ${specialties.size === 0 ? "var(--color-accent)" : "var(--color-paper-300)"}`,
+                  color: specialties.size === 0 ? "white" : "var(--color-ink-600)",
+                }}>すべて</button>
+              {specialtyOptions.map((s) => (
+                <button key={s} onClick={() => toggleSpecialty(s)}
+                  className="text-xs font-medium px-3 py-1.5 rounded-full"
+                  style={{
+                    background: specialties.has(s) ? "var(--color-paper-200)" : "white",
+                    border: `1px solid ${specialties.has(s) ? "var(--color-accent)" : "var(--color-paper-300)"}`,
+                    color: specialties.has(s) ? "var(--color-accent)" : "var(--color-ink-600)",
+                  }}>{s}</button>
+              ))}
+            </div>
+            {specialties.size === 0 && (
+              <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
+                「すべて」が選択されている間は、専門分野を問わずすべての人脈が検索対象になります
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>まだ専門分野が登録された外部人脈がありません。</p>
+        )}
+
+        <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>② さがしたい人の条件（自由記述）</h2>
+        <textarea value={freeText} onChange={(e) => setFreeText(e.target.value)} rows={3}
+          placeholder="例：広報・PR領域に強く、スタートアップ支援の実績がある人"
+          className="w-full rounded-xl px-3 py-2 text-sm mb-4" style={{ border: "1px solid var(--color-paper-300)" }} />
+
+        <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>③ 検索対象</h2>
+        <label className="flex items-center gap-2 mb-4 text-sm cursor-pointer" style={{ color: "var(--color-ink-700)" }}>
+          <input type="checkbox" checked={includeOwnContacts} onChange={(e) => setIncludeOwnContacts(e.target.checked)} />
+          自分自身の人脈も検索対象に含める
+        </label>
+
+        <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>④ 表示件数</h2>
+        <PageSizeSelect value={pageSize} onChange={setPageSize} />
+
+        {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
+
+        <button onClick={() => freeText.trim() ? search.mutate() : setError("さがしたい人の条件を入力してください")}
+          disabled={search.isPending}
+          className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
+          style={{ background: "var(--color-brand)" }}>
+          {search.isPending ? <Loader2 size={16} className="animate-spin" /> : <Users size={16} />} この条件で人脈をさがす
+        </button>
+      </div>
+
+      {searchResponse && (
+        <ResultGroups result={searchResponse.data} historyId={searchResponse.historyId} mode="contact-search" pageSize={pageSize}
+          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={removeTransacted} onRemoveHidden={removeHidden} onRemoveIntroduced={() => {}}
           onCardsRemoved={handleCardsRemoved} />
       )}
     </div>

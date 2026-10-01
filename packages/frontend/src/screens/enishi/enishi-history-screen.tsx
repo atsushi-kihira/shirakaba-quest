@@ -5,11 +5,18 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ChevronRight, Search, Gift, Star, Trash2, Loader2 } from "lucide-react";
+import { ChevronRight, Search, Gift, Users, Star, Trash2, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 
-type HistoryListItem = { id: string; mode: "for-me" | "giver"; title: string; createdAt: number; hasGoodMatch: boolean };
+type HistoryMode = "for-me" | "giver" | "contact-search";
+type HistoryListItem = { id: string; mode: HistoryMode; title: string; createdAt: number; hasGoodMatch: boolean };
+
+const MODE_ICON: Record<HistoryMode, { icon: typeof Search; bg: string; color: string }> = {
+  "for-me": { icon: Search, bg: "var(--color-paper-200)", color: "var(--color-accent)" },
+  giver: { icon: Gift, bg: "#e7f0dc", color: "var(--color-success)" },
+  "contact-search": { icon: Users, bg: "var(--color-paper-200)", color: "var(--color-ink-600)" },
+};
 
 export function EnishiHistoryScreen() {
   const { termEnishi } = useSettings();
@@ -100,8 +107,8 @@ export function EnishiHistoryScreen() {
               <div key={item.id} className="card-paper rounded-2xl p-3.5 flex items-center gap-3">
                 <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} className="shrink-0" />
                 <span className="w-9 h-9 rounded-full flex items-center justify-center text-base shrink-0"
-                  style={{ background: item.mode === "for-me" ? "var(--color-paper-200)" : "#e7f0dc", color: item.mode === "for-me" ? "var(--color-accent)" : "var(--color-success)" }}>
-                  {item.mode === "for-me" ? <Search size={16} /> : <Gift size={16} />}
+                  style={{ background: MODE_ICON[item.mode].bg, color: MODE_ICON[item.mode].color }}>
+                  {(() => { const Icon = MODE_ICON[item.mode].icon; return <Icon size={16} />; })()}
                 </span>
                 <Link to={`/enishi/history/${item.id}`} className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate flex items-center gap-1.5" style={{ color: "var(--color-ink-800)" }}>
