@@ -18,7 +18,7 @@ import { fmtDateShort, fmtTime, isToday } from "@/lib/date";
 
 import type { Season } from "@shared/types";
 
-type MyRankResponse  = { data: { points: number; rank: number } };
+type MyRankResponse  = { data: { points: number; rank: number | null } };
 type ActiveSeasonResponse = { data: Season | null };
 type OnoSession = {
   id: string;
@@ -170,8 +170,8 @@ export function HomeScreen() {
   }
 
   const { data: rankData } = useQuery({
-    queryKey: ["ranking", "me"],
-    queryFn: () => api.get<MyRankResponse>("/ranking/me"),
+    queryKey: ["season", "ranking", "me"],
+    queryFn: () => api.get<MyRankResponse>("/season/ranking/me"),
     enabled: !!user,
   });
 
@@ -1102,9 +1102,11 @@ export function HomeScreen() {
             <div className="text-5xl font-bold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
               {rank.points}<span className="text-xl ml-1">pt</span>
             </div>
-            <p className="text-sm mb-1" style={{ color: "var(--color-ink-500)" }}>
-              現在 <span className="font-bold" style={{ color: "var(--color-ink-800)" }}>{rank.rank}</span> 位
-            </p>
+            {rank.rank !== null && (
+              <p className="text-sm mb-1" style={{ color: "var(--color-ink-500)" }}>
+                現在 <span className="font-bold" style={{ color: "var(--color-ink-800)" }}>{rank.rank}</span> 位
+              </p>
+            )}
           </div>
         ) : (
           <div className="text-5xl font-bold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
