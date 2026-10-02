@@ -1076,7 +1076,7 @@ export function HomeScreen() {
         <div className="card-paper rounded-3xl p-5 opacity-50">
           <div className="flex items-center gap-2">
             <span className="text-xl">⭐️</span>
-            <span className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>現在のポイント</span>
+            <span className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>現在のシーズンポイント</span>
             <Lock size={14} className="ml-auto" style={{ color: "var(--color-ink-400)" }} />
           </div>
           <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>承認されると表示されます</p>
@@ -1089,7 +1089,7 @@ export function HomeScreen() {
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
             <span className="text-xl">⭐️</span>
-            <span className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>現在のポイント</span>
+            <span className="text-sm font-medium" style={{ color: "var(--color-ink-600)" }}>現在のシーズンポイント</span>
           </div>
           <ChevronDown
             size={16}
