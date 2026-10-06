@@ -28,7 +28,8 @@ type SeriesDetail = {
   status: "voting" | "confirmed" | "ended" | "cancelled";
   deadline: number | null;
   endCondition: "date" | "count" | null; endDate: number | null; occurrenceCount: number | null;
-  conferenceType: "google_meet" | "zoom" | null;
+  conferenceType: "manual" | "google_meet" | "zoom" | null;
+  conferenceUrl: string | null;
   candidates: Candidate[];
   myResponses: Record<string, Availability>;
   targetMembers: TargetMember[];
@@ -59,7 +60,7 @@ function countYes(cand: Candidate): number {
 const STATUS_LABEL: Record<string, string> = {
   voting: "投票中", confirmed: "確定済み", ended: "終了", cancelled: "キャンセル",
 };
-const CONFERENCE_LABEL: Record<string, string> = { google_meet: "Google Meet", zoom: "Zoom" };
+const CONFERENCE_LABEL: Record<string, string> = { manual: "会議URL（全回共通）", google_meet: "Google Meet", zoom: "Zoom" };
 
 function formatEndCondition(series: SeriesDetail, tz: string): string {
   if (series.endCondition === "count" && series.occurrenceCount) return `全${series.occurrenceCount}回`;
@@ -174,7 +175,7 @@ export function MeetingSeriesDetailScreen() {
           </span>
           {series.conferenceType && (
             <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: "rgba(107,125,179,0.12)", color: "#6B7DB3" }}>
-              🎥 {CONFERENCE_LABEL[series.conferenceType]} 自動発行
+              🎥 {CONFERENCE_LABEL[series.conferenceType]}{series.conferenceType === "manual" ? "" : series.conferenceUrl ? "（全回共通のURL）" : " 自動発行"}
             </span>
           )}
         </div>

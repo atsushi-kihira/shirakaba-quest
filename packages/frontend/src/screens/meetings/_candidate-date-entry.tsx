@@ -8,6 +8,7 @@ import { Plus, Trash2, CalendarDays, Pencil, GripVertical } from "lucide-react";
 import { MeetingCandidatePicker } from "./_meeting-candidate-picker";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
+import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
 
 export type CandidateRow = { id: string; date: string; time: string; endTime: string };
 
@@ -15,7 +16,7 @@ export const MIN_ONEONONE_CANDIDATES = 2;
 export const MAX_ONEONONE_CANDIDATES = 5;
 
 export function emptyCandidateRow(): CandidateRow {
-  return { id: crypto.randomUUID(), date: "", time: "10:00", endTime: "10:30" };
+  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: defaultEndTime(30) };
 }
 
 function todayDateStr(): string {
@@ -61,7 +62,12 @@ export function CandidateDateEntry({
     onChange(candidates.filter((_, idx) => idx !== i));
   }
   function updateRow(i: number, field: keyof CandidateRow, value: string) {
-    onChange(candidates.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
+    onChange(candidates.map((r, idx) => {
+      if (idx !== i) return r;
+      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
+      if (field === "time") return { ...r, time: value, endTime: shiftEndWithStart(r.time, r.endTime, value) };
+      return { ...r, [field]: value };
+    }));
   }
   // カレンダー上のドラッグ/クリックで選んだ範囲を候補として追加する（空行があればそこに詰める）
   function addCalendarRow(date: string, startTime: string, endTime: string) {

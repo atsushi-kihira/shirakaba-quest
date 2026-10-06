@@ -785,7 +785,11 @@ export const meetingSeries = sqliteTable("meeting_series", {
   endDate:             integer("end_date"),
   occurrenceCount:     integer("occurrence_count"),
   conferenceType:      text("conference_type"), // 'manual' | 'google_meet' | 'zoom' | null（各回の会議URLをどう用意するか）
-  conferenceUrl:       text("conference_url"),  // conferenceType='manual' の場合の固定URL（毎回同じ会議室URLを使い回す）
+  conferenceUrl:       text("conference_url"),  // 全回共通で使う会議URL（manualは手入力URL、zoom/google_meetは確定時に1回だけ自動発行したURL）
+  // 全回共通URLを自動発行した場合の後始末用（Zoom: {"meetingId"}、Google Meet: URL発行用の予定ID）。
+  // conferenceType が zoom/google_meet で conferenceUrl が null の定例会は、旧方式（各回ごとにURLを発行）。
+  conferenceMetaJson:  text("conference_meta_json"),
+  conferenceCalendarEventId: text("conference_calendar_event_id"),
   dateMode:            text("date_mode").notNull().default("recurring"), // 'recurring'（繰り返しパターン） | 'fixed'（個別の固定日リスト）
   eventTypeDefId:      text("event_type_def_id"),
   createdAt:           integer("created_at").notNull(),

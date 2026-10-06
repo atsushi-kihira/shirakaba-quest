@@ -17,7 +17,7 @@ import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { computeOccurrences, type RecurrencePattern } from "../services/recurrence.ts";
-import { getAvailableConferenceTypes, autoCreateConferenceForOccurrence, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent } from "../services/conferenceService.ts";
+import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -540,6 +540,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       status: series.status, deadline: series.deadline,
       endCondition: series.endCondition, endDate: series.endDate, occurrenceCount: series.occurrenceCount,
       conferenceType: series.conferenceType,
+      conferenceUrl: series.conferenceUrl,
       candidates: candidates.map((cand) => ({
         id: cand.id, recurrenceType: cand.recurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: cand.weekOfMonth,
         startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal, note: cand.note,
@@ -600,23 +601,37 @@ async function generateSeriesOccurrences(
   const memberIds = await resolveSeriesMemberIds(db, series);
   const inviteeIds = memberIds.filter((mid) => mid !== series.hostMemberId);
 
+  // 会議ツール（Google Meet / Zoom）が指定されていれば、全開催回で共通して使う会議URLをここで1回だけ発行する
+  // （毎回ログインしてURLを確認しなくても済むよう、各回ごとには発行しない）。発行に失敗しても開催回自体は作成する。
+  let sharedUrl: string | null = manualConferenceUrl ?? null;
+  if (!manualConferenceUrl && (series.conferenceType === "google_meet" || series.conferenceType === "zoom") && occurrences.length > 0) {
+    const shared = await createSharedSeriesConference(
+      db, env, series.hostMemberId, series.conferenceType,
+      series.title, series.description ?? "",
+      occurrences[0].startsAt, occurrences[0].endsAt
+    );
+    if (shared) {
+      sharedUrl = shared.conferenceUrl;
+      await db.update(schema.meetingSeries).set({
+        conferenceUrl: shared.conferenceUrl,
+        conferenceMetaJson: shared.conferenceMetaJson,
+        conferenceCalendarEventId: shared.calendarEventId,
+        updatedAt: now,
+      }).where(eq(schema.meetingSeries.id, series.id));
+    }
+  }
+
   const createdMeetingIds: string[] = [];
   for (let i = 0; i < occurrences.length; i++) {
     const occ = occurrences[i];
     const meetingId = newId();
     const dateLabel = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric" }).format(new Date(occ.startsAt * 1000));
 
-    // 会議ツールが指定されていれば、この回の会議URLを先に発行しておく（失敗しても開催回自体は作成する）
-    let conf: OccurrenceConference | null = null;
-    if (manualConferenceUrl) {
-      conf = { conferenceType: "manual", conferenceUrl: manualConferenceUrl, conferenceMetaJson: null, calendarEventId: null };
-    } else if (series.conferenceType === "google_meet" || series.conferenceType === "zoom") {
-      conf = await autoCreateConferenceForOccurrence(
-        db, env, series.hostMemberId, series.conferenceType,
-        `${series.title}（第${i + 1}回・${dateLabel}）`, series.description ?? "",
-        occ.startsAt, occ.endsAt
-      );
-    }
+    // 全開催回で共通のURL（手入力・自動発行のどちらでも同じ扱い）。各回は「手入力URL」と同じ形で保持するため、
+    // 個別回の日程変更・キャンセルで共通URLが作り直されたり削除されたりすることはない。
+    let conf: OccurrenceConference | null = sharedUrl
+      ? { conferenceType: "manual", conferenceUrl: sharedUrl, conferenceMetaJson: null, calendarEventId: null }
+      : null;
 
     // 会議ツールの種類（手入力・Zoom）ではGoogleカレンダーに何も記録されないため、この回の日程を
     // 主催者のカレンダーにブロック予定として登録しておく（google_meetの場合は上で既にMeet付きの
@@ -625,7 +640,8 @@ async function generateSeriesOccurrences(
     if (!conf?.calendarEventId) {
       const blocked = await blockHostCalendarForDate({
         db, env, hostMemberId: series.hostMemberId,
-        summary: `${series.title}（第${i + 1}回・${dateLabel}）`, description: series.description ?? "",
+        summary: `${series.title}（第${i + 1}回・${dateLabel}）`,
+        description: [series.description ?? "", sharedUrl ? `会議URL（全回共通）: ${sharedUrl}` : ""].filter(Boolean).join("\n\n"),
         startAtUtc: new Date(occ.startsAt * 1000).toISOString(),
         endAtUtc: new Date(occ.endsAt * 1000).toISOString(),
         requestId: `series-block-${series.id}-${i + 1}`,
@@ -676,9 +692,9 @@ async function generateSeriesOccurrences(
   const design = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
   const mailer = new MailService(db, env);
   const firstDate = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric" }).format(new Date(occurrences[0].startsAt * 1000));
-  const confNote = manualConferenceUrl
-    ? "会議URLは毎回同じURLをご利用ください。"
-    : series.conferenceType ? "会議URLも各回に自動で発行されます。" : "";
+  const confNote = sharedUrl ? "会議URLは毎回同じURLをご利用ください。" : "";
+  // メール本文にも共通の会議URLを載せる（毎回ログインしなくても確認できるように）
+  const urlNote = sharedUrl ? `\n▼ 会議URL（毎回共通）\n${sharedUrl}\n` : "";
   const notifyMsg = `「${series.title}」が「${scheduleLabel}」で確定しました（全${occurrences.length}回、初回：${firstDate}〜）${confNote}`;
   const confirmedDateText = `${scheduleLabel}（全${occurrences.length}回、初回：${firstDate}〜）`;
   const mailPromises: Promise<void>[] = [];
@@ -691,7 +707,7 @@ async function generateSeriesOccurrences(
         mailer.send("meeting_confirmed_member", m.email, {
           appTitle: design?.appTitle ?? "白樺クエスト", memberName: m.name, meetingTitle: `【定例会】${series.title}`,
           hostName: host?.name ?? "主催者", confirmedDate: confirmedDateText,
-          urlPendingNote: "", meetingUrl: `${appUrl}/meetings/series/${series.id}`,
+          urlPendingNote: urlNote, meetingUrl: `${appUrl}/meetings/series/${series.id}`,
         }).catch(console.error)
       );
     }
@@ -701,7 +717,7 @@ async function generateSeriesOccurrences(
       mailer.send("meeting_confirmed_member", host.email, {
         appTitle: design?.appTitle ?? "白樺クエスト", memberName: host.name, meetingTitle: `【定例会】${series.title}`,
         hostName: host.name, confirmedDate: confirmedDateText,
-        urlPendingNote: "", meetingUrl: `${appUrl}/meetings/series/${series.id}`,
+        urlPendingNote: urlNote, meetingUrl: `${appUrl}/meetings/series/${series.id}`,
       }).catch(console.error)
     );
   }
@@ -790,6 +806,14 @@ meetingSeriesRoutes.delete("/:id", async (c) => {
   if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみキャンセルできます" } }, 403);
 
   await db.update(schema.meetingSeries).set({ status: "cancelled", updatedAt: now }).where(eq(schema.meetingSeries.id, id));
+
+  // 全回共通で自動発行した会議URL（Zoom会議／Meet発行用の予定）は、シリーズ中止時に1回だけ後始末する。
+  // 旧方式（各回ごとにURL発行）の定例会は下の各回キャンセルで処理されるため、ここでは何も起きない。
+  if ((series.conferenceType === "zoom" || series.conferenceType === "google_meet") && (series.conferenceMetaJson || series.conferenceCalendarEventId)) {
+    c.executionCtx.waitUntil(
+      cancelAutoConference(db, c.env, series.hostMemberId, series.conferenceType, series.conferenceMetaJson, series.conferenceCalendarEventId)
+    );
+  }
 
   // まだ開催されていない（開始前の）回だけキャンセルする。過去の回は履歴として残す。
   const futureMeetings = await db.select().from(schema.meetings)

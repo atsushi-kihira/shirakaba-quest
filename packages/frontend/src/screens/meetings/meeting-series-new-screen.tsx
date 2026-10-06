@@ -11,6 +11,7 @@ import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { MeetingCandidatePicker } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
+import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
 
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
 type Team = { id: string; name: string; emblemEmoji: string };
@@ -37,11 +38,11 @@ const MAX_CANDIDATES = 5;
 const MAX_FIXED_DATES = 50;
 
 function emptyCandidate(): PatternCandidate {
-  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, startTimeLocal: "19:00", endTimeLocal: "20:00", note: "" };
+  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, startTimeLocal: DEFAULT_START_TIME, endTimeLocal: defaultEndTime(60), note: "" };
 }
 
 function emptyFixedDateRow(): FixedDateRow {
-  return { id: crypto.randomUUID(), date: "", time: "19:00", endTime: "20:00" };
+  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: defaultEndTime(60) };
 }
 
 function todayDateStr(): string {
@@ -116,7 +117,14 @@ export function MeetingSeriesNewScreen() {
     setCandidates(candidates.filter((_, idx) => idx !== i));
   }
   function updateCandidate<K extends keyof PatternCandidate>(i: number, field: K, value: PatternCandidate[K]) {
-    setCandidates(candidates.map((c, idx) => (idx === i ? { ...c, [field]: value } : c)));
+    setCandidates(candidates.map((c, idx) => {
+      if (idx !== i) return c;
+      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
+      if (field === "startTimeLocal") {
+        return { ...c, startTimeLocal: value as string, endTimeLocal: shiftEndWithStart(c.startTimeLocal, c.endTimeLocal, value as string) };
+      }
+      return { ...c, [field]: value };
+    }));
   }
   function toggleInvitee(id: string) {
     setInviteeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -131,7 +139,12 @@ export function MeetingSeriesNewScreen() {
   }
   const fixedDateDrag = useDragReorder(fixedDates, setFixedDates);
   function updateFixedDate(i: number, field: keyof FixedDateRow, value: string) {
-    setFixedDates(fixedDates.map((d, idx) => (idx === i ? { ...d, [field]: value } : d)));
+    setFixedDates(fixedDates.map((d, idx) => {
+      if (idx !== i) return d;
+      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
+      if (field === "time") return { ...d, time: value, endTime: shiftEndWithStart(d.time, d.endTime, value) };
+      return { ...d, [field]: value };
+    }));
   }
   // カレンダー上のドラッグ/クリックで選んだ範囲を確定日として追加する
   function addCalendarFixedDate(date: string, startTime: string, endTime: string) {
@@ -544,12 +557,12 @@ export function MeetingSeriesNewScreen() {
           />
           {(conferenceMode === "zoom" || conferenceMode === "google_meet") && (
             <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
-              確定後、各回のミーティングに自動で会議URLが発行されます。個別に日時を変更した回はURLも自動で発行し直されます。
+              確定後、会議URLが1つだけ自動で発行され、全回で共通して使われます（日程を変更した回もURLは変わりません）。確定通知のメールにもURLが記載されます。
             </p>
           )}
           {conferenceMode === "manual" && (
             <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
-              毎回同じ会議URLが、各回のミーティングに設定されます。
+              毎回同じ会議URLが、各回のミーティングに設定されます。確定通知のメールにもURLが記載されます。
             </p>
           )}
         </div>

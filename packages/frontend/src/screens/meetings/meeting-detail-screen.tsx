@@ -10,6 +10,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { NewPostModal, type GraphTeamLite } from "@/screens/collab/_activity-and-records";
+import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
 
 type Availability = "yes" | "maybe" | "no";
 
@@ -96,7 +97,7 @@ function formatCandidateDate(ts: number, endsAt: number | null): { date: string;
 // 候補日追加フォーム用の行データ（meeting-new-screen.tsx と同じ入力パターン）
 type NewCandidateRow = { date: string; time: string; endTime: string };
 function emptyCandidateRow(): NewCandidateRow {
-  return { date: "", time: "09:00", endTime: "10:00" };
+  return { date: "", time: DEFAULT_START_TIME, endTime: defaultEndTime(60) };
 }
 function rowToUnixTimestamp(date: string, time: string): number {
   const dt = time ? new Date(`${date}T${time}:00`) : new Date(`${date}T00:00:00`);
@@ -597,7 +598,7 @@ export function MeetingDetailScreen() {
                         <div className="flex items-center gap-2">
                           <input type="date" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)}
                             className="px-2 py-1.5 rounded-lg text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
-                          <input type="time" value={rescheduleTime} onChange={(e) => setRescheduleTime(e.target.value)}
+                          <input type="time" value={rescheduleTime} onChange={(e) => { setRescheduleEndTime(shiftEndWithStart(rescheduleTime, rescheduleEndTime, e.target.value)); setRescheduleTime(e.target.value); }}
                             className="px-2 py-1.5 rounded-lg text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
                           <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>〜</span>
                           <input type="time" value={rescheduleEndTime} onChange={(e) => setRescheduleEndTime(e.target.value)}
@@ -1081,7 +1082,7 @@ export function MeetingDetailScreen() {
                         className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
                         style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
                       <input type="time" value={cand.time}
-                        onChange={(e) => setProposedCandidates(proposedCandidates.map((c, idx) => idx === i ? { ...c, time: e.target.value } : c))}
+                        onChange={(e) => setProposedCandidates(proposedCandidates.map((c, idx) => idx === i ? { ...c, time: e.target.value, endTime: shiftEndWithStart(c.time, c.endTime, e.target.value) } : c))}
                         className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
                         style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
                       <input type="time" value={cand.endTime}
@@ -1194,7 +1195,7 @@ export function MeetingDetailScreen() {
                         className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
                         style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
                       <input type="time" value={cand.time}
-                        onChange={(e) => setHostNewCandidates(hostNewCandidates.map((c, idx) => idx === i ? { ...c, time: e.target.value } : c))}
+                        onChange={(e) => setHostNewCandidates(hostNewCandidates.map((c, idx) => idx === i ? { ...c, time: e.target.value, endTime: shiftEndWithStart(c.time, c.endTime, e.target.value) } : c))}
                         className="col-span-3 sm:col-span-1 px-2 py-1.5 rounded-xl text-xs outline-none border"
                         style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
                       <input type="time" value={cand.endTime}
@@ -1865,7 +1866,7 @@ export function MeetingDetailScreen() {
                 className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
                 style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
               <input type="time" value={editCandidateModal.time}
-                onChange={(e) => setEditCandidateModal({ ...editCandidateModal, time: e.target.value })}
+                onChange={(e) => setEditCandidateModal({ ...editCandidateModal, time: e.target.value, endTime: shiftEndWithStart(editCandidateModal.time, editCandidateModal.endTime, e.target.value) })}
                 className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
                 style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
               <input type="time" value={editCandidateModal.endTime}

@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { shiftEndWithStart } from "@/lib/meeting-time";
 
 type ConferenceMode = "manual" | "zoom" | "google_meet" | "none";
 
@@ -116,7 +117,7 @@ export function EditBookingScheduleModal({
               <input
                 type="time"
                 value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
+                onChange={(e) => { setEndTime(shiftEndWithStart(startTime, endTime, e.target.value)); setStartTime(e.target.value); }}
                 className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
                 style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
               />

@@ -12,6 +12,7 @@ import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
+import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
 
 type Team = { id: string; name: string; emblemEmoji: string };
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
@@ -35,7 +36,7 @@ function toUnixTimestamp(date: string, time: string): number {
 }
 
 function emptyCandidate(): Candidate {
-  return { id: crypto.randomUUID(), date: "", time: "09:00", endTime: "10:00" };
+  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: defaultEndTime(60) };
 }
 
 function isoToJstDateTime(iso: string): { date: string; time: string } {
@@ -143,7 +144,12 @@ export function MeetingNewScreen() {
   const candidateDrag = useDragReorder(candidates, setCandidates);
 
   function updateCandidate(i: number, field: keyof Candidate, value: string) {
-    setCandidates(candidates.map((c, idx) => idx === i ? { ...c, [field]: value } : c));
+    setCandidates(candidates.map((c, idx) => {
+      if (idx !== i) return c;
+      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
+      if (field === "time") return { ...c, time: value, endTime: shiftEndWithStart(c.time, c.endTime, value) };
+      return { ...c, [field]: value };
+    }));
   }
 
   // カレンダー上のドラッグ/クリックで選んだ範囲を候補日として追加する

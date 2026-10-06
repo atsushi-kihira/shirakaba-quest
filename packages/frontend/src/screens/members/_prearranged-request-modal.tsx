@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { DEFAULT_START_TIME } from "@/lib/meeting-time";
 
 type ZoomStatus = { data: { connected: boolean } };
 type GoogleStatus = { data: { connected: boolean } };
@@ -34,7 +35,7 @@ export function PrearrangedRequestModal({
   const qc = useQueryClient();
   const [title, setTitle] = useState(`${responderName}さんとの1to1`);
   const [date, setDate] = useState(todayYMD());
-  const [time, setTime] = useState("10:00");
+  const [time, setTime] = useState(DEFAULT_START_TIME);
   const [duration, setDuration] = useState(30);
   const [conferenceType, setConferenceType] = useState<"zoom" | "google_meet" | "manual" | "none">("none");
   const [conferenceUrl, setConferenceUrl] = useState("");

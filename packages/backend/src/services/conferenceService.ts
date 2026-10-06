@@ -448,6 +448,74 @@ export async function autoCreateConferenceForOccurrence(
   }
 }
 
+export type SharedSeriesConference = {
+  conferenceUrl: string;
+  conferenceMetaJson: string | null;
+  calendarEventId: string | null;
+};
+
+/**
+ * 定例会の全開催回で共通して使う会議URLを、シリーズにつき1回だけ発行する（失敗時は null）。
+ * - Zoom: 開催時刻を固定しない定期ミーティング（type 3）を作る。参加URLは変わらず何度でも使える。
+ * - Google Meet: 初回の日時でMeet付きの予定を1件作り、そのMeet URLを全回で使い回す。
+ *   この予定はシリーズ中止時にだけ削除する（各回の予定・日程変更とは紐付けない）。
+ */
+export async function createSharedSeriesConference(
+  db: Db,
+  env: AutoConferenceEnv,
+  hostMemberId: string,
+  type: "google_meet" | "zoom",
+  title: string,
+  description: string,
+  firstStartsAtSec: number,
+  firstEndsAtSec: number
+): Promise<SharedSeriesConference | null> {
+  try {
+    if (type === "zoom") {
+      if (!env.ZOOM_CLIENT_ID || !env.ZOOM_CLIENT_SECRET) return null;
+      const cred = await getValidZoomAccessToken(db, hostMemberId, env.SCHEDULER_TOKEN_KEY, env.ZOOM_CLIENT_ID, env.ZOOM_CLIENT_SECRET);
+      if (!cred) return null;
+      const res = await fetch("https://api.zoom.us/v2/users/me/meetings", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cred.accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: title,
+          type: 3, // 開催時刻を固定しない定期ミーティング（同じ参加URLを繰り返し使える）
+          agenda: description,
+          settings: { host_video: true, participant_video: true, join_before_host: true, waiting_room: false },
+        }),
+      });
+      if (!res.ok) {
+        console.error("Zoom shared series meeting creation failed:", await res.text());
+        return null;
+      }
+      const data = (await res.json()) as { join_url: string; id: number };
+      return { conferenceUrl: data.join_url, conferenceMetaJson: JSON.stringify({ meetingId: String(data.id) }), calendarEventId: null };
+    }
+
+    if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET) return null;
+    const cred = await getValidGoogleAccessToken(db, hostMemberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
+    if (cred.status !== "ok") return null;
+    const host = await db.select({ email: schema.members.email }).from(schema.members).where(eq(schema.members.id, hostMemberId)).get();
+    const result = await insertCalendarEvent({
+      accessToken: cred.accessToken,
+      calendarId: cred.calendarId,
+      summary: `${title}（全回共通の会議URL）`,
+      description: `${description}\n\n※ この予定は定例会の全回で共通して使うGoogle Meet URLを発行するためのものです。定例会を中止するまで削除しないでください。`.trim(),
+      startAtUtc: new Date(firstStartsAtSec * 1000).toISOString(),
+      endAtUtc: new Date(firstEndsAtSec * 1000).toISOString(),
+      attendeeEmails: host?.email ? [host.email] : [],
+      requestId: `series-shared-${hostMemberId}-${firstStartsAtSec}`,
+      withMeet: true,
+    });
+    if (!result.meetUrl) return null;
+    return { conferenceUrl: result.meetUrl, conferenceMetaJson: null, calendarEventId: result.eventId };
+  } catch (e) {
+    console.error("createSharedSeriesConference failed:", e);
+    return null;
+  }
+}
+
 /** 自動発行された会議URLをキャンセルする（個別回の日程変更・キャンセル時。失敗しても致命的ではない） */
 export async function cancelAutoConference(
   db: Db,

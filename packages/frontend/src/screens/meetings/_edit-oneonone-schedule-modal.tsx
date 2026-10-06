@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { DEFAULT_START_TIME } from "@/lib/meeting-time";
 
 type ConferenceMode = "manual" | "zoom" | "google_meet" | "none";
 const DURATION_OPTIONS = [30, 45, 60, 90];
@@ -20,7 +21,7 @@ function toLocalDateInput(ts: number | null): string {
 }
 
 function toLocalTimeInput(ts: number | null): string {
-  if (!ts) return "10:00";
+  if (!ts) return DEFAULT_START_TIME;
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(new Date(ts * 1000));
