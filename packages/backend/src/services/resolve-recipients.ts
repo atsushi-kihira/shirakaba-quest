@@ -15,8 +15,11 @@ export type RecipientScope = "all" | "team" | "collab_team" | "selected" | "crit
  * 入会日が未入力のメンバーは、期間の条件では対象外になる。
  */
 export type RecipientCriteria = {
-  /** 入会から days 日以内（within）／days 日以上たった（over）メンバー */
-  joined?: { days: number; mode: "within" | "over" } | null;
+  /**
+   * 入会から fromDays 日以上、toDays 日以内のメンバー（どちらか一方だけの指定も可）。
+   * 例: 1か月〜2か月 = { fromDays: 30, toDays: 60 }
+   */
+  joined?: { fromDays?: number | null; toDays?: number | null } | null;
   /** 金の卵・金のガチョウの登録がないメンバー（egg=卵なし／goose=ガチョウなし／both=どちらもなし） */
   noEnishi?: "egg" | "goose" | "both" | null;
   /** 外部人脈の登録が1件もないメンバー */
@@ -53,9 +56,18 @@ function chunk<T>(arr: T[]): T[][] {
 export function normalizeCriteria(raw: RecipientCriteria | undefined | null): RecipientCriteria | string {
   const c: RecipientCriteria = {};
   if (raw?.joined) {
-    const days = Math.floor(Number(raw.joined.days));
-    if (!Number.isFinite(days) || days < 1 || days > 3650) return "入会からの日数は1〜3650の範囲で指定してください";
-    c.joined = { days, mode: raw.joined.mode === "over" ? "over" : "within" };
+    const parse = (v: number | null | undefined): number | null | string => {
+      if (v === null || v === undefined) return null;
+      const n = Math.floor(Number(v));
+      if (!Number.isFinite(n) || n < 0 || n > 3650) return "入会からの日数は0〜3650の範囲で指定してください";
+      return n;
+    };
+    const from = parse(raw.joined.fromDays);
+    const to = parse(raw.joined.toDays);
+    if (typeof from === "string") return from;
+    if (typeof to === "string") return to;
+    if (from !== null && to !== null && from > to) return "入会期間の開始は、終了より前（短い期間）にしてください";
+    if (from !== null || to !== null) c.joined = { fromDays: from, toDays: to };
   }
   if (raw?.noEnishi) {
     if (!["egg", "goose", "both"].includes(raw.noEnishi)) return "金の卵・金のガチョウの条件が正しくありません";
@@ -75,13 +87,16 @@ export function normalizeCriteria(raw: RecipientCriteria | undefined | null): Re
 }
 
 const JOINED_PRESET_LABEL: Record<number, string> = { 7: "1週間", 14: "2週間", 30: "1か月", 60: "2か月", 90: "3か月", 180: "6か月" };
+const daysLabel = (d: number): string => JOINED_PRESET_LABEL[d] ?? `${d}日`;
 
 /** 配信履歴に残す、条件の説明文 */
 export function describeCriteria(c: RecipientCriteria): string {
   const parts: string[] = [];
   if (c.joined) {
-    const span = JOINED_PRESET_LABEL[c.joined.days] ?? `${c.joined.days}日`;
-    parts.push(c.joined.mode === "within" ? `入会${span}以内` : `入会${span}以上`);
+    const { fromDays: f, toDays: t } = c.joined;
+    if (f != null && t != null) parts.push(`入会${daysLabel(f)}〜${daysLabel(t)}`);
+    else if (f != null) parts.push(`入会${daysLabel(f)}以上`);
+    else if (t != null) parts.push(`入会${daysLabel(t)}以内`);
   }
   if (c.noEnishi) parts.push(c.noEnishi === "egg" ? "金の卵の登録なし" : c.noEnishi === "goose" ? "金のガチョウの登録なし" : "金の卵・ガチョウとも登録なし");
   if (c.noContacts) parts.push("外部人脈の登録なし");
@@ -127,8 +142,9 @@ async function resolveByCriteria(db: Db, c: RecipientCriteria): Promise<Recipien
     if (c.joined) {
       const joinedAt = parseJoinedDate(m.joinedDate);
       if (joinedAt === null) return false; // 入会日が未入力の人は、期間では判定できない
-      const cutoff = now - c.joined.days * 86400;
-      if (c.joined.mode === "within" ? joinedAt < cutoff : joinedAt > cutoff) return false;
+      const elapsedDays = Math.floor((now - joinedAt) / 86400); // 入会から何日たったか
+      if (c.joined.fromDays != null && elapsedDays < c.joined.fromDays) return false;
+      if (c.joined.toDays != null && elapsedDays > c.joined.toDays) return false;
     }
     if (needEggs && eggs.has(m.id)) return false;
     if (needGeese && geese.has(m.id)) return false;

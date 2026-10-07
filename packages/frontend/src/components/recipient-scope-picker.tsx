@@ -8,11 +8,16 @@ import { useSettings } from "@/hooks/use-settings";
 export type RecipientScope = "all" | "team" | "collab_team" | "selected" | "criteria";
 
 /** 「条件」で絞り込むときの入力値。チェックを入れた条件をすべて満たすメンバーが宛先になる */
+type JoinedPreset = "none" | "7" | "14" | "30" | "60" | "90" | "180" | "custom";
+
 export type CriteriaValue = {
   joinedOn: boolean;
-  joinedMode: "within" | "over";
-  joinedPreset: "7" | "14" | "30" | "60" | "90" | "180" | "custom";
-  joinedCustomDays: string;
+  /** 入会からの期間の開始（"none" = 指定しない／"custom" = 任意の日数） */
+  joinedFrom: JoinedPreset;
+  joinedFromCustom: string;
+  /** 入会からの期間の終了 */
+  joinedTo: JoinedPreset;
+  joinedToCustom: string;
   noEnishiOn: boolean;
   noEnishi: "egg" | "goose" | "both";
   noContactsOn: boolean;
@@ -23,7 +28,8 @@ export type CriteriaValue = {
 };
 
 export const EMPTY_CRITERIA: CriteriaValue = {
-  joinedOn: false, joinedMode: "within", joinedPreset: "7", joinedCustomDays: "",
+  // 開始・終了の両方を指定するのが基本（例: 1か月〜2か月）。片方だけにしたいときは「指定しない」を選ぶ
+  joinedOn: false, joinedFrom: "30", joinedFromCustom: "", joinedTo: "60", joinedToCustom: "",
   noEnishiOn: false, noEnishi: "both",
   noContactsOn: false,
   unusedFeatureOn: false, unusedFeature: "",
@@ -45,16 +51,30 @@ export type RecipientOptions = {
   features?: { key: string; name: string; emoji: string }[];
 };
 
-function joinedDays(c: CriteriaValue): number | null {
-  const n = c.joinedPreset === "custom" ? Math.floor(Number(c.joinedCustomDays)) : Number(c.joinedPreset);
-  return Number.isFinite(n) && n >= 1 && n <= 3650 ? n : null;
+type DaysResult = { ok: true; days: number | null } | { ok: false };
+
+/** 開始／終了の入力を日数に直す（"none" は未指定=null、入力が不正なら ok:false） */
+function parseDays(preset: JoinedPreset, custom: string): DaysResult {
+  if (preset === "none") return { ok: true, days: null };
+  const n = preset === "custom" ? (custom.trim() === "" ? NaN : Math.floor(Number(custom))) : Number(preset);
+  return Number.isFinite(n) && n >= 0 && n <= 3650 ? { ok: true, days: n } : { ok: false };
+}
+
+/** 入会期間の入力が正しいか（少なくとも一方を指定、開始は終了以下） */
+function joinedRange(c: CriteriaValue): { fromDays: number | null; toDays: number | null } | null {
+  const from = parseDays(c.joinedFrom, c.joinedFromCustom);
+  const to = parseDays(c.joinedTo, c.joinedToCustom);
+  if (!from.ok || !to.ok) return null;
+  if (from.days === null && to.days === null) return null;
+  if (from.days !== null && to.days !== null && from.days > to.days) return null;
+  return { fromDays: from.days, toDays: to.days };
 }
 
 /** 条件のうち、入力が揃っている（宛先を確認できる）かどうか */
 function criteriaReady(c: CriteriaValue): boolean {
   const any = c.joinedOn || c.noEnishiOn || c.noContactsOn || c.unusedFeatureOn || c.noIntegrationOn;
   if (!any) return false;
-  if (c.joinedOn && joinedDays(c) === null) return false;
+  if (c.joinedOn && joinedRange(c) === null) return false;
   if (c.unusedFeatureOn && !c.unusedFeature) return false;
   return true;
 }
@@ -72,11 +92,11 @@ export function isRecipientReady(v: RecipientValue): boolean {
 /** APIに送る宛先の形（条件はチェックを入れたものだけを送る） */
 export function toRecipientPayload(v: RecipientValue) {
   const c = v.criteria;
-  const days = joinedDays(c);
+  const range = joinedRange(c);
   return {
     scope: v.scope, teamId: v.teamId, collabTeamId: v.collabTeamId, memberIds: v.memberIds,
     criteria: v.scope !== "criteria" ? undefined : {
-      joined: c.joinedOn && days !== null ? { days, mode: c.joinedMode } : null,
+      joined: c.joinedOn && range ? range : null,
       noEnishi: c.noEnishiOn ? c.noEnishi : null,
       noContacts: c.noContactsOn,
       unusedFeature: c.unusedFeatureOn && c.unusedFeature ? c.unusedFeature : null,
@@ -188,29 +208,19 @@ function CriteriaEditor({ value, onChange, features }: {
       </p>
 
       <CriteriaRow checked={value.joinedOn} onToggle={(on) => set({ joinedOn: on })} label={`${termBusinessCommunity}入会からの期間で選ぶ`}>
-        <select value={value.joinedPreset} onChange={(e) => set({ joinedPreset: e.target.value as CriteriaValue["joinedPreset"] })}
-          className={SELECT_CLS} style={SELECT_STYLE}>
-          <option value="7">1週間</option>
-          <option value="14">2週間</option>
-          <option value="30">1か月</option>
-          <option value="60">2か月</option>
-          <option value="90">3か月</option>
-          <option value="180">6か月</option>
-          <option value="custom">任意の日数</option>
-        </select>
-        {value.joinedPreset === "custom" && (
-          <span className="flex items-center gap-1 text-sm">
-            <input type="number" min={1} max={3650} value={value.joinedCustomDays}
-              onChange={(e) => set({ joinedCustomDays: e.target.value })}
-              className={`${SELECT_CLS} w-20`} style={SELECT_STYLE} placeholder="45" />日
-          </span>
-        )}
-        <select value={value.joinedMode} onChange={(e) => set({ joinedMode: e.target.value as CriteriaValue["joinedMode"] })}
-          className={SELECT_CLS} style={SELECT_STYLE}>
-          <option value="within">以内（入会が新しい人）</option>
-          <option value="over">以上たった人</option>
-        </select>
-        <span className="text-xs w-full" style={{ color: "var(--color-ink-400)" }}>※ メンバーが登録した{termBusinessCommunity}の入会日から数えます（入会日が未入力の人は対象外です）</span>
+        <JoinedBound label="開始" preset={value.joinedFrom} custom={value.joinedFromCustom}
+          onPreset={(v) => set({ joinedFrom: v })} onCustom={(v) => set({ joinedFromCustom: v })} />
+        <span className="text-sm">から</span>
+        <JoinedBound label="終了" preset={value.joinedTo} custom={value.joinedToCustom}
+          onPreset={(v) => set({ joinedTo: v })} onCustom={(v) => set({ joinedToCustom: v })} />
+        <span className="text-sm">まで</span>
+        <span className="text-xs w-full" style={{ color: "var(--color-ink-500)" }}>
+          {joinedSummary(value)}
+        </span>
+        <span className="text-xs w-full" style={{ color: "var(--color-ink-400)" }}>
+          ※ メンバーが登録した{termBusinessCommunity}の入会日から数えます（入会日が未入力の人は対象外です）。
+          開始だけ・終了だけにしたいときは、もう一方を「指定しない」にしてください。
+        </span>
       </CriteriaRow>
 
       <CriteriaRow checked={value.noEnishiOn} onToggle={(on) => set({ noEnishiOn: on })} label="金の卵・金のガチョウの登録がない人">
@@ -243,4 +253,48 @@ function CriteriaEditor({ value, onChange, features }: {
       </CriteriaRow>
     </div>
   );
+}
+
+const JOINED_OPTIONS: { value: JoinedPreset; label: string }[] = [
+  { value: "none", label: "指定しない" },
+  { value: "7", label: "1週間" },
+  { value: "14", label: "2週間" },
+  { value: "30", label: "1か月" },
+  { value: "60", label: "2か月" },
+  { value: "90", label: "3か月" },
+  { value: "180", label: "6か月" },
+  { value: "custom", label: "任意の日数" },
+];
+
+function JoinedBound({ label, preset, custom, onPreset, onCustom }: {
+  label: string; preset: JoinedPreset; custom: string; onPreset: (v: JoinedPreset) => void; onCustom: (v: string) => void;
+}) {
+  return (
+    <span className="flex items-center gap-1">
+      <select aria-label={`入会からの期間の${label}`} value={preset} onChange={(e) => onPreset(e.target.value as JoinedPreset)}
+        className={SELECT_CLS} style={SELECT_STYLE}>
+        {JOINED_OPTIONS.map((o) => <option key={o.value} value={o.value}>{label}：{o.label}</option>)}
+      </select>
+      {preset === "custom" && (
+        <span className="flex items-center gap-1 text-sm">
+          <input type="number" min={0} max={3650} value={custom} onChange={(e) => onCustom(e.target.value)}
+            className={`${SELECT_CLS} w-20`} style={SELECT_STYLE} placeholder="45" />日
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** 選んだ期間を、文章で確認できるようにする */
+function joinedSummary(c: CriteriaValue): string {
+  const from = parseDays(c.joinedFrom, c.joinedFromCustom);
+  const to = parseDays(c.joinedTo, c.joinedToCustom);
+  if (!from.ok || !to.ok) return "日数を入力してください";
+  const f = from.days, t = to.days;
+  if (f === null && t === null) return "開始か終了のどちらかは指定してください";
+  if (f !== null && t !== null && f > t) return "開始は、終了より短い期間にしてください";
+  const label = (d: number) => JOINED_OPTIONS.find((o) => o.value === String(d))?.label ?? `${d}日`;
+  if (f !== null && t !== null) return `→ 入会から ${label(f)} 以上 ${label(t)} 以内の人`;
+  if (f !== null) return `→ 入会から ${label(f)} 以上たった人`;
+  return `→ 入会から ${label(t!)} 以内の人`;
 }
