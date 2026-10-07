@@ -17,6 +17,7 @@ import {
 } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
 import { hasMemberRole } from "../services/member-roles.ts";
+import { sendFirstLoginWelcome } from "../services/first-login-welcome.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { eq } from "drizzle-orm";
 import type { Env, Variables } from "../types.ts";
@@ -129,6 +130,17 @@ authRoutes.post("/verify-otp", async (c) => {
     userId: found.id,
     userType: found.userType,
   });
+
+  // 初めてのログインなら「ようこそ」の通知とメールを配信する（失敗してもログイン自体は成功させる）
+  if (found.userType === "member") {
+    try {
+      await sendFirstLoginWelcome({
+        db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p), memberId: found.id,
+      });
+    } catch (e) {
+      console.error("[first-login welcome] failed", found.id, e);
+    }
+  }
 
   // ユーザー情報を返す（パスワード等センシティブなものは除く）
   // status は isApprovedMember() の判定に使われるため必須。これを省くと、

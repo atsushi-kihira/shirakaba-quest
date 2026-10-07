@@ -29,6 +29,8 @@ export const members = sqliteTable("members", {
   timezone:            text("timezone"),
   status:              text("status").notNull().default("pending"), // 'pending' | 'active' | 'guest' | 'on_leave' | 'rejected' | 'deleted'
   approvedAt:          integer("approved_at"),
+  // 初めてのログイン時の「ようこそ」通知・メールを配信した時刻（NULL = まだ）
+  firstLoginWelcomedAt: integer("first_login_welcomed_at"),
   createdAt:           integer("created_at").notNull(),
   updatedAt:           integer("updated_at").notNull(),
 
@@ -1078,6 +1080,8 @@ export const broadcastTemplates = sqliteTable("broadcast_templates", {
   body:                  text("body").notNull(),
   includeUsage:          integer("include_usage").notNull().default(0),
   includeRecommendations: integer("include_recommendations").notNull().default(0),
+  // 自動配信に使う文面を見分けるキー（'first_login' = 初めてのログイン時）。通常のテンプレートはNULL
+  systemKey:             text("system_key"),
   createdAt:             integer("created_at").notNull(),
   updatedAt:             integer("updated_at").notNull(),
 });

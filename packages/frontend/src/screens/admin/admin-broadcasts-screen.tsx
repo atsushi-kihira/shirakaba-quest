@@ -6,11 +6,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Send, Eye, Plus, Pencil, Trash2, X, ChevronDown, ChevronUp } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { RecipientScopePicker, type RecipientOptions, type RecipientValue } from "@/components/recipient-scope-picker";
+import {
+  RecipientScopePicker, EMPTY_CRITERIA, isRecipientReady, toRecipientPayload,
+  type RecipientOptions, type RecipientValue,
+} from "@/components/recipient-scope-picker";
 import { LinkifiedText } from "@/components/linkified-text";
 
 type Template = {
-  id: string; name: string; title: string; body: string;
+  id: string; name: string; title: string; body: string; systemKey: string | null;
   includeUsage: boolean; includeRecommendations: boolean; updatedAt: number;
 };
 type FeatureInfo = { key: string; name: string; emoji: string };
@@ -85,7 +88,7 @@ function SendPanel({ templates, options }: { templates: Template[]; options: (Re
   const [body, setBody] = useState("");
   const [includeUsage, setIncludeUsage] = useState(false);
   const [includeRecommendations, setIncludeRecommendations] = useState(false);
-  const [recipient, setRecipient] = useState<RecipientValue>({ scope: "all", teamId: null, collabTeamId: null, memberIds: [] });
+  const [recipient, setRecipient] = useState<RecipientValue>({ scope: "all", teamId: null, collabTeamId: null, memberIds: [], criteria: EMPTY_CRITERIA });
   const [sendEmail, setSendEmail] = useState(true);
   const [showList, setShowList] = useState(false);
   const [previewMemberId, setPreviewMemberId] = useState("");
@@ -104,15 +107,11 @@ function SendPanel({ templates, options }: { templates: Template[]; options: (Re
     setIncludeUsage(t.includeUsage); setIncludeRecommendations(t.includeRecommendations);
   }
 
-  const recipientReady =
-    recipient.scope === "all" ||
-    (recipient.scope === "team" && !!recipient.teamId) ||
-    (recipient.scope === "collab_team" && !!recipient.collabTeamId) ||
-    (recipient.scope === "selected" && recipient.memberIds.length > 0);
+  const recipientReady = isRecipientReady(recipient);
 
   const { data: recData, isFetching: recLoading } = useQuery({
     queryKey: ["admin", "broadcasts", "recipients", recipient],
-    queryFn: () => api.post<{ data: RecipientRow[] }>("/admin/broadcasts/recipients", recipient),
+    queryFn: () => api.post<{ data: RecipientRow[] }>("/admin/broadcasts/recipients", toRecipientPayload(recipient)),
     enabled: recipientReady,
   });
   const recipients = recipientReady ? recData?.data ?? [] : [];
@@ -130,7 +129,7 @@ function SendPanel({ templates, options }: { templates: Template[]; options: (Re
 
   const sendMutation = useMutation({
     mutationFn: () => api.post<{ data: { recipientCount: number } }>("/admin/broadcasts/send", {
-      title, body, includeUsage, includeRecommendations, templateId: templateId || null, sendEmail, ...recipient,
+      title, body, includeUsage, includeRecommendations, templateId: templateId || null, sendEmail, ...toRecipientPayload(recipient),
     }),
     onSuccess: (res) => {
       setMessage({ kind: "ok", text: `${res.data.recipientCount}名に配信しました${sendEmail ? "（メールは順次送信されます）" : ""}` });
@@ -303,7 +302,14 @@ function TemplatesPanel({ templates }: { templates: Template[] }) {
           <div key={t.id} className={CARD}>
             <div className="flex items-start gap-2">
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>{t.name}</p>
+                <p className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>
+                  {t.name}
+                  {t.systemKey === "first_login" && (
+                    <span className="ml-2 text-[10px] px-2 py-0.5 rounded-full font-medium align-middle" style={{ background: "var(--color-brand)", color: "white" }}>
+                      初めてのログイン時に自動配信
+                    </span>
+                  )}
+                </p>
                 <p className="text-xs mt-0.5 truncate" style={{ color: "var(--color-ink-500)" }}>件名：{t.title}</p>
                 <div className="flex gap-1.5 mt-1.5 flex-wrap">
                   {t.includeUsage && <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>ご利用状況つき</span>}
@@ -311,7 +317,9 @@ function TemplatesPanel({ templates }: { templates: Template[] }) {
                 </div>
               </div>
               <button onClick={() => setEditing(t)} className="p-2 rounded-xl" style={{ background: "var(--color-paper-200)" }} title="編集"><Pencil size={14} style={{ color: "var(--color-ink-600)" }} /></button>
-              <button onClick={() => { if (confirm(`「${t.name}」を削除しますか？`)) del.mutate(t.id); }} className="p-2 rounded-xl" style={{ background: "var(--color-paper-200)" }} title="削除"><Trash2 size={14} style={{ color: "var(--color-brand)" }} /></button>
+              {!t.systemKey && (
+                <button onClick={() => { if (confirm(`「${t.name}」を削除しますか？`)) del.mutate(t.id); }} className="p-2 rounded-xl" style={{ background: "var(--color-paper-200)" }} title="削除"><Trash2 size={14} style={{ color: "var(--color-brand)" }} /></button>
+              )}
             </div>
           </div>
         ))}
@@ -346,6 +354,12 @@ function TemplateModal({ template, onClose }: { template: Template | null; onClo
           <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>{template ? "テンプレートを編集" : "テンプレートを追加"}</h2>
           <button onClick={onClose}><X size={18} style={{ color: "var(--color-ink-400)" }} /></button>
         </div>
+        {template?.systemKey === "first_login" && (
+          <p className="text-xs rounded-xl px-3 py-2 mb-3" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-700)" }}>
+            🆕 メンバーが<strong>初めてログインしたとき</strong>に、この内容が通知とメールで自動的に届きます（承認済みのメンバーが対象）。
+            内容はここで自由に編集できます。
+          </p>
+        )}
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>テンプレート名（管理用）</label>
         <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-xl px-3 py-2 text-sm border mb-3" style={INPUT_STYLE} />
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>件名</label>

@@ -12,6 +12,7 @@ import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
 import { usePushNotifications } from "@/hooks/use-push";
+import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
 import { fmtDateTime } from "@/lib/date";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
@@ -46,6 +47,7 @@ export function MypageScreen() {
   const { termUsp } = useSettings();
   const tz = useTimezone();
   const push = usePushNotifications();
+  const { unreadCount: unreadNotificationCount } = useBroadcastNotifications();
   const [tab, setTab] = useState<"profile" | "history">("profile");
   const [showQr, setShowQr] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -157,10 +159,22 @@ export function MypageScreen() {
     <div className="px-4 py-6 pb-24 max-w-xl lg:max-w-3xl mx-auto">
       {/* ヘッダー */}
       <div className="mb-5 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+        <h1 className="text-xl lg:text-2xl font-semibold whitespace-nowrap" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
           👤 マイページ
         </h1>
         <div className="flex gap-2">
+          {/* スマホの下部メニューには「通知」がないため、ここから開けるようにする（未確認の件数つき） */}
+          <Link to="/notifications"
+            className="lg:hidden relative flex items-center gap-1 text-sm px-2.5 py-1.5 rounded-xl font-medium whitespace-nowrap"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+            🔔 通知
+            {unreadNotificationCount > 0 && (
+              <span className="min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
+                style={{ background: "var(--color-brand)" }}>
+                {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}
+              </span>
+            )}
+          </Link>
           {isAdmin && (
             <Link to="/admin"
               className="text-sm px-3 py-1.5 rounded-xl font-medium"
@@ -169,7 +183,7 @@ export function MypageScreen() {
             </Link>
           )}
           <button onClick={handleLogout}
-            className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-xl"
+            className="flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-xl whitespace-nowrap"
             style={{ color: "var(--color-ink-400)", background: "var(--color-paper-200)" }}>
             <LogOut size={14} />
             ログアウト

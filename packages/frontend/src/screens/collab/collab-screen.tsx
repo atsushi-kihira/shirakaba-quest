@@ -129,6 +129,9 @@ function CollabMap() {
   const [selectedOwnerId, setSelectedOwnerId] = useState<string | null>(null);
   const [createTeamMode, setCreateTeamMode] = useState<"loose" | "power" | null>(null);
   const [showContacts, setShowContacts] = useState(false);
+  // 協働チーム一覧の「開いているチーム」。マップ上のチームの塊をタップしても、ここが切り替わる
+  const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
+  const [teamScrollNonce, setTeamScrollNonce] = useState(0);
 
   const graph = data?.data;
   const myEdge = graph?.myEdges.find((e) => e.partnerId === selectedId) ?? null;
@@ -210,6 +213,8 @@ function CollabMap() {
             onSelect={(id) => { setSelectedId(id); setSelectedOwnerId(null); }}
             showContacts={showContacts}
             onSelectOwnerContacts={(id) => { setSelectedOwnerId(id); setSelectedId(null); }}
+            highlightTeamId={expandedTeamId}
+            onSelectTeam={(id) => { setExpandedTeamId(id); setTeamScrollNonce((n) => n + 1); }}
           />
 
           {selectedNode && sharedEdge && (
@@ -244,6 +249,7 @@ function CollabMap() {
               </div>
             </div>
             <CollabTeamsList teams={graph.teams} meId={graph.center}
+              expandedId={expandedTeamId} onExpandedChange={setExpandedTeamId} scrollNonce={teamScrollNonce}
               candidateMembers={[...graph.nodes.filter((n) => !n.isMe), ...graph.noActivityMembers]} />
           </div>
 
@@ -339,17 +345,22 @@ function GraphCanvas({
   onSelect,
   showContacts,
   onSelectOwnerContacts,
+  highlightTeamId,
+  onSelectTeam,
 }: {
   graph: GraphResponse["data"];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   showContacts: boolean;
   onSelectOwnerContacts: (ownerId: string) => void;
+  highlightTeamId: string | null;
+  onSelectTeam: (teamId: string) => void;
 }) {
   const qc = useQueryClient();
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const panMoved = useRef(false); // 背景のドラッグで動かしたあとの「クリック」を、チームの選択と区別する
 
   // アイコンの配置：保存済みの位置（layout）を基本に、ドラッグ中だけ一時的な位置（dragging）で上書きする
   const savedQ = useCollabMapPositions();
@@ -827,6 +838,7 @@ function GraphCanvas({
   }, [showContacts, graph.contacts, positionById]);
 
   function onPointerDown(e: React.PointerEvent) {
+    panMoved.current = false;
     dragState.current = { startX: e.clientX, startY: e.clientY, origX: offset.x, origY: offset.y };
     (e.target as Element).setPointerCapture(e.pointerId);
   }
@@ -834,6 +846,7 @@ function GraphCanvas({
     if (!dragState.current) return;
     const dx = e.clientX - dragState.current.startX;
     const dy = e.clientY - dragState.current.startY;
+    if (Math.hypot(dx, dy) > 5) panMoved.current = true;
     setOffset({ x: dragState.current.origX + dx, y: dragState.current.origY + dy });
   }
   function onPointerUp() {
@@ -872,19 +885,21 @@ function GraphCanvas({
         <g ref={svgGroupRef} transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}>
           {/* 協働チームの塊（ぼかし背景・全員共通）。実際のメンバー位置を包む形にして、
               無関係なメンバーのアイコンが塊の中に紛れ込まないようにしている */}
-          {teamBlobs.map(({ team, path, circle }) => (
-            path ? (
-              <path key={`blob-${team.id}`} d={path}
-                fill={TEAM_TYPE_META[team.type].color}
-                opacity={0.16}
-                filter="url(#collab-blob-blur)" />
+          {teamBlobs.map(({ team, path, circle }) => {
+            const picked = highlightTeamId === team.id;
+            const common = {
+              fill: TEAM_TYPE_META[team.type].color,
+              opacity: picked ? 0.34 : 0.16,
+              filter: "url(#collab-blob-blur)",
+              style: { cursor: "pointer" },
+              onClick: () => { if (!panMoved.current) onSelectTeam(team.id); },
+            };
+            return path ? (
+              <path key={`blob-${team.id}`} d={path} {...common} />
             ) : circle ? (
-              <circle key={`blob-${team.id}`} cx={circle.cx} cy={circle.cy} r={circle.r}
-                fill={TEAM_TYPE_META[team.type].color}
-                opacity={0.16}
-                filter="url(#collab-blob-blur)" />
-            ) : null
-          ))}
+              <circle key={`blob-${team.id}`} cx={circle.cx} cy={circle.cy} r={circle.r} {...common} />
+            ) : null;
+          })}
           {/* 丸に入れると無関係な人を巻き込んでしまうメンバーは、丸から外して細い線でチームとつなぐ */}
           {teamBlobs.flatMap(({ team, tethers }) =>
             tethers.map((t, i) => (
@@ -895,7 +910,10 @@ function GraphCanvas({
           {teamBlobs.map(({ team, cx, labelY }) => (
             <text key={`blob-label-${team.id}`} x={cx} textAnchor="middle" y={labelY}
               fontSize="11" fontWeight={700} fill={TEAM_TYPE_META[team.type].color}
-              stroke="var(--color-paper-50)" strokeWidth={3} paintOrder="stroke">
+              stroke="var(--color-paper-50)" strokeWidth={3} paintOrder="stroke"
+              style={{ cursor: "pointer" }}
+              textDecoration={highlightTeamId === team.id ? "underline" : undefined}
+              onClick={() => { if (!panMoved.current) onSelectTeam(team.id); }}>
               {TEAM_TYPE_META[team.type].icon} {team.name}
             </text>
           ))}
@@ -1029,7 +1047,7 @@ function GraphCanvas({
       <p className="text-[11px] leading-snug" style={{ color: saveFailed ? "var(--color-brand)" : "var(--color-ink-500)" }}>
         {saveFailed
           ? "配置を保存できませんでした。通信状況をご確認のうえ、もう一度動かしてみてください。"
-          : "✋ 丸はドラッグで動かせます。置いた場所は自動で覚えます。"}
+          : "✋ 丸はドラッグで動かせます（置いた場所は自動で覚えます）。チームの色の塊をタップすると、下の協働チームが開きます。"}
       </p>
       <button onClick={resetLayout} disabled={resetting}
         className="shrink-0 text-[11px] px-2.5 py-1 rounded-full font-medium transition disabled:opacity-60"
@@ -1746,11 +1764,18 @@ function TeamActionItemsChecklist({ teamId, members, canEdit }: { teamId: string
   );
 }
 
-function CollabTeamsList({ teams, meId, candidateMembers }: {
+function CollabTeamsList({ teams, meId, candidateMembers, expandedId, onExpandedChange: setExpandedId, scrollNonce }: {
   teams: GraphTeam[]; meId: string; candidateMembers: { id: string; name: string; emoji: string; bgColor: string }[];
+  expandedId: string | null; onExpandedChange: (id: string | null) => void;
+  /** マップ上でチームを選ぶたびに増える。増えたら、開いているチームの位置までスクロールする */
+  scrollNonce: number;
 }) {
   const qc = useQueryClient();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (scrollNonce === 0 || !expandedId) return;
+    document.getElementById(`collab-team-${expandedId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollNonce]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [invitingTeamId, setInvitingTeamId] = useState<string | null>(null);
@@ -1809,7 +1834,8 @@ function CollabTeamsList({ teams, meId, candidateMembers }: {
         const isExpanded = expandedId === t.id;
         const existingMemberIds = new Set(t.members.map((m) => m.id));
         return (
-          <div key={t.id} className="card-paper px-4 py-3">
+          <div key={t.id} id={`collab-team-${t.id}`} className="card-paper px-4 py-3"
+            style={isExpanded ? { boxShadow: `0 0 0 2px ${TEAM_TYPE_META[t.type].color}` } : undefined}>
             <div className="flex items-center justify-between">
               <div>
                 {renamingId === t.id ? (

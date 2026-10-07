@@ -20,6 +20,9 @@ export function useBroadcastNotifications() {
     queryFn: () => api.get<Response>("/notifications"),
     enabled: !!user,
     staleTime: 30_000,
+    // 開きっぱなしの画面でも、新しい通知の未確認バッジが出るように定期的に取り直す
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const markRead = useMutation({

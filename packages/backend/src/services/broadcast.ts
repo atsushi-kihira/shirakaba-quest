@@ -83,7 +83,7 @@ export type SendBroadcastArgs = {
   sentBy: string;
 };
 
-const EMPTY_USAGE: MemberUsage = {
+export const EMPTY_USAGE: MemberUsage = {
   counts: {} as MemberUsage["counts"],
   used: [], unused: FEATURES.map((f) => f.key), recommended: FEATURES.slice(0, 3).map((f) => f.key),
 };

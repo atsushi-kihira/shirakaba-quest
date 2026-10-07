@@ -62,6 +62,8 @@ export function AppLayout() {
     "/collab": collabAlerts.total,
     "/notifications": broadcastUnreadCount,
   };
+  // スマホの下部メニューには「通知」がないため、マイページ（ここから通知を開ける）に未確認の件数を出す
+  const MOBILE_BADGE_COUNTS: Record<string, number> = { ...BADGE_COUNTS, "/me": broadcastUnreadCount };
 
   // 一般公開したばかりの機能・新機能に一時的に表示するお知らせバッジ（数値バッジがある場合はそちらを優先）
   const TEXT_BADGES: Record<string, string> = {};
@@ -178,10 +180,10 @@ export function AppLayout() {
             <div className="relative">
               <Icon size={20} />
               {/* 通知バッジ（ホーム／ミーティング等） */}
-              {(BADGE_COUNTS[to] ?? 0) > 0 ? (
+              {(MOBILE_BADGE_COUNTS[to] ?? 0) > 0 ? (
                 <span className="absolute -top-1 -right-1.5 min-w-[14px] h-[14px] rounded-full text-white flex items-center justify-center px-0.5 font-bold"
                   style={{ background: "var(--color-brand)", fontSize: "9px" }}>
-                  {BADGE_COUNTS[to] > 9 ? "9+" : BADGE_COUNTS[to]}
+                  {MOBILE_BADGE_COUNTS[to] > 9 ? "9+" : MOBILE_BADGE_COUNTS[to]}
                 </span>
               ) : TEXT_BADGES[to] ? (
                 /* お知らせバッジ（New!／Update!） */

@@ -15,13 +15,13 @@ import { desc, eq, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import { computeFeatureUsage, FEATURES } from "../../services/feature-usage.ts";
-import { resolveRecipients, type RecipientQuery, type RecipientScope } from "../../services/resolve-recipients.ts";
+import { describeCriteria, normalizeCriteria, resolveRecipients, type RecipientQuery, type RecipientScope } from "../../services/resolve-recipients.ts";
 import { getRenderBase, renderBroadcast, sendBroadcast, type BroadcastContent } from "../../services/broadcast.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminBroadcastRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-const SCOPES: RecipientScope[] = ["all", "team", "collab_team", "selected"];
+const SCOPES: RecipientScope[] = ["all", "team", "collab_team", "selected", "criteria"];
 const MAX_TITLE = 200;
 const MAX_BODY = 20000;
 
@@ -37,7 +37,7 @@ adminBroadcastRoutes.get("/templates", async (c) => {
   const rows = await db.select().from(schema.broadcastTemplates).orderBy(schema.broadcastTemplates.createdAt).all();
   return c.json({
     data: rows.map((t) => ({
-      id: t.id, name: t.name, title: t.title, body: t.body,
+      id: t.id, name: t.name, title: t.title, body: t.body, systemKey: t.systemKey,
       includeUsage: !!t.includeUsage, includeRecommendations: !!t.includeRecommendations, updatedAt: t.updatedAt,
     })),
   });
@@ -75,6 +75,9 @@ adminBroadcastRoutes.patch("/templates/:id", async (c) => {
 
 adminBroadcastRoutes.delete("/templates/:id", async (c) => {
   const db = createDb(c.env.DB);
+  const t = await db.select({ systemKey: schema.broadcastTemplates.systemKey }).from(schema.broadcastTemplates)
+    .where(eq(schema.broadcastTemplates.id, c.req.param("id"))).get();
+  if (t?.systemKey) return badRequest(c, "自動配信に使われているテンプレートは削除できません（内容の編集はできます）");
   await db.delete(schema.broadcastTemplates).where(eq(schema.broadcastTemplates.id, c.req.param("id")));
   return c.json({ ok: true });
 });
@@ -106,13 +109,21 @@ adminBroadcastRoutes.get("/options", async (c) => {
   });
 });
 
-function parseRecipientQuery(b: Partial<RecipientQuery> & { scope?: string }): RecipientQuery | null {
-  if (!b.scope || !SCOPES.includes(b.scope as RecipientScope)) return null;
-  return { scope: b.scope as RecipientScope, teamId: b.teamId ?? null, collabTeamId: b.collabTeamId ?? null, memberIds: b.memberIds ?? [] };
+/** 宛先の指定を検証する。不正なら理由の文字列を返す */
+function parseRecipientQuery(b: Partial<RecipientQuery> & { scope?: string }): RecipientQuery | string {
+  if (!b.scope || !SCOPES.includes(b.scope as RecipientScope)) return "宛先の指定が正しくありません";
+  const q: RecipientQuery = { scope: b.scope as RecipientScope, teamId: b.teamId ?? null, collabTeamId: b.collabTeamId ?? null, memberIds: b.memberIds ?? [] };
+  if (q.scope === "criteria") {
+    const c = normalizeCriteria(b.criteria);
+    if (typeof c === "string") return c;
+    q.criteria = c;
+  }
+  return q;
 }
 
 async function scopeLabelOf(db: ReturnType<typeof createDb>, q: RecipientQuery, count: number): Promise<string> {
   if (q.scope === "all") return "全員";
+  if (q.scope === "criteria") return `${describeCriteria(q.criteria ?? {})}（${count}名）`;
   if (q.scope === "team") {
     const t = q.teamId ? await db.select({ name: schema.teams.name }).from(schema.teams).where(eq(schema.teams.id, q.teamId)).get() : null;
     return `ギルド：${t?.name ?? "不明"}`;
@@ -128,7 +139,7 @@ async function scopeLabelOf(db: ReturnType<typeof createDb>, q: RecipientQuery, 
 adminBroadcastRoutes.post("/recipients", async (c) => {
   const db = createDb(c.env.DB);
   const q = parseRecipientQuery(await c.req.json().catch(() => ({})));
-  if (!q) return badRequest(c, "宛先の指定が正しくありません");
+  if (typeof q === "string") return badRequest(c, q);
   const [recipients, usage] = await Promise.all([resolveRecipients(db, q), computeFeatureUsage(db)]);
   return c.json({
     data: recipients.map((r) => {
@@ -171,7 +182,7 @@ adminBroadcastRoutes.post("/send", async (c) => {
   const content = parseContent(b);
   if (typeof content === "string") return badRequest(c, content);
   const q = parseRecipientQuery(b);
-  if (!q) return badRequest(c, "宛先の指定が正しくありません");
+  if (typeof q === "string") return badRequest(c, q);
 
   const [recipients, usageMap] = await Promise.all([resolveRecipients(db, q), computeFeatureUsage(db)]);
   if (recipients.length === 0) return badRequest(c, "配信先のメンバーがいません");
