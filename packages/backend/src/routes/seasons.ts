@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { eq, sql } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
+import { getMemberSeasonPoints } from "../services/season-ranking.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const seasonRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -141,24 +142,8 @@ seasonRoutes.get("/ranking/me", authMiddleware, async (c) => {
   // シーズンが存在しない場合、全期間の合計に静かにフォールバックすると「シーズンポイント」の
   // 意味が崩れるため、明示的に0件・順位なしを返す（teams.ts の scope=season と違い、ここでは
   // フォールバックしない）。
-  if (!season) return c.json({ data: { points: 0, rank: null } });
+  if (!season) return c.json({ data: { points: 0, rank: null, seasonName: null } });
 
-  const endTs = season.endsAt ?? Math.floor(Date.now() / 1000);
-  const rows = await db
-    .select({
-      memberId: schema.pointTransactions.memberId,
-      total:    sql<number>`sum(${schema.pointTransactions.delta})`.as("total"),
-    })
-    .from(schema.pointTransactions)
-    .where(
-      sql`${schema.pointTransactions.delta} > 0 AND ${schema.pointTransactions.createdAt} >= ${season.startsAt} AND ${schema.pointTransactions.createdAt} <= ${endTs}`
-    )
-    .groupBy(schema.pointTransactions.memberId)
-    .all();
-
-  const totalMap = new Map(rows.map((r) => [r.memberId, Number(r.total ?? 0)]));
-  const myPoints = totalMap.get(userId) ?? 0;
-  const rank = [...totalMap.values()].filter((p) => p > myPoints).length + 1;
-
-  return c.json({ data: { points: myPoints, rank } });
+  const { points: myPoints, rank, seasonName } = await getMemberSeasonPoints(db, userId, season);
+  return c.json({ data: { points: myPoints, rank, seasonName } });
 });

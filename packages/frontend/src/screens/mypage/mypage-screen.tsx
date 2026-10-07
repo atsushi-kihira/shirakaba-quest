@@ -13,6 +13,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
 import { usePushNotifications } from "@/hooks/use-push";
 import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
+import { PointsSummary } from "@/components/points-summary";
 import { fmtDateTime } from "@/lib/date";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
@@ -76,6 +77,13 @@ export function MypageScreen() {
   const { data: rankData } = useQuery({
     queryKey: ["ranking", "me"],
     queryFn: () => api.get<MyRankResponse>("/ranking/me"),
+    enabled: !isAdmin,
+  });
+
+  // 表示の主役はシーズンポイント（累計は rankData.points を「累計ポイントを見る」で表示）
+  const { data: seasonRankData } = useQuery({
+    queryKey: ["season", "ranking", "me"],
+    queryFn: () => api.get<{ data: { points: number; rank: number | null; seasonName: string | null } }>("/season/ranking/me"),
     enabled: !isAdmin,
   });
 
@@ -392,14 +400,17 @@ export function MypageScreen() {
                   履歴を見る →
                 </button>
               </div>
-              <div className="flex items-end gap-4">
-                <div className="text-4xl font-bold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
-                  {rank.points}<span className="text-lg ml-1">pt</span>
-                </div>
-                <div className="text-sm pb-1" style={{ color: "var(--color-ink-500)" }}>
-                  現在 <span className="font-bold text-lg" style={{ color: "var(--color-ink-800)" }}>{rank.rank}</span> 位
-                </div>
-              </div>
+              {seasonRankData ? (
+                <PointsSummary
+                  size="xl"
+                  seasonPoints={seasonRankData.data.points}
+                  seasonName={seasonRankData.data.seasonName}
+                  rank={seasonRankData.data.rank}
+                  totalPoints={rank.points}
+                />
+              ) : (
+                <p className="text-sm" style={{ color: "var(--color-ink-400)" }}>読み込み中...</p>
+              )}
             </div>
           )}
 

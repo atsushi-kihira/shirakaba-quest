@@ -3,6 +3,7 @@
 // 「条件」（入会からの期間・登録の有無・機能の利用・連携の設定で絞り込み）を加えた5種類
 // =============================================================
 import { useState } from "react";
+import { useSettings } from "@/hooks/use-settings";
 
 export type RecipientScope = "all" | "team" | "collab_team" | "selected" | "criteria";
 
@@ -178,6 +179,7 @@ function CriteriaRow({ checked, onToggle, label, children }: {
 function CriteriaEditor({ value, onChange, features }: {
   value: CriteriaValue; onChange: (v: CriteriaValue) => void; features: { key: string; name: string; emoji: string }[];
 }) {
+  const { termBusinessCommunity } = useSettings();
   const set = (patch: Partial<CriteriaValue>) => onChange({ ...value, ...patch });
   return (
     <div className="space-y-2">
@@ -185,7 +187,7 @@ function CriteriaEditor({ value, onChange, features }: {
         チェックを入れた条件を<strong>すべて満たす</strong>メンバーに配信します（承認済みのメンバーが対象）。
       </p>
 
-      <CriteriaRow checked={value.joinedOn} onToggle={(on) => set({ joinedOn: on })} label="入会からの期間で選ぶ">
+      <CriteriaRow checked={value.joinedOn} onToggle={(on) => set({ joinedOn: on })} label={`${termBusinessCommunity}入会からの期間で選ぶ`}>
         <select value={value.joinedPreset} onChange={(e) => set({ joinedPreset: e.target.value as CriteriaValue["joinedPreset"] })}
           className={SELECT_CLS} style={SELECT_STYLE}>
           <option value="7">1週間</option>
@@ -208,7 +210,7 @@ function CriteriaEditor({ value, onChange, features }: {
           <option value="within">以内（入会が新しい人）</option>
           <option value="over">以上たった人</option>
         </select>
-        <span className="text-xs w-full" style={{ color: "var(--color-ink-400)" }}>※ このアプリでの承認日（なければ登録日）から数えます</span>
+        <span className="text-xs w-full" style={{ color: "var(--color-ink-400)" }}>※ メンバーが登録した{termBusinessCommunity}の入会日から数えます（入会日が未入力の人は対象外です）</span>
       </CriteriaRow>
 
       <CriteriaRow checked={value.noEnishiOn} onToggle={(on) => set({ noEnishiOn: on })} label="金の卵・金のガチョウの登録がない人">

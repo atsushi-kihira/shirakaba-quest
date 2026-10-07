@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { eq, and, or, like, sum, desc, ne } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
+import { getMemberSeasonPoints } from "../services/season-ranking.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
@@ -934,9 +935,14 @@ memberRoutes.get("/:id/history", async (c) => {
     }
   }
 
+  // 表示の主役は「現在のシーズンポイント」。累計ポイント（totalPoints）は、指定されたときに見られるよう併せて返す
+  const season = await getMemberSeasonPoints(db, targetId);
+
   return c.json({
     data: {
       totalPoints: Number(totalRow?.total ?? 0),
+      seasonPoints: season.points,
+      seasonName: season.seasonName,
       history: txs.map((t) => {
         const label = REASON_LABEL[t.reason] ?? t.reason;
         const quest = questMap.get(t.relatedId ?? "");

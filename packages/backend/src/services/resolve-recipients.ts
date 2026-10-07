@@ -11,7 +11,8 @@ export type RecipientScope = "all" | "team" | "collab_team" | "selected" | "crit
 
 /**
  * 条件による絞り込み（指定した条件をすべて満たすメンバーが対象）。
- * 「入会」は、このアプリでの承認日（承認日がなければ登録日）を基準にする。
+ * 「入会」は、BNIへの入会日（メンバーが登録した businessCommunityJoinedDate）を基準にする。
+ * 入会日が未入力のメンバーは、期間の条件では対象外になる。
  */
 export type RecipientCriteria = {
   /** 入会から days 日以内（within）／days 日以上たった（over）メンバー */
@@ -89,6 +90,13 @@ export function describeCriteria(c: RecipientCriteria): string {
   return `条件：${parts.join("／")}`;
 }
 
+/** "YYYY-MM-DD" → unix秒（不正・未入力は null） */
+function parseJoinedDate(value: string | null): number | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
 async function memberIdSet(rows: Promise<{ id: string }[]>): Promise<Set<string>> {
   return new Set((await rows).map((r) => r.id));
 }
@@ -96,7 +104,7 @@ async function memberIdSet(rows: Promise<{ id: string }[]>): Promise<Set<string>
 async function resolveByCriteria(db: Db, c: RecipientCriteria): Promise<Recipient[]> {
   const members = await db.select({
     id: schema.members.id, name: schema.members.name, email: schema.members.email, emoji: schema.members.emoji,
-    approvedAt: schema.members.approvedAt, createdAt: schema.members.createdAt,
+    joinedDate: schema.members.businessCommunityJoinedDate,
   }).from(schema.members).where(eq(schema.members.status, "active")).all();
 
   const needEggs = c.noEnishi === "egg" || c.noEnishi === "both";
@@ -117,7 +125,8 @@ async function resolveByCriteria(db: Db, c: RecipientCriteria): Promise<Recipien
   const now = Math.floor(Date.now() / 1000);
   return members.filter((m) => {
     if (c.joined) {
-      const joinedAt = m.approvedAt ?? m.createdAt;
+      const joinedAt = parseJoinedDate(m.joinedDate);
+      if (joinedAt === null) return false; // 入会日が未入力の人は、期間では判定できない
       const cutoff = now - c.joined.days * 86400;
       if (c.joined.mode === "within" ? joinedAt < cutoff : joinedAt > cutoff) return false;
     }

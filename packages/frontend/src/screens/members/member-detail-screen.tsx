@@ -15,6 +15,7 @@ import { AutoSchedulerShareLinkPanel, useAutoSchedulerShareLink } from "@/compon
 import { ResponseUrlCopyRow } from "@/screens/meetings/_oneonone-sections";
 import { api, ApiError } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
+import { PointsSummary } from "@/components/points-summary";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
@@ -30,7 +31,7 @@ type OnoListResponse = { data: OnoSession[] };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
 type HistoryItem = { id: string; delta: number; label: string; detail?: string; createdAt: number };
-type MemberHistoryResponse = { data: { totalPoints: number; history: HistoryItem[] } };
+type MemberHistoryResponse = { data: { totalPoints: number; seasonPoints: number; seasonName: string | null; history: HistoryItem[] } };
 
 // ---- 協働情報（パイロット限定） ----
 type CollabGraphNode = { id: string; name: string; emoji: string; bgColor: string };
@@ -643,9 +644,12 @@ export function MemberDetailScreen() {
               獲得ポイント・活動履歴
             </h3>
           </div>
-          <div className="text-3xl font-bold mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
-            {memberHistoryData.data.totalPoints}
-            <span className="text-base ml-1 font-normal" style={{ color: "var(--color-ink-400)" }}>pt</span>
+          <div className="mb-3">
+            <PointsSummary
+              seasonPoints={memberHistoryData.data.seasonPoints}
+              seasonName={memberHistoryData.data.seasonName}
+              totalPoints={memberHistoryData.data.totalPoints}
+            />
           </div>
           {memberHistoryData.data.history.length === 0 ? (
             <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>まだ活動記録がありません</p>

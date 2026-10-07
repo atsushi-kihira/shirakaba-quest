@@ -10,11 +10,12 @@
 // PATCH  /api/admin/members/:id/roles
 // =============================================================
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { MailService } from "../../services/mailer.ts";
 import { getFrontendUrl } from "../../services/frontendUrl.ts";
 import { hardDeleteMember } from "../../services/memberDeletion.ts";
+import { getCardImageDataUrl } from "../../services/card-image.ts";
 import {
   getActiveMemberIdsWithRole,
   grantMemberRole,
@@ -53,6 +54,77 @@ adminMemberRoutes.get("/", async (c) => {
       isTopicMentor: tmIds.has(m.id),
     })),
   });
+});
+
+// ---- GET /api/admin/members/:id/detail ----
+// 一般ユーザーがメンバーのプロフィールで確認できる内容（協働の状況・金の卵/ガチョウ・外部人脈の件数など）を、
+// 1to1の有無にかかわらずすべて返す。名刺情報・ポイントなどは一覧/別エンドポイントと同じ内容を画面側で組み合わせる。
+adminMemberRoutes.get("/:id/detail", async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param("id");
+
+  const member = await db.select({ id: schema.members.id, cardImageKey: schema.members.cardImageKey })
+    .from(schema.members).where(eq(schema.members.id, id)).get();
+  if (!member) return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+
+  const [guildRows, collabRows, seedLinks, oneOnOneRow, contactRows, eggs, geese, lastLoginRow] = await Promise.all([
+    db.select({ id: schema.teams.id, name: schema.teams.name, emblemEmoji: schema.teams.emblemEmoji, isLeader: schema.teamMembers.isLeader })
+      .from(schema.teamMembers).innerJoin(schema.teams, eq(schema.teams.id, schema.teamMembers.teamId))
+      .where(eq(schema.teamMembers.memberId, id)).all(),
+    db.select({ id: schema.collabTeams.id, name: schema.collabTeams.name, type: schema.collabTeams.type, status: schema.collabTeamMembers.status })
+      .from(schema.collabTeamMembers).innerJoin(schema.collabTeams, eq(schema.collabTeams.id, schema.collabTeamMembers.teamId))
+      .where(and(eq(schema.collabTeamMembers.memberId, id), eq(schema.collabTeams.archived, 0))).all(),
+    db.select({ low: schema.collaborationLinks.memberLowId, high: schema.collaborationLinks.memberHighId })
+      .from(schema.collaborationLinks)
+      .where(and(eq(schema.collaborationLinks.stage, "seed"), or(eq(schema.collaborationLinks.memberLowId, id), eq(schema.collaborationLinks.memberHighId, id)))).all(),
+    db.select({ n: sql<number>`count(*)` }).from(schema.oneOnOneSessions)
+      .where(and(eq(schema.oneOnOneSessions.status, "completed"), or(eq(schema.oneOnOneSessions.requesterId, id), eq(schema.oneOnOneSessions.responderId, id)))).get(),
+    db.select({ visibility: schema.externalContacts.visibility, n: sql<number>`count(*)` })
+      .from(schema.externalContacts).where(eq(schema.externalContacts.ownerMemberId, id))
+      .groupBy(schema.externalContacts.visibility).all(),
+    db.select().from(schema.goldenEggs).where(eq(schema.goldenEggs.memberId, id)).orderBy(schema.goldenEggs.createdAt).all(),
+    db.select().from(schema.goldenGeese).where(eq(schema.goldenGeese.memberId, id)).orderBy(schema.goldenGeese.createdAt).all(),
+    db.select({ last: sql<number>`max(${schema.authSessions.createdAt})` }).from(schema.authSessions)
+      .where(and(eq(schema.authSessions.userId, id), eq(schema.authSessions.userType, "member"))).get(),
+  ]);
+
+  const partnerIds = seedLinks.map((l) => (l.low === id ? l.high : l.low));
+  const partners = partnerIds.length > 0
+    ? (await db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji }).from(schema.members).all())
+        .filter((m) => partnerIds.includes(m.id))
+    : [];
+
+  const contactCounts = { total: 0, private: 0, existence: 0, full: 0 };
+  for (const r of contactRows) {
+    const n = Number(r.n);
+    contactCounts.total += n;
+    if (r.visibility === "private" || r.visibility === "existence" || r.visibility === "full") contactCounts[r.visibility] += n;
+  }
+
+  return c.json({
+    data: {
+      guilds: guildRows.map((g) => ({ ...g, isLeader: !!g.isLeader })),
+      collabTeams: collabRows,
+      seedPartners: partners,
+      oneOnOneCompleted: Number(oneOnOneRow?.n ?? 0),
+      externalContacts: contactCounts,
+      goldenEggs: eggs,
+      goldenGeese: geese,
+      lastLoginAt: lastLoginRow?.last ?? null,
+      hasCardImage: !!member.cardImageKey,
+    },
+  });
+});
+
+// ---- GET /api/admin/members/:id/card-image ---- 名刺（リアルカード）の撮影画像
+adminMemberRoutes.get("/:id/card-image", async (c) => {
+  const db = createDb(c.env.DB);
+  const member = await db.select({ cardImageKey: schema.members.cardImageKey }).from(schema.members)
+    .where(eq(schema.members.id, c.req.param("id"))).get();
+  if (!member?.cardImageKey) return c.json({ error: { code: "not_found", message: "カード画像がありません" } }, 404);
+  const dataUrl = await getCardImageDataUrl(c.env.R2, member.cardImageKey);
+  if (!dataUrl) return c.json({ error: { code: "not_found", message: "カード画像がありません" } }, 404);
+  return c.json({ data: { imageDataUrl: dataUrl } });
 });
 
 const VALID_MEMBER_ROLES: MemberRoleName[] = [

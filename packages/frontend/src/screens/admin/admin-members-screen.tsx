@@ -3,27 +3,14 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle, UserMinus, UserCheck, Trash2, ChevronDown, ChevronUp, Ghost, Ban } from "lucide-react";
+import { CheckCircle, UserMinus, UserCheck, Trash2, ChevronDown, ChevronUp, Ghost, Ban, Eye } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { fmtDateISO } from "@/lib/date";
-import type { Skill } from "@shared/types";
+import { AdminMemberDetailModal, type AdminMemberDetailBase } from "./_admin-member-detail-modal";
 
-type AdminMember = {
-  id: string;
-  name: string;
-  furigana: string;
-  email: string;
-  emoji: string;
-  bgColor: string;
-  category: string;
-  businessDescription: string | null;
-  company: string | null;
-  role: string | null;
-  skills: Skill[];
+type AdminMember = AdminMemberDetailBase & {
   status: "pending" | "active" | "guest" | "on_leave" | "rejected" | "deleted";
-  approvedAt: number | null;
-  createdAt: number;
   isPilot1: boolean;
   isPilot2: boolean;
   isPowerTeamCoordinator: boolean;
@@ -49,6 +36,7 @@ export function AdminMembersScreen() {
   const [filter, setFilter] = useState<"all" | "pending" | "active" | "guest" | "on_leave" | "rejected">("all");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailMemberId, setDetailMemberId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "members"],
@@ -261,6 +249,15 @@ export function AdminMembersScreen() {
 
                   {/* アクション */}
                   <div className="flex gap-2 shrink-0">
+                    <button
+                      onClick={() => setDetailMemberId(m.id)}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs font-medium transition hover:opacity-80"
+                      style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+                      title="プロフィール・名刺情報・ポイントなど、メンバーの詳細を見る"
+                    >
+                      <Eye size={14} />
+                      詳細
+                    </button>
                     {(m.status === "pending" || m.status === "guest") && (
                       <>
                         <button
@@ -384,6 +381,12 @@ export function AdminMembersScreen() {
           })}
         </div>
       )}
+
+      {/* メンバー詳細 */}
+      {detailMemberId && (() => {
+        const target = members.find((x) => x.id === detailMemberId);
+        return target ? <AdminMemberDetailModal member={target} onClose={() => setDetailMemberId(null)} /> : null;
+      })()}
 
       {/* 削除確認モーダル */}
       {confirmDelete && (
