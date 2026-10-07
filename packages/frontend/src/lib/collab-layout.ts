@@ -48,13 +48,16 @@ function mobilityOf(p: LayoutPoint, isNew: boolean): number {
  * base: これまでの配置（新規メンバーは自動配置の位置を入れておく）
  * newIds: base のうち、今回初めて配置するメンバーのID
  * teams: チームごとのメンバーID（「あなた」は含めない）
+ * opts.centerFixed: 原点に固定のアイコン（「あなた」）があるか。あれば、そのアイコンと重ならないようにずらす
  * 戻り値: 微調整後の配置（placed の値はそのまま引き継ぐ）
  */
 export function nudgeLayout(
   base: Map<string, LayoutPoint>,
   newIds: Set<string>,
-  teams: string[][]
+  teams: string[][],
+  opts: { centerFixed?: boolean } = {}
 ): Map<string, LayoutPoint> {
+  const centerFixed = opts.centerFixed ?? true;
   const ids = [...base.keys()].sort();
   const origin = new Map<string, Mutable>();
   const cur = new Map<string, Mutable>();
@@ -124,7 +127,7 @@ export function nudgeLayout(
 
       // 「あなた」（原点）との距離：自分のアイコンは動かさず、相手だけを少しずらす
       const dSelf = Math.hypot(pa.x, pa.y);
-      if (dSelf < MIN_SELF_DISTANCE) {
+      if (centerFixed && dSelf < MIN_SELF_DISTANCE) {
         const angle = dSelf > 0.01 ? Math.atan2(pa.y, pa.x) : (i * 2.399963) % (Math.PI * 2);
         const need = MIN_SELF_DISTANCE - dSelf;
         move(a, Math.cos(angle) * need, Math.sin(angle) * need);

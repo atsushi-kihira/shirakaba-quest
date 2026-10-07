@@ -9,6 +9,7 @@
 // DELETE /api/admin/collab/posts/:id    → 不適切な投稿を削除
 // GET    /api/admin/collab/stories      → シェアストーリー一覧（モデレーション用、全件閲覧）
 // DELETE /api/admin/collab/stories/:id  → 不適切なシェアストーリーを削除
+// GET/PUT/DELETE /api/admin/collab/map-positions → 協働マップのアイコン配置（管理者ごと）
 // =============================================================
 import { Hono } from "hono";
 import { and, desc, eq, gte, inArray, isNull, ne, or, isNotNull } from "drizzle-orm";
@@ -16,6 +17,7 @@ import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import { deriveStage, computeStalled } from "../../services/collab-stage.ts";
 import { generateCompanySummary } from "../../services/company-summary.ts";
+import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../../services/map-positions.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminCollabRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -23,6 +25,26 @@ export const adminCollabRoutes = new Hono<{ Bindings: Env; Variables: Variables 
 function normalizePair(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
+
+// ---- 協働マップのアイコン配置（管理者ごとに保存） ----
+adminCollabRoutes.get("/map-positions", async (c) => {
+  const db = createDb(c.env.DB);
+  return c.json({ data: { positions: await listMapPositions(db, c.get("userId")) } });
+});
+
+adminCollabRoutes.put("/map-positions", async (c) => {
+  const db = createDb(c.env.DB);
+  const body = await c.req.json<{ positions?: { nodeId?: unknown; x?: unknown; y?: unknown; userPlaced?: unknown }[] }>().catch(() => null);
+  const result = await saveMapPositions(db, c.get("userId"), body?.positions);
+  if (!result) return c.json({ error: { code: "invalid_request", message: MAP_POSITION_INVALID_MESSAGE } }, 400);
+  return c.json({ data: result });
+});
+
+adminCollabRoutes.delete("/map-positions", async (c) => {
+  const db = createDb(c.env.DB);
+  await resetMapPositions(db, c.get("userId"));
+  return c.json({ data: { reset: true } });
+});
 
 // ---- GET /api/admin/collab/graph ----
 adminCollabRoutes.get("/graph", async (c) => {

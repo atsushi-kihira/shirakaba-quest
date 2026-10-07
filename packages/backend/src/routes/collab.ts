@@ -16,6 +16,7 @@ import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { deriveStage, computeStalled } from "../services/collab-stage.ts";
 import { MailService } from "../services/mailer.ts";
+import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../services/map-positions.ts";
 import { generateCompanySummary } from "../services/company-summary.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -250,68 +251,28 @@ collabRoutes.get("/my-teams", async (c) => {
 // PUT    /api/collab/map-positions → 配置の保存（差分のみ・upsert）
 // DELETE /api/collab/map-positions → 配置を全て消して自動配置に戻す
 // ----------------------------------------------------------------
-const MAP_POSITION_LIMIT = 500;
-const MAP_COORD_LIMIT = 1000;
-
 collabRoutes.get("/map-positions", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
-
-  const rows = await db.select().from(schema.collabMapPositions)
-    .where(eq(schema.collabMapPositions.memberId, meId));
-  return c.json({
-    data: {
-      positions: rows.map((r) => ({ nodeId: r.nodeId, x: r.x, y: r.y, userPlaced: r.userPlaced === 1 })),
-    },
-  });
+  return c.json({ data: { positions: await listMapPositions(db, meId) } });
 });
 
 collabRoutes.put("/map-positions", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
-
   const body = await c.req.json<{ positions?: { nodeId?: unknown; x?: unknown; y?: unknown; userPlaced?: unknown }[] }>().catch(() => null);
-  const input = body?.positions;
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAP_POSITION_LIMIT) {
-    return c.json({ error: { code: "invalid_request", message: "保存する配置の内容が正しくありません。画面を開き直してもう一度お試しください" } }, 400);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const rows: { nodeId: string; x: number; y: number; userPlaced: number }[] = [];
-  for (const p of input) {
-    if (typeof p.nodeId !== "string" || p.nodeId.length === 0 || p.nodeId.length > 100) continue;
-    if (typeof p.x !== "number" || typeof p.y !== "number" || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
-    rows.push({
-      nodeId: p.nodeId,
-      x: Math.max(-MAP_COORD_LIMIT, Math.min(MAP_COORD_LIMIT, p.x)),
-      y: Math.max(-MAP_COORD_LIMIT, Math.min(MAP_COORD_LIMIT, p.y)),
-      userPlaced: p.userPlaced ? 1 : 0,
-    });
-  }
-  if (rows.length === 0) {
-    return c.json({ error: { code: "invalid_request", message: "保存する配置の内容が正しくありません。画面を開き直してもう一度お試しください" } }, 400);
-  }
-
-  const statements = rows.map((r) =>
-    db.insert(schema.collabMapPositions)
-      .values({ memberId: meId, nodeId: r.nodeId, x: r.x, y: r.y, userPlaced: r.userPlaced, updatedAt: now })
-      .onConflictDoUpdate({
-        target: [schema.collabMapPositions.memberId, schema.collabMapPositions.nodeId],
-        set: { x: r.x, y: r.y, userPlaced: r.userPlaced, updatedAt: now },
-      })
-  );
-  await db.batch(statements as [typeof statements[number], ...typeof statements]);
-  return c.json({ data: { saved: rows.length } });
+  const result = await saveMapPositions(db, meId, body?.positions);
+  if (!result) return c.json({ error: { code: "invalid_request", message: MAP_POSITION_INVALID_MESSAGE } }, 400);
+  return c.json({ data: result });
 });
 
 collabRoutes.delete("/map-positions", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
-
-  await db.delete(schema.collabMapPositions).where(eq(schema.collabMapPositions.memberId, meId));
+  await resetMapPositions(db, meId);
   return c.json({ data: { reset: true } });
 });
 

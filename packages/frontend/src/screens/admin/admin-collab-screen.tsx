@@ -10,6 +10,7 @@ import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Handshake, Plus, Home as HomeIcon, Search, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { useDraggableMapLayout } from "@/hooks/use-draggable-map-layout";
 
 type GraphNode = { id: string; name: string; emoji: string; bgColor: string; hasActivity: boolean };
 type Stage = "one" | "seed" | "loose";
@@ -134,7 +135,8 @@ function AdminGraphCanvas({
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
 
-  const positionById = useMemo(() => {
+  // 自動配置（保存済みの位置がないメンバーの初期位置）
+  const autoPositionById = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
     const total = graph.nodes.length;
     if (total === 0) return map;
@@ -190,6 +192,24 @@ function AdminGraphCanvas({
     }
     return map;
   }, [graph.nodes, graph.teams]);
+
+  // アイコンの配置：ドラッグで動かせ、位置は管理者ごとに記録される（メンバー向けの協働マップと同じ仕組み）
+  const autoPositions = useMemo(
+    () => [...autoPositionById].map(([id, p]) => ({ id, x: p.x, y: p.y })),
+    [autoPositionById]
+  );
+  const { positions, draggingId, svgGroupRef, nodeHandlers, saveFailed, resetting, resetLayout } = useDraggableMapLayout({
+    endpoint: "/admin/collab/map-positions",
+    nodes: graph.nodes,
+    autoPositions,
+    teams: graph.teams,
+    centerFixed: false,
+    onSelect,
+  });
+  const positionById = useMemo(
+    () => new Map(positions.map((p) => [p.id, { x: p.x, y: p.y }])),
+    [positions]
+  );
 
   // 緩いチームの塊（円）で表現する関係は、線でも二重に表現しない（パワーチームと同じ扱いにする）。
   // 緩いチームの現役メンバー同士のペアは、たとえ実際の1to1関係の段階が"loose"でなくても
@@ -389,6 +409,7 @@ function AdminGraphCanvas({
   }
 
   return (
+    <>
     <div className="relative rounded-3xl overflow-hidden card-paper"
       style={{ height: 460, touchAction: "none" }}
       onPointerDown={onPointerDown}
@@ -403,7 +424,7 @@ function AdminGraphCanvas({
             <feGaussianBlur stdDeviation="10" />
           </filter>
         </defs>
-        <g transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}>
+        <g ref={svgGroupRef} transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}>
           {teamBlobs.map(({ team, path, circle }) => (
             path ? (
               <path key={`blob-${team.id}`} d={path}
@@ -444,7 +465,9 @@ function AdminGraphCanvas({
             if (!p) return null;
             const isSelected = selectedId === node.id;
             return (
-              <g key={node.id} transform={`translate(${p.x} ${p.y})`} onClick={() => onSelect(node.id)} style={{ cursor: "pointer" }}>
+              <g key={node.id} transform={`translate(${p.x} ${p.y})`} {...nodeHandlers(node.id)}
+                style={{ cursor: draggingId === node.id ? "grabbing" : "pointer", touchAction: "none" }}
+                opacity={draggingId === node.id ? 0.85 : 1}>
                 <circle r={isSelected ? 20 : 17} fill="var(--color-paper-50)"
                   stroke={isSelected ? "var(--color-brand)" : "var(--color-ink-300)"}
                   strokeWidth={isSelected ? 3 : 2} />
@@ -510,6 +533,20 @@ function AdminGraphCanvas({
           style={{ background: "var(--color-paper-50)", color: "var(--color-ink-600)", boxShadow: "0 1px 4px rgba(0,0,0,0.15)" }}>−</button>
       </div>
     </div>
+
+    <div className="mt-2 flex items-center justify-between gap-3">
+      <p className="text-[11px] leading-snug" style={{ color: saveFailed ? "var(--color-brand)" : "var(--color-ink-500)" }}>
+        {saveFailed
+          ? "配置を保存できませんでした。通信状況をご確認のうえ、もう一度動かしてみてください。"
+          : "✋ 丸はドラッグで動かせます（置いた場所は、この管理者アカウントの表示として自動で覚えます）。"}
+      </p>
+      <button onClick={resetLayout} disabled={resetting}
+        className="shrink-0 text-[11px] px-2.5 py-1 rounded-full font-medium transition disabled:opacity-60"
+        style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+        {resetting ? "戻しています..." : "↺ 自動の並びに戻す"}
+      </button>
+    </div>
+    </>
   );
 }
 
