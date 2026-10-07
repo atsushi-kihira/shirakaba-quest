@@ -164,13 +164,19 @@ adminMemberRoutes.patch("/:id/approve", async (c) => {
   const id = c.req.param("id");
 
   const member = await db
-    .select({ name: schema.members.name, email: schema.members.email })
+    .select({ name: schema.members.name, email: schema.members.email, status: schema.members.status })
     .from(schema.members)
     .where(eq(schema.members.id, id))
     .get();
 
   await db.update(schema.members)
-    .set({ status: "active", approvedAt: now, updatedAt: now })
+    .set({
+      status: "active", approvedAt: now, updatedAt: now,
+      // 承認前（承認待ち・ゲストユーザー）のログインは「初めてのログイン」に数えない。
+      // 承認後に初めてログインしたときに「ようこそ」を配信するため、配信済みの印をここでリセットする
+      // （すでにアクティブなメンバーの承認操作では触らない）
+      ...(member && member.status !== "active" ? { firstLoginWelcomedAt: null } : {}),
+    })
     .where(eq(schema.members.id, id));
 
   if (member) {
