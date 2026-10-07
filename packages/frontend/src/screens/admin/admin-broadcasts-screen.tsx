@@ -412,14 +412,74 @@ function HistoryPanel() {
               {fmt(r.createdAt)} ・ 宛先：{r.scopeLabel} ・ {r.recipientCount}名（既読 {r.readCount}名）・ {r.sendEmail ? "メールあり" : "通知のみ"}
             </p>
           </button>
-          {openId === r.id && (
-            <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
-              <p className="text-[11px] mb-1" style={{ color: "var(--color-ink-400)" }}>配信した文面（差し込み前）</p>
-              <LinkifiedText text={r.body} className="text-sm" style={{ color: "var(--color-ink-700)" }} />
-            </div>
-          )}
+          {openId === r.id && <HistoryDetail broadcastId={r.id} sendEmail={r.sendEmail} fmt={fmt} />}
         </div>
       ))}
+    </div>
+  );
+}
+
+type HistoryRecipient = { memberId: string; name: string; emoji: string; hasEmail: boolean; readAt: number | null };
+type HistoryMessage = { title: string; body: string; readAt: number | null; sentAt: number; memberName: string; email: string | null };
+
+/** 配信先の一覧と、選んだ1名に実際に届いた内容（差し込み済みの通知・メール） */
+function HistoryDetail({ broadcastId, sendEmail, fmt }: { broadcastId: string; sendEmail: boolean; fmt: (ts: number) => string }) {
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin", "broadcasts", "history", broadcastId, "recipients"],
+    queryFn: () => api.get<{ data: HistoryRecipient[] }>(`/admin/broadcasts/history/${broadcastId}`),
+  });
+  const recipients = data?.data ?? [];
+  const activeId = pickedId ?? recipients[0]?.memberId ?? null;
+
+  const { data: msgData, isLoading: msgLoading } = useQuery({
+    queryKey: ["admin", "broadcasts", "history", broadcastId, "message", activeId],
+    queryFn: () => api.get<{ data: HistoryMessage }>(`/admin/broadcasts/history/${broadcastId}/recipients/${activeId}`),
+    enabled: !!activeId,
+  });
+  const msg = msgData?.data;
+  const unread = recipients.filter((r) => r.readAt === null).length;
+
+  return (
+    <div className="mt-3 pt-3 space-y-3" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+      <div>
+        <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>
+          配信先（{recipients.length}名）<span style={{ color: "var(--color-ink-400)" }}>　✓＝既読 ／ 未読 {unread}名 ／ 名前を押すとその人に届いた内容を表示</span>
+        </p>
+        {isLoading ? <Loader2 size={16} className="animate-spin" /> : (
+          <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
+            {recipients.map((r) => {
+              const on = r.memberId === activeId;
+              return (
+                <button key={r.memberId} onClick={() => setPickedId(r.memberId)}
+                  className="px-2.5 py-1 rounded-full text-xs font-medium"
+                  style={{ background: on ? "var(--color-brand)" : "var(--color-paper-200)", color: on ? "white" : "var(--color-ink-700)" }}>
+                  {r.emoji} {r.name} {r.readAt !== null ? "✓" : ""}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {activeId && (
+        <div className="rounded-xl p-3" style={{ background: "var(--color-paper-100)" }}>
+          {msgLoading || !msg ? <Loader2 size={16} className="animate-spin" /> : (
+            <>
+              <p className="text-[11px] mb-1.5" style={{ color: "var(--color-ink-400)" }}>
+                {msg.memberName}さんに実際に届いた内容（{fmt(msg.sentAt)}・{msg.readAt !== null ? `既読 ${fmt(msg.readAt)}` : "未読"}）
+              </p>
+              <p className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-800)" }}>{msg.title}</p>
+              <LinkifiedText text={msg.body} className="text-sm" style={{ color: "var(--color-ink-700)" }} />
+              <p className="text-[11px] mt-2" style={{ color: "var(--color-ink-400)" }}>
+                {sendEmail
+                  ? `アプリ内通知と同じ件名・本文でメールも送信${msg.email ? `（${msg.email}）` : "（メールアドレスなし）"}`
+                  : "アプリ内通知のみ（メールは送っていません）"}
+              </p>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

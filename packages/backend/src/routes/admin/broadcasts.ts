@@ -9,9 +9,11 @@
 // POST   /api/admin/broadcasts/preview            — 指定メンバーに届く文面のプレビュー
 // POST   /api/admin/broadcasts/send               — 配信（アプリ内通知＋メール）
 // GET    /api/admin/broadcasts/history            — 配信履歴
+// GET    /api/admin/broadcasts/history/:id        — 配信先の一覧（既読状況つき）
+// GET    /api/admin/broadcasts/history/:id/recipients/:memberId — その人に実際に届いた通知・メールの内容
 // =============================================================
 import { Hono } from "hono";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import { computeFeatureUsage, FEATURES } from "../../services/feature-usage.ts";
@@ -205,9 +207,12 @@ adminBroadcastRoutes.get("/history", async (c) => {
     .from(schema.memberNotifications).where(sql`${schema.memberNotifications.readAt} IS NOT NULL`)
     .groupBy(schema.memberNotifications.broadcastId).all();
   const readMap = new Map(reads.map((r) => [r.id, Number(r.n)]));
+  // 一覧の見出しは、差し込み項目を読みやすい形にしておく（実際に届いた内容は配信先を選んで確認する）
+  const base = await getRenderBase(db, c.env);
+  const headline = (t: string) => t.replace(/\{\{memberName\}\}/g, "○○").replace(/\{\{appTitle\}\}/g, base.appTitle).replace(/\{\{appUrl\}\}/g, base.appUrl);
   return c.json({
     data: rows.map((r) => ({
-      id: r.id, title: r.title, body: r.body, scopeLabel: r.scopeLabel ?? "", recipientCount: r.recipientCount,
+      id: r.id, title: headline(r.title), body: r.body, scopeLabel: r.scopeLabel ?? "", recipientCount: r.recipientCount,
       sendEmail: !!r.sendEmail, includeUsage: !!r.includeUsage, includeRecommendations: !!r.includeRecommendations,
       readCount: readMap.get(r.id) ?? 0, createdAt: r.createdAt,
     })),
@@ -215,3 +220,42 @@ adminBroadcastRoutes.get("/history", async (c) => {
 });
 
 
+
+// ---- 配信先の一覧（誰に配信したか・既読か） ----
+adminBroadcastRoutes.get("/history/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const rows = await db
+    .select({
+      memberId: schema.memberNotifications.memberId,
+      readAt: schema.memberNotifications.readAt,
+      name: schema.members.name,
+      emoji: schema.members.emoji,
+      email: schema.members.email,
+    })
+    .from(schema.memberNotifications)
+    .leftJoin(schema.members, eq(schema.members.id, schema.memberNotifications.memberId))
+    .where(eq(schema.memberNotifications.broadcastId, c.req.param("id")))
+    .all();
+  return c.json({
+    data: rows
+      .map((r) => ({
+        memberId: r.memberId, name: r.name ?? "（削除されたメンバー）", emoji: r.emoji ?? "👤",
+        hasEmail: !!r.email, readAt: r.readAt,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ja")),
+  });
+});
+
+// ---- 配信先1名に実際に届いた通知・メールの内容（差し込み済み。メールも同じ件名・本文） ----
+adminBroadcastRoutes.get("/history/:id/recipients/:memberId", async (c) => {
+  const db = createDb(c.env.DB);
+  const n = await db.select().from(schema.memberNotifications)
+    .where(and(eq(schema.memberNotifications.broadcastId, c.req.param("id")), eq(schema.memberNotifications.memberId, c.req.param("memberId"))))
+    .orderBy(desc(schema.memberNotifications.createdAt)).get();
+  if (!n) return c.json({ error: { code: "not_found", message: "配信内容が見つかりません" } }, 404);
+  const member = await db.select({ name: schema.members.name, email: schema.members.email })
+    .from(schema.members).where(eq(schema.members.id, n.memberId)).get();
+  return c.json({
+    data: { title: n.title, body: n.body, readAt: n.readAt, sentAt: n.createdAt, memberName: member?.name ?? "（削除されたメンバー）", email: member?.email ?? null },
+  });
+});
