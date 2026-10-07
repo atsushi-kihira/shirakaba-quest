@@ -5,6 +5,7 @@
 // POST /api/collab/links/referral   → リファーラル提供できそうチェック
 // POST /api/collab/teams            → 緩いチーム作成（当事者のみ・即active）
 // POST /api/collab/teams/declare    → パワーチーム宣言（当事者・他メンバーはpending）
+// GET/PUT/DELETE /api/collab/map-positions → アイコン配置（自分専用）
 // POST /api/collab/teams/:id/respond → パワーチーム/緩いチームの招待に応答
 // =============================================================
 import { Hono } from "hono";
@@ -241,6 +242,77 @@ collabRoutes.get("/my-teams", async (c) => {
 
   const data = teams.map((t) => ({ id: t.id, name: t.name, type: t.type, memberCount: countMap.get(t.id) ?? 0 }));
   return c.json({ data });
+});
+
+// ----------------------------------------------------------------
+// 協働マップのアイコン配置（自分専用）
+// GET    /api/collab/map-positions → 保存済みの配置
+// PUT    /api/collab/map-positions → 配置の保存（差分のみ・upsert）
+// DELETE /api/collab/map-positions → 配置を全て消して自動配置に戻す
+// ----------------------------------------------------------------
+const MAP_POSITION_LIMIT = 500;
+const MAP_COORD_LIMIT = 1000;
+
+collabRoutes.get("/map-positions", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const rows = await db.select().from(schema.collabMapPositions)
+    .where(eq(schema.collabMapPositions.memberId, meId));
+  return c.json({
+    data: {
+      positions: rows.map((r) => ({ nodeId: r.nodeId, x: r.x, y: r.y, userPlaced: r.userPlaced === 1 })),
+    },
+  });
+});
+
+collabRoutes.put("/map-positions", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const body = await c.req.json<{ positions?: { nodeId?: unknown; x?: unknown; y?: unknown; userPlaced?: unknown }[] }>().catch(() => null);
+  const input = body?.positions;
+  if (!Array.isArray(input) || input.length === 0 || input.length > MAP_POSITION_LIMIT) {
+    return c.json({ error: { code: "invalid_request", message: "保存する配置の内容が正しくありません。画面を開き直してもう一度お試しください" } }, 400);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const rows: { nodeId: string; x: number; y: number; userPlaced: number }[] = [];
+  for (const p of input) {
+    if (typeof p.nodeId !== "string" || p.nodeId.length === 0 || p.nodeId.length > 100) continue;
+    if (typeof p.x !== "number" || typeof p.y !== "number" || !Number.isFinite(p.x) || !Number.isFinite(p.y)) continue;
+    rows.push({
+      nodeId: p.nodeId,
+      x: Math.max(-MAP_COORD_LIMIT, Math.min(MAP_COORD_LIMIT, p.x)),
+      y: Math.max(-MAP_COORD_LIMIT, Math.min(MAP_COORD_LIMIT, p.y)),
+      userPlaced: p.userPlaced ? 1 : 0,
+    });
+  }
+  if (rows.length === 0) {
+    return c.json({ error: { code: "invalid_request", message: "保存する配置の内容が正しくありません。画面を開き直してもう一度お試しください" } }, 400);
+  }
+
+  const statements = rows.map((r) =>
+    db.insert(schema.collabMapPositions)
+      .values({ memberId: meId, nodeId: r.nodeId, x: r.x, y: r.y, userPlaced: r.userPlaced, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [schema.collabMapPositions.memberId, schema.collabMapPositions.nodeId],
+        set: { x: r.x, y: r.y, userPlaced: r.userPlaced, updatedAt: now },
+      })
+  );
+  await db.batch(statements as [typeof statements[number], ...typeof statements]);
+  return c.json({ data: { saved: rows.length } });
+});
+
+collabRoutes.delete("/map-positions", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  await db.delete(schema.collabMapPositions).where(eq(schema.collabMapPositions.memberId, meId));
+  return c.json({ data: { reset: true } });
 });
 
 // 組織全体で共有するグラフ（関係線・チームの塊は誰が見ても同じ）＋

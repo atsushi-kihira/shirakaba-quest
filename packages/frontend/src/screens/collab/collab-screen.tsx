@@ -6,8 +6,8 @@
 // 自分との関係の強さによるレイアウト）の2層構造になっている。
 // =============================================================
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Handshake, Plus, Home as HomeIcon, X } from "lucide-react";
+import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Handshake, Plus, Home as HomeIcon, RefreshCw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { matchesSearchQuery } from "@/lib/contact-search";
 import {
@@ -17,6 +17,7 @@ import {
   CONTACT_SORT_LABEL,
   sortContacts,
 } from "@/lib/contacts";
+import { type LayoutPoint, nudgeLayout } from "@/lib/collab-layout";
 import { CreateCollabTeamModal } from "./_create-team-modal";
 import { ActivityAndRecords } from "./_activity-and-records";
 
@@ -90,6 +91,33 @@ function useCollabGraph() {
   });
 }
 
+type SavedPosition = { nodeId: string; x: number; y: number; userPlaced: boolean };
+type MapPositionsResponse = { data: { positions: SavedPosition[] } };
+
+// アイコン配置は画面を開いた時点の保存内容を土台にして、そのあとは画面側の状態で管理する
+// （開いている間に別の値へ差し替わってアイコンが勝手に動かないよう、再取得はしない）
+function useCollabMapPositions() {
+  return useQuery({
+    queryKey: ["collab", "map-positions"],
+    queryFn: () => api.get<MapPositionsResponse>("/collab/map-positions"),
+    staleTime: Infinity,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** 一部分だけを再表示するボタン（再取得中は回転して「動いている」ことを示す） */
+function RefreshSectionButton({ label, busy, onClick }: { label: string; busy: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} disabled={busy}
+      className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition disabled:opacity-60"
+      style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+      <RefreshCw size={13} className={busy ? "animate-spin" : ""} />
+      {busy ? "更新中..." : label}
+    </button>
+  );
+}
+
 export function CollabScreen() {
   return <CollabMap />;
 }
@@ -113,6 +141,22 @@ function CollabMap() {
     mutationFn: (partnerId: string) => api.post(`/collab/links/${partnerId}/acknowledge`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["collab", "graph"] }),
   });
+
+  // 協働マップ／活動記録は、それぞれの部分のデータだけを取り直して再表示する（ページ全体は再読み込みしない）
+  const mapFetching = useIsFetching({ queryKey: ["collab", "graph"] }) > 0;
+  const activityFetching =
+    useIsFetching({ queryKey: ["collab", "feed"] }) +
+      useIsFetching({ queryKey: ["share-stories"] }) +
+      useIsFetching({ queryKey: ["collab", "team-action-items"] }) > 0;
+  function refreshMap() {
+    qc.refetchQueries({ queryKey: ["collab", "graph"] });
+  }
+  function refreshActivity() {
+    qc.refetchQueries({ queryKey: ["collab", "feed"] });
+    qc.refetchQueries({ queryKey: ["share-stories"] });
+    qc.refetchQueries({ queryKey: ["collab", "team-action-items"] });
+    qc.invalidateQueries({ queryKey: ["collab", "activity", "unread-count"] });
+  }
 
   return (
     <div className="pb-24 lg:pb-6">
@@ -142,7 +186,8 @@ function CollabMap() {
 
           <SelfSummaryPanel graph={graph} />
 
-          <div className="px-4 lg:px-0 mb-2 flex justify-end">
+          <div className="px-4 lg:px-0 mb-2 flex items-center justify-between gap-2">
+            <RefreshSectionButton label="🗺️ マップを再表示" busy={mapFetching} onClick={refreshMap} />
             <button onClick={() => setShowContacts((v) => !v)}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full font-medium transition"
               style={{ background: showContacts ? "var(--color-brand)" : "var(--color-paper-200)", color: showContacts ? "white" : "var(--color-ink-600)" }}>
@@ -203,6 +248,9 @@ function CollabMap() {
           </div>
 
           <div className="mt-8 pt-6" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+            <div className="px-4 lg:px-0 mb-3 flex justify-end">
+              <RefreshSectionButton label="📝 活動記録を再表示" busy={activityFetching} onClick={refreshActivity} />
+            </div>
             <ActivityAndRecords />
           </div>
         </>
@@ -298,9 +346,25 @@ function GraphCanvas({
   showContacts: boolean;
   onSelectOwnerContacts: (ownerId: string) => void;
 }) {
+  const qc = useQueryClient();
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+
+  // アイコンの配置：保存済みの位置（layout）を基本に、ドラッグ中だけ一時的な位置（dragging）で上書きする
+  const savedQ = useCollabMapPositions();
+  const [layout, setLayout] = useState<Map<string, LayoutPoint> | null>(null);
+  const [dragging, setDragging] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const layoutRef = useRef<Map<string, LayoutPoint> | null>(null);
+  const persistedRef = useRef<Map<string, LayoutPoint>>(new Map()); // サーバーに保存済みと分かっている配置
+  const processedKeyRef = useRef<string | null>(null);
+  const svgGroupRef = useRef<SVGGElement>(null);
+  const nodeDrag = useRef<{
+    id: string; startClientX: number; startClientY: number; offX: number; offY: number; moved: boolean;
+    last: { x: number; y: number } | null;
+  } | null>(null);
 
   const meId = graph.center;
   const myEdgeByPartner = useMemo(() => new Map(graph.myEdges.map((e) => [e.partnerId, e])), [graph.myEdges]);
@@ -328,7 +392,7 @@ function GraphCanvas({
     return set;
   }, [graph.teams, myTeamIds, meId]);
 
-  const others = graph.nodes.filter((n) => !n.isMe);
+  const others = useMemo(() => graph.nodes.filter((n) => !n.isMe), [graph.nodes]);
 
   function tierOf(nodeId: string): Tier {
     const edge = sharedEdgeWithMe.get(nodeId);
@@ -337,7 +401,7 @@ function GraphCanvas({
     return "far";
   }
 
-  const positions = useMemo(() => {
+  const autoPositions = useMemo(() => {
     const total = others.length;
     if (total === 0) return [];
     const otherIds = new Set(others.map((n) => n.id));
@@ -400,12 +464,164 @@ function GraphCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [others, sharedEdgeWithMe, teammateIds, graph.teams]);
 
+  // ---- アイコン配置の記録と微調整 -------------------------------------------
+  // 位置は「保存済み」を基本とする。新しく増えたメンバーだけ自動配置の位置から始め、
+  // 重なりやチームの塊への入り込みがあれば、1回につき少しだけずらして保存する。
+  // （メンバーやチームの顔ぶれが変わったときだけ調整する。毎回の表示では動かさない）
+  const structureKey = useMemo(() => {
+    const teamKey = graph.teams
+      .filter((t) => !t.archived && (t.type === "power" || t.type === "loose"))
+      .map((t) => `${t.id}:${t.members.map((m) => m.id).sort().join(",")}`)
+      .sort()
+      .join("|");
+    return `${others.map((n) => n.id).sort().join(",")}#${teamKey}`;
+  }, [others, graph.teams]);
+
+  function savePositions(items: { nodeId: string; x: number; y: number; userPlaced: boolean }[]): void {
+    if (items.length === 0) return;
+    for (const it of items) persistedRef.current.set(it.nodeId, { x: it.x, y: it.y, placed: it.userPlaced });
+    for (let i = 0; i < items.length; i += 400) {
+      const chunk = items.slice(i, i + 400);
+      api.put("/collab/map-positions", { positions: chunk })
+        .then(() => setSaveFailed(false))
+        .catch(() => {
+          for (const it of chunk) persistedRef.current.delete(it.nodeId);
+          setSaveFailed(true);
+        });
+    }
+  }
+
+  function recomputeLayout(persist: boolean): void {
+    const prior = layoutRef.current;
+    const autoById = new Map(autoPositions.map((p) => [p.id, p]));
+    const baseline = new Map<string, LayoutPoint>();
+    const newIds = new Set<string>();
+    for (const n of others) {
+      const known = prior?.get(n.id) ?? persistedRef.current.get(n.id);
+      if (known) {
+        baseline.set(n.id, { x: known.x, y: known.y, placed: known.placed });
+      } else {
+        const auto = autoById.get(n.id);
+        if (!auto) continue;
+        baseline.set(n.id, { x: auto.x, y: auto.y, placed: false });
+        newIds.add(n.id);
+      }
+    }
+    const teamMemberIds = graph.teams
+      .filter((t) => !t.archived && (t.type === "power" || t.type === "loose"))
+      .map((t) => t.members.map((m) => m.id).filter((id) => baseline.has(id)));
+    const resolved = nudgeLayout(baseline, newIds, teamMemberIds);
+    layoutRef.current = resolved;
+    setLayout(resolved);
+
+    if (!persist) return;
+    const changed: { nodeId: string; x: number; y: number; userPlaced: boolean }[] = [];
+    for (const [id, p] of resolved) {
+      const saved = persistedRef.current.get(id);
+      if (!saved || Math.abs(saved.x - p.x) > 0.5 || Math.abs(saved.y - p.y) > 0.5 || saved.placed !== p.placed) {
+        changed.push({ nodeId: id, x: p.x, y: p.y, userPlaced: p.placed });
+      }
+    }
+    savePositions(changed);
+  }
+
+  useEffect(() => {
+    if (savedQ.isPending) return; // 保存済みの配置を読み込み終えてから並べる
+    if (processedKeyRef.current === structureKey && layoutRef.current) return;
+    if (processedKeyRef.current === null) {
+      persistedRef.current = new Map(
+        (savedQ.data?.data.positions ?? []).map((p) => [p.nodeId, { x: p.x, y: p.y, placed: p.userPlaced }])
+      );
+    }
+    processedKeyRef.current = structureKey;
+    recomputeLayout(savedQ.isSuccess);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureKey, savedQ.isPending, savedQ.isSuccess]);
+
+  async function resetLayout(): Promise<void> {
+    if (!window.confirm("アイコンの配置を、自動の並びに戻しますか？\n（動かした位置の記録は消えます）")) return;
+    setResetting(true);
+    try {
+      await api.delete("/collab/map-positions");
+      persistedRef.current = new Map();
+      layoutRef.current = null;
+      setSaveFailed(false);
+      recomputeLayout(true);
+      qc.removeQueries({ queryKey: ["collab", "map-positions"] });
+    } catch {
+      setSaveFailed(true);
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const positions = useMemo(() => {
+    if (!layout) return [];
+    return others.flatMap((n) => {
+      const p = dragging && dragging.id === n.id ? dragging : layout.get(n.id);
+      return p ? [{ id: n.id, x: p.x, y: p.y }] : [];
+    });
+  }, [layout, others, dragging]);
+
   const positionById = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
     map.set(meId, { x: 0, y: 0 });
     positions.forEach((p) => map.set(p.id, { x: p.x, y: p.y }));
     return map;
   }, [positions, meId]);
+
+  // ---- アイコンのドラッグ ----------------------------------------------------
+  // 画面上の座標 → マップ内（拡大・移動を取り除いた）の座標
+  function toWorld(clientX: number, clientY: number): { x: number; y: number } | null {
+    const g = svgGroupRef.current;
+    const m = g?.getScreenCTM();
+    if (!g || !m) return null;
+    const pt = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
+    return { x: pt.x, y: pt.y };
+  }
+  function onNodePointerDown(e: React.PointerEvent<SVGGElement>, id: string) {
+    e.stopPropagation(); // 背景のドラッグ（マップ全体の移動）とは分ける
+    const w = toWorld(e.clientX, e.clientY);
+    const cur = positionById.get(id);
+    if (!w || !cur) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    nodeDrag.current = { id, startClientX: e.clientX, startClientY: e.clientY, offX: cur.x - w.x, offY: cur.y - w.y, moved: false, last: null };
+  }
+  function onNodePointerMove(e: React.PointerEvent<SVGGElement>, id: string) {
+    const d = nodeDrag.current;
+    if (!d || d.id !== id) return;
+    e.stopPropagation();
+    // 指がわずかに動いただけのタップは「選択」として扱う
+    if (!d.moved && Math.hypot(e.clientX - d.startClientX, e.clientY - d.startClientY) < 6) return;
+    d.moved = true;
+    const w = toWorld(e.clientX, e.clientY);
+    if (!w) return;
+    const x = Math.max(-480, Math.min(480, w.x + d.offX));
+    const y = Math.max(-480, Math.min(480, w.y + d.offY));
+    d.last = { x, y };
+    setDragging({ id, x, y });
+  }
+  function onNodePointerUp(e: React.PointerEvent<SVGGElement>, id: string) {
+    const d = nodeDrag.current;
+    nodeDrag.current = null;
+    if (!d || d.id !== id) return;
+    e.stopPropagation();
+    if (!d.moved || !d.last) {
+      onSelect(id);
+      return;
+    }
+    const { x, y } = d.last;
+    const next = new Map(layoutRef.current ?? []);
+    next.set(id, { x, y, placed: true });
+    layoutRef.current = next;
+    setLayout(next);
+    setDragging(null);
+    savePositions([{ nodeId: id, x, y, userPlaced: true }]);
+  }
+  function onNodePointerCancel() {
+    nodeDrag.current = null;
+    setDragging(null);
+  }
 
   // 緩いチームの塊（円）で表現する関係は、線でも二重に表現しない（パワーチームと同じ扱いにする）。
   // 緩いチームの現役メンバー同士のペアは、たとえ実際の1to1関係の段階が"loose"でなくても
@@ -638,6 +854,7 @@ function GraphCanvas({
   }
 
   return (
+    <>
     <div className="relative mx-4 lg:mx-0 rounded-3xl overflow-hidden card-paper"
       style={{ height: 420, touchAction: "none" }}
       onPointerDown={onPointerDown}
@@ -652,7 +869,7 @@ function GraphCanvas({
             <feGaussianBlur stdDeviation="10" />
           </filter>
         </defs>
-        <g transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}>
+        <g ref={svgGroupRef} transform={`translate(${offset.x} ${offset.y}) scale(${scale})`}>
           {/* 協働チームの塊（ぼかし背景・全員共通）。実際のメンバー位置を包む形にして、
               無関係なメンバーのアイコンが塊の中に紛れ込まないようにしている */}
           {teamBlobs.map(({ team, path, circle }) => (
@@ -711,12 +928,17 @@ function GraphCanvas({
             const node = others.find((n) => n.id === p.id)!;
             const sharedEdge = sharedEdgeWithMe.get(p.id);
             const isSelected = selectedId === p.id;
+            const isDragging = dragging?.id === p.id;
             return (
               <g
                 key={p.id}
                 transform={`translate(${p.x} ${p.y})`}
-                onClick={() => onSelect(p.id)}
-                style={{ cursor: "pointer" }}
+                onPointerDown={(e) => onNodePointerDown(e, p.id)}
+                onPointerMove={(e) => onNodePointerMove(e, p.id)}
+                onPointerUp={(e) => onNodePointerUp(e, p.id)}
+                onPointerCancel={onNodePointerCancel}
+                style={{ cursor: isDragging ? "grabbing" : "pointer", touchAction: "none" }}
+                opacity={isDragging ? 0.85 : 1}
               >
                 <circle
                   r={isSelected ? 20 : 17}
@@ -802,6 +1024,20 @@ function GraphCanvas({
           style={{ background: "var(--color-paper-50)", color: "var(--color-ink-600)", boxShadow: "0 1px 4px rgba(0,0,0,0.15)" }}>−</button>
       </div>
     </div>
+
+    <div className="mx-4 lg:mx-0 mt-2 flex items-center justify-between gap-3">
+      <p className="text-[11px] leading-snug" style={{ color: saveFailed ? "var(--color-brand)" : "var(--color-ink-500)" }}>
+        {saveFailed
+          ? "配置を保存できませんでした。通信状況をご確認のうえ、もう一度動かしてみてください。"
+          : "✋ 丸はドラッグで動かせます。置いた場所は自動で覚えます。"}
+      </p>
+      <button onClick={resetLayout} disabled={resetting}
+        className="shrink-0 text-[11px] px-2.5 py-1 rounded-full font-medium transition disabled:opacity-60"
+        style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+        {resetting ? "戻しています..." : "↺ 自動の並びに戻す"}
+      </button>
+    </div>
+    </>
   );
 }
 

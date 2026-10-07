@@ -1,7 +1,7 @@
 // =============================================================
 // Drizzle ORM スキーマ定義 (D1/SQLite)
 // =============================================================
-import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, primaryKey, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const members = sqliteTable("members", {
   id:                  text("id").primaryKey(),
@@ -1108,3 +1108,15 @@ export const memberNotifications = sqliteTable("member_notifications", {
   readAt:      integer("read_at"),
   createdAt:   integer("created_at").notNull(),
 });
+
+// 協働マップのアイコン配置（メンバーごとの私的なレイアウト）
+export const collabMapPositions = sqliteTable("collab_map_positions", {
+  memberId:   text("member_id").notNull(),
+  nodeId:     text("node_id").notNull(),
+  x:          real("x").notNull(),
+  y:          real("y").notNull(),
+  userPlaced: integer("user_placed").notNull().default(0),
+  updatedAt:  integer("updated_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.memberId, t.nodeId] }),
+}));
