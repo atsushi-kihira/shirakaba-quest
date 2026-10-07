@@ -12,7 +12,7 @@ export type EmailVar = {
 export type EmailDefault = {
   emailKey: string;
   label: string;
-  category: "auth" | "usp" | "meeting" | "oneonone" | "card" | "scheduler" | "collab";
+  category: "auth" | "usp" | "meeting" | "oneonone" | "card" | "scheduler" | "collab" | "broadcast";
   triggerDescription: string;
   enabled: boolean;
   subject: string;
@@ -1090,6 +1090,19 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
       { key: "teamTypeLabel", label: "チーム種別", example: "パワーチーム" },
     ],
   },
+  {
+    emailKey: "admin_broadcast",
+    label: "運営からのお知らせ（管理画面から配信）",
+    category: "broadcast",
+    triggerDescription: "管理ダッシュボードの「お知らせ配信」から配信したとき（件名・本文は配信のたびに文面を選んで作成します）",
+    enabled: true,
+    subject: "{{subject}}",
+    bodyText: `{{body}}`,
+    availableVars: [
+      { key: "subject", label: "件名（配信時の文面）", example: "あなたにおすすめの使い方" },
+      { key: "body", label: "本文（配信時の文面）", example: "山田 太郎さん ..." },
+    ],
+  },
 ];
 
 export const EMAIL_DEFAULTS_MAP = new Map<string, EmailDefault>(
@@ -1104,4 +1117,5 @@ export const CATEGORY_LABELS: Record<EmailDefault["category"], string> = {
   card: "カード発注",
   scheduler: "スケジューラー",
   collab: "協働",
+  broadcast: "お知らせ配信",
 };

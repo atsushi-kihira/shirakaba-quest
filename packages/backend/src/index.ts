@@ -14,6 +14,7 @@ import { oneOnOneGuestInvitePublicRoutes } from "./routes/oneonone-guest-invites
 import { questRoutes } from "./routes/quests.ts";
 import { badgeRoutes } from "./routes/badges.ts";
 import { seasonRoutes } from "./routes/seasons.ts";
+import { notificationRoutes } from "./routes/notifications.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { teamRoutes } from "./routes/teams.ts";
 import { collabRoutes, sweepPendingCompanySummaries } from "./routes/collab.ts";
@@ -82,6 +83,7 @@ app.route("/api/meetings", meetingRoutes);
 app.route("/api/meeting-series", meetingSeriesRoutes);
 app.route("/api/schedule", scheduleRoutes);
 app.route("/api/push", pushRoutes);
+app.route("/api/notifications", notificationRoutes);
 app.route("/api/scheduler", schedulerRoutes);
 
 // ---- 内部専用: 会社概要のバックグラウンド生成の自己連鎖呼び出し（一般ユーザーの認証は使わず、共有シークレットで保護） ----

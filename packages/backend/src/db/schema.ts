@@ -1066,3 +1066,45 @@ export const pushSubscriptions = sqliteTable("push_subscriptions", {
   userAgent: text("user_agent"),
   createdAt: integer("created_at").notNull(),
 });
+
+// ---- 運営からのお知らせ配信（管理ダッシュボードから配信する通知＋メール） ----
+
+// 配信文面のテンプレート（管理者が自由に何件でも作れる）。
+// includeUsage / includeRecommendations: 受信者ごとの「利用状況」「おすすめ機能」ブロックを差し込むかどうか。
+export const broadcastTemplates = sqliteTable("broadcast_templates", {
+  id:                    text("id").primaryKey(),
+  name:                  text("name").notNull(),
+  title:                 text("title").notNull(),
+  body:                  text("body").notNull(),
+  includeUsage:          integer("include_usage").notNull().default(0),
+  includeRecommendations: integer("include_recommendations").notNull().default(0),
+  createdAt:             integer("created_at").notNull(),
+  updatedAt:             integer("updated_at").notNull(),
+});
+
+// 配信の履歴（実際に送った文面は、その時点の編集後の内容を保存する）
+export const broadcasts = sqliteTable("broadcasts", {
+  id:                    text("id").primaryKey(),
+  templateId:            text("template_id"),
+  title:                 text("title").notNull(),
+  body:                  text("body").notNull(),
+  includeUsage:          integer("include_usage").notNull().default(0),
+  includeRecommendations: integer("include_recommendations").notNull().default(0),
+  sendEmail:             integer("send_email").notNull().default(1),
+  scope:                 text("scope").notNull(), // 'all' | 'team'(ギルド) | 'collab_team'(チーム) | 'selected'
+  scopeLabel:            text("scope_label"),
+  recipientCount:        integer("recipient_count").notNull().default(0),
+  sentBy:                text("sent_by").notNull(),
+  createdAt:             integer("created_at").notNull(),
+});
+
+// メンバーごとの通知（受信者ごとに差し込み済みの文面を保存する）
+export const memberNotifications = sqliteTable("member_notifications", {
+  id:          text("id").primaryKey(),
+  broadcastId: text("broadcast_id").notNull(),
+  memberId:    text("member_id").notNull(),
+  title:       text("title").notNull(),
+  body:        text("body").notNull(),
+  readAt:      integer("read_at"),
+  createdAt:   integer("created_at").notNull(),
+});

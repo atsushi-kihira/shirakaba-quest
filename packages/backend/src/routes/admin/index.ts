@@ -18,6 +18,7 @@ import { adminUsageReportRoutes } from "./usage-report.ts";
 import { adminEmailTemplateRoutes } from "./email-templates.ts";
 import { adminCollabRoutes } from "./collab.ts";
 import { adminOneOnOneRoutes } from "./oneonone.ts";
+import { adminBroadcastRoutes } from "./broadcasts.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -38,6 +39,7 @@ adminRoutes.route("/usage-report", adminUsageReportRoutes);
 adminRoutes.route("/email-templates", adminEmailTemplateRoutes);
 adminRoutes.route("/collab", adminCollabRoutes);
 adminRoutes.route("/oneonone", adminOneOnOneRoutes);
+adminRoutes.route("/broadcasts", adminBroadcastRoutes);
 
 // D1のバインド変数上限を避けるため、IN句に渡すID件数を安全な単位に分割するヘルパー
 const POINTS_ID_CHUNK_SIZE = 50;

@@ -34,6 +34,7 @@ import { AdminPointsScreen } from "@/screens/admin/admin-points-screen";
 import { AdminOneOnOneHistoryScreen } from "@/screens/admin/admin-oneonone-history-screen";
 import { AdminSettingsScreen } from "@/screens/admin/admin-settings-screen";
 import { AdminEmailTemplatesScreen } from "@/screens/admin/admin-email-templates-screen";
+import { AdminBroadcastsScreen } from "@/screens/admin/admin-broadcasts-screen";
 import { AdminUspsScreen } from "@/screens/admin/admin-usps-screen";
 import { AdminSeasonsScreen } from "@/screens/admin/admin-seasons-screen";
 import { AdminEventTypesScreen } from "@/screens/admin/admin-event-types-screen";
@@ -173,6 +174,7 @@ export default function App() {
                 <Route path="oneonone-history" element={<AdminOneOnOneHistoryScreen />} />
                 <Route path="usage-report" element={<AdminUsageReportScreen />} />
                 <Route path="email-templates" element={<AdminEmailTemplatesScreen />} />
+                <Route path="broadcasts" element={<AdminBroadcastsScreen />} />
                 <Route path="settings" element={<AdminSettingsScreen />} />
               </Route>
             </Route>

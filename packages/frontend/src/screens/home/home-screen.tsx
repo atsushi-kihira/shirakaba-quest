@@ -6,6 +6,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar, X, Handshake, Sparkles, MessageSquarePlus, Lock, LinkIcon, Clock } from "lucide-react";
 import { api } from "@/lib/api";
+import { useBroadcastNotifications, type BroadcastNotification } from "@/hooks/use-broadcast-notifications";
+import { LinkifiedText } from "@/components/linkified-text";
 import { MemberAvatar } from "@/components/member-avatar";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { AddContactFromBookingModal } from "@/components/add-contact-from-booking-modal";
@@ -167,6 +169,14 @@ export function HomeScreen() {
       .then(() => qc.invalidateQueries({ queryKey: ["meetings", "notifications"] }))
       .catch(() => {});
     navigate(`/meetings/${meetingId}`);
+  }
+
+  // 運営（管理画面）からのお知らせ
+  const { unread: broadcastUnread, markRead: markBroadcastRead } = useBroadcastNotifications();
+  const [openBroadcast, setOpenBroadcast] = useState<BroadcastNotification | null>(null);
+  function handleBroadcastOpen(n: BroadcastNotification) {
+    setOpenBroadcast(n);
+    markBroadcastRead(n.id);
   }
 
   const { data: rankData } = useQuery({
@@ -618,6 +628,38 @@ export function HomeScreen() {
                 </Link>
               );
             })}
+          </div>
+        </section>
+      )}
+
+      {/* 運営からのお知らせ */}
+      {broadcastUnread.length > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
+              📣 運営からのお知らせ
+            </h2>
+            <Link to="/notifications" className="text-xs" style={{ color: "var(--color-brand)" }}>
+              通知をすべて見る →
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {broadcastUnread.slice(0, 3).map((n) => (
+              <button
+                key={n.id}
+                onClick={() => handleBroadcastOpen(n)}
+                className="w-full card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80 text-left"
+                style={{ borderLeft: "3px solid var(--color-brand)" }}
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+                  style={{ background: "rgba(181,56,75,0.1)" }}>📣</div>
+                <p className="flex-1 min-w-0 text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{n.title}</p>
+                <ChevronRight size={16} style={{ color: "var(--color-brand)" }} />
+              </button>
+            ))}
+            {broadcastUnread.length > 3 && (
+              <p className="text-xs text-center" style={{ color: "var(--color-ink-500)" }}>ほか{broadcastUnread.length - 3}件の未読があります</p>
+            )}
           </div>
         </section>
       )}
@@ -1236,6 +1278,20 @@ export function HomeScreen() {
             <p className="text-sm whitespace-pre-wrap p-3 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-ink-800)" }}>
               {openReactionNotif.message}
             </p>
+          </div>
+        </div>
+      )}
+
+      {openBroadcast && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.4)" }} onClick={() => setOpenBroadcast(null)}>
+          <div className="card-paper p-5 w-full max-w-md rounded-3xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+                📣 {openBroadcast.title}
+              </h2>
+              <button onClick={() => setOpenBroadcast(null)} className="shrink-0"><X size={18} style={{ color: "var(--color-ink-400)" }} /></button>
+            </div>
+            <LinkifiedText text={openBroadcast.body} className="text-sm leading-relaxed" style={{ color: "var(--color-ink-800)" }} />
           </div>
         </div>
       )}

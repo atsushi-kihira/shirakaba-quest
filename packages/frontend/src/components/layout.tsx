@@ -4,7 +4,7 @@
 // =============================================================
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { Home, Users, ScrollText, Trophy, User, Calendar, Handshake, Sparkles, Lock, BookOpen } from "lucide-react";
+import { Home, Users, ScrollText, Trophy, User, Calendar, Handshake, Sparkles, Lock, BookOpen, Bell } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { useOneOnOneSessions, filterActionableOneOnOne, filterInFlightOneOnOneForBadge } from "@/hooks/use-oneonone-status";
@@ -12,6 +12,7 @@ import { useMeetingAlerts } from "@/hooks/use-meeting-alerts";
 import { useCollabAlerts, useCollabReactionNotificationCount } from "@/hooks/use-collab-alerts";
 import { useGuestFollowups, usePendingExternalOneOnOneCount } from "@/hooks/use-guest-followups";
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
+import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
 
 // 承認待ち（ゲスト）状態のメンバーには使わせない画面（ナビ自体を非活性表示にする）
 const GUEST_RESTRICTED_PATHS = new Set(["/members", "/collab", "/enishi", "/quests", "/ranking"]);
@@ -53,11 +54,13 @@ export function AppLayout() {
   const collabAlerts = useCollabAlerts();
   const settings = useSettings();
   const approved = isApprovedMember(useAuthStore((s) => s.user));
+  const { unreadCount: broadcastUnreadCount } = useBroadcastNotifications();
 
   const BADGE_COUNTS: Record<string, number> = {
     "/home": pendingCount,
     "/meetings": meetingPendingCount,
     "/collab": collabAlerts.total,
+    "/notifications": broadcastUnreadCount,
   };
 
   // 一般公開したばかりの機能・新機能に一時的に表示するお知らせバッジ（数値バッジがある場合はそちらを優先）
@@ -78,6 +81,8 @@ export function AppLayout() {
       description: "1to1や複数人でのミーティングの申し込み・日程調整・記録を管理します" },
     { to: "/ranking",  icon: Trophy,     label: "順位",           mobileVisible: false,
       description: "チャプター内でのポイントランキングを確認できます" },
+    { to: "/notifications", icon: Bell,   label: "通知",           mobileVisible: false,
+      description: "運営からのお知らせや、これまでの通知を確認できます" },
     { to: "/me",       icon: User,       label: "マイページ",     mobileVisible: true,
       description: "プロフィール編集・QRコード表示・各種設定はこちらから" },
   ] as const;
