@@ -694,13 +694,18 @@ oneOnOneRoutes.post("/", async (c) => {
 
   // 相手が存在するか確認
   const responder = await db
-    .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
+    .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email, status: schema.members.status })
     .from(schema.members)
     .where(eq(schema.members.id, responderId))
     .get();
 
   if (!responder) {
     return c.json({ error: { code: "not_found", message: "相手が見つかりません" } }, 404);
+  }
+  // 1to1（ポイントの対象）は、承認済みのメンバー同士のみ。外部のゲスト（ビジター）とは
+  // 「ゲスト招待」の流れで日程調整する
+  if (responder.status !== "active") {
+    return c.json({ error: { code: "not_member", message: "この方には1to1を申し込めません（承認済みのメンバーのみ対象です）。外部の方は「ゲストを招待する」からご案内ください。" } }, 400);
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -1066,13 +1071,16 @@ oneOnOneRoutes.patch("/:id/uncomplete", async (c) => {
 
   // 双方完了済み（completed）だった場合、両者のポイントを取り消す
   if (wasFullyCompleted) {
-    const seasonPts = await getActiveSeasonPoints(db);
-    const delta = -seasonPts.oneOnOne;
-    for (const memberId of [session.requesterId, session.responderId]) {
+    // 実際にポイントを付与したメンバー分だけ取り消す（メンバー同士の1to1にしか付与しないため）
+    const awarded = await db.select({ memberId: schema.pointTransactions.memberId, delta: schema.pointTransactions.delta })
+      .from(schema.pointTransactions)
+      .where(and(eq(schema.pointTransactions.reason, "one_on_one_completed"), eq(schema.pointTransactions.relatedId, sessionId)))
+      .all();
+    for (const a of awarded) {
       await db.insert(schema.pointTransactions).values({
         id: newId(),
-        memberId,
-        delta,
+        memberId: a.memberId,
+        delta: -a.delta,
         reason: "one_on_one_cancelled",
         relatedId: sessionId,
         createdAt: now,
@@ -1188,6 +1196,20 @@ async function applyOneOnOneCompletion(
     await touchCollaborationLink(db, session.requesterId, session.responderId, now);
   } catch (e) {
     console.error("[oneonone] 協働リンク更新失敗", e);
+  }
+
+  // ポイントは、承認済みのメンバー同士の1to1にだけ付与する（外部のゲスト・ビジターや、
+  // 承認前・休会中・退会済みのアカウントとの1to1は、完了にはなってもポイントの対象外）
+  const participants = await db
+    .select({ id: schema.members.id, status: schema.members.status })
+    .from(schema.members)
+    .where(inArray(schema.members.id, [session.requesterId, session.responderId]))
+    .all();
+  const bothActiveMembers = participants.length === 2 && participants.every((m) => m.status === "active");
+  if (!bothActiveMembers) {
+    await checkAndAwardBadges(db, session.requesterId, schema);
+    await checkAndAwardBadges(db, session.responderId, schema);
+    return;
   }
 
   // 双方にポイント付与（シーズン設定を優先）
