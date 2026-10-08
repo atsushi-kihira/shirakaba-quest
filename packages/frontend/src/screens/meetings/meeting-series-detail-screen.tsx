@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateJP, fmtTime } from "@/lib/date";
+import { EventTypeSelector } from "@/components/event-type-selector";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -23,6 +24,7 @@ type TargetMember = { id: string; name: string; emoji: string; bgColor: string }
 type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null };
 type SeriesDetail = {
   id: string; title: string; description: string | null;
+  eventType: { id: string; name: string; emoji: string; pointValue: number } | null;
   hostMemberId: string; isHost: boolean;
   scope: "collab_team" | "selected"; collabTeamId: string | null;
   status: "voting" | "confirmed" | "ended" | "cancelled";
@@ -92,6 +94,17 @@ export function MeetingSeriesDetailScreen() {
       setHasEdited(false);
       qc.invalidateQueries({ queryKey: ["meeting-series", id] });
       qc.invalidateQueries({ queryKey: ["meeting-series"] });
+    },
+  });
+
+  const [editingEventType, setEditingEventType] = useState(false);
+  const [pickedEventTypeId, setPickedEventTypeId] = useState("");
+  const eventTypeMutation = useMutation({
+    mutationFn: (eventTypeDefId: string) => api.patch(`/meeting-series/${id}/event-type`, { eventTypeDefId }),
+    onSuccess: () => {
+      setEditingEventType(false);
+      qc.invalidateQueries({ queryKey: ["meeting-series", id] });
+      qc.invalidateQueries({ queryKey: ["meetings"] });
     },
   });
 
@@ -179,6 +192,37 @@ export function MeetingSeriesDetailScreen() {
             </span>
           )}
         </div>
+        {/* イベント種別（ポイントのつく種別なら、各回の参加ごとにポイントが付く） */}
+        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+          <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: "rgba(212,160,59,0.15)", color: "var(--color-accent)" }}>
+            🎯 {series.eventType ? `${series.eventType.emoji} ${series.eventType.name}` : "イベント種別：未設定"}
+            {series.eventType && series.eventType.pointValue > 0 ? `（参加ごとに+${series.eventType.pointValue}pt）` : ""}
+          </span>
+          {series.isHost && series.status !== "cancelled" && (
+            <button onClick={() => { setPickedEventTypeId(series.eventType?.id ?? ""); setEditingEventType((v) => !v); }}
+              className="text-xs underline" style={{ color: "var(--color-brand)" }}>
+              {series.eventType ? "変更する" : "設定する"}
+            </button>
+          )}
+        </div>
+        {editingEventType && (
+          <div className="rounded-2xl p-3 mb-2" style={{ background: "var(--color-paper-100)" }}>
+            <EventTypeSelector value={pickedEventTypeId} onChange={setPickedEventTypeId} defaultToFirst={false}
+              hint="すでに開催回が作成されている場合は、各回にも反映されます（付与済みのポイントは変わりません）" />
+            <div className="flex gap-2 mt-3">
+              <button onClick={() => setEditingEventType(false)} className="flex-1 py-2 rounded-2xl text-sm"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>キャンセル</button>
+              <button onClick={() => eventTypeMutation.mutate(pickedEventTypeId)}
+                disabled={!pickedEventTypeId || eventTypeMutation.isPending}
+                className="flex-1 py-2 rounded-2xl text-sm text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+                {eventTypeMutation.isPending ? "保存中…" : "保存する"}
+              </button>
+            </div>
+            {eventTypeMutation.isError && (
+              <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>保存できませんでした。もう一度お試しください。</p>
+            )}
+          </div>
+        )}
         {series.description && <p className="text-sm mb-1" style={{ color: "var(--color-ink-700)" }}>{series.description}</p>}
         <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
           対象: {series.targetMembers.map((m) => `${m.emoji} ${m.name}`).join("、") || "（対象者なし）"}

@@ -635,11 +635,13 @@ function TypeDefSection({
           {isMeetingLinked && (
             <p className="text-xs py-2 px-3 rounded-xl"
               style={{ background: "rgba(212,160,59,0.1)", color: "var(--color-ink-600)" }}>
-              ☕ 新しいイベントはミーティング作成時に種別を選択することで作成されます。
+              ☕ この種別のミーティング（定例会を含む）を作成すると、参加者にポイントが付きます。
+              ここでは、この種別のイベント（インスタンス）を管理者が作成できます。作成したイベントは、ミーティング詳細画面の「イベントを設定する」から紐づけられます。
             </p>
           )}
 
-          {!isMeetingLinked && isAdminCreator && !showCreate && (
+          {/* 管理者は、どの種別でもイベントを作成できる（メンバー作成の種別・ミーティング連携の種別も含む） */}
+          {!showCreate && (
             <button
               onClick={() => setShowCreate(true)}
               className="mt-3 flex items-center gap-2 px-4 py-2 rounded-2xl text-sm font-medium transition hover:opacity-80"
@@ -648,7 +650,7 @@ function TypeDefSection({
             </button>
           )}
 
-          {!isMeetingLinked && showCreate && (
+          {showCreate && (
             <CreateInstanceForm
               typeDef={typeDef} members={members}
               onDone={() => { setShowCreate(false); onRefresh(); }}
@@ -658,8 +660,7 @@ function TypeDefSection({
 
           {activeInstances.length === 0 && !showCreate && (
             <p className="text-xs py-2" style={{ color: "var(--color-ink-300)" }}>
-              {isMeetingLinked ? "ミーティング連携のイベントはまだありません" :
-               isAdminCreator ? "実施中のイベントはありません" : "メンバーが作成したイベントはありません"}
+              実施中のイベントはありません
             </p>
           )}
           {activeInstances.map((inst) =>

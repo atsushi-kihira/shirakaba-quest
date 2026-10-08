@@ -74,6 +74,15 @@ async function resolveSeriesMemberIds(
 // ----------------------------------------------------------------
 const MAX_FIXED_DATES = 50;
 
+/** ミーティング連携できるイベント種別を解決する（未指定なら先頭の種別。無効・対象外の種別ならnull） */
+async function resolveMeetingEventType(db: ReturnType<typeof createDb>, eventTypeDefId: string | null | undefined) {
+  const candidates = await db.select().from(schema.eventTypeDefinitions)
+    .where(and(eq(schema.eventTypeDefinitions.linksToMeeting, 1), eq(schema.eventTypeDefinitions.isActive, 1)))
+    .orderBy(schema.eventTypeDefinitions.sortOrder).all();
+  if (!eventTypeDefId) return candidates[0] ?? null;
+  return candidates.find((t) => t.id === eventTypeDefId) ?? null;
+}
+
 meetingSeriesRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
@@ -122,6 +131,13 @@ meetingSeriesRoutes.post("/", async (c) => {
   }
   if (body.scope === "selected" && (!body.inviteeIds || body.inviteeIds.length === 0)) {
     return c.json({ error: { code: "invalid_input", message: "招待するメンバーを1人以上選んでください" } }, 400);
+  }
+
+  // イベント種別は必須（ポイントのつく種別なら、各回の参加ごとにポイントが付く）。
+  // 指定がなければ、ミーティング連携できる種別の先頭（通常は「ミーティング」）にする
+  const eventTypeDef = await resolveMeetingEventType(db, body.eventTypeDefId);
+  if (!eventTypeDef) {
+    return c.json({ error: { code: "invalid_input", message: "イベント種別を選んでください" } }, 400);
   }
 
   let manualConferenceUrl: string | undefined;
@@ -240,7 +256,7 @@ meetingSeriesRoutes.post("/", async (c) => {
     conferenceType: body.conferenceType ?? null,
     conferenceUrl: manualConferenceUrl ?? null,
     dateMode,
-    eventTypeDefId: body.eventTypeDefId ?? null,
+    eventTypeDefId: eventTypeDef.id,
     createdAt: now,
     updatedAt: now,
   });
@@ -532,9 +548,17 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       .sort((a, b) => a.startsAt - b.startsAt);
   }
 
+  const eventType = series.eventTypeDefId
+    ? await db.select({
+        id: schema.eventTypeDefinitions.id, name: schema.eventTypeDefinitions.name,
+        emoji: schema.eventTypeDefinitions.emoji, pointValue: schema.eventTypeDefinitions.pointValue,
+      }).from(schema.eventTypeDefinitions).where(eq(schema.eventTypeDefinitions.id, series.eventTypeDefId)).get()
+    : null;
+
   return c.json({
     data: {
       id: series.id, title: series.title, description: series.description,
+      eventType: eventType ?? null,
       hostMemberId: series.hostMemberId, isHost: series.hostMemberId === memberId,
       scope: series.scope, teamId: series.teamId, collabTeamId: series.collabTeamId,
       status: series.status, deadline: series.deadline,
@@ -794,6 +818,32 @@ meetingSeriesRoutes.patch("/:id/confirm", async (c) => {
 // ----------------------------------------------------------------
 // DELETE /api/meeting-series/:id — 定例会をキャンセル
 // ----------------------------------------------------------------
+// ----------------------------------------------------------------
+// PATCH /api/meeting-series/:id/event-type — 定例会のイベント種別を設定・変更（主催者のみ）
+// 各回（すでに生成済みのミーティング）にも反映する。すでに付与したポイントは変わらない。
+// ----------------------------------------------------------------
+meetingSeriesRoutes.patch("/:id/event-type", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ変更できます" } }, 403);
+
+  const body = await c.req.json<{ eventTypeDefId?: string }>().catch(() => ({} as { eventTypeDefId?: string }));
+  if (!body.eventTypeDefId) return c.json({ error: { code: "invalid_input", message: "イベント種別を選んでください" } }, 400);
+  const typeDef = await resolveMeetingEventType(db, body.eventTypeDefId);
+  if (!typeDef) return c.json({ error: { code: "invalid_input", message: "選んだイベント種別は使えません" } }, 400);
+
+  await db.update(schema.meetingSeries).set({ eventTypeDefId: typeDef.id, updatedAt: now }).where(eq(schema.meetingSeries.id, id));
+  await db.update(schema.meetings).set({ eventTypeDefId: typeDef.id, updatedAt: now }).where(eq(schema.meetings.seriesId, id));
+
+  return c.json({ data: { eventTypeDefId: typeDef.id } });
+});
+
 meetingSeriesRoutes.delete("/:id", async (c) => {
   const db = createDb(c.env.DB);
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
