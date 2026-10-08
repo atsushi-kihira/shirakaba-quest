@@ -12,6 +12,7 @@ import { Hono } from "hono";
 import { eq, and, sql, asc, inArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { listMeetingEvents, listPlainMeetingTypes } from "../services/meeting-event.ts";
+import { listOneOnOneEvents } from "../services/oneonone-event.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import type { Env, Variables } from "../types.ts";
@@ -117,6 +118,7 @@ eventRoutes.get("/active", async (c) => {
           rewardTarget: typeDef.rewardTarget,
           requiresTargetMember: typeDef.requiresTargetMember,
           linksToMeeting: typeDef.linksToMeeting,
+          linksToOneOnOne: typeDef.linksToOneOnOne,
         }),
         ...(ids.length > 0 && {
           relatedMemberName: memberMap.get(ids[0])?.name ?? null,
@@ -169,6 +171,14 @@ eventRoutes.get("/meeting-events", async (c) => {
   // data: ポイントのつくイベント（インスタンス）／plainTypes: ポイントなしでそのまま選べる種別（「ミーティング」など）
   const [events, plainTypes] = await Promise.all([listMeetingEvents(db), listPlainMeetingTypes(db)]);
   return c.json({ data: events, plainTypes });
+});
+
+// GET /api/events/one-on-one-events?target=member|visitor — 1to1に結びつけられるイベント一覧
+// （メンバーに申し込むとき＝member、ビジターを招待するとき＝visitor）
+eventRoutes.get("/one-on-one-events", async (c) => {
+  const db = createDb(c.env.DB);
+  const target = c.req.query("target") === "visitor" ? "visitor" : "member";
+  return c.json({ data: await listOneOnOneEvents(db, target) });
 });
 
 // POST /api/events/instances — メンバーがイベントインスタンスを作成

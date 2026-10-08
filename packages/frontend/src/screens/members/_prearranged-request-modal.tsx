@@ -3,6 +3,7 @@
 // 既に別の手段で日程調整済みの相手に対し、日時・会議ツールを指定して申し込む。
 // =============================================================
 import { useState } from "react";
+import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
@@ -33,6 +34,7 @@ export function PrearrangedRequestModal({
   onSuccess: (conferenceUrl: string | null) => void;
 }) {
   const qc = useQueryClient();
+  const [eventCampaignId, setEventCampaignId] = useState("");
   const [title, setTitle] = useState(`${responderName}さんとの1to1`);
   const [date, setDate] = useState(todayYMD());
   const [time, setTime] = useState(DEFAULT_START_TIME);
@@ -70,6 +72,7 @@ export function PrearrangedRequestModal({
         title: title.trim() || undefined,
         note: note.trim() || undefined,
         notifyByEmail,
+        eventCampaignId: eventCampaignId || undefined,
       });
     },
     onSuccess: (res) => {
@@ -97,6 +100,8 @@ export function PrearrangedRequestModal({
         </p>
 
         <div className="space-y-4">
+          <OneOnOneEventSelector target="member" value={eventCampaignId} onChange={setEventCampaignId} />
+
           <div>
             <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>ミーティングのタイトル</label>
             <input

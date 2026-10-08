@@ -14,6 +14,32 @@ import { useSettings } from "@/hooks/use-settings";
 import { fmtDateISO, tsToDateInput } from "@/lib/date";
 import type { EventTypeDefinition } from "@shared/types";
 
+const ONE_ON_ONE_TARGET_LABEL = { member: "メンバーとの1to1向け", visitor: "ビジターとの1to1向け" } as const;
+
+/** 1to1に結びつける種別のイベントで、メンバーとの1to1向けか、ビジターとの1to1向けかを選ぶ */
+function OneOnOneTargetField({ value, onChange }: { value: "member" | "visitor"; onChange: (v: "member" | "visitor") => void }) {
+  return (
+    <div>
+      <p className="text-xs font-medium mb-1" style={{ color: "var(--color-ink-500)" }}>どの1to1向けのイベントですか？</p>
+      <div className="grid grid-cols-2 gap-2">
+        {(["member", "visitor"] as const).map((t) => (
+          <button key={t} type="button" onClick={() => onChange(t)}
+            className="py-2 rounded-2xl text-sm font-medium transition"
+            style={{
+              background: value === t ? "var(--color-brand)" : "var(--color-paper-200)",
+              color: value === t ? "white" : "var(--color-ink-600)",
+            }}>
+            {t === "member" ? "🤝 メンバーとの1to1向け" : "🙋 ビジターとの1to1向け"}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+        メンバー向けはメンバーに1to1を申し込むときに、ビジター向けはビジターを招待するときに選べます
+      </p>
+    </div>
+  );
+}
+
 // ---- 型定義 ----
 type Instance = {
   id: string;
@@ -26,6 +52,7 @@ type Instance = {
   relatedMemberId: string | null;
   relatedMemberIds: string[];
   multiplier: number | null;
+  oneOnOneTarget: "member" | "visitor" | null;
   status: "active" | "ended" | "deleted";
   createdByMemberId: string | null;
   createdAt: number;
@@ -64,6 +91,7 @@ function TypeDefEditForm({ typeDef, instanceCount, onDone }: { typeDef: EventTyp
   const [requiresTarget, setRequiresTarget] = useState(typeDef.requiresTargetMember === 1);
   const [creatorRole, setCreatorRole] = useState(typeDef.creatorRole);
   const [linksToMeeting, setLinksToMeeting] = useState(typeDef.linksToMeeting === 1);
+  const [linksToOneOnOne, setLinksToOneOnOne] = useState(typeDef.linksToOneOnOne === 1);
 
   const effectiveHasPoints = triggerType === "on_action" && hasPoints;
 
@@ -77,6 +105,7 @@ function TypeDefEditForm({ typeDef, instanceCount, onDone }: { typeDef: EventTyp
       requiresTargetMember: requiresTarget,
       creatorRole,
       linksToMeeting,
+      linksToOneOnOne,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "event-type-definitions"] });
@@ -141,6 +170,10 @@ function TypeDefEditForm({ typeDef, instanceCount, onDone }: { typeDef: EventTyp
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" checked={linksToMeeting} onChange={(e) => setLinksToMeeting(e.target.checked)} className="rounded" />
           <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>ミーティング連携</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={linksToOneOnOne} onChange={(e) => setLinksToOneOnOne(e.target.checked)} className="rounded" />
+          <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>1to1連携（1to1に結びつけるイベント種別）</span>
         </label>
       </div>
       <div>
@@ -211,6 +244,12 @@ function InstanceCard({
             {style.label}
           </span>
           <span className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>{inst.title}</span>
+          {inst.oneOnOneTarget && (
+            <span className="text-xs px-1.5 py-0.5 rounded-full"
+              style={{ background: "rgba(212,160,59,0.15)", color: "var(--color-accent)" }}>
+              {ONE_ON_ONE_TARGET_LABEL[inst.oneOnOneTarget]}
+            </span>
+          )}
           {creatorMember && (
             <span className="text-xs px-1.5 py-0.5 rounded-full"
               style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
@@ -280,10 +319,12 @@ function EditInstanceForm({
   const [endsAt, setEndsAt] = useState(instance.endsAt ? tsToDateInput(instance.endsAt, tz) : "");
   const [multiplier, setMultiplier] = useState(instance.multiplier ? String(instance.multiplier) : "");
   const [selectedIds, setSelectedIds] = useState<string[]>(instance.relatedMemberIds);
+  const [oneOnOneTarget, setOneOnOneTarget] = useState<"member" | "visitor">(instance.oneOnOneTarget ?? "member");
 
   const activeMembers = members.filter((m) => m.status === "active");
   const resolvedDef = allTypeDefs.find((t) => t.id === selectedTypeDefId) ?? currentDef;
   const needsTarget = resolvedDef?.requiresTargetMember === 1;
+  const isOneOnOne = resolvedDef?.linksToOneOnOne === 1;
   const typeChanged = selectedTypeDefId !== (instance.eventTypeDefId ?? "");
 
   function toggleMember(id: string) {
@@ -308,6 +349,7 @@ function EditInstanceForm({
           <p className="text-xs mt-0.5" style={{ color: "var(--color-accent)" }}>⚠ 種別が変更されます</p>
         )}
       </div>
+      {isOneOnOne && <OneOnOneTargetField value={oneOnOneTarget} onChange={setOneOnOneTarget} />}
       <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="タイトル"
         className="w-full px-3 py-2 rounded-xl border text-sm font-semibold"
         style={{ borderColor: "var(--color-paper-300)" }} />
@@ -365,6 +407,7 @@ function EditInstanceForm({
             endsAt: endsAt ? Math.floor(new Date(endsAt).getTime() / 1000) : null,
             multiplier: multiplier ? Number(multiplier) : null,
             relatedMemberIds: needsTarget ? selectedIds : undefined,
+            oneOnOneTarget: isOneOnOne ? oneOnOneTarget : null,
           })}
           disabled={!title.trim() || isPending}
           className="flex items-center gap-1 px-3 py-1.5 rounded-2xl text-xs text-white disabled:opacity-50"
@@ -393,6 +436,7 @@ function CreateInstanceForm({
   const [endsAt, setEndsAt] = useState("");
   const [multiplier, setMultiplier] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [oneOnOneTarget, setOneOnOneTarget] = useState<"member" | "visitor">("member");
 
   const activeMembers = members.filter((m) => m.status === "active");
   const needsTarget = typeDef.requiresTargetMember === 1;
@@ -406,6 +450,7 @@ function CreateInstanceForm({
       endsAt: endsAt ? Math.floor(new Date(endsAt).getTime() / 1000) : undefined,
       relatedMemberIds: selectedIds.length > 0 ? selectedIds : undefined,
       multiplier: multiplier ? Number(multiplier) : undefined,
+      oneOnOneTarget: typeDef.linksToOneOnOne === 1 ? oneOnOneTarget : undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "events"] });
@@ -422,6 +467,7 @@ function CreateInstanceForm({
     <div className="mt-3 p-4 rounded-2xl space-y-3 border-2"
       style={{ borderColor: "rgba(181,56,75,0.3)", background: "var(--color-paper-50)" }}>
       <p className="text-xs font-semibold" style={{ color: "var(--color-brand)" }}>新しいイベントを作成</p>
+      {typeDef.linksToOneOnOne === 1 && <OneOnOneTargetField value={oneOnOneTarget} onChange={setOneOnOneTarget} />}
       <input value={title} onChange={(e) => setTitle(e.target.value)}
         placeholder={`タイトル（例: 7月${typeDef.name}）`}
         className="w-full px-3 py-2 rounded-xl border text-sm"
@@ -568,6 +614,12 @@ function TypeDefSection({
                   ミーティング連携
                 </span>
               )}
+              {typeDef.linksToOneOnOne === 1 && (
+                <span className="text-xs px-1.5 py-0.5 rounded-full"
+                  style={{ background: "rgba(212,160,59,0.15)", color: "var(--color-accent)" }}>
+                  1to1連携
+                </span>
+              )}
               <span className="text-xs px-1.5 py-0.5 rounded-full"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
                 {TRIGGER_LABELS[typeDef.triggerType] ?? typeDef.triggerType}
@@ -637,6 +689,14 @@ function TypeDefSection({
               style={{ background: "rgba(212,160,59,0.1)", color: "var(--color-ink-600)" }}>
               ☕ ここで作成したイベントは、ミーティング・定例会の作成時に「イベント」として選べます。
               ポイントは、イベントの「加算ポイント」に設定してください（出席1回ごとにそのポイントが付きます）。
+            </p>
+          )}
+
+          {typeDef.linksToOneOnOne === 1 && (
+            <p className="text-xs py-2 px-3 rounded-xl"
+              style={{ background: "rgba(212,160,59,0.1)", color: "var(--color-ink-600)" }}>
+              🤝 この種別のイベントは、1to1を申し込む・ビジターを招待するときに選べます。イベントごとに「メンバーとの1to1向け」か「ビジターとの1to1向け」かを設定し、
+              ポイントは「加算ポイント」に入力します（空欄ならポイントなし）。
             </p>
           )}
 
@@ -745,6 +805,7 @@ function CreateTypeModal({ onClose }: { onClose: () => void }) {
   const [requiresTarget, setRequiresTarget] = useState(false);
   const [creatorRole, setCreatorRole] = useState<"admin" | "member">("admin");
   const [linksToMeeting, setLinksToMeeting] = useState(false);
+  const [linksToOneOnOne, setLinksToOneOnOne] = useState(false);
 
   const effectiveHasPoints = triggerType === "on_action" && hasPoints;
 
@@ -754,7 +815,7 @@ function CreateTypeModal({ onClose }: { onClose: () => void }) {
       emoji: emoji || "🎪", triggerType,
       pointValue: effectiveHasPoints ? 1 : 0,
       requiresTargetMember: requiresTarget,
-      creatorRole, linksToMeeting,
+      creatorRole, linksToMeeting, linksToOneOnOne,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "event-type-definitions"] });
@@ -817,6 +878,10 @@ function CreateTypeModal({ onClose }: { onClose: () => void }) {
             <label className="flex items-center gap-2 cursor-pointer">
               <input type="checkbox" checked={linksToMeeting} onChange={(e) => setLinksToMeeting(e.target.checked)} className="rounded" />
               <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>ミーティング連携</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={linksToOneOnOne} onChange={(e) => setLinksToOneOnOne(e.target.checked)} className="rounded" />
+              <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>1to1連携（1to1に結びつけるイベント種別）</span>
             </label>
           </div>
           <div>

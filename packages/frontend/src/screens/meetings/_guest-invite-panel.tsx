@@ -14,6 +14,7 @@ import { api, ApiError } from "@/lib/api";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateTime } from "@/lib/date";
 import { SchedulingMethodSelector, type SchedulingMethod } from "./_scheduling-method-selector";
+import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import { CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload, emptyCandidateRow, type CandidateRow } from "./_candidate-date-entry";
 
 type GuestInviteResult = {
@@ -65,6 +66,7 @@ export function GuestInvitePanel() {
   }, [googleStatusData]);
   const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(), emptyCandidateRow()]);
   const [error, setError] = useState("");
+  const [eventCampaignId, setEventCampaignId] = useState("");
   const [submitResult, setSubmitResult] = useState<GuestInviteResult | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -76,6 +78,7 @@ export function GuestInvitePanel() {
       notifyByEmail,
       arrangementMethod: schedulingMethod,
       candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows) : undefined,
+      eventCampaignId: eventCampaignId || undefined,
     }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["oneonone", "guest-invites"] });
@@ -223,6 +226,8 @@ export function GuestInvitePanel() {
             </p>
           )}
         </div>
+
+        <OneOnOneEventSelector target="visitor" value={eventCampaignId} onChange={setEventCampaignId} />
 
         <div>
           <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>日程の決め方</label>

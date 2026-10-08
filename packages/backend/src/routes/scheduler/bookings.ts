@@ -16,6 +16,7 @@ import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
 import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
 import { createConference, getAvailableConferenceTypes, cancelAutoConference } from "../../services/conferenceService.ts";
 import { newId } from "../../services/auth.ts";
+import { awardVisitorOneOnOnePoints } from "../../services/oneonone-event.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const schedulerBookingsRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -224,7 +225,10 @@ schedulerBookingsRoutes.patch("/:id/dismiss-followup", async (c) => {
     .set({ guestFollowupDismissedAt: new Date().toISOString(), guestFollowupOutcome: outcome })
     .where(eq(schema.bookings.id, bookingId));
 
-  return c.json({ data: { dismissed: true } });
+  // 実施した（人脈には追加しない）場合、招待時に選んだ「ビジターとの1to1」イベントのポイントを付与する
+  const pointsAwarded = outcome === "no_add" ? await awardVisitorOneOnOnePoints(db, bookingId, memberId) : 0;
+
+  return c.json({ data: { dismissed: true, pointsAwarded } });
 });
 
 // ---- PATCH /api/scheduler/bookings/:id/reschedule ----

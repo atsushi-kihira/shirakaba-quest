@@ -10,6 +10,7 @@ import { X, Loader2, Handshake, ExternalLink } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { SchedulingMethodSelector, type SchedulingMethod } from "../meetings/_scheduling-method-selector";
+import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import {
   CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload,
   emptyCandidateRow, type CandidateRow,
@@ -50,6 +51,7 @@ export function NormalRequestModal({
     setSchedulingMethod(googleStatusData.data.connected ? "public_url" : "candidates");
   }, [googleStatusData]);
   const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(), emptyCandidateRow()]);
+  const [eventCampaignId, setEventCampaignId] = useState("");
   const [error, setError] = useState("");
 
   const submitMutation = useMutation({
@@ -61,6 +63,7 @@ export function NormalRequestModal({
       notifyByEmail,
       arrangementMethod: schedulingMethod,
       candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows) : undefined,
+      eventCampaignId: eventCampaignId || undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["oneonone"] });
@@ -108,6 +111,8 @@ export function NormalRequestModal({
         </p>
 
         <div className="space-y-4">
+          <OneOnOneEventSelector target="member" value={eventCampaignId} onChange={setEventCampaignId} />
+
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>日程の決め方</label>
             <SchedulingMethodSelector method={schedulingMethod} onChange={setSchedulingMethod} googleConnected={googleConnected} copy="member" />

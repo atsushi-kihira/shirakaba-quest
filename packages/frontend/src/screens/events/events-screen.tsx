@@ -38,6 +38,7 @@ type ActiveEvent = {
   rewardTarget?: string | null;
   requiresTargetMember?: number;
   linksToMeeting?: number;
+  linksToOneOnOne?: number;
   myParticipated?: boolean;
   creatorName?: string | null;
   creatorEmoji?: string | null;
@@ -753,9 +754,10 @@ export function EventsScreen() {
 
   const allEvents = eventsData?.data ?? [];
   // ミーティング連携イベントを除外したフラットリスト
-  const displayEvents = allEvents.filter((ev) => !ev.linksToMeeting);
+  // ミーティング連携・1to1連携のイベントは、それぞれの作成・申込画面で選ぶものなので、イベント一覧には出さない
+  const displayEvents = allEvents.filter((ev) => !ev.linksToMeeting && !ev.linksToOneOnOne);
 
-  const memberTypes = (typesData?.data ?? []).filter((t) => !t.linksToMeeting) as EventTypeDef[];
+  const memberTypes = (typesData?.data ?? []).filter((t) => !t.linksToMeeting && !(t as { linksToOneOnOne?: number }).linksToOneOnOne) as EventTypeDef[];
   const createTypeForModal = memberTypes.find((t) => t.id === createTypeId);
   const editableTypeIds = new Set(memberTypes.map((t) => t.id));
 

@@ -420,6 +420,8 @@ export const oneOnOneSessions = sqliteTable("one_on_one_sessions", {
   selectedCandidateSlotId: text("selected_candidate_slot_id"), // one_on_one_candidate_slots.id
   // 会議URLの状態: null（従来通り・URL未確認）| 'none'（あえて「URLなし」を選んだ） | 'unresolved'（自動発行を試みたが失敗した）
   conferenceUrlStatus:     text("conference_url_status"),
+  // 申込時に選んだ1to1イベント（ポイントはイベントに設定）。null は従来どおり（シーズン設定のポイント）
+  eventCampaignId:         text("event_campaign_id"),
 });
 
 // arrangementMethod='candidates' の1to1申込で、申込者があらかじめ提示する候補日時（2〜5件）
@@ -448,6 +450,7 @@ export const oneOnOneGuestInvites = sqliteTable("one_on_one_guest_invites", {
   customNote:            text("custom_note"),
   selectedSlotId:        text("selected_slot_id"), // one_on_one_guest_invite_candidate_slots.id
   resultingBookingId:    text("resulting_booking_id"), // bookings.id
+  eventCampaignId:       text("event_campaign_id"), // 招待時に選んだ「ビジターとの1to1」イベント
   createdAt:             integer("created_at").notNull(),
 });
 
@@ -571,6 +574,7 @@ export const eventTypeDefinitions = sqliteTable("event_type_definitions", {
   creatorRole:          text("creator_role").notNull().default("admin"),
   // 'admin' | 'member'
   linksToMeeting:       integer("links_to_meeting").notNull().default(0),
+  linksToOneOnOne:      integer("links_to_one_on_one").notNull().default(0), // 1to1に結びつけるイベント種別か
   isSystem:             integer("is_system").notNull().default(0),
   isActive:             integer("is_active").notNull().default(1),
   sortOrder:            integer("sort_order").notNull().default(0),
@@ -591,6 +595,7 @@ export const eventCampaigns = sqliteTable("event_campaigns", {
   multiplier:       integer("multiplier"),
   pointAwardTiming: text("point_award_timing"),  // 'on_view' | 'on_complete' | null
   allowRepeat:      integer("allow_repeat").notNull().default(1), // 1=何度でも実施可（デフォルト）、0=1度のみ
+  oneOnOneTarget:   text("one_on_one_target"), // 1to1に結びつける種別のイベントのみ: 'member'（メンバーとの1to1向け） | 'visitor'（ビジターとの1to1向け）
   status:             text("status").notNull().default("active"),
   createdByMemberId:  text("created_by_member_id"),
   createdAt:          integer("created_at").notNull(),

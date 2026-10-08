@@ -389,6 +389,7 @@ export type EventTypeDefinition = {
   requiresTargetMember: number;
   creatorRole: EventTypeCreatorRole;
   linksToMeeting: number;
+  linksToOneOnOne: number;
   isSystem: number;
   isActive: number;
   sortOrder: number;

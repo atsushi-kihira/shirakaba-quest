@@ -46,6 +46,8 @@ adminEventRoutes.post("/", async (c) => {
     multiplier?: number;
     pointAwardTiming?: string | null;
     allowRepeat?: number;
+    /** 1to1に結びつける種別のとき必須: "member"（メンバーとの1to1向け）| "visitor"（ビジターとの1to1向け） */
+    oneOnOneTarget?: string | null;
   }>();
 
   if (!body.title?.trim()) {
@@ -60,6 +62,15 @@ adminEventRoutes.post("/", async (c) => {
   } else if (body.type) {
     typeDef = await db.select().from(schema.eventTypeDefinitions)
       .where(eq(schema.eventTypeDefinitions.slug, body.type)).get();
+  }
+
+  // 1to1に結びつける種別のイベントは、メンバーとの1to1向けか、ビジターとの1to1向けかを必ず指定する
+  let oneOnOneTarget: "member" | "visitor" | null = null;
+  if (typeDef?.linksToOneOnOne === 1) {
+    if (body.oneOnOneTarget !== "member" && body.oneOnOneTarget !== "visitor") {
+      return c.json({ error: { code: "invalid_input", message: "メンバーとの1to1向けか、ビジターとの1to1向けかを選んでください" } }, 400);
+    }
+    oneOnOneTarget = body.oneOnOneTarget;
   }
 
   const memberIds = body.relatedMemberIds ?? (body.relatedMemberId ? [body.relatedMemberId] : []);
@@ -78,6 +89,7 @@ adminEventRoutes.post("/", async (c) => {
     multiplier: body.multiplier ?? null,
     pointAwardTiming: body.pointAwardTiming ?? null,
     allowRepeat: body.allowRepeat !== undefined ? body.allowRepeat : 1,
+    oneOnOneTarget,
     status: "active",
     createdByMemberId: null,
     createdAt: now,
@@ -104,6 +116,7 @@ adminEventRoutes.patch("/:id", async (c) => {
     pointAwardTiming?: string | null;
     allowRepeat?: number;
     status?: string;
+    oneOnOneTarget?: string | null;
   };
   const body = await c.req.json<PatchEventBody>().catch(() => ({} as PatchEventBody));
 
@@ -132,6 +145,7 @@ adminEventRoutes.patch("/:id", async (c) => {
     ...(body.pointAwardTiming  !== undefined && { pointAwardTiming: body.pointAwardTiming }),
     ...(body.allowRepeat       !== undefined && { allowRepeat: body.allowRepeat }),
     ...(body.status            !== undefined && { status: body.status }),
+    ...(body.oneOnOneTarget !== undefined && { oneOnOneTarget: body.oneOnOneTarget === "member" || body.oneOnOneTarget === "visitor" ? body.oneOnOneTarget : null }),
     ...memberIdsUpdate,
     updatedAt: now,
   }).where(eq(schema.eventCampaigns.id, c.req.param("id")));
@@ -164,6 +178,7 @@ function toPublic(e: typeof schema.eventCampaigns.$inferSelect) {
     multiplier: e.multiplier,
     pointAwardTiming: e.pointAwardTiming ?? null,
     allowRepeat: e.allowRepeat ?? 1,
+    oneOnOneTarget: e.oneOnOneTarget ?? null,
     status: e.status,
     createdByMemberId: e.createdByMemberId ?? null,
     createdAt: e.createdAt,

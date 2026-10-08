@@ -14,6 +14,7 @@ import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { getSchedulerLinkValidityHours } from "../services/schedulerShareToken.ts";
 import { isGoogleCalendarConnected } from "../services/conferenceService.ts";
+import { listOneOnOneEvents, resolveOneOnOneEvent } from "../services/oneonone-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -64,6 +65,8 @@ oneOnOneGuestInviteRoutes.post("/", async (c) => {
     durationMinutes?: number;
     note?: string;
     notifyByEmail?: boolean;
+    /** 結びつける1to1イベント（ビジターとの1to1向け） */
+    eventCampaignId?: string;
   }>();
 
   if (body.arrangementMethod !== "public_url" && body.arrangementMethod !== "candidates") {
@@ -109,6 +112,17 @@ oneOnOneGuestInviteRoutes.post("/", async (c) => {
     customDurationMinutes = Math.round(body.durationMinutes);
   }
 
+  // 結びつける1to1イベント（ビジターとの1to1向け）。未指定なら先頭のイベント（なければなし）
+  let eventCampaignId: string | null = null;
+  if (body.eventCampaignId) {
+    eventCampaignId = await resolveOneOnOneEvent(db, body.eventCampaignId, "visitor");
+    if (!eventCampaignId) {
+      return c.json({ error: { code: "bad_request", message: "選んだイベントは、現在は使えません（終了または削除されています）。選び直してください" } }, 400);
+    }
+  } else {
+    eventCampaignId = (await listOneOnOneEvents(db, "visitor"))[0]?.id ?? null;
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const id = newId();
   const token = generateUrlSafeToken();
@@ -130,6 +144,7 @@ oneOnOneGuestInviteRoutes.post("/", async (c) => {
     customTitle: body.title?.trim() || null,
     customDurationMinutes,
     customNote: body.note?.trim() || null,
+    eventCampaignId,
     createdAt: now,
   });
 

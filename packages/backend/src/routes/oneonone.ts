@@ -11,6 +11,7 @@
 import { Hono } from "hono";
 import { eq, or, and, sql, inArray, isNull, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
+import { listOneOnOneEvents, oneOnOneEventPoints, resolveOneOnOneEvent } from "../services/oneonone-event.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
@@ -656,6 +657,8 @@ oneOnOneRoutes.post("/", async (c) => {
     notifyByEmail?: boolean;
     arrangementMethod: "public_url" | "candidates";
     candidateSlots?: CandidateSlotInput[];
+    /** 結びつける1to1イベント（メンバーとの1to1向け）。ポイントはイベントに設定されている */
+    eventCampaignId?: string;
   }>();
   const { responderId, notifyByEmail } = body;
 
@@ -708,6 +711,17 @@ oneOnOneRoutes.post("/", async (c) => {
     return c.json({ error: { code: "not_member", message: "この方には1to1を申し込めません（承認済みのメンバーのみ対象です）。外部の方は「ゲストを招待する」からご案内ください。" } }, 400);
   }
 
+  // 結びつける1to1イベント。選んだイベントが使えない場合はエラー。未指定なら、先頭のイベント（なければイベントなし＝従来のポイント）
+  let eventCampaignId: string | null = null;
+  if (body.eventCampaignId) {
+    eventCampaignId = await resolveOneOnOneEvent(db, body.eventCampaignId, "member");
+    if (!eventCampaignId) {
+      return c.json({ error: { code: "invalid_input", message: "選んだイベントは、現在は使えません（終了または削除されています）。選び直してください" } }, 400);
+    }
+  } else {
+    eventCampaignId = (await listOneOnOneEvents(db, "member"))[0]?.id ?? null;
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const id = newId();
 
@@ -715,6 +729,7 @@ oneOnOneRoutes.post("/", async (c) => {
     id,
     requesterId,
     responderId,
+    eventCampaignId,
     status: "pending",
     requestedAt: now,
     customTitle,
@@ -811,6 +826,8 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
     title?: string;
     note?: string;
     notifyByEmail?: boolean;
+    /** 結びつける1to1イベント（メンバーとの1to1向け）。ポイントはイベントに設定されている */
+    eventCampaignId?: string;
   }>();
 
   if (requesterId === body.responderId) {
@@ -829,12 +846,27 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
   }
 
   const responder = await db
-    .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
+    .select({ id: schema.members.id, name: schema.members.name, email: schema.members.email, status: schema.members.status })
     .from(schema.members)
     .where(eq(schema.members.id, body.responderId))
     .get();
   if (!responder) {
     return c.json({ error: { code: "not_found", message: "相手が見つかりません" } }, 404);
+  }
+  // 1to1（ポイントの対象）は、承認済みのメンバー同士のみ
+  if (responder.status !== "active") {
+    return c.json({ error: { code: "not_member", message: "この方には1to1を申し込めません（承認済みのメンバーのみ対象です）。外部の方は「ゲストを招待する」からご案内ください。" } }, 400);
+  }
+
+  // 結びつける1to1イベント。選んだイベントが使えない場合はエラー。未指定なら先頭のイベント（なければイベントなし＝従来のポイント）
+  let prearrangedEventId: string | null;
+  if (body.eventCampaignId) {
+    prearrangedEventId = await resolveOneOnOneEvent(db, body.eventCampaignId, "member");
+    if (!prearrangedEventId) {
+      return c.json({ error: { code: "invalid_input", message: "選んだイベントは、現在は使えません（終了または削除されています）。選び直してください" } }, 400);
+    }
+  } else {
+    prearrangedEventId = (await listOneOnOneEvents(db, "member"))[0]?.id ?? null;
   }
 
   const requester = await db
@@ -889,6 +921,7 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
     id: sessionId,
     requesterId,
     responderId: body.responderId,
+    eventCampaignId: prearrangedEventId,
     status: "accepted",
     requestedAt: now,
     respondedAt: now,
@@ -1212,17 +1245,24 @@ async function applyOneOnOneCompletion(
     return;
   }
 
-  // 双方にポイント付与（シーズン設定を優先）
+  // 双方にポイント付与。結びついた1to1イベントの加算ポイントを使う（ポイントなしのイベントなら付与しない）。
+  // イベントが結びついていない従来の1to1は、これまでどおりシーズン設定のポイント
   const seasonPts = await getActiveSeasonPoints(db);
-  for (const memberId of [session.requesterId, session.responderId]) {
-    await db.insert(schema.pointTransactions).values({
-      id: newId(),
-      memberId,
-      delta: seasonPts.oneOnOne,
-      reason: "one_on_one_completed",
-      relatedId: sessionId,
-      createdAt: now,
-    });
+  const sessionEvent = await db.select({ eventCampaignId: schema.oneOnOneSessions.eventCampaignId })
+    .from(schema.oneOnOneSessions).where(eq(schema.oneOnOneSessions.id, sessionId)).get();
+  const eventPoints = await oneOnOneEventPoints(db, sessionEvent?.eventCampaignId);
+  const basePoints = eventPoints ?? seasonPts.oneOnOne;
+  if (basePoints > 0) {
+    for (const memberId of [session.requesterId, session.responderId]) {
+      await db.insert(schema.pointTransactions).values({
+        id: newId(),
+        memberId,
+        delta: basePoints,
+        reason: "one_on_one_completed",
+        relatedId: sessionId,
+        createdAt: now,
+      });
+    }
   }
 
   // welcome_quest ボーナス（event_type_def_id 統一方式）
@@ -1270,7 +1310,7 @@ async function applyOneOnOneCompletion(
     }
   } catch { /* ボーナスエラーは握り潰す */ }
 
-  // チーム内1on1ボーナス: 同一チームなら双方に +50% の差分を付与
+  // チーム内1on1ボーナス: 同一チームなら双方に +50% の差分を付与（1to1自体にポイントがつかないイベントでは付与しない）
   try {
     const requesterTeam = await db
       .select({ teamId: schema.teamMembers.teamId })
@@ -1278,7 +1318,7 @@ async function applyOneOnOneCompletion(
       .where(eq(schema.teamMembers.memberId, session.requesterId))
       .get();
 
-    if (requesterTeam) {
+    if (basePoints > 0 && requesterTeam) {
       const responderTeam = await db
         .select({ teamId: schema.teamMembers.teamId })
         .from(schema.teamMembers)

@@ -37,6 +37,7 @@ adminEventTypeDefinitionRoutes.post("/", async (c) => {
     requiresTargetMember?: boolean;
     creatorRole?: "admin" | "member";
     linksToMeeting?: boolean;
+    linksToOneOnOne?: boolean;
     sortOrder?: number;
   }>();
 
@@ -59,6 +60,7 @@ adminEventTypeDefinitionRoutes.post("/", async (c) => {
     requiresTargetMember: body.requiresTargetMember ? 1 : 0,
     creatorRole: body.creatorRole ?? "admin",
     linksToMeeting: body.linksToMeeting ? 1 : 0,
+    linksToOneOnOne: body.linksToOneOnOne ? 1 : 0,
     isSystem: 0,
     isActive: 1,
     sortOrder: body.sortOrder ?? 0,
@@ -84,6 +86,7 @@ adminEventTypeDefinitionRoutes.patch("/:id", async (c) => {
     requiresTargetMember?: boolean;
     creatorRole?: "admin" | "member";
     linksToMeeting?: boolean;
+    linksToOneOnOne?: boolean;
     isActive?: boolean;
     sortOrder?: number;
   }>();
@@ -104,6 +107,7 @@ adminEventTypeDefinitionRoutes.patch("/:id", async (c) => {
     ...(body.requiresTargetMember  !== undefined && { requiresTargetMember: body.requiresTargetMember ? 1 : 0 }),
     ...(body.creatorRole           !== undefined && { creatorRole: body.creatorRole }),
     ...(body.linksToMeeting        !== undefined && { linksToMeeting: body.linksToMeeting ? 1 : 0 }),
+    ...(body.linksToOneOnOne       !== undefined && { linksToOneOnOne: body.linksToOneOnOne ? 1 : 0 }),
     updatedAt: now,
   }).where(eq(schema.eventTypeDefinitions.id, id));
 

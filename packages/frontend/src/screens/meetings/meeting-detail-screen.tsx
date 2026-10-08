@@ -223,7 +223,7 @@ export function MeetingDetailScreen() {
     enabled: showMemberPicker,
   });
 
-  type EventItem = { id: string; title: string; multiplier: number | null };
+  type EventItem = { id: string; title: string; multiplier: number | null; linksToOneOnOne?: number };
   const { data: eventsData } = useQuery({
     queryKey: ["events", "active"],
     queryFn: () => api.get<{ data: EventItem[] }>("/events/active"),
@@ -1543,7 +1543,7 @@ export function MeetingDetailScreen() {
                           <Loader2 size={16} className="animate-spin" style={{ color: "var(--color-brand)" }} />
                         </div>
                       ) : (() => {
-                        const pointEvents = (eventsData.data ?? []).filter((e) => e.multiplier != null);
+                        const pointEvents = (eventsData.data ?? []).filter((e) => e.multiplier != null && !e.linksToOneOnOne);
                         return pointEvents.length === 0 ? (
                           <p className="text-xs text-center py-4 px-3" style={{ color: "var(--color-ink-400)" }}>
                             ポイント設定のあるアクティブなイベントがありません

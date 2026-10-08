@@ -16,6 +16,7 @@ import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { deriveStage, computeStalled } from "../services/collab-stage.ts";
 import { MailService } from "../services/mailer.ts";
+import { awardVisitorOneOnOnePoints } from "../services/oneonone-event.ts";
 import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../services/map-positions.ts";
 import { generateCompanySummary } from "../services/company-summary.ts";
 import type { Env, Variables } from "../types.ts";
@@ -2111,6 +2112,8 @@ collabRoutes.post("/contacts", async (c) => {
       await db.update(schema.bookings)
         .set({ externalContactId: id })
         .where(eq(schema.bookings.id, body.sourceBookingId));
+      // 実施した1to1として人脈に追加した場合、招待時に選んだ「ビジターとの1to1」イベントのポイントを付与する
+      await awardVisitorOneOnOnePoints(db, body.sourceBookingId, meId);
     }
   }
 

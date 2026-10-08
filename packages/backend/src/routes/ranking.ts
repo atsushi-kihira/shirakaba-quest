@@ -193,6 +193,7 @@ rankingRoutes.get("/history", async (c) => {
 
   const REASON_LABEL: Record<string, string> = {
     one_on_one_completed:     "🤝 1to1完了",
+    visitor_one_on_one_completed: "🤝 ビジターとの1to1",
     one_on_one_team_bonus:    "🤝 1to1チームボーナス",
     real_card_exchanged:      "🃏 リアルカード受け取り",
     quest_normal_solved:      "⚔️ お題クリア",
