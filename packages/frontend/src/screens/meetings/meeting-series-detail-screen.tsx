@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateJP, fmtTime } from "@/lib/date";
-import { MeetingEventSelector } from "@/components/meeting-event-selector";
+import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -25,6 +25,7 @@ type Occurrence = { id: string; startsAt: number; endsAt: number | null; status:
 type SeriesDetail = {
   id: string; title: string; description: string | null;
   event: { id: string; title: string; ended: boolean; points: number } | null;
+  eventType: { id: string; name: string; emoji: string; pointValue: number } | null;
   hostMemberId: string; isHost: boolean;
   scope: "collab_team" | "selected"; collabTeamId: string | null;
   status: "voting" | "confirmed" | "ended" | "cancelled";
@@ -100,7 +101,7 @@ export function MeetingSeriesDetailScreen() {
   const [editingEvent, setEditingEvent] = useState(false);
   const [pickedEventId, setPickedEventId] = useState("");
   const eventMutation = useMutation({
-    mutationFn: (eventCampaignId: string) => api.patch(`/meeting-series/${id}/event`, { eventCampaignId: eventCampaignId || null }),
+    mutationFn: (selection: string) => api.patch(`/meeting-series/${id}/event`, selectionToPayload(selection)),
     onSuccess: () => {
       setEditingEvent(false);
       qc.invalidateQueries({ queryKey: ["meeting-series", id] });
@@ -195,14 +196,14 @@ export function MeetingSeriesDetailScreen() {
         {/* 紐づけたイベント（ポイントのつくイベントなら、各回の参加ごとにポイントが付く） */}
         <div className="flex items-center gap-2 mb-1.5 flex-wrap">
           <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: "rgba(212,160,59,0.15)", color: "var(--color-accent)" }}>
-            🎯 {series.event ? series.event.title : "イベント：なし"}
+            🎯 {series.event ? series.event.title : series.eventType ? `${series.eventType.emoji} ${series.eventType.name}（ポイントなし）` : "イベント種別：未設定"}
             {series.event && series.event.points > 0 ? `（参加ごとに+${series.event.points}pt）` : ""}
             {series.event?.ended ? "（イベントは終了しています）" : ""}
           </span>
           {series.isHost && series.status !== "cancelled" && (
-            <button onClick={() => { setPickedEventId(series.event && !series.event.ended ? series.event.id : ""); setEditingEvent((v) => !v); }}
+            <button onClick={() => { setPickedEventId(series.event && !series.event.ended ? `event:${series.event.id}` : series.eventType ? `type:${series.eventType.id}` : ""); setEditingEvent((v) => !v); }}
               className="text-xs underline" style={{ color: "var(--color-brand)" }}>
-              {series.event ? "変更する" : "設定する"}
+              {series.event || series.eventType ? "変更する" : "設定する"}
             </button>
           )}
         </div>
@@ -213,7 +214,7 @@ export function MeetingSeriesDetailScreen() {
             <div className="flex gap-2 mt-3">
               <button onClick={() => setEditingEvent(false)} className="flex-1 py-2 rounded-2xl text-sm"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>キャンセル</button>
-              <button onClick={() => eventMutation.mutate(pickedEventId)} disabled={eventMutation.isPending}
+              <button onClick={() => eventMutation.mutate(pickedEventId)} disabled={!pickedEventId || eventMutation.isPending}
                 className="flex-1 py-2 rounded-2xl text-sm text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
                 {eventMutation.isPending ? "保存中…" : "保存する"}
               </button>

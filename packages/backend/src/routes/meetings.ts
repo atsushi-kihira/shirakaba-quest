@@ -28,7 +28,7 @@
 import { Hono } from "hono";
 import { eq, inArray, and, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
-import { attendancePointsFor, resolveEventCampaign } from "../services/meeting-event.ts";
+import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
@@ -131,6 +131,10 @@ meetingRoutes.post("/", async (c) => {
       return c.json({ error: { code: "invalid_input", message: "選んだイベントは、現在は使えません（終了または削除されています）。選び直してください" } }, 400);
     }
     eventLink = resolved;
+  }
+  // 指定がなければ、ポイントなしの「ミーティング」（先頭の種別）にする
+  if (!eventLink.eventCampaignId && !eventLink.eventTypeDefId) {
+    eventLink.eventTypeDefId = (await listPlainMeetingTypes(db))[0]?.id ?? null;
   }
 
   const meetingId = newId();

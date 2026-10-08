@@ -12,7 +12,7 @@ import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { MeetingCandidatePicker } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
-import { MeetingEventSelector } from "@/components/meeting-event-selector";
+import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
 type Team = { id: string; name: string; emblemEmoji: string };
@@ -72,7 +72,7 @@ export function MeetingSeriesNewScreen() {
   const [endDate, setEndDate] = useState("");
   const [conferenceMode, setConferenceMode] = useState<ConferenceMode>("none");
   const [conferenceUrl, setConferenceUrl] = useState("");
-  const [eventCampaignId, setEventCampaignId] = useState(""); // 紐づけるイベント（"" = なし）
+  const [eventSelection, setEventSelection] = useState(""); // "type:<ID>"（ポイントなしの種別）または "event:<ID>"（イベント）
   const [seriesMode, setSeriesMode] = useState<"vote" | "confirmed">("vote");
   const [dateMode, setDateMode] = useState<"recurring" | "fixed">("recurring");
   const [fixedDates, setFixedDates] = useState<FixedDateRow[]>([emptyFixedDateRow()]);
@@ -162,6 +162,7 @@ export function MeetingSeriesNewScreen() {
 
   function handleSubmit() {
     setError("");
+    if (!eventSelection) { setError("イベント種別を選んでください"); return; }
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
     if (scope === "collab_team" && !collabTeamId) { setError("対象チームを選択してください"); return; }
@@ -170,7 +171,7 @@ export function MeetingSeriesNewScreen() {
 
     const body: Record<string, unknown> = {
       title: title.trim(),
-      eventCampaignId: eventCampaignId || undefined,
+      ...selectionToPayload(eventSelection),
       description: description.trim() || undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
@@ -240,7 +241,7 @@ export function MeetingSeriesNewScreen() {
       </p>
 
       <div className="space-y-5">
-        <MeetingEventSelector value={eventCampaignId} onChange={setEventCampaignId}
+        <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、定例会1回の参加ごとにポイントが付与されます" />
 
         <div>

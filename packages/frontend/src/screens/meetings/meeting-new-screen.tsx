@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
-import { MeetingEventSelector } from "@/components/meeting-event-selector";
+import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
@@ -71,7 +71,7 @@ export function MeetingNewScreen() {
   // 手入力・カレンダー由来の候補が既にある状態でAI検索結果を受け取った場合、
   // 「残して追加」か「全部入れ替え」かをユーザーに確認するまで一時的に保持しておく
   const [pendingAiApply, setPendingAiApply] = useState<{ slots: SuggestedSlot[]; prevAiKeys: Set<string> } | null>(null);
-  const [eventCampaignId, setEventCampaignId] = useState<string>(""); // 紐づけるイベント（"" = なし）
+  const [eventSelection, setEventSelection] = useState<string>(""); // "type:<ID>"（ポイントなしの種別）または "event:<ID>"（イベント）
   const [registrationDeadline, setRegistrationDeadline] = useState("");
   const [meetingMode, setMeetingMode] = useState<"vote" | "confirmed">("vote");
   const [conferenceMode, setConferenceMode] = useState<ConferenceMode>("none");
@@ -227,7 +227,7 @@ export function MeetingNewScreen() {
       teamId: scope === "team" ? teamId : undefined,
       collabTeamId: scope === "collab_team" ? collabTeamId : undefined,
       inviteeIds: scope === "selected" ? inviteeIds : undefined,
-      eventCampaignId: eventCampaignId || undefined,
+      ...selectionToPayload(eventSelection),
       registrationDeadline: registrationDeadline
         ? Math.floor(new Date(registrationDeadline).getTime() / 1000)
         : undefined,
@@ -289,7 +289,7 @@ export function MeetingNewScreen() {
         </div>
 
         {/* 紐づけるイベント（先頭）。ポイントはイベントに設定されている */}
-        <MeetingEventSelector value={eventCampaignId} onChange={setEventCampaignId}
+        <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、出席者にポイントが付与されます" />
 
         {/* タイトル */}
@@ -627,7 +627,7 @@ export function MeetingNewScreen() {
         {/* 作成ボタン */}
         <button
           onClick={handleSubmit}
-          disabled={createMutation.isPending}
+          disabled={createMutation.isPending || !eventSelection}
           className="w-full py-4 rounded-2xl text-base font-medium text-white flex items-center justify-center gap-2 transition disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}
         >

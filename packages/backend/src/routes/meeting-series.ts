@@ -13,7 +13,7 @@ import { eq, and, or, inArray, gte, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
-import { attendancePointsFor, resolveEventCampaign } from "../services/meeting-event.ts";
+import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
@@ -149,6 +149,10 @@ meetingSeriesRoutes.post("/", async (c) => {
     const typeDef = await resolveMeetingEventType(db, body.eventTypeDefId);
     if (!typeDef) return c.json({ error: { code: "invalid_input", message: "選んだイベント種別は使えません" } }, 400);
     eventLink = { eventCampaignId: null, eventTypeDefId: typeDef.id };
+  }
+  // 指定がなければ、ポイントなしの「ミーティング」（先頭の種別）にする
+  if (!eventLink.eventCampaignId && !eventLink.eventTypeDefId) {
+    eventLink.eventTypeDefId = (await listPlainMeetingTypes(db))[0]?.id ?? null;
   }
 
   let manualConferenceUrl: string | undefined;
@@ -854,12 +858,20 @@ meetingSeriesRoutes.patch("/:id/event", async (c) => {
   if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
   if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ変更できます" } }, 403);
 
-  const body = await c.req.json<{ eventCampaignId?: string | null }>().catch(() => ({} as { eventCampaignId?: string | null }));
-  let link: { eventCampaignId: string | null; eventTypeDefId: string | null } = { eventCampaignId: null, eventTypeDefId: null };
+  // イベント（インスタンス）か、ポイントなしの種別（「ミーティング」など）のどちらかを必ず選ぶ
+  const body = await c.req.json<{ eventCampaignId?: string | null; eventTypeDefId?: string | null }>()
+    .catch(() => ({} as { eventCampaignId?: string | null; eventTypeDefId?: string | null }));
+  let link: { eventCampaignId: string | null; eventTypeDefId: string | null };
   if (body.eventCampaignId) {
     const resolved = await resolveEventCampaign(db, body.eventCampaignId);
     if (!resolved) return c.json({ error: { code: "invalid_input", message: "選んだイベントは、現在は使えません（終了または削除されています）" } }, 400);
     link = resolved;
+  } else if (body.eventTypeDefId) {
+    const typeDef = await resolveMeetingEventType(db, body.eventTypeDefId);
+    if (!typeDef) return c.json({ error: { code: "invalid_input", message: "選んだ種別は使えません" } }, 400);
+    link = { eventCampaignId: null, eventTypeDefId: typeDef.id };
+  } else {
+    return c.json({ error: { code: "invalid_input", message: "イベントを選んでください" } }, 400);
   }
 
   await db.update(schema.meetingSeries).set({ ...link, updatedAt: now }).where(eq(schema.meetingSeries.id, id));

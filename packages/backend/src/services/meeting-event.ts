@@ -44,6 +44,19 @@ export async function listMeetingEvents(db: Db): Promise<MeetingEventOption[]> {
   }));
 }
 
+/** ポイントのつかない、ミーティング連携の種別（「ミーティング」など）。イベント（インスタンス）を作らずにそのまま選べる */
+export async function listPlainMeetingTypes(db: Db): Promise<{ id: string; name: string; emoji: string }[]> {
+  const rows = await db.select({ id: schema.eventTypeDefinitions.id, name: schema.eventTypeDefinitions.name, emoji: schema.eventTypeDefinitions.emoji })
+    .from(schema.eventTypeDefinitions)
+    .where(and(
+      eq(schema.eventTypeDefinitions.linksToMeeting, 1),
+      eq(schema.eventTypeDefinitions.isActive, 1),
+      eq(schema.eventTypeDefinitions.pointValue, 0)
+    ))
+    .orderBy(schema.eventTypeDefinitions.sortOrder, schema.eventTypeDefinitions.createdAt).all();
+  return rows;
+}
+
 /**
  * 紐づけるイベントを検証し、保存する値（イベントIDと、その種別ID）を返す。
  * 指定なし（null）は「イベントなし」。実施中でない・期限切れ・存在しないイベントなら null を返す。
