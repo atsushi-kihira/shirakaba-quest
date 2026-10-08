@@ -11,6 +11,7 @@
 import { Hono } from "hono";
 import { eq, and, sql, asc, inArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
+import { listMeetingEvents } from "../services/meeting-event.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import type { Env, Variables } from "../types.ts";
@@ -160,6 +161,12 @@ eventRoutes.get("/meeting-types", async (c) => {
     .orderBy(asc(schema.eventTypeDefinitions.sortOrder))
     .all();
   return c.json({ data: rows });
+});
+
+// GET /api/events/meeting-events — ミーティング・定例会に紐づけられるイベント（インスタンス）一覧
+eventRoutes.get("/meeting-events", async (c) => {
+  const db = createDb(c.env.DB);
+  return c.json({ data: await listMeetingEvents(db) });
 });
 
 // POST /api/events/instances — メンバーがイベントインスタンスを作成

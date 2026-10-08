@@ -13,6 +13,7 @@ import { eq, and, or, inArray, gte, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
+import { attendancePointsFor, resolveEventCampaign } from "../services/meeting-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
@@ -101,6 +102,8 @@ meetingSeriesRoutes.post("/", async (c) => {
     inviteeIds?: string[];
     deadline?: number;
     eventTypeDefId?: string;
+    /** 紐づけるイベント（インスタンス）。ポイントはここに設定されている */
+    eventCampaignId?: string;
     mode?: "vote" | "confirmed";
     dateMode?: "recurring" | "fixed";
     endCondition?: "date" | "count";
@@ -133,11 +136,19 @@ meetingSeriesRoutes.post("/", async (c) => {
     return c.json({ error: { code: "invalid_input", message: "招待するメンバーを1人以上選んでください" } }, 400);
   }
 
-  // イベント種別は必須（ポイントのつく種別なら、各回の参加ごとにポイントが付く）。
-  // 指定がなければ、ミーティング連携できる種別の先頭（通常は「ミーティング」）にする
-  const eventTypeDef = await resolveMeetingEventType(db, body.eventTypeDefId);
-  if (!eventTypeDef) {
-    return c.json({ error: { code: "invalid_input", message: "イベント種別を選んでください" } }, 400);
+  // 紐づけるイベント（インスタンス）。選ばれていれば、定例会の各回の参加ごとにそのイベントのポイントが付く。
+  // 未指定は「イベントなし」（旧クライアントが種別だけを送ってきた場合は、種別のみ記録する）
+  let eventLink: { eventCampaignId: string | null; eventTypeDefId: string | null } = { eventCampaignId: null, eventTypeDefId: null };
+  if (body.eventCampaignId) {
+    const resolved = await resolveEventCampaign(db, body.eventCampaignId);
+    if (!resolved) {
+      return c.json({ error: { code: "invalid_input", message: "選んだイベントは、現在は使えません（終了または削除されています）。選び直してください" } }, 400);
+    }
+    eventLink = resolved;
+  } else if (body.eventTypeDefId) {
+    const typeDef = await resolveMeetingEventType(db, body.eventTypeDefId);
+    if (!typeDef) return c.json({ error: { code: "invalid_input", message: "選んだイベント種別は使えません" } }, 400);
+    eventLink = { eventCampaignId: null, eventTypeDefId: typeDef.id };
   }
 
   let manualConferenceUrl: string | undefined;
@@ -256,7 +267,8 @@ meetingSeriesRoutes.post("/", async (c) => {
     conferenceType: body.conferenceType ?? null,
     conferenceUrl: manualConferenceUrl ?? null,
     dateMode,
-    eventTypeDefId: eventTypeDef.id,
+    eventTypeDefId: eventLink.eventTypeDefId,
+    eventCampaignId: eventLink.eventCampaignId,
     createdAt: now,
     updatedAt: now,
   });
@@ -555,9 +567,17 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       }).from(schema.eventTypeDefinitions).where(eq(schema.eventTypeDefinitions.id, series.eventTypeDefId)).get()
     : null;
 
+  // 紐づけたイベント（インスタンス）と、出席1回あたりのポイント
+  const linkedEvent = series.eventCampaignId
+    ? await db.select({ id: schema.eventCampaigns.id, title: schema.eventCampaigns.title, status: schema.eventCampaigns.status })
+        .from(schema.eventCampaigns).where(eq(schema.eventCampaigns.id, series.eventCampaignId)).get()
+    : null;
+  const eventPoints = await attendancePointsFor(db, { eventCampaignId: series.eventCampaignId, eventTypeDefId: series.eventTypeDefId });
+
   return c.json({
     data: {
       id: series.id, title: series.title, description: series.description,
+      event: linkedEvent ? { id: linkedEvent.id, title: linkedEvent.title, ended: linkedEvent.status !== "active", points: eventPoints } : null,
       eventType: eventType ?? null,
       hostMemberId: series.hostMemberId, isHost: series.hostMemberId === memberId,
       scope: series.scope, teamId: series.teamId, collabTeamId: series.collabTeamId,
@@ -683,6 +703,7 @@ async function generateSeriesOccurrences(
       scope: "selected",
       status: "confirmed",
       eventTypeDefId: series.eventTypeDefId,
+      eventCampaignId: series.eventCampaignId,
       seriesId: series.id,
       seriesOccurrenceIndex: i + 1,
       conferenceType: conf?.conferenceType ?? "manual",
@@ -818,6 +839,35 @@ meetingSeriesRoutes.patch("/:id/confirm", async (c) => {
 // ----------------------------------------------------------------
 // DELETE /api/meeting-series/:id — 定例会をキャンセル
 // ----------------------------------------------------------------
+// ----------------------------------------------------------------
+// PATCH /api/meeting-series/:id/event — 定例会に紐づけるイベント（インスタンス）を設定・解除（主催者のみ）
+// 各回（すでに生成済みのミーティング）にも反映する。すでに付与したポイントは変わらない。
+// ----------------------------------------------------------------
+meetingSeriesRoutes.patch("/:id/event", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ変更できます" } }, 403);
+
+  const body = await c.req.json<{ eventCampaignId?: string | null }>().catch(() => ({} as { eventCampaignId?: string | null }));
+  let link: { eventCampaignId: string | null; eventTypeDefId: string | null } = { eventCampaignId: null, eventTypeDefId: null };
+  if (body.eventCampaignId) {
+    const resolved = await resolveEventCampaign(db, body.eventCampaignId);
+    if (!resolved) return c.json({ error: { code: "invalid_input", message: "選んだイベントは、現在は使えません（終了または削除されています）" } }, 400);
+    link = resolved;
+  }
+
+  await db.update(schema.meetingSeries).set({ ...link, updatedAt: now }).where(eq(schema.meetingSeries.id, id));
+  await db.update(schema.meetings).set({ ...link, updatedAt: now }).where(eq(schema.meetings.seriesId, id));
+
+  return c.json({ data: link });
+});
+
 // ----------------------------------------------------------------
 // PATCH /api/meeting-series/:id/event-type — 定例会のイベント種別を設定・変更（主催者のみ）
 // 各回（すでに生成済みのミーティング）にも反映する。すでに付与したポイントは変わらない。

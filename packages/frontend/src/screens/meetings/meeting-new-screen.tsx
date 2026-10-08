@@ -1,7 +1,7 @@
 // =============================================================
 // ミーティング新規作成画面
 // =============================================================
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Loader2, ChevronLeft, CalendarDays, Pencil, Sparkles, X, GripVertical } from "lucide-react";
@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
+import { MeetingEventSelector } from "@/components/meeting-event-selector";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
@@ -17,11 +18,9 @@ import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/mee
 type Team = { id: string; name: string; emblemEmoji: string };
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
 type Member = { id: string; name: string; emoji: string; bgColor: string };
-type MeetingTypeDef = { id: string; slug: string; name: string; emoji: string; pointValue: number };
 type TeamsResponse = { data: Team[] };
 type CollabTeamsResponse = { data: CollabTeam[] };
 type MembersResponse = { data: Member[] };
-type MeetingTypesResponse = { data: MeetingTypeDef[] };
 
 type Candidate = {
   id: string;    // 並び替え用の内部ID（送信はしない）
@@ -72,7 +71,7 @@ export function MeetingNewScreen() {
   // 手入力・カレンダー由来の候補が既にある状態でAI検索結果を受け取った場合、
   // 「残して追加」か「全部入れ替え」かをユーザーに確認するまで一時的に保持しておく
   const [pendingAiApply, setPendingAiApply] = useState<{ slots: SuggestedSlot[]; prevAiKeys: Set<string> } | null>(null);
-  const [eventTypeDefId, setEventTypeDefId] = useState<string>("");
+  const [eventCampaignId, setEventCampaignId] = useState<string>(""); // 紐づけるイベント（"" = なし）
   const [registrationDeadline, setRegistrationDeadline] = useState("");
   const [meetingMode, setMeetingMode] = useState<"vote" | "confirmed">("vote");
   const [conferenceMode, setConferenceMode] = useState<ConferenceMode>("none");
@@ -110,18 +109,6 @@ export function MeetingNewScreen() {
     // 「全員」選択時にも、送信前の確認ダイアログで対象人数を表示するために取得する
     enabled: scope === "selected" || scope === "all",
   });
-
-  const { data: meetingTypesData } = useQuery({
-    queryKey: ["events", "meeting-types"],
-    queryFn: () => api.get<MeetingTypesResponse>("/events/meeting-types"),
-  });
-
-  // イベント種別のデフォルトは先頭（sortOrder順で最初）の種別、通常は「ミーティング」
-  useEffect(() => {
-    if (eventTypeDefId === "" && meetingTypesData?.data && meetingTypesData.data.length > 0) {
-      setEventTypeDefId(meetingTypesData.data[0].id);
-    }
-  }, [meetingTypesData, eventTypeDefId]);
 
   const createMutation = useMutation({
     mutationFn: (body: object) => api.post<{ data: { id: string } }>("/meetings", body),
@@ -240,7 +227,7 @@ export function MeetingNewScreen() {
       teamId: scope === "team" ? teamId : undefined,
       collabTeamId: scope === "collab_team" ? collabTeamId : undefined,
       inviteeIds: scope === "selected" ? inviteeIds : undefined,
-      eventTypeDefId: eventTypeDefId || undefined,
+      eventCampaignId: eventCampaignId || undefined,
       registrationDeadline: registrationDeadline
         ? Math.floor(new Date(registrationDeadline).getTime() / 1000)
         : undefined,
@@ -301,43 +288,9 @@ export function MeetingNewScreen() {
           </p>
         </div>
 
-        {/* イベント種別設定（先頭） */}
-        <div>
-          <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
-            🎯 イベント種別
-          </label>
-          <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>
-            ミーティング参加者にポイントを付与するイベントと連携できます
-          </p>
-          {!meetingTypesData ? (
-            <div className="flex justify-center py-3">
-              <Loader2 size={16} className="animate-spin" style={{ color: "var(--color-brand)" }} />
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {(meetingTypesData.data ?? []).map((t) => (
-                <label
-                  key={t.id}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-2xl cursor-pointer transition"
-                  style={{
-                    background: eventTypeDefId === t.id ? "rgba(212,160,59,0.12)" : "var(--color-paper-200)",
-                    border: eventTypeDefId === t.id ? "1.5px solid rgba(212,160,59,0.4)" : "1.5px solid transparent",
-                  }}
-                >
-                  <input type="radio" name="eventTypeDefId" value={t.id} checked={eventTypeDefId === t.id} onChange={() => setEventTypeDefId(t.id)} className="sr-only" />
-                  <span className="text-base">{t.emoji}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{t.name}</p>
-                    {t.pointValue > 0 && (
-                      <p className="text-xs" style={{ color: "var(--color-accent)" }}>出席者に +{t.pointValue}pt</p>
-                    )}
-                  </div>
-                  {eventTypeDefId === t.id && <span className="text-xs font-bold" style={{ color: "var(--color-accent)" }}>✓</span>}
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* 紐づけるイベント（先頭）。ポイントはイベントに設定されている */}
+        <MeetingEventSelector value={eventCampaignId} onChange={setEventCampaignId}
+          hint="ポイントのつくイベントを選ぶと、出席者にポイントが付与されます" />
 
         {/* タイトル */}
         <div>
@@ -674,7 +627,7 @@ export function MeetingNewScreen() {
         {/* 作成ボタン */}
         <button
           onClick={handleSubmit}
-          disabled={createMutation.isPending || !eventTypeDefId}
+          disabled={createMutation.isPending}
           className="w-full py-4 rounded-2xl text-base font-medium text-white flex items-center justify-center gap-2 transition disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}
         >

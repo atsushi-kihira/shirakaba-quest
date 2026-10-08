@@ -28,6 +28,7 @@
 import { Hono } from "hono";
 import { eq, inArray, and, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
+import { attendancePointsFor, resolveEventCampaign } from "../services/meeting-event.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
@@ -120,6 +121,18 @@ meetingRoutes.post("/", async (c) => {
     }
   }
 
+  // 紐づけるイベント（インスタンス）。選ばれていれば、その種別もあわせて記録する（旧クライアントは種別のみ）
+  let eventLink: { eventCampaignId: string | null; eventTypeDefId: string | null } = {
+    eventCampaignId: null, eventTypeDefId: body.eventTypeDefId ?? null,
+  };
+  if (body.eventCampaignId) {
+    const resolved = await resolveEventCampaign(db, body.eventCampaignId);
+    if (!resolved) {
+      return c.json({ error: { code: "invalid_input", message: "選んだイベントは、現在は使えません（終了または削除されています）。選び直してください" } }, 400);
+    }
+    eventLink = resolved;
+  }
+
   const meetingId = newId();
 
   await db.insert(schema.meetings).values({
@@ -133,8 +146,8 @@ meetingRoutes.post("/", async (c) => {
     status: confirmNow ? "confirmed" : "open",
     confirmedCandidateId: null,
     deadline: body.deadline ?? null,
-    eventCampaignId: body.eventCampaignId ?? null,
-    eventTypeDefId: body.eventTypeDefId ?? null,
+    eventCampaignId: eventLink.eventCampaignId,
+    eventTypeDefId: eventLink.eventTypeDefId,
     registrationDeadline: body.registrationDeadline ?? null,
     createdAt: now,
     updatedAt: now,
@@ -2849,8 +2862,16 @@ meetingRoutes.patch("/:id/event", async (c) => {
 
   const { eventCampaignId } = await c.req.json<{ eventCampaignId: string | null }>();
 
+  // イベントを選んだ場合は、そのイベントの種別もあわせて記録する（外す場合は種別はそのまま）
+  let linkedTypeId: string | null | undefined;
+  if (eventCampaignId) {
+    const ev = await db.select({ eventTypeDefId: schema.eventCampaigns.eventTypeDefId }).from(schema.eventCampaigns)
+      .where(eq(schema.eventCampaigns.id, eventCampaignId)).get();
+    if (!ev) return c.json({ error: { code: "not_found", message: "イベントが見つかりません" } }, 404);
+    linkedTypeId = ev.eventTypeDefId ?? null;
+  }
   await db.update(schema.meetings)
-    .set({ eventCampaignId: eventCampaignId ?? null, updatedAt: now })
+    .set({ eventCampaignId: eventCampaignId ?? null, ...(linkedTypeId !== undefined && { eventTypeDefId: linkedTypeId }), updatedAt: now })
     .where(eq(schema.meetings.id, id));
 
   return c.json({ ok: true });
@@ -2918,19 +2939,8 @@ meetingRoutes.post("/:id/attendance", async (c) => {
     // ポイント付与：開催後かつ出席に変更かつまだポイント未付与の場合のみ
     let pointsToAward = 0;
     if (meetingStarted && status === "attended" && (!existing || existing.status === "absent") && !existing?.pointsAwarded) {
-      if (meeting.eventTypeDefId) {
-        const typeDef = await db.select({ pointValue: schema.eventTypeDefinitions.pointValue })
-          .from(schema.eventTypeDefinitions)
-          .where(eq(schema.eventTypeDefinitions.id, meeting.eventTypeDefId))
-          .get();
-        if (typeDef?.pointValue) pointsToAward = typeDef.pointValue;
-      } else if (meeting.eventCampaignId) {
-        const ev = await db.select({ multiplier: schema.eventCampaigns.multiplier })
-          .from(schema.eventCampaigns)
-          .where(eq(schema.eventCampaigns.id, meeting.eventCampaignId))
-          .get();
-        if (ev?.multiplier) pointsToAward = ev.multiplier;
-      }
+      // 紐づけたイベントの加算ポイント（なければ種別の標準ポイント）
+      pointsToAward = await attendancePointsFor(db, meeting);
     }
 
     if (existing) {

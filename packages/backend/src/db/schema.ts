@@ -794,6 +794,7 @@ export const meetingSeries = sqliteTable("meeting_series", {
   conferenceCalendarEventId: text("conference_calendar_event_id"),
   dateMode:            text("date_mode").notNull().default("recurring"), // 'recurring'（繰り返しパターン） | 'fixed'（個別の固定日リスト）
   eventTypeDefId:      text("event_type_def_id"),
+  eventCampaignId:     text("event_campaign_id"), // 紐づけたイベント（インスタンス）。ポイントはここに設定する
   createdAt:           integer("created_at").notNull(),
   updatedAt:           integer("updated_at").notNull(),
 });
