@@ -28,6 +28,9 @@ type MeetingItem = {
   deadline: number | null;
   confirmedDate: { startsAt: number; endsAt: number | null } | null;
   hasResponded: boolean;
+  /** 定例会から作られた開催回の場合、その定例会のID・何回目か（直近の開催回だけが一覧に出る） */
+  seriesId?: string | null;
+  seriesOccurrenceIndex?: number | null;
   createdAt: number;
 };
 
@@ -374,6 +377,12 @@ function RegularMeetingsTab() {
               <span className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>
                 {m.title}
               </span>
+              {m.seriesId && (
+                <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
+                  style={{ background: "rgba(107,125,179,0.12)", color: "#6B7DB3" }}>
+                  🔁 定例会{m.seriesOccurrenceIndex ? ` 第${m.seriesOccurrenceIndex}回` : ""}
+                </span>
+              )}
               {m.isHost && (
                 <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
                   style={{ background: "var(--color-accent)", color: "white" }}>

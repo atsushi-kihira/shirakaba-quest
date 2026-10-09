@@ -747,11 +747,31 @@ meetingRoutes.get("/", async (c) => {
         .all()
     : [];
 
-  // 重複排除して統合（定例会から自動生成された開催回は一覧に出さず、定例会詳細画面にまとめる）
+  // 重複排除して統合。定例会から自動生成された開催回は、すべてを一覧に並べると数が多くなるため、
+  // 定例会ごとに「直近の開催回」（まだ終わっていない最も近い回）だけを通常のミーティングと同様に表示し、
+  // それ以外の回は定例会詳細画面にまとめる
+  const pool = [...hosted, ...allScope, ...selectedInvited, ...teamMeetings, ...collabTeamMeetings];
+  const nowSec = Math.floor(Date.now() / 1000);
+  const seriesCandidateIds = [...new Set(pool.filter((m) => m.seriesId && m.status === "confirmed" && m.confirmedCandidateId).map((m) => m.confirmedCandidateId as string))];
+  const seriesCandidates = seriesCandidateIds.length > 0
+    ? await db.select().from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, seriesCandidateIds)).all()
+    : [];
+  const seriesCandMap = new Map(seriesCandidates.map((cd) => [cd.id, cd]));
+  const nearestBySeries = new Map<string, { id: string; startsAt: number }>();
+  for (const m of pool) {
+    if (!m.seriesId || m.status !== "confirmed" || !m.confirmedCandidateId) continue;
+    const cd = seriesCandMap.get(m.confirmedCandidateId);
+    if (!cd) continue;
+    if ((cd.endsAt ?? cd.startsAt + 3600) < nowSec) continue; // 終わった回は対象外
+    const cur = nearestBySeries.get(m.seriesId);
+    if (!cur || cd.startsAt < cur.startsAt) nearestBySeries.set(m.seriesId, { id: m.id, startsAt: cd.startsAt });
+  }
+  const nearestOccurrenceIds = new Set([...nearestBySeries.values()].map((v) => v.id));
+
   const seen = new Set<string>();
   const all: typeof hosted = [];
-  for (const m of [...hosted, ...allScope, ...selectedInvited, ...teamMeetings, ...collabTeamMeetings]) {
-    if (!seen.has(m.id) && !m.seriesId) {
+  for (const m of pool) {
+    if (!seen.has(m.id) && (!m.seriesId || nearestOccurrenceIds.has(m.id))) {
       seen.add(m.id);
       all.push(m);
     }
@@ -841,6 +861,8 @@ meetingRoutes.get("/", async (c) => {
         registrationDeadline: m.registrationDeadline,
         confirmedDate: confCand ? { startsAt: confCand.startsAt, endsAt: confCand.endsAt } : null,
         hasResponded: respondedSet.has(m.id),
+        seriesId: m.seriesId,
+        seriesOccurrenceIndex: m.seriesOccurrenceIndex,
         createdAt: m.createdAt,
       };
     });
