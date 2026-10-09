@@ -8,6 +8,7 @@ import { Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateTimeFull, fmtTime } from "@/lib/date";
+import { AvailabilityNotice, SlotAvailabilityNote, useAvailabilityForSlots } from "@/components/candidate-availability";
 
 export type CandidateSlot = { id: string; startAt: number; endAt: number };
 export type ConferenceType = "google_meet" | "zoom";
@@ -24,6 +25,8 @@ export function CandidateSelectionPanel({
   onConfirmed: () => void;
 }) {
   const tz = useTimezone();
+  // 提示された候補が、自分のカレンダーで空いているか確認できるようにする
+  const availability = useAvailabilityForSlots(candidates);
   const [selectedId, setSelectedId] = useState<string>(candidates[0]?.id ?? "");
   const [error, setError] = useState("");
   // 2種類連携されている場合、何も選ばずに送信すると先頭固定の候補が黙って選ばれてしまうため、
@@ -47,6 +50,7 @@ export function CandidateSelectionPanel({
       <p className="text-xs font-medium mb-2" style={{ color: "var(--color-success)" }}>
         🗓 提示された候補から、ご都合の良い日時をお選びください
       </p>
+      <AvailabilityNotice loggedIn={availability.loggedIn} isLoading={availability.isLoading} connected={availability.connected} />
       <div className="space-y-1.5 mb-2.5">
         {candidates.map((c) => {
           const selected = c.id === selectedId;
@@ -64,8 +68,11 @@ export function CandidateSelectionPanel({
                 className="w-3.5 h-3.5 rounded-full shrink-0"
                 style={{ border: selected ? "4px solid var(--color-brand)" : "2px solid var(--color-paper-300)" }}
               />
-              <span className="text-sm" style={{ color: "var(--color-ink-800)", fontWeight: selected ? 700 : 400 }}>
-                {fmtDateTimeFull(c.startAt, tz)}〜{fmtTime(c.endAt, tz)}
+              <span className="flex flex-col min-w-0">
+                <span className="text-sm" style={{ color: "var(--color-ink-800)", fontWeight: selected ? 700 : 400 }}>
+                  {fmtDateTimeFull(c.startAt, tz)}〜{fmtTime(c.endAt, tz)}
+                </span>
+                <SlotAvailabilityNote availability={availability.byId.get(c.id)} />
               </span>
             </label>
           );

@@ -29,6 +29,7 @@ import { Hono } from "hono";
 import { eq, inArray, and, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
+import { candidateEndSeconds } from "../services/candidate-length.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
@@ -81,6 +82,8 @@ meetingRoutes.post("/", async (c) => {
     eventTypeDefId?: string;
     registrationDeadline?: number;
     candidates: Array<{ startsAt: number; endsAt?: number; note?: string }>;
+    /** すべての候補日時に共通の所要時間（分）。終了時刻は「開始＋所要時間」にそろえる */
+    durationMinutes?: number;
     confirmNow?: boolean;
     conferenceType?: "manual" | "zoom" | "google_meet" | "none";
     conferenceUrl?: string;
@@ -98,6 +101,8 @@ meetingRoutes.post("/", async (c) => {
   if (body.candidates.some((cd) => cd.startsAt < now)) {
     return c.json({ error: { code: "past_date", message: "過去の日時は候補日に設定できません" } }, 400);
   }
+  // 候補日時の長さは共通の所要時間にそろえる（極端に長い候補は作らせない）
+  body.candidates = body.candidates.map((cd) => ({ ...cd, endsAt: candidateEndSeconds(cd.startsAt, cd.endsAt, body.durationMinutes) ?? undefined }));
   if (body.scope === "team" && !body.teamId) {
     return c.json({ error: { code: "invalid_input", message: "ギルドを指定してください" } }, 400);
   }
@@ -1428,12 +1433,12 @@ meetingRoutes.post("/:id/candidates", async (c) => {
         id: candId,
         meetingId: id,
         startsAt: nc.startsAt,
-        endsAt: nc.endsAt ?? null,
+        endsAt: candidateEndSeconds(nc.startsAt, nc.endsAt),
         note: nc.note ?? null,
         sortOrder,
         addedByMemberId: memberId,
       });
-      createdCandidates.push({ id: candId, startsAt: nc.startsAt, endsAt: nc.endsAt ?? null, note: nc.note ?? null, sortOrder });
+      createdCandidates.push({ id: candId, startsAt: nc.startsAt, endsAt: candidateEndSeconds(nc.startsAt, nc.endsAt), note: nc.note ?? null, sortOrder });
     }
 
     // 追加者本人以外の対象メンバー・外部ゲストへ「再度ご都合をお知らせください」通知
@@ -1547,6 +1552,7 @@ meetingRoutes.patch("/:id/candidates/:candidateId", async (c) => {
   }
 
   const body = await c.req.json<{ startsAt: number; endsAt?: number; note?: string }>();
+  if (body.startsAt) body.endsAt = candidateEndSeconds(body.startsAt, body.endsAt) ?? undefined; // 極端に長い候補は60分にする
   if (!body.startsAt) {
     return c.json({ error: { code: "invalid_input", message: "日時を入力してください" } }, 400);
   }
@@ -2148,6 +2154,7 @@ meetingRoutes.patch("/:id/reschedule", async (c) => {
   }
 
   const body = await c.req.json<{ startsAt: number; endsAt?: number }>();
+  if (body.startsAt) body.endsAt = candidateEndSeconds(body.startsAt, body.endsAt) ?? undefined; // 極端に長い候補は60分にする
   if (!body.startsAt || body.startsAt < now) {
     return c.json({ error: { code: "invalid_input", message: "未来の日時を指定してください" } }, 400);
   }

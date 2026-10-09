@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
+import { candidateEndSeconds } from "../services/candidate-length.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateUrlSafeToken } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
@@ -26,7 +27,7 @@ const MAX_ONEONONE_CANDIDATES = 5;
 
 type CandidateSlotInput = { startAtUtc: string; endAtUtc: string };
 
-function validateCandidateSlots(candidateSlots: CandidateSlotInput[] | undefined): { error: string } | { slots: { startsAt: number; endsAt: number }[] } {
+function validateCandidateSlots(candidateSlots: CandidateSlotInput[] | undefined, durationMinutes?: number): { error: string } | { slots: { startsAt: number; endsAt: number }[] } {
   if (!candidateSlots || candidateSlots.length < MIN_ONEONONE_CANDIDATES || candidateSlots.length > MAX_ONEONONE_CANDIDATES) {
     return { error: `候補日は${MIN_ONEONONE_CANDIDATES}〜${MAX_ONEONONE_CANDIDATES}件で指定してください` };
   }
@@ -40,7 +41,9 @@ function validateCandidateSlots(candidateSlots: CandidateSlotInput[] | undefined
     if (startMs <= Date.now()) {
       return { error: "過去の日時は候補日にできません" };
     }
-    slots.push({ startsAt: Math.floor(startMs / 1000), endsAt: Math.floor(endMs / 1000) });
+    // 終了時刻は、開始＋共通の所要時間にそろえる（極端に長い候補は作らせない）
+    const startsAt = Math.floor(startMs / 1000);
+    slots.push({ startsAt, endsAt: candidateEndSeconds(startsAt, Math.floor(endMs / 1000), durationMinutes) ?? startsAt + 3600 });
   }
   return { slots };
 }
@@ -99,7 +102,7 @@ oneOnOneGuestInviteRoutes.post("/", async (c) => {
   }
   let candidateSlotsToInsert: { startsAt: number; endsAt: number }[] = [];
   if (body.arrangementMethod === "candidates") {
-    const validated = validateCandidateSlots(body.candidateSlots);
+    const validated = validateCandidateSlots(body.candidateSlots, body.durationMinutes);
     if ("error" in validated) return c.json({ error: { code: "bad_request", message: validated.error } }, 400);
     candidateSlotsToInsert = validated.slots;
   }

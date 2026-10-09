@@ -13,6 +13,7 @@ import { eq, and, or, inArray, gte, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
+import { candidateEndSeconds } from "../services/candidate-length.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
@@ -193,7 +194,10 @@ meetingSeriesRoutes.post("/", async (c) => {
         return c.json({ error: { code: "past_date", message: "過去の日時は確定日に設定できません" } }, 400);
       }
     }
-    sortedFixedDates = [...body.fixedDates].sort((a, b) => a.startsAt - b.startsAt);
+    // 極端に長い確定日（8:00〜18:00など）は60分にそろえる
+    sortedFixedDates = body.fixedDates
+      .map((d) => ({ startsAt: d.startsAt, endsAt: candidateEndSeconds(d.startsAt, d.endsAt) ?? d.startsAt + 3600 }))
+      .sort((a, b) => a.startsAt - b.startsAt);
     occurrences = sortedFixedDates;
     scheduleLabel = `個別日程（全${sortedFixedDates.length}回）`;
   } else {

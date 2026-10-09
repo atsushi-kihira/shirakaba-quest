@@ -8,15 +8,15 @@ import { Plus, Trash2, CalendarDays, Pencil, GripVertical } from "lucide-react";
 import { MeetingCandidatePicker } from "./_meeting-candidate-picker";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
-import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
+import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 
 export type CandidateRow = { id: string; date: string; time: string; endTime: string };
 
 export const MIN_ONEONONE_CANDIDATES = 2;
 export const MAX_ONEONONE_CANDIDATES = 5;
 
-export function emptyCandidateRow(): CandidateRow {
-  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: defaultEndTime(30) };
+export function emptyCandidateRow(durationMinutes = 60): CandidateRow {
+  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: addMinutesToTime(DEFAULT_START_TIME, durationMinutes) };
 }
 
 function todayDateStr(): string {
@@ -24,38 +24,41 @@ function todayDateStr(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** 送信前バリデーション: 入力済みの行が2〜5件、各行の終了>開始、重複なし */
+/** 送信前バリデーション: 開始日時が入力済みの行が2〜5件、重複なし（終了は共通の所要時間から決まる） */
 export function isValidCandidateSet(rows: CandidateRow[]): boolean {
-  const filled = rows.filter((r) => r.date && r.time && r.endTime);
+  const filled = rows.filter((r) => r.date && r.time);
   if (filled.length < MIN_ONEONONE_CANDIDATES || filled.length > MAX_ONEONONE_CANDIDATES) return false;
-  if (filled.some((r) => r.time >= r.endTime)) return false;
-  const keys = new Set(filled.map((r) => `${r.date}T${r.time}-${r.endTime}`));
+  const keys = new Set(filled.map((r) => `${r.date}T${r.time}`));
   return keys.size === filled.length;
 }
 
-export function candidateRowsToPayload(rows: CandidateRow[]): { startAtUtc: string; endAtUtc: string }[] {
+/** 開始日時と共通の所要時間（分）から、送信する候補日時を作る */
+export function candidateRowsToPayload(rows: CandidateRow[], durationMinutes: number): { startAtUtc: string; endAtUtc: string }[] {
   return rows
-    .filter((r) => r.date && r.time && r.endTime)
-    .map((r) => ({
-      startAtUtc: new Date(`${r.date}T${r.time}:00+09:00`).toISOString(),
-      endAtUtc: new Date(`${r.date}T${r.endTime}:00+09:00`).toISOString(),
-    }));
+    .filter((r) => r.date && r.time)
+    .map((r) => {
+      const start = new Date(`${r.date}T${r.time}:00+09:00`);
+      return { startAtUtc: start.toISOString(), endAtUtc: new Date(start.getTime() + durationMinutes * 60_000).toISOString() };
+    });
 }
 
 export function CandidateDateEntry({
   candidates,
   onChange,
   googleConnected,
+  duration,
 }: {
   candidates: CandidateRow[];
   onChange: (rows: CandidateRow[]) => void;
   googleConnected: boolean;
+  /** すべての候補に共通の所要時間（分）。候補日時は開始日時だけを入力する */
+  duration: number;
 }) {
   const [showCalendarPicker, setShowCalendarPicker] = useState(false);
 
   function addRow() {
     if (candidates.length >= MAX_ONEONONE_CANDIDATES) return;
-    onChange([...candidates, emptyCandidateRow()]);
+    onChange([...candidates, emptyCandidateRow(duration)]);
   }
   function removeRow(i: number) {
     if (candidates.length <= MIN_ONEONONE_CANDIDATES) return;
@@ -64,15 +67,15 @@ export function CandidateDateEntry({
   function updateRow(i: number, field: keyof CandidateRow, value: string) {
     onChange(candidates.map((r, idx) => {
       if (idx !== i) return r;
-      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
-      if (field === "time") return { ...r, time: value, endTime: shiftEndWithStart(r.time, r.endTime, value) };
+      // 終了時刻は入力させない。開始時刻と共通の所要時間から決まる
+      if (field === "time") return { ...r, time: value, endTime: addMinutesToTime(value, duration) };
       return { ...r, [field]: value };
     }));
   }
   // カレンダー上のドラッグ/クリックで選んだ範囲を候補として追加する（空行があればそこに詰める）
-  function addCalendarRow(date: string, startTime: string, endTime: string) {
+  function addCalendarRow(date: string, startTime: string) {
     if (candidates.filter((r) => r.date).length >= MAX_ONEONONE_CANDIDATES) return;
-    const newRow: CandidateRow = { id: crypto.randomUUID(), date, time: startTime, endTime };
+    const newRow: CandidateRow = { id: crypto.randomUUID(), date, time: startTime, endTime: addMinutesToTime(startTime, duration) };
     const emptyIdx = candidates.findIndex((r) => !r.date);
     if (emptyIdx >= 0) {
       onChange(candidates.map((r, i) => (i === emptyIdx ? newRow : r)));
@@ -87,7 +90,7 @@ export function CandidateDateEntry({
     <div className="rounded-2xl p-3.5" style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
       <div className="flex items-center justify-between mb-2.5 gap-2">
         <span className="text-xs font-semibold" style={{ color: "var(--color-ink-700)" }}>
-          候補日時を入力する（{MIN_ONEONONE_CANDIDATES}〜{MAX_ONEONONE_CANDIDATES}件）
+          候補の開始日時を入力する（{MIN_ONEONONE_CANDIDATES}〜{MAX_ONEONONE_CANDIDATES}件）
         </span>
         {googleConnected && (
           <button
@@ -105,7 +108,8 @@ export function CandidateDateEntry({
       {showCalendarPicker && googleConnected && (
         <div className="mb-3">
           <MeetingCandidatePicker
-            candidates={candidates}
+            duration={duration}
+            candidates={candidates.map((r) => ({ ...r, endTime: addMinutesToTime(r.time, duration) }))}
             onAdd={addCalendarRow}
             onRemove={removeRow}
             maxReached={candidates.filter((r) => r.date).length >= MAX_ONEONONE_CANDIDATES}
@@ -156,14 +160,9 @@ export function CandidateDateEntry({
                   className="w-[88px] px-2 py-2 rounded-xl text-xs outline-none border text-center"
                   style={{ background: "#fff", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
                 />
-                <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>〜</span>
-                <input
-                  type="time"
-                  value={row.endTime}
-                  onChange={(e) => updateRow(i, "endTime", e.target.value)}
-                  className="w-[88px] px-2 py-2 rounded-xl text-xs outline-none border text-center"
-                  style={{ background: "#fff", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
-                />
+                <span className="text-xs w-[64px] shrink-0" style={{ color: "var(--color-ink-500)" }}>
+                  〜{row.time ? addMinutesToTime(row.time, duration) : "--:--"}
+                </span>
                 <button
                   type="button"
                   onClick={() => removeRow(i)}

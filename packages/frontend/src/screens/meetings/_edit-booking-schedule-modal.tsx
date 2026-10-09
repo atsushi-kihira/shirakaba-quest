@@ -8,7 +8,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { shiftEndWithStart } from "@/lib/meeting-time";
+import { addMinutesToTime } from "@/lib/meeting-time";
+import { DurationSelect } from "@/components/duration-select";
 
 type ConferenceMode = "manual" | "zoom" | "google_meet" | "none";
 
@@ -40,7 +41,12 @@ export function EditBookingScheduleModal({
   const qc = useQueryClient();
   const [date, setDate] = useState(toLocalDateInput(currentStartAtUtc));
   const [startTime, setStartTime] = useState(toLocalTimeInput(currentStartAtUtc));
-  const [endTime, setEndTime] = useState(toLocalTimeInput(currentEndAtUtc));
+  // 終了時刻は入力させない。開始時刻と所要時間から決まる（いまの予約の長さが異常に長い場合は60分にそろえる）
+  const [duration, setDuration] = useState(() => {
+    const m = Math.round((new Date(currentEndAtUtc).getTime() - new Date(currentStartAtUtc).getTime()) / 60_000);
+    return m > 0 && m <= 240 ? m : 60;
+  });
+  const endTime = addMinutesToTime(startTime, duration);
   const [conferenceUrl, setConferenceUrl] = useState(currentConferenceUrl ?? "");
   const [mode, setMode] = useState<ConferenceMode>("manual");
   const [error, setError] = useState("");
@@ -117,22 +123,15 @@ export function EditBookingScheduleModal({
               <input
                 type="time"
                 value={startTime}
-                onChange={(e) => { setEndTime(shiftEndWithStart(startTime, endTime, e.target.value)); setStartTime(e.target.value); }}
+                onChange={(e) => setStartTime(e.target.value)}
                 className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
                 style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
               />
             </div>
-            <div>
-              <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>終了時刻</label>
-              <input
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
-                style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
-              />
-            </div>
+            <p className="self-end pb-2.5 text-sm" style={{ color: "var(--color-ink-500)" }}>〜 {endTime}</p>
           </div>
+
+          <DurationSelect value={duration} onChange={setDuration} label="所要時間" />
 
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>会議URLの設定方法</label>

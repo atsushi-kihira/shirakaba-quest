@@ -1,10 +1,10 @@
 // =============================================================
 // ミーティング作成画面：候補日を「自分のカレンダー」を見ながら選ぶための週間グリッド
-// 1to1のカレンダー表示と同じ横幅・時間軸で表示し、30分単位でドラッグして
-// 開始・終了時刻を自由に選べる（クリックのみの場合は選択中の所要時間で追加）。
+// 1to1のカレンダー表示と同じ横幅・時間軸で表示し、30分単位で「開始時刻」だけをクリックして選ぶ。
+// 所要時間は呼び出し元で指定した共通の長さで、クリックした時刻からその長さぶんの枠が候補になる。
 // 自分の既存の予定は薄い色で重ねて表示し、目安として使える（重ねて選ぶこと自体は制限しない）。
 // =============================================================
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Loader2, X } from "lucide-react";
@@ -18,7 +18,6 @@ export type SuggestedSlot = { startUtc: string; endUtc: string; reason?: string 
 const HOURS = Array.from({ length: 16 }, (_, i) => 7 + i); // 7:00-23:00
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 const CELL_HEIGHT_PX = 48; // 1時間あたりの高さ（1to1のカレンダー表示と統一）
-const DURATION_OPTIONS = [30, 60, 90, 120];
 
 function startOfWeekSunday(): Date {
   const now = new Date();
@@ -62,7 +61,10 @@ export function MeetingCandidatePicker({
   onRemove,
   maxReached,
   suggestedSlots,
+  duration,
 }: {
+  /** すべての候補に共通の所要時間（分）。クリックした開始時刻からこの長さの枠が候補になる */
+  duration: number;
   candidates: PickerCandidate[];
   onAdd: (date: string, startTime: string, endTime: string) => void;
   onRemove: (index: number) => void;
@@ -71,9 +73,6 @@ export function MeetingCandidatePicker({
   suggestedSlots?: SuggestedSlot[];
 }) {
   const [weekStart, setWeekStart] = useState<Date>(startOfWeekSunday());
-  const [duration, setDuration] = useState(60);
-  const [drag, setDrag] = useState<{ date: string; anchorMin: number; currentMin: number } | null>(null);
-  const dragRectRef = useRef<{ top: number } | null>(null);
   const fromStr = toYMD(weekStart);
   const toStr = toYMD(addDays(weekStart, 6));
 
@@ -131,37 +130,13 @@ export function MeetingCandidatePicker({
     return { top, height: Math.max(height, 10) };
   }
 
+  // クリックした位置（30分単位に丸めた時刻）を開始時刻として、共通の所要時間ぶんの候補を追加する
   function handleColumnMouseDown(e: React.MouseEvent<HTMLDivElement>, dayStr: string) {
     if (maxReached) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    dragRectRef.current = { top: rect.top };
-    const anchorMin = pxToMinutes(e.clientY - rect.top);
-    setDrag({ date: dayStr, anchorMin, currentMin: anchorMin });
-
-    function onMove(me: MouseEvent) {
-      if (!dragRectRef.current) return;
-      const currentMin = pxToMinutes(me.clientY - dragRectRef.current.top);
-      setDrag((prev) => (prev ? { ...prev, currentMin } : prev));
-    }
-    function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      setDrag((prev) => {
-        if (prev) {
-          let startMin = Math.min(prev.anchorMin, prev.currentMin);
-          let endMin = Math.max(prev.anchorMin, prev.currentMin);
-          if (endMin - startMin < 30) {
-            // ドラッグ量が小さい＝単純クリックとみなし、選択中の所要時間で追加する
-            startMin = prev.anchorMin;
-            endMin = Math.min(HOURS[HOURS.length - 1] * 60 + 60, startMin + duration);
-          }
-          onAdd(prev.date, minutesToTimeStr(startMin), minutesToTimeStr(endMin));
-        }
-        return null;
-      });
-    }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    const startMin = pxToMinutes(e.clientY - rect.top);
+    const endMin = Math.min(HOURS[HOURS.length - 1] * 60 + 60, startMin + duration);
+    onAdd(dayStr, minutesToTimeStr(startMin), minutesToTimeStr(endMin));
   }
 
   if (data && !data.data.connected) {
@@ -187,16 +162,9 @@ export function MeetingCandidatePicker({
         </button>
       </div>
 
-      <div className="mb-2 flex items-center gap-1.5 flex-wrap">
-        <span className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>クリック追加時の長さ:</span>
-        {DURATION_OPTIONS.map((d) => (
-          <button key={d} type="button" onClick={() => setDuration(d)}
-            className="px-2 py-1 rounded-full text-[11px] font-medium transition"
-            style={{ background: duration === d ? "var(--color-brand)" : "var(--color-paper-200)", color: duration === d ? "white" : "var(--color-ink-600)" }}>
-            {d < 60 ? `${d}分` : d % 60 === 0 ? `${d / 60}時間` : `${Math.floor(d / 60)}.5時間`}
-          </button>
-        ))}
-      </div>
+      <p className="mb-2 text-[11px]" style={{ color: "var(--color-ink-400)" }}>
+        開始したい時刻をクリックしてください（{duration}分の枠が候補になります）
+      </p>
 
       {isLoading ? (
         <div className="flex justify-center py-10">
@@ -301,7 +269,7 @@ export function MeetingCandidatePicker({
                       const endMin = end.dateKey === dayStr ? end.hour * 60 + end.min : HOURS[HOURS.length - 1] * 60 + 60;
                       const { top, height } = blockTopHeight(startMin, endMin);
                       const startTime = minutesToTimeStr(startMin);
-                      const endTime = minutesToTimeStr(endMin);
+                      const endTime = minutesToTimeStr(Math.min(HOURS[HOURS.length - 1] * 60 + 60, startMin + duration));
                       return (
                         <button
                           key={`sugg-${s.startUtc}`}
@@ -324,20 +292,6 @@ export function MeetingCandidatePicker({
                         </button>
                       );
                     })}
-
-                    {/* ドラッグ中のプレビュー */}
-                    {drag && drag.date === dayStr && (() => {
-                      const startMin = Math.min(drag.anchorMin, drag.currentMin);
-                      const endMinRaw = Math.max(drag.anchorMin, drag.currentMin);
-                      const endMin = endMinRaw - startMin < 30 ? startMin + duration : endMinRaw;
-                      const { top, height } = blockTopHeight(startMin, endMin);
-                      return (
-                        <div className="absolute rounded pointer-events-none flex items-center px-1"
-                          style={{ top: `${top}px`, height: `${height}px`, left: "2px", right: "2px", background: "rgba(181,56,75,0.5)", border: "2px dashed var(--color-brand)", zIndex: 6 }}>
-                          <span className="text-[9px] leading-tight text-white truncate">{minutesToTimeStr(startMin)}〜{minutesToTimeStr(endMin)}</span>
-                        </div>
-                      );
-                    })()}
                   </div>
                 );
               })}

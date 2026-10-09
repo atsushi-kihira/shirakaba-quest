@@ -15,6 +15,7 @@ import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateTime } from "@/lib/date";
 import { SchedulingMethodSelector, type SchedulingMethod } from "./_scheduling-method-selector";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
+import { DurationSelect } from "@/components/duration-select";
 import { CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload, emptyCandidateRow, type CandidateRow } from "./_candidate-date-entry";
 
 type GuestInviteResult = {
@@ -67,6 +68,7 @@ export function GuestInvitePanel() {
   const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(), emptyCandidateRow()]);
   const [error, setError] = useState("");
   const [eventCampaignId, setEventCampaignId] = useState("");
+  const [duration, setDuration] = useState(60);
   const [submitResult, setSubmitResult] = useState<GuestInviteResult | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -77,7 +79,8 @@ export function GuestInvitePanel() {
       note: note.trim() || undefined,
       notifyByEmail,
       arrangementMethod: schedulingMethod,
-      candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows) : undefined,
+      candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows, duration) : undefined,
+      durationMinutes: duration,
       eventCampaignId: eventCampaignId || undefined,
     }),
     onSuccess: (res) => {
@@ -239,7 +242,10 @@ export function GuestInvitePanel() {
             🔗 公開予約URLは、この内容で申込みを行ったのちに表示されます。
           </p>
         ) : (
-          <CandidateDateEntry candidates={candidateRows} onChange={setCandidateRows} googleConnected={googleConnected} />
+          <>
+            <DurationSelect value={duration} onChange={setDuration} />
+            <CandidateDateEntry candidates={candidateRows} onChange={setCandidateRows} googleConnected={googleConnected} duration={duration} />
+          </>
         )}
 
         <div>

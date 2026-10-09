@@ -10,6 +10,8 @@ import { Loader2, Check, X, AlertCircle, Link2, User, Building2, Briefcase, Mail
 import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime, fmtDateTimeFull, fmtTime } from "@/lib/date";
+import { useAuthStore } from "@/stores/auth-store";
+import { AvailabilityNotice, SlotAvailabilityNote, useAvailabilityForSlots } from "@/components/candidate-availability";
 
 type CandidateSlot = { id: string; startAt: number; endAt: number };
 
@@ -51,6 +53,12 @@ export function OneOnOneRespondScreen() {
   const [resultConference, setResultConference] = useState<{ type: string | null; url: string | null } | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>("");
   const [conferenceType, setConferenceType] = useState<"google_meet" | "zoom" | undefined>(undefined);
+
+  // 自分のカレンダーで候補日時が空いているかの確認。ログイン中のアカウントが、この申込の宛先本人の場合だけ行う
+  // （未ログインなら、ログインして確認できる案内を出す）
+  const authUser = useAuthStore((s) => s.user);
+  const isResponder = !!data?.responderEmail && !!authUser?.email && authUser.email.toLowerCase() === data.responderEmail.toLowerCase();
+  const availability = useAvailabilityForSlots(data?.candidateSlots ?? [], isResponder);
 
   useEffect(() => {
     if (!token) return;
@@ -240,6 +248,12 @@ export function OneOnOneRespondScreen() {
               <p className="text-sm pt-2" style={{ color: "var(--color-ink-700)" }}>
                 提示された候補から、ご都合の良い日時をお選びください。
               </p>
+              <AvailabilityNotice
+                loggedIn={availability.loggedIn && isResponder}
+                isLoading={availability.isLoading}
+                connected={availability.connected}
+                loginRedirectPath={availability.loggedIn ? undefined : `/oneonone/respond/${token}`}
+              />
               <div className="space-y-1.5">
                 {d.candidateSlots.map((slot) => {
                   const selected = slot.id === selectedCandidateId;
@@ -257,8 +271,11 @@ export function OneOnOneRespondScreen() {
                         className="w-3.5 h-3.5 rounded-full shrink-0"
                         style={{ border: selected ? "4px solid var(--color-brand)" : "2px solid var(--color-paper-300)" }}
                       />
-                      <span className="text-sm" style={{ color: "var(--color-ink-800)", fontWeight: selected ? 700 : 400 }}>
-                        {fmtDateTimeFull(slot.startAt, timezone)}〜{fmtTime(slot.endAt, timezone)}
+                      <span className="flex flex-col min-w-0">
+                        <span className="text-sm" style={{ color: "var(--color-ink-800)", fontWeight: selected ? 700 : 400 }}>
+                          {fmtDateTimeFull(slot.startAt, timezone)}〜{fmtTime(slot.endAt, timezone)}
+                        </span>
+                        <SlotAvailabilityNote availability={availability.byId.get(slot.id)} />
                       </span>
                     </label>
                   );

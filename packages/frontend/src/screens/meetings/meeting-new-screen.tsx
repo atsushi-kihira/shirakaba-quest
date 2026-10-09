@@ -13,7 +13,8 @@ import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-e
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
-import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
+import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
+import { DurationSelect } from "@/components/duration-select";
 
 type Team = { id: string; name: string; emblemEmoji: string };
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
@@ -34,8 +35,8 @@ function toUnixTimestamp(date: string, time: string): number {
   return Math.floor(dt.getTime() / 1000);
 }
 
-function emptyCandidate(): Candidate {
-  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: defaultEndTime(60) };
+function emptyCandidate(durationMinutes = 60): Candidate {
+  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: addMinutesToTime(DEFAULT_START_TIME, durationMinutes) };
 }
 
 function isoToJstDateTime(iso: string): { date: string; time: string } {
@@ -66,6 +67,8 @@ export function MeetingNewScreen() {
   const [collabTeamId, setCollabTeamId] = useState("");
   const [inviteeIds, setInviteeIds] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([emptyCandidate()]);
+  // 所要時間はすべての候補日時で共通。候補日時は開始日時だけを指定する（終了は開始＋所要時間）
+  const [duration, setDuration] = useState(60);
   const [dateInputMode, setDateInputMode] = useState<"manual" | "calendar" | "ai">("manual");
   const [suggestedSlots, setSuggestedSlots] = useState<SuggestedSlot[]>([]);
   // 手入力・カレンダー由来の候補が既にある状態でAI検索結果を受け取った場合、
@@ -121,7 +124,7 @@ export function MeetingNewScreen() {
 
   function addCandidate() {
     if (candidates.length >= MAX_CANDIDATES) return;
-    setCandidates([...candidates, emptyCandidate()]);
+    setCandidates([...candidates, emptyCandidate(duration)]);
   }
 
   function removeCandidate(i: number) {
@@ -133,16 +136,16 @@ export function MeetingNewScreen() {
   function updateCandidate(i: number, field: keyof Candidate, value: string) {
     setCandidates(candidates.map((c, idx) => {
       if (idx !== i) return c;
-      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
-      if (field === "time") return { ...c, time: value, endTime: shiftEndWithStart(c.time, c.endTime, value) };
+      // 終了時刻は入力させない。開始時刻と共通の所要時間から決まる
+      if (field === "time") return { ...c, time: value, endTime: addMinutesToTime(value, duration) };
       return { ...c, [field]: value };
     }));
   }
 
-  // カレンダー上のドラッグ/クリックで選んだ範囲を候補日として追加する
-  function addCalendarCandidate(date: string, startTime: string, endTime: string) {
+  // カレンダー上でクリックした開始時刻を、共通の所要時間の候補日として追加する
+  function addCalendarCandidate(date: string, startTime: string) {
     if (candidates.filter((c) => c.date).length >= MAX_CANDIDATES) return;
-    const newCandidate: Candidate = { id: crypto.randomUUID(), date, time: startTime, endTime };
+    const newCandidate: Candidate = { id: crypto.randomUUID(), date, time: startTime, endTime: addMinutesToTime(startTime, duration) };
     const emptyIdx = candidates.findIndex((c) => !c.date);
     if (emptyIdx >= 0) {
       setCandidates(candidates.map((c, i) => i === emptyIdx ? newCandidate : c));
@@ -169,7 +172,7 @@ export function MeetingNewScreen() {
       for (const slot of slots) {
         if (next.filter((c) => c.date).length >= MAX_CANDIDATES) break;
         const { date, time } = isoToJstDateTime(slot.startUtc);
-        const { time: endTime } = isoToJstDateTime(slot.endUtc);
+        const endTime = addMinutesToTime(time, duration);
         if (next.some((c) => c.date === date && c.time === time)) continue;
         const newCandidate: Candidate = { id: crypto.randomUUID(), date, time, endTime };
         const emptyIdx = next.findIndex((c) => !c.date);
@@ -231,9 +234,10 @@ export function MeetingNewScreen() {
       registrationDeadline: registrationDeadline
         ? Math.floor(new Date(registrationDeadline).getTime() / 1000)
         : undefined,
+      durationMinutes: duration,
       candidates: validCandidates.map((c) => ({
         startsAt: toUnixTimestamp(c.date, c.time),
-        endsAt: c.endTime ? toUnixTimestamp(c.date, c.endTime) : undefined,
+        endsAt: toUnixTimestamp(c.date, c.time) + duration * 60,
       })),
       confirmNow: meetingMode === "confirmed" || undefined,
       conferenceType: meetingMode === "confirmed" ? conferenceMode : undefined,
@@ -422,6 +426,10 @@ export function MeetingNewScreen() {
           )}
         </div>
 
+        {/* 所要時間（すべての候補日時で共通） */}
+        <DurationSelect value={duration} onChange={setDuration}
+          label={`所要時間（${meetingMode === "confirmed" ? "すべての確定日" : "すべての候補日"}で共通）`} />
+
         {/* 候補日／確定日 */}
         <div>
           <div className="flex items-center justify-between mb-1.5 flex-wrap gap-y-1">
@@ -472,11 +480,12 @@ export function MeetingNewScreen() {
                 />
               ) : (
                 <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
-                  自分の予定を見ながら、時間帯をクリック（選択中の長さで追加）またはドラッグ（30分単位で開始・終了を自由に指定）して候補日を追加できます
+                  自分の予定を見ながら、開始したい時刻をクリックして候補日を追加できます（上で選んだ所要時間の枠が確保されます）
                 </p>
               )}
               <MeetingCandidatePicker
-                candidates={candidates}
+                duration={duration}
+                candidates={candidates.map((c) => ({ ...c, endTime: addMinutesToTime(c.time, duration) }))}
                 onAdd={addCalendarCandidate}
                 onRemove={removeCandidate}
                 maxReached={candidates.filter((c) => c.date).length >= MAX_CANDIDATES}
@@ -544,14 +553,9 @@ export function MeetingNewScreen() {
                     className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
                     style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
                   />
-                  <input
-                    type="time"
-                    value={cand.endTime}
-                    onChange={(e) => updateCandidate(i, "endTime", e.target.value)}
-                    placeholder="終了時刻"
-                    className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
-                    style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
-                  />
+                  <p className="col-span-3 sm:col-span-1 px-3 py-2 text-sm" style={{ color: "var(--color-ink-500)" }}>
+                    〜 {cand.time ? addMinutesToTime(cand.time, duration) : "--:--"}
+                  </p>
                 </div>
                   </div>
                 </div>

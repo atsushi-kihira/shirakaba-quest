@@ -11,7 +11,8 @@ import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { MeetingCandidatePicker } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
-import { DEFAULT_START_TIME, defaultEndTime, shiftEndWithStart } from "@/lib/meeting-time";
+import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
+import { DurationSelect } from "@/components/duration-select";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
@@ -38,12 +39,12 @@ const WEEK_OPTIONS: { value: number; label: string }[] = [
 const MAX_CANDIDATES = 5;
 const MAX_FIXED_DATES = 50;
 
-function emptyCandidate(): PatternCandidate {
-  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, startTimeLocal: DEFAULT_START_TIME, endTimeLocal: defaultEndTime(60), note: "" };
+function emptyCandidate(durationMinutes = 60): PatternCandidate {
+  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, startTimeLocal: DEFAULT_START_TIME, endTimeLocal: addMinutesToTime(DEFAULT_START_TIME, durationMinutes), note: "" };
 }
 
-function emptyFixedDateRow(): FixedDateRow {
-  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: defaultEndTime(60) };
+function emptyFixedDateRow(durationMinutes = 60): FixedDateRow {
+  return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: addMinutesToTime(DEFAULT_START_TIME, durationMinutes) };
 }
 
 function todayDateStr(): string {
@@ -72,6 +73,8 @@ export function MeetingSeriesNewScreen() {
   const [endDate, setEndDate] = useState("");
   const [conferenceMode, setConferenceMode] = useState<ConferenceMode>("none");
   const [conferenceUrl, setConferenceUrl] = useState("");
+  // 所要時間はすべての候補日時で共通。候補日時は開始日時だけを指定する（終了は開始＋所要時間）
+  const [duration, setDuration] = useState(60);
   const [eventSelection, setEventSelection] = useState(""); // "type:<ID>"（ポイントなしの種別）または "event:<ID>"（イベント）
   const [seriesMode, setSeriesMode] = useState<"vote" | "confirmed">("vote");
   const [dateMode, setDateMode] = useState<"recurring" | "fixed">("recurring");
@@ -113,7 +116,7 @@ export function MeetingSeriesNewScreen() {
 
   function addCandidate() {
     if (candidates.length >= MAX_CANDIDATES) return;
-    setCandidates([...candidates, emptyCandidate()]);
+    setCandidates([...candidates, emptyCandidate(duration)]);
   }
   function removeCandidate(i: number) {
     setCandidates(candidates.filter((_, idx) => idx !== i));
@@ -121,9 +124,9 @@ export function MeetingSeriesNewScreen() {
   function updateCandidate<K extends keyof PatternCandidate>(i: number, field: K, value: PatternCandidate[K]) {
     setCandidates(candidates.map((c, idx) => {
       if (idx !== i) return c;
-      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
+      // 終了時刻は入力させない。開始時刻と共通の所要時間から決まる
       if (field === "startTimeLocal") {
-        return { ...c, startTimeLocal: value as string, endTimeLocal: shiftEndWithStart(c.startTimeLocal, c.endTimeLocal, value as string) };
+        return { ...c, startTimeLocal: value as string, endTimeLocal: addMinutesToTime(value as string, duration) };
       }
       return { ...c, [field]: value };
     }));
@@ -134,7 +137,7 @@ export function MeetingSeriesNewScreen() {
 
   function addFixedDate() {
     if (fixedDates.length >= MAX_FIXED_DATES) return;
-    setFixedDates([...fixedDates, emptyFixedDateRow()]);
+    setFixedDates([...fixedDates, emptyFixedDateRow(duration)]);
   }
   function removeFixedDate(i: number) {
     setFixedDates(fixedDates.filter((_, idx) => idx !== i));
@@ -143,15 +146,15 @@ export function MeetingSeriesNewScreen() {
   function updateFixedDate(i: number, field: keyof FixedDateRow, value: string) {
     setFixedDates(fixedDates.map((d, idx) => {
       if (idx !== i) return d;
-      // 開始時刻を変えたら、所要時間を保ったまま終了時刻も追従させる
-      if (field === "time") return { ...d, time: value, endTime: shiftEndWithStart(d.time, d.endTime, value) };
+      // 終了時刻は入力させない。開始時刻と共通の所要時間から決まる
+      if (field === "time") return { ...d, time: value, endTime: addMinutesToTime(value, duration) };
       return { ...d, [field]: value };
     }));
   }
-  // カレンダー上のドラッグ/クリックで選んだ範囲を確定日として追加する
-  function addCalendarFixedDate(date: string, startTime: string, endTime: string) {
+  // カレンダー上でクリックした開始時刻を、共通の所要時間の確定日として追加する
+  function addCalendarFixedDate(date: string, startTime: string) {
     if (fixedDates.filter((d) => d.date).length >= MAX_FIXED_DATES) return;
-    const newRow: FixedDateRow = { id: crypto.randomUUID(), date, time: startTime, endTime };
+    const newRow: FixedDateRow = { id: crypto.randomUUID(), date, time: startTime, endTime: addMinutesToTime(startTime, duration) };
     const emptyIdx = fixedDates.findIndex((d) => !d.date);
     if (emptyIdx >= 0) {
       setFixedDates(fixedDates.map((d, i) => (i === emptyIdx ? newRow : d)));
@@ -189,7 +192,7 @@ export function MeetingSeriesNewScreen() {
       body.dateMode = "fixed";
       body.fixedDates = validDates.map((d) => ({
         startsAt: toUnixTimestamp(d.date, d.time),
-        endsAt: toUnixTimestamp(d.date, d.endTime),
+        endsAt: toUnixTimestamp(d.date, d.time) + duration * 60,
       }));
     } else {
       const activeCandidates = seriesMode === "confirmed" ? candidates.slice(0, 1) : candidates;
@@ -211,7 +214,7 @@ export function MeetingSeriesNewScreen() {
         dayOfWeek: c.dayOfWeek,
         weekOfMonth: c.recurrenceType === "monthly" ? c.weekOfMonth : undefined,
         startTimeLocal: c.startTimeLocal,
-        endTimeLocal: c.endTimeLocal,
+        endTimeLocal: addMinutesToTime(c.startTimeLocal, duration),
         note: c.note.trim() || undefined,
       }));
     }
@@ -241,6 +244,8 @@ export function MeetingSeriesNewScreen() {
       </p>
 
       <div className="space-y-5">
+        <DurationSelect value={duration} onChange={setDuration} />
+
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、定例会1回の参加ごとにポイントが付与されます" />
 
@@ -380,10 +385,11 @@ export function MeetingSeriesNewScreen() {
             {showCalendarPicker && (
               <div className="card-paper rounded-2xl px-3 py-3 mb-2">
                 <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
-                  自分の予定を見ながら、時間帯をクリック（選択中の長さで追加）またはドラッグ（30分単位で開始・終了を自由に指定）して確定日を追加できます
+                  自分の予定を見ながら、開始したい時刻をクリックして確定日を追加できます（上で選んだ所要時間の枠が確保されます）
                 </p>
                 <MeetingCandidatePicker
-                  candidates={fixedDates}
+                  duration={duration}
+                  candidates={fixedDates.map((d) => ({ ...d, endTime: addMinutesToTime(d.time, duration) }))}
                   onAdd={addCalendarFixedDate}
                   onRemove={removeFixedDate}
                   maxReached={fixedDates.filter((d) => d.date).length >= MAX_FIXED_DATES}
@@ -437,9 +443,9 @@ export function MeetingSeriesNewScreen() {
                     <input type="time" value={d.time} onChange={(e) => updateFixedDate(i, "time", e.target.value)}
                       className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
                       style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
-                    <input type="time" value={d.endTime} onChange={(e) => updateFixedDate(i, "endTime", e.target.value)}
-                      className="col-span-3 sm:col-span-1 px-3 py-2 rounded-xl text-sm outline-none border"
-                      style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+                    <p className="col-span-3 sm:col-span-1 px-3 py-2 text-sm" style={{ color: "var(--color-ink-500)" }}>
+                      〜 {d.time ? addMinutesToTime(d.time, duration) : "--:--"}
+                    </p>
                   </div>
                     </div>
                   </div>
@@ -498,9 +504,9 @@ export function MeetingSeriesNewScreen() {
                       </select>
                       <input type="time" value={cand.startTimeLocal} onChange={(e) => updateCandidate(i, "startTimeLocal", e.target.value)}
                         className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }} />
-                      <span className="self-center text-xs" style={{ color: "var(--color-ink-400)" }}>〜</span>
-                      <input type="time" value={cand.endTimeLocal} onChange={(e) => updateCandidate(i, "endTimeLocal", e.target.value)}
-                        className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }} />
+                      <span className="self-center text-xs" style={{ color: "var(--color-ink-500)" }}>
+                        〜{cand.startTimeLocal ? addMinutesToTime(cand.startTimeLocal, duration) : "--:--"}
+                      </span>
                     </div>
 
                     <input value={cand.note} onChange={(e) => updateCandidate(i, "note", e.target.value)} placeholder="メモ（任意・例：オンライン開催）"

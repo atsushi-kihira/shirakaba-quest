@@ -50,7 +50,7 @@ export function NormalRequestModal({
     didSetDefaultMethod.current = true;
     setSchedulingMethod(googleStatusData.data.connected ? "public_url" : "candidates");
   }, [googleStatusData]);
-  const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(), emptyCandidateRow()]);
+  const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(30), emptyCandidateRow(30)]);
   const [eventCampaignId, setEventCampaignId] = useState("");
   const [error, setError] = useState("");
 
@@ -62,7 +62,7 @@ export function NormalRequestModal({
       note: note.trim() || undefined,
       notifyByEmail,
       arrangementMethod: schedulingMethod,
-      candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows) : undefined,
+      candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows, duration) : undefined,
       eventCampaignId: eventCampaignId || undefined,
     }),
     onSuccess: () => {
@@ -130,7 +130,7 @@ export function NormalRequestModal({
               </a>
             ) : (
               <div className="mt-2.5">
-                <CandidateDateEntry candidates={candidateRows} onChange={setCandidateRows} googleConnected={googleConnected} />
+                <CandidateDateEntry candidates={candidateRows} onChange={setCandidateRows} googleConnected={googleConnected} duration={duration} />
               </div>
             )}
           </div>
@@ -168,7 +168,7 @@ export function NormalRequestModal({
               ))}
             </div>
             <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
-              このリンクだけの所要時間です。あなたの予約ページ全体の設定は変わりません
+              すべての候補日時に共通の所要時間です（候補日時は開始時刻だけを選びます）。あなたの予約ページ全体の設定は変わりません
             </p>
           </div>
 
