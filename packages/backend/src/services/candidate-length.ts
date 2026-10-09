@@ -5,13 +5,13 @@
 // 8:00〜18:00のような極端に長い候補（空き時間帯を入れてしまった等）が作られないようにする。
 // =============================================================
 
-/** 所要時間の指定がない古い画面からの送信で許す最大の長さ。これを超える候補は60分にする */
-export const MAX_CANDIDATE_MINUTES = 240;
+/** 所要時間の指定がない送信で許す最大の長さ（12時間）。これを超える候補は60分にする */
+export const MAX_CANDIDATE_MINUTES = 720;
 export const DEFAULT_CANDIDATE_MINUTES = 60;
 
 /** 共通の所要時間（分）が正しい指定か */
 export function validDuration(minutes: unknown): minutes is number {
-  return typeof minutes === "number" && Number.isFinite(minutes) && minutes >= 5 && minutes <= 480;
+  return typeof minutes === "number" && Number.isFinite(minutes) && minutes >= 5 && minutes <= 720;
 }
 
 /**

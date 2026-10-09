@@ -477,6 +477,7 @@ export function MeetingNewScreen() {
                   inviteeIds={inviteeIds}
                   allMembers={scope === "all" ? members : undefined}
                   onResults={handleAiResults}
+                  durationMinutes={duration}
                 />
               ) : (
                 <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>

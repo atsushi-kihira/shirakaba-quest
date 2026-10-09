@@ -53,7 +53,7 @@ type Availability = "yes" | "maybe" | "no";
 
 const MAX_CANDIDATES = 10;
 const REMINDER_COOLDOWN_SECONDS = 6 * 60 * 60; // 6時間
-const SLOT_SEARCH_ALLOWED_DURATIONS = [15, 30, 45, 60, 90, 120, 180];
+// AIの空き時間検索で指定できる所要時間は、ほかの所要時間の設定と同じ 5分〜12時間
 
 export const meetingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 meetingRoutes.use("*", authMiddleware);
@@ -388,7 +388,7 @@ meetingRoutes.post("/suggest-slots", async (c) => {
   if (body.timeStartLocal >= body.timeEndLocal) {
     return c.json({ error: { code: "invalid_input", message: "終了時刻は開始時刻より後にしてください" } }, 400);
   }
-  if (!SLOT_SEARCH_ALLOWED_DURATIONS.includes(body.durationMinutes)) {
+  if (!Number.isInteger(body.durationMinutes) || body.durationMinutes < 5 || body.durationMinutes > 720) {
     return c.json({ error: { code: "invalid_input", message: "ミーティング時間の指定が正しくありません" } }, 400);
   }
   if (body.scope === "team" && !body.teamId) {

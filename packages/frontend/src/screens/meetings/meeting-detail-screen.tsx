@@ -217,11 +217,11 @@ export function MeetingDetailScreen() {
   });
 
   // このミーティングの所要時間。候補日時の追加・変更では開始日時だけを指定し、長さはこの共通の所要時間にする
-  // （既存の候補の長さから求める。長さが未設定または4時間を超える異常な値のときは60分）
+  // （既存の候補の長さから求める。長さが未設定または12時間を超える異常な値のときは60分）
   const meetingDuration = (() => {
     const c = data?.data.candidates.find((x) => x.endsAt && x.endsAt > x.startsAt);
     const minutes = c ? Math.round(((c.endsAt as number) - c.startsAt) / 60) : 60;
-    return minutes > 0 && minutes <= 240 ? minutes : 60;
+    return minutes > 0 && minutes <= 720 ? minutes : 60;
   })();
 
   type MemberSummary = { id: string; name: string; emoji: string; bgColor: string };

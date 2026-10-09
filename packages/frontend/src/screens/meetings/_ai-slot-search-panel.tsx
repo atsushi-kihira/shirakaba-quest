@@ -4,6 +4,7 @@
 // 曜日・時間帯・所要時間・自由記述の条件から候補日時を抽出する。
 // 結果は呼び出し元（MeetingCandidatePicker）のカレンダー上に表示される。
 // =============================================================
+import { formatDuration } from "@/components/duration-select";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2, Sparkles } from "lucide-react";
@@ -12,7 +13,6 @@ import type { SuggestedSlot } from "./_meeting-candidate-picker";
 
 const DOW_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 const DEFAULT_DAYS = [1, 2, 3, 4, 5]; // 平日
-const DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
 const MAX_RANGE_DAYS = 56; // 8週間
 
 function todayDateStr(): string {
@@ -53,6 +53,7 @@ export function AiSlotSearchPanel({
   inviteeIds,
   allMembers,
   onResults,
+  durationMinutes,
 }: {
   scope: "all" | "team" | "collab_team" | "selected";
   teamId?: string;
@@ -60,11 +61,12 @@ export function AiSlotSearchPanel({
   inviteeIds: string[];
   allMembers?: Array<{ id: string; name: string; emoji: string; bgColor: string }>;
   onResults: (slots: SuggestedSlot[]) => void;
+  /** ミーティングの所要時間（分）。ミーティング作成画面の共通の所要時間を渡す */
+  durationMinutes: number;
 }) {
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>(DEFAULT_DAYS);
   const [timeStart, setTimeStart] = useState("09:00");
   const [timeEnd, setTimeEnd] = useState("21:00");
-  const [durationMinutes, setDurationMinutes] = useState(60);
   const [searchFrom, setSearchFrom] = useState(todayDateStr());
   const [searchTo, setSearchTo] = useState(addDaysToDateStr(todayDateStr(), 13));
   const [maxMembersToCheck, setMaxMembersToCheck] = useState(10);
@@ -159,18 +161,10 @@ export function AiSlotSearchPanel({
         </div>
       </div>
 
-      <div>
-        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>ミーティング時間</label>
-        <div className="grid grid-cols-4 gap-1.5">
-          {DURATION_OPTIONS.map((d) => (
-            <button key={d} type="button" onClick={() => setDurationMinutes(d)}
-              className="py-1.5 rounded-xl text-xs font-medium transition"
-              style={{ background: durationMinutes === d ? "var(--color-brand)" : "var(--color-paper-200)", color: durationMinutes === d ? "white" : "var(--color-ink-600)" }}>
-              {d < 60 ? `${d}分` : d % 60 === 0 ? `${d / 60}時間` : `${Math.floor(d / 60)}.5時間`}
-            </button>
-          ))}
-        </div>
-      </div>
+      <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+        ミーティング時間：<strong>{formatDuration(durationMinutes)}</strong>
+        <span style={{ color: "var(--color-ink-400)" }}>（上の「所要時間」で変更できます）</span>
+      </p>
 
       <div>
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>検索期間</label>

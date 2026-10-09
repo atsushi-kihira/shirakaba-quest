@@ -3,16 +3,16 @@
 // 既に別の手段で日程調整済みの相手に対し、日時・会議ツールを指定して申し込む。
 // =============================================================
 import { useState } from "react";
+import { DurationSelect } from "@/components/duration-select";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { DEFAULT_START_TIME } from "@/lib/meeting-time";
+import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 
 type ZoomStatus = { data: { connected: boolean } };
 type GoogleStatus = { data: { connected: boolean } };
 
-const DURATION_OPTIONS = [30, 45, 60, 90];
 
 function todayYMD(): string {
   const now = new Date();
@@ -131,34 +131,21 @@ export function PrearrangedRequestModal({
             </div>
             <div>
               <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>開始時刻</label>
-              <input
-                type="time"
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
-                style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
-              />
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  className="flex-1 min-w-0 px-3 py-2.5 rounded-xl text-sm outline-none border"
+                  style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
+                />
+                {/* 終了時刻は所要時間から決まる（直接は編集できない） */}
+                <span className="text-sm shrink-0" style={{ color: "var(--color-ink-500)" }}>〜{time ? addMinutesToTime(time, duration) : "--:--"}</span>
+              </div>
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>所要時間</label>
-            <div className="flex gap-2">
-              {DURATION_OPTIONS.map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDuration(d)}
-                  className="flex-1 py-2 rounded-xl text-sm font-medium transition"
-                  style={{
-                    background: duration === d ? "var(--color-brand)" : "var(--color-paper-200)",
-                    color: duration === d ? "white" : "var(--color-ink-600)",
-                  }}
-                >
-                  {d}分
-                </button>
-              ))}
-            </div>
-          </div>
+          <DurationSelect value={duration} onChange={setDuration} label="所要時間" />
 
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>会議ツール</label>

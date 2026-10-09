@@ -10,13 +10,13 @@ import { X, Loader2, Handshake, ExternalLink } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { SchedulingMethodSelector, type SchedulingMethod } from "../meetings/_scheduling-method-selector";
+import { DurationSelect } from "@/components/duration-select";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import {
   CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload,
   emptyCandidateRow, type CandidateRow,
 } from "../meetings/_candidate-date-entry";
 
-const DURATION_OPTIONS = [30, 45, 60, 90];
 
 export function NormalRequestModal({
   responderId,
@@ -151,22 +151,7 @@ export function NormalRequestModal({
           </div>
 
           <div>
-            <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>所要時間</label>
-            <div className="flex gap-2">
-              {DURATION_OPTIONS.map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDuration(d)}
-                  className="flex-1 py-2 rounded-xl text-sm font-medium transition"
-                  style={{
-                    background: duration === d ? "var(--color-brand)" : "var(--color-paper-200)",
-                    color: duration === d ? "white" : "var(--color-ink-600)",
-                  }}
-                >
-                  {d}分
-                </button>
-              ))}
-            </div>
+            <DurationSelect value={duration} onChange={setDuration} label="所要時間" />
             <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
               すべての候補日時に共通の所要時間です（候補日時は開始時刻だけを選びます）。あなたの予約ページ全体の設定は変わりません
             </p>

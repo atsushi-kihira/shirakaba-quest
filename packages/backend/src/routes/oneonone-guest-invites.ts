@@ -109,7 +109,7 @@ oneOnOneGuestInviteRoutes.post("/", async (c) => {
 
   let customDurationMinutes: number | null = null;
   if (body.durationMinutes !== undefined) {
-    if (!Number.isFinite(body.durationMinutes) || body.durationMinutes < 5 || body.durationMinutes > 480) {
+    if (!Number.isFinite(body.durationMinutes) || body.durationMinutes < 5 || body.durationMinutes > 720) {
       return c.json({ error: { code: "bad_request", message: "所要時間の指定が正しくありません" } }, 400);
     }
     customDurationMinutes = Math.round(body.durationMinutes);

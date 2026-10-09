@@ -8,9 +8,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { DEFAULT_START_TIME } from "@/lib/meeting-time";
+import { DurationSelect } from "@/components/duration-select";
 
 type ConferenceMode = "manual" | "zoom" | "google_meet" | "none";
-const DURATION_OPTIONS = [30, 45, 60, 90];
 
 function toLocalDateInput(ts: number | null): string {
   if (!ts) return "";
@@ -171,16 +171,7 @@ export function EditOneOnOneScheduleModal({
             </div>
           ) : (
             <div>
-              <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>所要時間</label>
-              <div className="flex gap-2">
-                {DURATION_OPTIONS.map((d) => (
-                  <button key={d} type="button" onClick={() => setDuration(d)}
-                    className="flex-1 py-2 rounded-xl text-sm font-medium transition"
-                    style={{ background: duration === d ? "var(--color-brand)" : "var(--color-paper-200)", color: duration === d ? "white" : "var(--color-ink-600)" }}>
-                    {d}分
-                  </button>
-                ))}
-              </div>
+              <DurationSelect value={duration} onChange={setDuration} label="所要時間" />
               <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
                 保存すると、指定した日時・所要時間で{mode === "zoom" ? "Zoom" : "Google Meet"}の会議URLをその場で発行します
               </p>

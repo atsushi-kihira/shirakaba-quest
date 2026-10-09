@@ -1,4 +1,5 @@
 // SC-04 自分の調整カレンダー設定画面
+import { DurationSelect } from "@/components/duration-select";
 import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -270,19 +271,7 @@ export function SchedulerSettingsScreen() {
           <h2 className="font-bold mb-4" style={{ color: "var(--color-ink-800)" }}>所要時間・バッファ</h2>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-xs font-medium mb-1.5 block" style={{ color: "var(--color-ink-600)" }}>
-                所要時間
-              </label>
-              <select
-                value={durationMinutes}
-                onChange={(e) => setDurationMinutes(parseInt(e.target.value))}
-                className="w-full px-3 py-2 rounded-xl text-sm border"
-                style={{ borderColor: "var(--color-paper-300)", background: "white" }}
-              >
-                {[15, 20, 30, 45, 60, 90].map((v) => (
-                  <option key={v} value={v}>{v}分</option>
-                ))}
-              </select>
+              <DurationSelect value={durationMinutes} onChange={setDurationMinutes} label="所要時間" />
             </div>
             <div>
               <label className="text-xs font-medium mb-1.5 block" style={{ color: "var(--color-ink-600)" }}>
