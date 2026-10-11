@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
+import { queueOneOnOneCalendarSync } from "../services/memberCalendarSync.ts";
 import { getAvailableConferenceTypes } from "../services/conferenceService.ts";
 import { createConferenceForOneOnOneSession } from "../services/oneOnOneConference.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
@@ -117,6 +118,7 @@ oneOnOnePublicRoutes.post("/:token/reject", async (c) => {
     });
   }
 
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, session.id);
   return c.json({ data: { status: "rejected", alreadyResolved: false } });
 });
 
@@ -199,5 +201,6 @@ oneOnOnePublicRoutes.post("/:token/select-candidate", async (c) => {
     .set({ oneOnOneAcceptedAt: now })
     .where(and(eq(schema.connections.fromMemberId, session.requesterId), eq(schema.connections.toMemberId, session.responderId)));
 
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, session.id);
   return c.json({ data: { status: "accepted", alreadyResolved: false, scheduledFor: slot.startsAt, conferenceType: resultConferenceType, conferenceUrl } });
 });

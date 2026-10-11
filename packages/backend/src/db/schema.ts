@@ -1130,3 +1130,21 @@ export const collabMapPositions = sqliteTable("collab_map_positions", {
 }, (t) => ({
   pk: primaryKey({ columns: [t.memberId, t.nodeId] }),
 }));
+
+// 招待されたメンバーのGoogleカレンダーへ自動登録した予定（更新・削除のための記録）
+export const memberCalendarEvents = sqliteTable("member_calendar_events", {
+  id:              text("id").primaryKey(),
+  memberId:        text("member_id").notNull(),
+  kind:            text("kind").notNull(), // 'meeting' | 'oneonone'
+  refId:           text("ref_id").notNull(),
+  slotId:          text("slot_id").notNull().default(""),
+  googleAccountId: text("google_account_id").notNull(),
+  calendarId:      text("calendar_id").notNull(),
+  eventId:         text("event_id").notNull(),
+  signature:       text("signature").notNull(),
+  startsAt:        integer("starts_at").notNull(),
+  createdAt:       integer("created_at").notNull(),
+  updatedAt:       integer("updated_at").notNull(),
+}, (t) => ({
+  uniq: uniqueIndex("uniq_member_calendar_event").on(t.memberId, t.kind, t.refId, t.slotId),
+}));

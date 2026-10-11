@@ -278,6 +278,10 @@ function GoogleAccountsCard({
               会議URLの発行・ダブルブッキング防止のための予定ブロックは、下の「デフォルト」のアカウントが使われます。
               複数アカウントを連携している場合は、アカウントごとに予定の書き込み先・空き状況確認に使うカレンダーを設定できます。
             </p>
+            <p className="text-xs mb-2 px-3 py-2 rounded-xl" style={{ background: "rgba(90,140,92,0.08)", color: "var(--color-ink-600)" }}>
+              📅 ミーティング・定例会・1to1に<strong>招待された予定</strong>も、「デフォルト」のアカウントの書き込み先カレンダーに自動で登録されます
+              （日時の変更・キャンセル・不参加の回答にも追従します）。
+            </p>
             <div className="space-y-2.5">
               {accounts.map((acc) => (
                 <div key={acc.id} className="rounded-xl p-3" style={{ background: "white", border: "1px solid var(--color-paper-300)" }}>

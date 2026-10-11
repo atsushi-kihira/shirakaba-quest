@@ -30,6 +30,7 @@ import { eq, inArray, and, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { candidateEndSeconds } from "../services/candidate-length.ts";
+import { queueMeetingCalendarSync, queueMemberCalendarSync, queueSelfCalendarSync } from "../services/memberCalendarSync.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
@@ -348,6 +349,8 @@ meetingRoutes.post("/", async (c) => {
   // waitUntil でレスポンス後もメール送信を完走させる
   c.executionCtx.waitUntil(Promise.all(mailPromises));
 
+  // 日程を確定して作成した場合は、招待された人（連携済み）のGoogleカレンダーにも予定を登録する
+  if (confirmNow) queueMeetingCalendarSync(c.executionCtx, db, c.env, meetingId);
   return c.json({ data: { id: meetingId } }, 201);
 });
 
@@ -867,6 +870,8 @@ meetingRoutes.get("/", async (c) => {
       };
     });
 
+  // アプリを開いたときに、自分のGoogleカレンダーの登録状況を補正する（5分に1回まで）
+  queueSelfCalendarSync(c.executionCtx, db, c.env, memberId);
   return c.json({ data: result });
 });
 
@@ -1650,6 +1655,7 @@ meetingRoutes.patch("/:id/candidates/:candidateId", async (c) => {
     c.executionCtx.waitUntil(Promise.all(mailPromises));
   }
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -1753,6 +1759,7 @@ meetingRoutes.delete("/:id/candidates/:candidateId", async (c) => {
 
   c.executionCtx.waitUntil(Promise.all(mailPromises));
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -1808,6 +1815,7 @@ meetingRoutes.post("/:id/decline", async (c) => {
     );
   }
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -1826,6 +1834,7 @@ meetingRoutes.delete("/:id/decline", async (c) => {
   await db.delete(schema.meetingDeclines)
     .where(and(eq(schema.meetingDeclines.meetingId, id), eq(schema.meetingDeclines.memberId, memberId)));
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -2152,6 +2161,8 @@ meetingRoutes.patch("/:id/confirm", async (c) => {
     c.executionCtx.waitUntil(Promise.all(confirmMailPromises));
   }
 
+  // 招待された人（連携済み）のGoogleカレンダーにも予定を登録・更新・削除する
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true, confirmed: newValue === 1 });
 });
 
@@ -2261,6 +2272,7 @@ meetingRoutes.patch("/:id/reschedule", async (c) => {
   }
   c.executionCtx.waitUntil(Promise.all(reschedMailPromises));
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -2553,6 +2565,7 @@ meetingRoutes.delete("/:id", async (c) => {
       .where(inArray(schema.meetingDateCandidates.id, blockedCandidates.map((cd) => cd.id)));
   }
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -2599,6 +2612,7 @@ meetingRoutes.delete("/:id/delete", async (c) => {
   await db.delete(schema.meetingExternalInvitees).where(eq(schema.meetingExternalInvitees.meetingId, id));
   await db.delete(schema.meetings).where(eq(schema.meetings.id, id));
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -2821,6 +2835,7 @@ meetingRoutes.post("/:id/invite-member", async (c) => {
     readAt: null, createdAt: now,
   });
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -2847,6 +2862,7 @@ meetingRoutes.delete("/:id/invitees/:memberId", async (c) => {
   await db.delete(schema.meetingResponses)
     .where(and(eq(schema.meetingResponses.meetingId, id), eq(schema.meetingResponses.memberId, memberId)));
 
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -3017,6 +3033,8 @@ meetingRoutes.post("/:id/attendance", async (c) => {
     }
   }
 
+  // 不参加の回答はカレンダーから外し、参加に変えたら登録し直す（回答した本人の分）
+  queueMemberCalendarSync(c.executionCtx, db, c.env, memberId);
   return c.json({ ok: true, pointsAwarded: totalPointsAwarded });
 });
 

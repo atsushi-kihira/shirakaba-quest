@@ -13,6 +13,7 @@ import { eq, or, and, sql, inArray, isNull, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { candidateEndSeconds } from "../services/candidate-length.ts";
 import { listOneOnOneEvents, oneOnOneEventPoints, resolveOneOnOneEvent } from "../services/oneonone-event.ts";
+import { queueOneOnOneCalendarSync } from "../services/memberCalendarSync.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
@@ -541,6 +542,7 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
 
   await db.update(schema.oneOnOneSessions).set(update).where(eq(schema.oneOnOneSessions.id, sessionId));
 
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
   return c.json({ data: { id: sessionId, scheduledFor: update.scheduledFor, conferenceUrl: generatedConferenceUrl ?? update.manualConferenceUrl } });
 });
 
@@ -639,6 +641,8 @@ oneOnOneRoutes.patch("/:id/select-candidate", async (c) => {
     .set({ oneOnOneAcceptedAt: now })
     .where(and(eq(schema.connections.fromMemberId, session.requesterId), eq(schema.connections.toMemberId, session.responderId)));
 
+  // 選んだ日時を、双方のGoogleカレンダー（連携済みの方）に登録する
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
   return c.json({ data: { status: update.status ?? session.status, scheduledFor: slot.startsAt, conferenceType: resultConferenceType, conferenceUrl } });
 });
 
@@ -997,6 +1001,7 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
     }
   }
 
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
   return c.json({ data: { id: sessionId, status: "accepted", conferenceUrl: conferenceResult.conferenceUrl } }, 201);
 });
 
@@ -1029,6 +1034,7 @@ oneOnOneRoutes.patch("/:id/reject", async (c) => {
   // 連携している確定済み予約があれば同期してキャンセルする
   await cancelLinkedBookingIfAny(db, c.env, sessionId, userId);
 
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
   return c.json({ data: { status: "rejected" } });
 });
 
@@ -1162,6 +1168,7 @@ oneOnOneRoutes.patch("/:id/cancel", async (c) => {
   // 連携している確定済み予約があれば同期してキャンセルする
   await cancelLinkedBookingIfAny(db, c.env, sessionId, userId);
 
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
   return c.json({ data: { status: "cancelled" } });
 });
 
@@ -1194,6 +1201,7 @@ oneOnOneRoutes.delete("/:id", async (c) => {
   await db.delete(schema.oneOnOneSessions)
     .where(eq(schema.oneOnOneSessions.id, sessionId));
 
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
   return c.json({ data: { deleted: true } });
 });
 

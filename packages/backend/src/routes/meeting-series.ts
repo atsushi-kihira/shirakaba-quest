@@ -14,6 +14,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { candidateEndSeconds } from "../services/candidate-length.ts";
+import { queueSeriesCalendarSync } from "../services/memberCalendarSync.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
@@ -357,6 +358,8 @@ meetingSeriesRoutes.post("/", async (c) => {
     series!, occurrences, scheduleLabel, manualConferenceUrl,
   );
 
+  // 日程を確定して作成した場合は、招待された人（連携済み）のGoogleカレンダーにも予定を登録する（直近の開催回から順に）
+  if (mode === "confirmed") queueSeriesCalendarSync(c.executionCtx, db, c.env, seriesId);
   return c.json({ data: { id: seriesId, occurrenceCount: result.occurrenceCount } }, 201);
 });
 
@@ -841,6 +844,7 @@ meetingSeriesRoutes.patch("/:id/confirm", async (c) => {
     series.conferenceType === "manual" ? (series.conferenceUrl ?? undefined) : undefined,
   );
 
+  queueSeriesCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ data: { occurrenceCount: result.occurrenceCount } });
 });
 
@@ -972,5 +976,6 @@ meetingSeriesRoutes.delete("/:id", async (c) => {
     }
   }
 
+  queueSeriesCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true, cancelledOccurrences: toCancel.length });
 });
