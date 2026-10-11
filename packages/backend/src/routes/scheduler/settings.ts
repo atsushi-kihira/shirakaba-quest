@@ -14,6 +14,7 @@ import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import { getActiveShareLink, issueNewShareLink, ensureActiveShareLink } from "../../services/schedulerShareToken.ts";
 import { getValidGoogleAccessToken } from "../../services/conferenceService.ts";
+import { getBusySources, listEventsAcrossAccounts } from "../../services/googleBusySources.ts";
 import { listEvents, insertCalendarEvent, updateCalendarEvent, deleteCalendarEvent } from "../../services/googleClient.ts";
 import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -303,26 +304,22 @@ schedulerSettingsRoutes.get("/calendar-events", async (c) => {
   const timeMinUtc = new Date(`${from}T00:00:00Z`).toISOString();
   const timeMaxUtc = new Date(`${to}T23:59:59Z`).toISOString();
 
-  const googleCred = await getValidGoogleAccessToken(
-    db, memberId,
-    c.env.SCHEDULER_TOKEN_KEY,
-    c.env.GOOGLE_OAUTH_CLIENT_ID,
-    c.env.GOOGLE_OAUTH_CLIENT_SECRET
-  );
-
-  if (googleCred.status === "not_connected") {
+  // 連携しているすべてのGoogleアカウント（複数可）の、確認対象カレンダーの予定をまとめて返す
+  const busy = await getBusySources(db, c.env, memberId);
+  if (busy.notConnected) {
     return c.json({ data: { connected: false, events: [], calendars: [] } });
   }
-  if (googleCred.status === "refresh_failed") {
+  if (busy.sources.length === 0) {
     return c.json({ error: { code: "calendar_unavailable", message: "Googleカレンダーの予定を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
   }
 
   try {
-    const eventLists = await Promise.all(
-      googleCred.busyCalendars.map((cal) => listEvents(googleCred.accessToken, cal.id, timeMinUtc, timeMaxUtc))
+    const events = await listEventsAcrossAccounts(busy.sources, timeMinUtc, timeMaxUtc);
+    // 予定の追加・編集で選ぶカレンダー。アカウントをまたいで同じIDが重ならないよう、アカウントも合わせて返す
+    const calendars = busy.sources.flatMap((src) =>
+      src.calendars.map((cal) => ({ id: cal.id, summary: cal.summary, accountId: src.accountId, accountEmail: src.accountEmail }))
     );
-    const events = eventLists.flat().sort((a, b) => a.startUtc.localeCompare(b.startUtc));
-    return c.json({ data: { connected: true, events, calendars: googleCred.busyCalendars } });
+    return c.json({ data: { connected: true, events, calendars, multipleAccounts: busy.sources.length > 1, partial: busy.failedAccounts > 0 } });
   } catch (e) {
     console.error("[scheduler/me/calendar-events] listEvents failed:", e);
     return c.json({ error: { code: "calendar_unavailable", message: "カレンダーの予定を取得できませんでした。時間をおいて再度お試しください。" } }, 503);
@@ -334,7 +331,7 @@ schedulerSettingsRoutes.post("/calendar-events", async (c) => {
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
 
-  const body = await c.req.json<{ calendarId?: string; summary?: string; startUtc?: string; endUtc?: string; location?: string; description?: string }>().catch(() => ({}) as { calendarId?: string; summary?: string; startUtc?: string; endUtc?: string; location?: string; description?: string });
+  const body = await c.req.json<{ accountId?: string; calendarId?: string; summary?: string; startUtc?: string; endUtc?: string; location?: string; description?: string }>().catch(() => ({}) as { accountId?: string; calendarId?: string; summary?: string; startUtc?: string; endUtc?: string; location?: string; description?: string });
   if (!body.calendarId || !body.summary?.trim() || !body.startUtc || !body.endUtc) {
     return c.json({ error: { code: "invalid_input", message: "カレンダー・タイトル・開始日時・終了日時を指定してください" } }, 400);
   }
@@ -342,12 +339,13 @@ schedulerSettingsRoutes.post("/calendar-events", async (c) => {
     return c.json({ error: { code: "invalid_input", message: "終了日時は開始日時より後にしてください" } }, 400);
   }
 
-  const googleCred = await getValidGoogleAccessToken(
-    db, memberId, c.env.SCHEDULER_TOKEN_KEY, c.env.GOOGLE_OAUTH_CLIENT_ID, c.env.GOOGLE_OAUTH_CLIENT_SECRET
-  );
-  if (googleCred.status === "not_connected") return c.json({ error: { code: "not_connected", message: "Googleと連携されていません" } }, 400);
-  if (googleCred.status === "refresh_failed") return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
-  if (!googleCred.busyCalendars.some((cal) => cal.id === body.calendarId)) {
+  // 予定の追加・編集・削除は、予定が入っているアカウント（複数連携している場合は accountId で指定）で行う
+  const busy = await getBusySources(db, c.env, memberId);
+  if (busy.notConnected) return c.json({ error: { code: "not_connected", message: "Googleと連携されていません" } }, 400);
+  const accountId = body.accountId;
+  const googleCred = accountId ? busy.sources.find((src) => src.accountId === accountId) : (busy.sources.find((src) => src.isDefault) ?? busy.sources[0]);
+  if (!googleCred) return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
+  if (!googleCred.calendars.some((cal) => cal.id === body.calendarId)) {
     return c.json({ error: { code: "invalid_calendar", message: "空き状況の確認対象に設定されているカレンダーのみ指定できます" } }, 400);
   }
 
@@ -378,9 +376,9 @@ schedulerSettingsRoutes.patch("/calendar-events/:eventId", async (c) => {
   if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
 
   const body = await c.req.json<{
-    calendarId?: string; summary?: string; location?: string; description?: string;
+    accountId?: string; calendarId?: string; summary?: string; location?: string; description?: string;
     allDay?: boolean; startUtc?: string; endUtc?: string; startDate?: string; endDate?: string;
-  }>().catch(() => ({}) as { calendarId?: string; summary?: string; location?: string; description?: string; allDay?: boolean; startUtc?: string; endUtc?: string; startDate?: string; endDate?: string });
+  }>().catch(() => ({}) as { accountId?: string; calendarId?: string; summary?: string; location?: string; description?: string; allDay?: boolean; startUtc?: string; endUtc?: string; startDate?: string; endDate?: string });
   if (!body.calendarId || !body.summary?.trim()) {
     return c.json({ error: { code: "invalid_input", message: "カレンダー・タイトルを指定してください" } }, 400);
   }
@@ -403,12 +401,13 @@ schedulerSettingsRoutes.patch("/calendar-events/:eventId", async (c) => {
     }
   }
 
-  const googleCred = await getValidGoogleAccessToken(
-    db, memberId, c.env.SCHEDULER_TOKEN_KEY, c.env.GOOGLE_OAUTH_CLIENT_ID, c.env.GOOGLE_OAUTH_CLIENT_SECRET
-  );
-  if (googleCred.status === "not_connected") return c.json({ error: { code: "not_connected", message: "Googleと連携されていません" } }, 400);
-  if (googleCred.status === "refresh_failed") return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
-  if (!googleCred.busyCalendars.some((cal) => cal.id === body.calendarId)) {
+  // 予定の追加・編集・削除は、予定が入っているアカウント（複数連携している場合は accountId で指定）で行う
+  const busy = await getBusySources(db, c.env, memberId);
+  if (busy.notConnected) return c.json({ error: { code: "not_connected", message: "Googleと連携されていません" } }, 400);
+  const accountId = body.accountId;
+  const googleCred = accountId ? busy.sources.find((src) => src.accountId === accountId) : (busy.sources.find((src) => src.isDefault) ?? busy.sources[0]);
+  if (!googleCred) return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
+  if (!googleCred.calendars.some((cal) => cal.id === body.calendarId)) {
     return c.json({ error: { code: "invalid_calendar", message: "空き状況の確認対象に設定されているカレンダーのみ指定できます" } }, 400);
   }
 
@@ -440,12 +439,13 @@ schedulerSettingsRoutes.delete("/calendar-events/:eventId", async (c) => {
   const calendarId = c.req.query("calendarId");
   if (!calendarId) return c.json({ error: { code: "invalid_input", message: "calendarId を指定してください" } }, 400);
 
-  const googleCred = await getValidGoogleAccessToken(
-    db, memberId, c.env.SCHEDULER_TOKEN_KEY, c.env.GOOGLE_OAUTH_CLIENT_ID, c.env.GOOGLE_OAUTH_CLIENT_SECRET
-  );
-  if (googleCred.status === "not_connected") return c.json({ error: { code: "not_connected", message: "Googleと連携されていません" } }, 400);
-  if (googleCred.status === "refresh_failed") return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
-  if (!googleCred.busyCalendars.some((cal) => cal.id === calendarId)) {
+  // 予定の追加・編集・削除は、予定が入っているアカウント（複数連携している場合は accountId で指定）で行う
+  const busy = await getBusySources(db, c.env, memberId);
+  if (busy.notConnected) return c.json({ error: { code: "not_connected", message: "Googleと連携されていません" } }, 400);
+  const accountId = c.req.query("accountId");
+  const googleCred = accountId ? busy.sources.find((src) => src.accountId === accountId) : (busy.sources.find((src) => src.isDefault) ?? busy.sources[0]);
+  if (!googleCred) return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
+  if (!googleCred.calendars.some((cal) => cal.id === calendarId)) {
     return c.json({ error: { code: "invalid_calendar", message: "空き状況の確認対象に設定されているカレンダーのみ指定できます" } }, 400);
   }
 

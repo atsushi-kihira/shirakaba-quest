@@ -11,6 +11,8 @@ export type CalendarMode = "public_guest" | "member_to_member";
 export type MyEvent = {
   id: string; calendarId: string; summary: string; startUtc: string; endUtc: string; allDay: boolean;
   location: string | null; description: string | null;
+  /** 予定が入っているGoogleアカウント（複数連携している場合の区別用） */
+  accountId?: string; accountEmail?: string;
 };
 
 type Props = {

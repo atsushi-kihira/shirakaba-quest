@@ -13,7 +13,7 @@
 import { inArray } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
-import { getValidGoogleAccessToken } from "./conferenceService.ts";
+import { getBusySources, listEventsAcrossAccounts } from "./googleBusySources.ts";
 import { listEvents } from "./googleClient.ts";
 import { localTimeToUtcMs, utcMsToLocalDateStr, utcMsToLocalDayOfWeek, type Slot } from "./slotCalculator.ts";
 
@@ -351,17 +351,16 @@ export async function searchCommonFreeSlots(params: SlotSearchParams): Promise<S
   for (let i = 0; i < connectedMemberIds.length; i += CONCURRENCY) {
     const batch = connectedMemberIds.slice(i, i + CONCURRENCY);
     const results = await Promise.all(batch.map(async (memberId) => {
-      const cred = await getValidGoogleAccessToken(db, memberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
-      if (cred.status === "refresh_failed") {
+      // そのメンバーが連携しているすべてのGoogleアカウント（複数可）の、確認対象カレンダーを見る
+      const cred = await getBusySources(db, env, memberId);
+      if (cred.failedAccounts > 0) {
         checkFailedMemberIds.push(memberId);
         return [];
       }
-      if (cred.status !== "ok") return [];
+      if (cred.sources.length === 0) return [];
       try {
-        const eventLists = await Promise.all(
-          cred.busyCalendars.map((cal) => listEvents(cred.accessToken, cal.id, fromUtc.toISOString(), toUtc.toISOString()))
-        );
-        return eventLists.flat()
+        const allEvents = await listEventsAcrossAccounts(cred.sources, fromUtc.toISOString(), toUtc.toISOString());
+        return allEvents
           // Googleカレンダーの「予定なし」設定（transparency: transparent）は、終日予定・時間指定予定の
           // どちらであっても空き扱いにする（例：終日の「自宅」マーカーなどはbusyとして扱わない）
           .filter((ev) => ev.transparency !== "transparent")

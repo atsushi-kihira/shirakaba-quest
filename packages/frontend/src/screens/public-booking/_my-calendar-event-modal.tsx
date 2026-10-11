@@ -9,7 +9,10 @@ import { X, Loader2, CalendarClock, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { MyEvent } from "@/components/unified-calendar-grid";
 
-export type MyCalendarOption = { id: string; summary: string };
+export type MyCalendarOption = { id: string; summary: string; accountId?: string; accountEmail?: string };
+
+/** 選択肢の値。複数のGoogleアカウントで同じカレンダーIDが重ならないよう、アカウントも含める */
+const optionKey = (accountId: string | undefined, calendarId: string) => `${accountId ?? ""}::${calendarId}`;
 
 function toLocalDateInput(d: Date): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -53,7 +56,12 @@ type Props = {
 export function MyEventModal({ calendars, initial, defaultStart, onClose, onSaved }: Props) {
   const isEdit = !!initial;
   const isAllDay = initial?.allDay ?? false;
-  const [calendarId, setCalendarId] = useState(initial?.calendarId ?? calendars[0]?.id ?? "");
+  const [calendarKey, setCalendarKey] = useState(
+    initial ? optionKey(initial.accountId, initial.calendarId) : (calendars[0] ? optionKey(calendars[0].accountId, calendars[0].id) : "")
+  );
+  const [selectedAccountId, selectedCalendarId] = calendarKey.split("::") as [string, string];
+  const calendarId = selectedCalendarId ?? "";
+  const accountId = selectedAccountId || undefined;
   const [summary, setSummary] = useState(initial?.summary ?? "");
   const [location, setLocation] = useState(initial?.location ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
@@ -73,12 +81,12 @@ export function MyEventModal({ calendars, initial, defaultStart, onClose, onSave
     mutationFn: () => {
       const body = isAllDay
         ? {
-            calendarId, summary: summary.trim(), allDay: true,
+            accountId, calendarId, summary: summary.trim(), allDay: true,
             startDate, endDate: shiftDateStr(endDate, 1),
             location: location.trim(), description: description.trim(),
           }
         : {
-            calendarId, summary: summary.trim(),
+            accountId, calendarId, summary: summary.trim(),
             startUtc: new Date(`${startDate}T${startTime}:00+09:00`).toISOString(),
             endUtc: new Date(`${endDate}T${endTime}:00+09:00`).toISOString(),
             location: location.trim(), description: description.trim(),
@@ -93,7 +101,7 @@ export function MyEventModal({ calendars, initial, defaultStart, onClose, onSave
 
   const remove = useMutation({
     mutationFn: () =>
-      api.delete(`/scheduler/me/calendar-events/${initial!.id}?calendarId=${encodeURIComponent(initial!.calendarId)}`),
+      api.delete(`/scheduler/me/calendar-events/${initial!.id}?calendarId=${encodeURIComponent(initial!.calendarId)}${initial!.accountId ? `&accountId=${encodeURIComponent(initial!.accountId)}` : ""}`),
     onSuccess: onSaved,
     onError: (e) => setError(e instanceof ApiError ? e.message : "削除に失敗しました"),
   });
@@ -136,12 +144,16 @@ export function MyEventModal({ calendars, initial, defaultStart, onClose, onSave
             <div>
               <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>カレンダー</label>
               <select
-                value={calendarId}
-                onChange={(e) => setCalendarId(e.target.value)}
+                value={calendarKey}
+                onChange={(e) => setCalendarKey(e.target.value)}
                 className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
                 style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
               >
-                {calendars.map((cal) => <option key={cal.id} value={cal.id}>{cal.summary}</option>)}
+                {calendars.map((cal) => (
+                  <option key={optionKey(cal.accountId, cal.id)} value={optionKey(cal.accountId, cal.id)}>
+                    {cal.summary}{cal.accountEmail && new Set(calendars.map((x) => x.accountId)).size > 1 ? `（${cal.accountEmail}）` : ""}
+                  </option>
+                ))}
               </select>
             </div>
           )}

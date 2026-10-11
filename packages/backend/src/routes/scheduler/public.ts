@@ -11,6 +11,7 @@ import { createDb, schema } from "../../db/index.ts";
 import { listEvents } from "../../services/googleClient.ts";
 import { calculateSlots } from "../../services/slotCalculator.ts";
 import { getValidGoogleAccessToken, getAvailableConferenceTypes } from "../../services/conferenceService.ts";
+import { getBusySources, listEventsAcrossAccounts } from "../../services/googleBusySources.ts";
 import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
 import { resolvePublicBookingToken } from "../../services/schedulerShareToken.ts";
 import { createBookingForConfirmedSlot, formatBookingDateRange } from "../../services/bookingCreation.ts";
@@ -200,14 +201,10 @@ publicBookingRoutes.get("/:memberSlug/slots", async (c) => {
   // freeBusy.query ではなく events.list を使うことで、「予定なし」（transparency: transparent）
   // に設定された予定も判定対象にできる（メンバーの設定次第で busy とみなす／みなさない）。
   let busy: { start: string; end: string }[] = [];
-  const googleCred = await getValidGoogleAccessToken(
-    db, settings.memberId,
-    c.env.SCHEDULER_TOKEN_KEY,
-    c.env.GOOGLE_OAUTH_CLIENT_ID,
-    c.env.GOOGLE_OAUTH_CLIENT_SECRET
-  );
+  // 連携しているすべてのGoogleアカウント（複数可）の、確認対象カレンダーをまとめて見る
+  const busySources = await getBusySources(db, c.env, settings.memberId);
 
-  if (googleCred.status === "refresh_failed") {
+  if (busySources.failedAccounts > 0) {
     // 連携済みだがGoogle側の一時的な不調等でトークンを取得できなかったケース。
     // ここで busy=[] のまま処理を続けると、実際には埋まっている時間帯まで
     // 「空き」として案内してしまい二重予約の原因になるため、必ずエラーとして返す。
@@ -220,14 +217,10 @@ publicBookingRoutes.get("/:memberSlug/slots", async (c) => {
     }, 503);
   }
 
-  if (googleCred.status === "ok") {
+  if (busySources.sources.length > 0) {
     try {
-      const eventLists = await Promise.all(
-        googleCred.busyCalendars.map((cal) =>
-          listEvents(googleCred.accessToken, cal.id, fromDate.toISOString(), effectiveTo.toISOString())
-        )
-      );
-      busy = eventLists.flat()
+      const allEvents = await listEventsAcrossAccounts(busySources.sources, fromDate.toISOString(), effectiveTo.toISOString());
+      busy = allEvents
         .filter((ev) => {
           if (ev.allDay && !settings.blockAllDayEvents) return false;
           if (!ev.allDay && ev.transparency === "transparent" && !settings.treatFreeEventsAsBusy) return false;

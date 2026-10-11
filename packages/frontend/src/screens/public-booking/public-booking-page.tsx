@@ -74,7 +74,7 @@ async function fetchPublic<T>(path: string): Promise<T> {
 }
 
 type MyCalendarEventsResponse = {
-  data: { connected: boolean; events: MyEvent[]; calendars: { id: string; summary: string }[] };
+  data: { connected: boolean; events: MyEvent[]; calendars: { id: string; summary: string; accountId?: string; accountEmail?: string }[] };
 };
 
 export function PublicBookingPage() {
@@ -123,6 +123,7 @@ export function PublicBookingPage() {
   const dragUpdateMutation = useMutation({
     mutationFn: ({ event, startUtc, endUtc }: { event: MyEvent; startUtc: string; endUtc: string }) =>
       api.patch(`/scheduler/me/calendar-events/${event.id}`, {
+        accountId: event.accountId,
         calendarId: event.calendarId,
         summary: event.summary,
         startUtc,
