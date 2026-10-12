@@ -984,7 +984,11 @@ meetingSeriesRoutes.post("/:id/occurrences/delete", async (c) => {
   }
 
   // 削除でいなくなる前に、カレンダーの更新が必要な人を控えておく
-  const affectedMemberIds = await membersAffectedBySeries(db, id);
+  // （カレンダー連携の補助処理なので、失敗しても削除自体は続ける）
+  const affectedMemberIds = await membersAffectedBySeries(db, id).catch((e) => {
+    console.error("[member calendar] affected members lookup failed", e);
+    return [] as string[];
+  });
 
   // 会議URL・カレンダーのブロック予定の後始末
   const deletedCandidates = dateRows.filter((d) => targetIds.includes(d.meetingId));
