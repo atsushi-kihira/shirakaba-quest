@@ -15,8 +15,8 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
-import { runEnishiSearch } from "../services/enishi-search.ts";
-import type { EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
+import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
+import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
 
 const MAX_EGGS = 8;
@@ -209,6 +209,13 @@ async function saveSearchHistory(
     createdAt: now,
   });
   return { historyId, result: augmented };
+}
+
+// D1のバインド変数上限（100）に収まるよう、IN句に渡すIDを分割する
+function chunkIds(ids: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 90) chunks.push(ids.slice(i, i + 90));
+  return chunks;
 }
 
 export const enishiRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -544,19 +551,56 @@ enishiRoutes.get("/contacts/specialties", async (c) => {
   return c.json({ data: specialties });
 });
 
+// ---- GET /api/enishi/contacts/owners ---- 人脈検索で「特定のメンバーの外部人脈」を選ぶための、人脈を公開しているメンバー一覧
+enishiRoutes.get("/contacts/owners", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const rows = await db.select({ ownerMemberId: schema.externalContacts.ownerMemberId })
+    .from(schema.externalContacts)
+    .where(and(ne(schema.externalContacts.ownerMemberId, meId), ne(schema.externalContacts.visibility, "private")))
+    .all();
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.ownerMemberId, (counts.get(r.ownerMemberId) ?? 0) + 1);
+  const ownerIds = [...counts.keys()];
+  if (ownerIds.length === 0) return c.json({ data: [] });
+
+  const members = (await Promise.all(chunkIds(ownerIds).map((chunk) =>
+    db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, furigana: schema.members.furigana })
+      .from(schema.members)
+      .where(and(inArray(schema.members.id, chunk), eq(schema.members.status, "active")))
+      .all()
+  ))).flat();
+  const data = members
+    .map((m) => ({ id: m.id, name: m.name, emoji: m.emoji, contactCount: counts.get(m.id) ?? 0, furigana: m.furigana }))
+    .sort((a, b) => (a.furigana || a.name).localeCompare(b.furigana || b.name, "ja"))
+    .map(({ furigana: _f, ...rest }) => rest);
+  return c.json({ data });
+});
+
 // ---- POST /api/enishi/search/contacts ---- 人脈検索：条件に合う人物を全メンバーの外部人脈から横断検索（紹介の道筋ではなく単純な検索）
 enishiRoutes.post("/search/contacts", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
 
-  const body = await c.req.json<{ specialties?: string[]; freeText?: string; includeOwnContacts?: boolean }>();
+  const body = await c.req.json<{
+    specialties?: string[]; freeText?: string; scope?: string; memberIds?: string[];
+    includeOwnContacts?: boolean; // 旧クライアント互換（scopeが無い場合のみ参照）
+  }>();
   const freeText = body.freeText?.trim() ?? "";
   if (!freeText) {
     return c.json({ error: { code: "invalid_input", message: "検索条件を入力してください" } }, 400);
   }
   const specialties = [...new Set(body.specialties ?? [])];
-  const includeOwnContacts = body.includeOwnContacts ?? true;
+  const scope: ContactSearchScope = body.scope === undefined
+    ? ((body.includeOwnContacts ?? true) ? "mine_and_members" : "others_only")
+    : (CONTACT_SEARCH_SCOPES as string[]).includes(body.scope) ? (body.scope as ContactSearchScope) : "mine_and_members";
+  const memberIds = scope === "specific_members" ? [...new Set((body.memberIds ?? []).filter((id) => id && id !== meId))] : [];
+  if (scope === "specific_members" && memberIds.length === 0) {
+    return c.json({ error: { code: "invalid_input", message: "検索対象にするメンバーを選んでください" } }, 400);
+  }
   const count = MAX_RESULTS;
 
   const [goodMatchContext, badMatchContext] = await Promise.all([
@@ -565,14 +609,14 @@ enishiRoutes.post("/search/contacts", async (c) => {
   ]);
   const result = await runEnishiSearch({
     db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
-    mode: "contact-search", meId, specialties, freeText, includeOwnContacts,
+    mode: "contact-search", meId, specialties, freeText, scope, memberIds,
     maxHop: "direct", count, goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
   });
 
   const now = Math.floor(Date.now() / 1000);
   const title = buildContactSearchTitle(freeText, now, countResults(result));
   const { historyId, result: augmented } = await saveSearchHistory(
-    db, meId, "contact-search", title, { specialties, freeText, includeOwnContacts, count }, result, now
+    db, meId, "contact-search", title, { specialties, freeText, scope, memberIds, count }, result, now
   );
   return c.json({ data: augmented, historyId });
 });

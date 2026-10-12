@@ -23,6 +23,7 @@ export type ResultCard = {
   linkedMemberId: string; actionLabel: string;
   cardId: string; goodMatch: boolean;
   isOwnContact?: boolean;
+  isMemberCandidate?: boolean; // 人脈検索で、外部人脈ではなくメンバー本人がヒットした場合
   candidateId: string; transacted: boolean;
   myContactId?: string; introduced: boolean;
 };
@@ -450,6 +451,11 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
             👤 あなたの人脈
           </span>
         )}
+        {r.isMemberCandidate && (
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md" style={{ background: "#e7f0dc", color: "var(--color-success)" }}>
+            🌳 メンバー本人
+          </span>
+        )}
         {(mode === "for-me" || mode === "contact-search") && (
           <button onClick={() => toggleGoodMatch.mutate(!r.goodMatch)} disabled={toggleGoodMatch.isPending}
             className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 disabled:opacity-50"
@@ -508,7 +514,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
           style={{ background: "var(--color-brand)" }}>
           {r.actionLabel} <ChevronRight size={13} />
         </Link>
-        {(mode === "for-me" || mode === "contact-search") && (
+        {(mode === "for-me" || mode === "contact-search") && !r.isMemberCandidate && (
           r.candidateId ? (
             <>
               <button
@@ -1184,19 +1190,39 @@ function useContactSearchSpecialtyOptions(): string[] {
   return data?.data ?? [];
 }
 
+type ContactSearchScope = "all" | "mine_and_members" | "mine_only" | "others_only" | "specific_members";
+type ContactOwner = { id: string; name: string; emoji: string; contactCount: number };
+
+const CONTACT_SEARCH_SCOPE_OPTIONS: { value: ContactSearchScope; title: string; desc: string }[] = [
+  { value: "all", title: "すべて", desc: "メンバー本人、自分の外部人脈、メンバー全員の外部人脈をまとめてさがします" },
+  { value: "mine_and_members", title: "自分の外部人脈 ＋ メンバー全員の外部人脈", desc: "メンバー本人は含めず、外部人脈だけをさがします" },
+  { value: "mine_only", title: "自分の外部人脈のみ", desc: "あなたが登録した外部人脈の中からさがします" },
+  { value: "others_only", title: "他のメンバー全員の外部人脈", desc: "あなたの人脈は含めず、なかまの外部人脈の中からさがします" },
+  { value: "specific_members", title: "特定のメンバーの外部人脈", desc: "選んだメンバーの外部人脈の中からさがします" },
+];
+
 function ContactSearchPanel() {
   const specialtyOptions = useContactSearchSpecialtyOptions();
 
   const [specialties, setSpecialties] = useState<Set<string>>(new Set());
   const [freeText, setFreeText] = useState("");
-  const [includeOwnContacts, setIncludeOwnContacts] = useState(true);
+  const [scope, setScope] = useState<ContactSearchScope>("all");
+  const [memberIds, setMemberIds] = useState<Set<string>>(new Set());
   const [pageSize, setPageSize] = useState(10);
   const [error, setError] = useState<string | null>(null);
   const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
 
+  const { data: ownersData } = useQuery({
+    queryKey: ["enishi", "contact-owners"],
+    queryFn: () => api.get<{ data: ContactOwner[] }>("/enishi/contacts/owners"),
+    enabled: scope === "specific_members",
+  });
+  const owners = ownersData?.data ?? [];
+
   const search = useMutation({
     mutationFn: () => api.post<SearchResponse>("/enishi/search/contacts", {
-      specialties: [...specialties], freeText, includeOwnContacts,
+      specialties: [...specialties], freeText, scope,
+      memberIds: scope === "specific_members" ? [...memberIds] : [],
     }),
     onSuccess: setSearchResponse,
     onError: (e) => setError(e instanceof ApiError ? e.message : "検索に失敗しました"),
@@ -1265,17 +1291,69 @@ function ContactSearchPanel() {
           className="w-full rounded-xl px-3 py-2 text-sm mb-4" style={{ border: "1px solid var(--color-paper-300)" }} />
 
         <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>③ 検索対象</h2>
-        <label className="flex items-center gap-2 mb-4 text-sm cursor-pointer" style={{ color: "var(--color-ink-700)" }}>
-          <input type="checkbox" checked={includeOwnContacts} onChange={(e) => setIncludeOwnContacts(e.target.checked)} />
-          自分自身の人脈も検索対象に含める
-        </label>
+        <div className="space-y-2 mb-4">
+          {CONTACT_SEARCH_SCOPE_OPTIONS.map((o) => {
+            const active = scope === o.value;
+            return (
+              <div key={o.value} onClick={() => setScope(o.value)}
+                className="rounded-2xl p-3 cursor-pointer flex gap-3"
+                style={{ border: `1.5px solid ${active ? "var(--color-brand)" : "var(--color-paper-300)"}`, background: active ? "var(--color-paper-100)" : "white" }}>
+                <div className="w-4 h-4 rounded-full mt-0.5 shrink-0" style={{ border: `2px solid ${active ? "var(--color-brand)" : "var(--color-paper-300)"}`, background: active ? "var(--color-brand)" : "transparent" }} />
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>{o.title}</div>
+                  <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>{o.desc}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {scope === "all" && specialties.size > 0 && (
+          <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
+            ※ 専門分野を絞り込んでいる間は、外部人脈のみが対象になります（メンバー本人は対象外）
+          </p>
+        )}
+        {scope === "specific_members" && (
+          <div className="mb-4">
+            <p className="text-xs mb-1.5" style={{ color: "var(--color-ink-500)" }}>
+              人脈を調べたいメンバーを選んでください（複数選択できます・{memberIds.size}名選択中）
+            </p>
+            {owners.length === 0 ? (
+              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+                {ownersData ? "人脈を公開しているなかまがまだいません。" : "読み込み中…"}
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {owners.map((m) => {
+                  const on = memberIds.has(m.id);
+                  return (
+                    <button key={m.id} type="button"
+                      onClick={() => setMemberIds((prev) => { const next = new Set(prev); next.has(m.id) ? next.delete(m.id) : next.add(m.id); return next; })}
+                      className="text-xs font-medium px-3 py-1.5 rounded-full flex items-center gap-1.5"
+                      style={{
+                        background: on ? "var(--color-paper-200)" : "white",
+                        border: `1px solid ${on ? "var(--color-accent)" : "var(--color-paper-300)"}`,
+                        color: on ? "var(--color-accent)" : "var(--color-ink-600)",
+                      }}>
+                      <span>{m.emoji}</span><span>{m.name}</span><span className="opacity-70">{m.contactCount}件</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>④ 表示件数</h2>
         <PageSizeSelect value={pageSize} onChange={setPageSize} />
 
         {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
-        <button onClick={() => freeText.trim() ? search.mutate() : setError("さがしたい人の条件を入力してください")}
+        <button onClick={() => {
+            if (!freeText.trim()) return setError("さがしたい人の条件を入力してください");
+            if (scope === "specific_members" && memberIds.size === 0) return setError("検索対象にするメンバーを選んでください");
+            setError(null);
+            search.mutate();
+          }}
           disabled={search.isPending}
           className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}>

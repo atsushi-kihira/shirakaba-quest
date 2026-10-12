@@ -68,6 +68,7 @@ export type EnishiResultCard = {
   privacyNote: string | null;
   linkedMemberId: string; // 1to1導線に使う相手（for-me: 仲介メンバー本人 / giver: 貢献先メンバー本人）。自分自身の人脈がヒットした場合は空文字
   actionLabel: string;
+  isMemberCandidate?: boolean; // 人脈検索限定：外部人脈ではなく「メンバー本人」がヒットした場合true（candidateIdは空）
   isOwnContact?: boolean; // for-me限定：仲介者不要で、すでに自分の人脈として登録済みの相手がヒットした場合true
   candidateId: string; // マッチした人脈・卵/ガチョウの元ID（for-me限定：「このご縁で繋がりました」フラグの対象指定に使う）
   myContactId?: string; // giver限定：「あなたの人脈」の元ID（「紹介しました」フラグの対象指定に使う。candidateIdとの組み合わせで一意）
@@ -107,10 +108,20 @@ type ContactSearchParams = {
   mode: "contact-search"; meId: string;
   specialties: string[]; // 空配列 = 専門分野を問わずすべて対象
   freeText: string; // 検索条件（自由記述）。AIへの指示本体になる
-  includeOwnContacts: boolean; // false の場合、自分自身の人脈は検索対象から除外する
+  scope: ContactSearchScope; // 検索対象の範囲
+  memberIds: string[]; // scope === "specific_members" のとき、対象にするメンバー
   maxHop: Hop; count: number;
   goodMatchContext?: string;
 };
+
+// 人脈検索の対象範囲
+//  all                 : メンバー本人 ＋ 自分の外部人脈 ＋ 他のメンバー全員の外部人脈
+//  mine_and_members    : 自分の外部人脈 ＋ 他のメンバー全員の外部人脈
+//  mine_only           : 自分の外部人脈のみ
+//  others_only         : 他のメンバー全員の外部人脈（自分の人脈は除く）
+//  specific_members    : 指定したメンバーの外部人脈のみ
+export type ContactSearchScope = "all" | "mine_and_members" | "mine_only" | "others_only" | "specific_members";
+export const CONTACT_SEARCH_SCOPES: ContactSearchScope[] = ["all", "mine_and_members", "mine_only", "others_only", "specific_members"];
 
 function hopsUpTo(maxHop: Hop): Hop[] {
   const idx = HOP_ORDER.indexOf(maxHop);
@@ -335,7 +346,7 @@ ${hopExplain}
 
 // 人脈検索（純粋な横断検索）用のプロンプト。他モードと異なり「さがす対象」は金の卵/ガチョウではなく
 // 自由記述の検索条件そのものであり、hop（到達方法）の概念も存在しない。
-function buildContactSearchInstructions(count: number, freeText: string): string {
+function buildContactSearchInstructions(count: number, freeText: string, includesMembers: boolean): string {
   return `あなたはBNIチャプターの人脈検索を支援するAIです。
 これは紹介の道筋をさがすものではなく、指定された条件に合う人物を人脈データベースから横断的に見つけ出す、純粋な検索機能です。
 以下の「検索条件」に合致する人物を、候補一覧の中から最大${count}件、関連性が高い順にJSON形式のみで出力してください。
@@ -345,7 +356,8 @@ ${freeText}
 
 # 出力ルール
 - 候補一覧に存在する candidateId のみを使うこと。存在しないIDや実名を作り出さないこと。
-- 候補として渡された情報以外の個人情報（連絡先など）を推測・記載しないこと。
+- 候補として渡された情報以外の個人情報（連絡先など）を推測・記載しないこと。${includesMembers ? `
+- 候補には「外部人脈」と「メンバー本人」の2種類がある。メンバー本人の候補は、そのメンバー自身の職種・事業内容・スキルが検索条件に合う場合にのみ出力すること。` : ""}
 - 検索条件に明確に合致しない候補は出力しないこと（無理に${count}件まで埋めようとしなくてよい）。
 - dealDescription（1文、日本語）: その人物がどんな立場・事業をしている人かの要約。
 - why（1文、日本語）: 検索条件のどの点に合致したかの根拠。
@@ -422,6 +434,53 @@ async function collectForMeCandidates(db: Db, meId: string): Promise<ForMeCandid
       isOwn,
     };
   });
+}
+
+// ---- 人脈検索「すべて」用：メンバー本人を候補にする ----
+// 全員に公開されている項目（名前・職種カテゴリー・事業内容・スキル）だけを使う。
+// 会社名・役職・連絡先などの名刺情報は、1to1完了後にしか開示されないため含めない。
+type MemberCandidate = {
+  memberId: string; name: string; emoji: string; bgColor: string;
+  category: string; businessDescription: string; skills: string[];
+};
+
+async function collectMemberCandidates(db: Db, meId: string): Promise<MemberCandidate[]> {
+  const rows = await db.select().from(schema.members)
+    .where(and(eq(schema.members.status, "active"), ne(schema.members.id, meId)))
+    .all();
+  // 職種・事業内容・スキルがいずれも未入力のメンバーは、検索の手がかりが無くノイズになるだけなので候補にしない
+  return rows.filter((m) => m.category || m.businessDescription || (m.skills && m.skills !== "[]")).map((m) => {
+    let skills: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(m.skills || "[]");
+      if (Array.isArray(parsed)) {
+        skills = parsed.flatMap((sk: unknown) => {
+          if (typeof sk !== "object" || sk === null) return [];
+          const o = sk as { name?: unknown; issue?: unknown; solution?: unknown };
+          const name = typeof o.name === "string" ? o.name : "";
+          const detail = [o.issue, o.solution].filter((v): v is string => typeof v === "string" && v.length > 0).join(" → ");
+          return name ? [detail ? `${name}（${detail}）` : name] : [];
+        });
+      }
+    } catch { /* スキルのJSONが壊れていても検索自体は続ける */ }
+    return {
+      memberId: m.id, name: m.name, emoji: m.emoji, bgColor: m.bgColor,
+      category: m.category, businessDescription: m.businessDescription, skills,
+    };
+  });
+}
+
+// メンバー候補のIDは外部人脈のIDと混ざらないよう接頭辞を付ける
+const MEMBER_CANDIDATE_PREFIX = "member:";
+
+function formatMemberCandidates(members: MemberCandidate[]): string {
+  return members.map((m) => {
+    const parts = [`id: ${MEMBER_CANDIDATE_PREFIX}${m.memberId}`, `メンバー氏名: ${m.name}`];
+    if (m.category) parts.push(`職種: ${m.category}`);
+    if (m.businessDescription) parts.push(`事業内容: ${m.businessDescription}`);
+    if (m.skills.length > 0) parts.push(`スキル: ${m.skills.join("、")}`);
+    return `- ${parts.join(" / ")}`;
+  }).join("\n");
 }
 
 type GiverCandidate = { candidateId: string; kind: "egg" | "goose"; memberId: string; memberName: string; memberEmoji: string; memberBgColor: string; description: string; extra: string | null };
@@ -543,26 +602,53 @@ export async function runEnishiSearch(params: ForMeParams | GiverParams | Contac
   }
 
   if (params.mode === "contact-search") {
-    const { specialties, freeText, includeOwnContacts } = params;
+    const { specialties, freeText, scope, memberIds } = params;
     const allCandidates = await collectForMeCandidates(db, params.meId);
-    let candidates = includeOwnContacts ? allCandidates : allCandidates.filter((cnd) => !cnd.isOwn);
+    const memberIdSet = new Set(memberIds);
+    let candidates = allCandidates.filter((cnd) => {
+      switch (scope) {
+        case "mine_only": return cnd.isOwn;
+        case "others_only": return !cnd.isOwn;
+        case "specific_members": return !cnd.isOwn && memberIdSet.has(cnd.ownerMemberId);
+        default: return true; // all / mine_and_members
+      }
+    });
     if (specialties.length > 0) candidates = candidates.filter((cnd) => cnd.specialty && specialties.includes(cnd.specialty));
-    if (candidates.length === 0) {
+    // 「すべて」のときだけ、メンバー本人も候補にする（専門分野の絞り込みは外部人脈の属性なので、指定時はメンバー本人は対象外）
+    const memberCandidates = scope === "all" && specialties.length === 0 ? await collectMemberCandidates(db, params.meId) : [];
+    if (candidates.length === 0 && memberCandidates.length === 0) {
       return { groups: [{ hop: "direct", label: "検索結果", results: [] }], truncated: false };
     }
     const candidatesTruncated = candidates.length > MAX_CANDIDATES;
     if (candidatesTruncated) candidates = sampleContactsFairlyBySpecialty(candidates, MAX_CANDIDATES);
 
-    const prompt = `${buildContactSearchInstructions(count, freeText)}
-
-# 候補一覧（外部人脈）
-${formatForMeCandidates(candidates)}${params.goodMatchContext ?? ""}`;
+    const contactsSection = candidates.length > 0 ? `\n\n# 候補一覧（外部人脈）\n${formatForMeCandidates(candidates)}` : "";
+    const membersSection = memberCandidates.length > 0 ? `\n\n# 候補一覧（メンバー本人）\n${formatMemberCandidates(memberCandidates)}` : "";
+    const prompt = `${buildContactSearchInstructions(count, freeText, memberCandidates.length > 0)}${contactsSection}${membersSection}${params.goodMatchContext ?? ""}`;
 
     const { matches, failed: aiCallFailed } = await runClaudeMatching(apiKey, prompt, "contact-search");
 
+    const memberMap = new Map(memberCandidates.map((m) => [`${MEMBER_CANDIDATE_PREFIX}${m.memberId}`, m]));
     const candidateMap = new Map(candidates.map((cnd) => [cnd.candidateId, cnd]));
     const cards: EnishiResultCard[] = [];
     for (const m of matches) {
+      const member = memberMap.get(m.candidateId);
+      if (member) {
+        cards.push({
+          hop: "direct", type: "egg",
+          matchedTargetLabel: freeText,
+          counterpart: { memberId: member.memberId, name: member.name, emoji: member.emoji, bgColor: member.bgColor },
+          path: ["あなた", `${member.name}さん（メンバー）`],
+          contactPathIndex: -1,
+          dealDescription: m.dealDescription, why: m.why,
+          privacyNote: null,
+          linkedMemberId: member.memberId,
+          actionLabel: `${member.name}さんの詳細を見る`,
+          isMemberCandidate: true,
+          candidateId: "",
+        });
+        continue;
+      }
       const cand = candidateMap.get(m.candidateId);
       if (!cand) continue;
       const intermediaryLabel = cand.name ?? `${cand.specialty ?? "人脈"}（属性のみ）`;
