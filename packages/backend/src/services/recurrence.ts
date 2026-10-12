@@ -3,12 +3,22 @@
 // タイムゾーンは常に Asia/Tokyo（UTC+9、夏時間なし）固定で計算する。
 // =============================================================
 
+import { isJapanHoliday } from "./japan-holidays.ts";
+
 const JST_OFFSET_SECONDS = 9 * 60 * 60;
 
+// 毎月の指定方法
+//  monthly             : 第N 曜日（weekOfMonth = 1〜5 / -1=最終週、dayOfWeek = 曜日）
+//  monthly_day         : 固定日（weekOfMonth に日付 1〜31 を入れる。その月にない日は月末日にする。dayOfWeekは未使用）
+//  monthly_end         : 月末（土日祝を含む暦上の最終日）
+//  monthly_end_weekday : 月末（土日祝にあたる場合は、直前の平日）
+export type RecurrenceType = "weekly" | "biweekly" | "monthly" | "monthly_day" | "monthly_end" | "monthly_end_weekday";
+export const RECURRENCE_TYPES: RecurrenceType[] = ["weekly", "biweekly", "monthly", "monthly_day", "monthly_end", "monthly_end_weekday"];
+
 export type RecurrencePattern = {
-  recurrenceType: "weekly" | "biweekly" | "monthly";
-  dayOfWeek: number; // 0=日 .. 6=土
-  weekOfMonth: number | null; // 1〜5、または -1(最終週)。monthlyのみ使用
+  recurrenceType: RecurrenceType;
+  dayOfWeek: number; // 0=日 .. 6=土（monthly / weekly / biweekly のみ使用）
+  weekOfMonth: number | null; // monthly: 1〜5 または -1(最終週) ／ monthly_day: 日付(1〜31)
   startTimeLocal: string; // "19:00"
   endTimeLocal: string;   // "20:00"
 };
@@ -49,6 +59,28 @@ function nthWeekdayOfMonth(year: number, month: number, dayOfWeek: number, weekO
   return day <= daysInMonth(year, month) ? day : null;
 }
 
+/** 月ごとの開催日（その月の何日か）。該当日がない月は null */
+function dayOfMonthFor(pattern: RecurrencePattern, year: number, month: number): number | null {
+  const last = daysInMonth(year, month);
+  switch (pattern.recurrenceType) {
+    case "monthly_day":
+      return Math.min(Math.max(pattern.weekOfMonth ?? 1, 1), last);
+    case "monthly_end":
+      return last;
+    case "monthly_end_weekday": {
+      let day = last;
+      while (day > 1) {
+        const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+        if (dow !== 0 && dow !== 6 && !isJapanHoliday(year, month, day)) break;
+        day--;
+      }
+      return day;
+    }
+    default:
+      return nthWeekdayOfMonth(year, month, pattern.dayOfWeek, pattern.weekOfMonth ?? 1);
+  }
+}
+
 const MAX_OCCURRENCES = 200; // 暴走防止（週次5年分弱に相当）
 
 /**
@@ -64,12 +96,12 @@ export function computeOccurrences(
   const maxCount = endCondition.type === "count" ? Math.min(endCondition.count, MAX_OCCURRENCES) : MAX_OCCURRENCES;
   const endDate = endCondition.type === "date" ? endCondition.endDate : null;
 
-  if (pattern.recurrenceType === "monthly") {
+  if (pattern.recurrenceType.startsWith("monthly")) {
     let { year, month } = jstPartsFromUnix(fromTs);
     let guardMonths = 0;
     while (results.length < maxCount && guardMonths < MAX_OCCURRENCES * 2) {
       guardMonths++;
-      const day = nthWeekdayOfMonth(year, month, pattern.dayOfWeek, pattern.weekOfMonth ?? 1);
+      const day = dayOfMonthFor(pattern, year, month);
       if (day !== null) {
         const startsAt = jstDateTimeToUnix(year, month, day, pattern.startTimeLocal);
         if (startsAt >= fromTs) {

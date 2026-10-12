@@ -14,33 +14,58 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { candidateEndSeconds } from "../services/candidate-length.ts";
-import { queueSeriesCalendarSync } from "../services/memberCalendarSync.ts";
+import { queueSeriesCalendarSync, membersAffectedBySeries, reconcileMembersCalendar } from "../services/memberCalendarSync.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
-import { computeOccurrences, type RecurrencePattern } from "../services/recurrence.ts";
-import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent } from "../services/conferenceService.ts";
+import { computeOccurrences, RECURRENCE_TYPES, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
+import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
 const MAX_CANDIDATES = 5;
 
+function chunkOf<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
 export const meetingSeriesRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 meetingSeriesRoutes.use("*", authMiddleware);
 
-const RECURRENCE_LABEL: Record<RecurrencePattern["recurrenceType"], string> = {
-  weekly: "毎週", biweekly: "隔週", monthly: "毎月",
-};
+const RECURRENCE_LABEL: Record<"weekly" | "biweekly", string> = { weekly: "毎週", biweekly: "隔週" };
 const DOW_LABEL = ["日", "月", "火", "水", "木", "金", "土"];
 const WEEK_LABEL: Record<number, string> = { 1: "第1", 2: "第2", 3: "第3", 4: "第4", 5: "第5", [-1]: "最終" };
 
 function patternLabel(p: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string }): string {
   const dow = DOW_LABEL[p.dayOfWeek] ?? "?";
-  const prefix = p.recurrenceType === "monthly"
-    ? `毎月${WEEK_LABEL[p.weekOfMonth ?? 1] ?? ""}${dow}曜`
-    : `${RECURRENCE_LABEL[p.recurrenceType as RecurrencePattern["recurrenceType"]]}${dow}曜`;
+  let prefix: string;
+  switch (p.recurrenceType) {
+    case "monthly": prefix = `毎月${WEEK_LABEL[p.weekOfMonth ?? 1] ?? ""}${dow}曜`; break;
+    case "monthly_day": prefix = `毎月${p.weekOfMonth ?? 1}日`; break;
+    case "monthly_end": prefix = "毎月末（土日祝を含む）"; break;
+    case "monthly_end_weekday": prefix = "毎月末（土日祝の場合は直前の平日）"; break;
+    default: prefix = `${RECURRENCE_LABEL[p.recurrenceType as "weekly" | "biweekly"] ?? ""}${dow}曜`;
+  }
   return `${prefix} ${p.startTimeLocal}〜${p.endTimeLocal}`;
+}
+
+// 候補パターンの入力を、保存する形（曜日・第N週・日付の使い分け）にそろえる。
+// 月ごとの「固定日」は日付を weekOfMonth 列に、曜日を使わない指定は dayOfWeek を 0 にして保存する。
+type CandidateInput = { recurrenceType: RecurrenceType; dayOfWeek: number; weekOfMonth?: number | null; dayOfMonth?: number | null };
+function normalizeCandidatePattern(cand: CandidateInput): { recurrenceType: RecurrenceType; dayOfWeek: number; weekOfMonth: number | null } {
+  switch (cand.recurrenceType) {
+    case "monthly": return { recurrenceType: "monthly", dayOfWeek: cand.dayOfWeek, weekOfMonth: cand.weekOfMonth ?? 1 };
+    case "monthly_day": return { recurrenceType: "monthly_day", dayOfWeek: 0, weekOfMonth: cand.dayOfMonth ?? cand.weekOfMonth ?? 1 };
+    case "monthly_end":
+    case "monthly_end_weekday": return { recurrenceType: cand.recurrenceType, dayOfWeek: 0, weekOfMonth: null };
+    default: return { recurrenceType: cand.recurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: null };
+  }
+}
+function usesDayOfWeek(t: RecurrenceType): boolean {
+  return t === "weekly" || t === "biweekly" || t === "monthly";
 }
 
 // 表示・投票状況の対象メンバーには常にホストを含める（通常ミーティングの getTargetMembers と同じ扱い）。
@@ -114,9 +139,10 @@ meetingSeriesRoutes.post("/", async (c) => {
     conferenceType?: "manual" | "google_meet" | "zoom";
     conferenceUrl?: string;
     candidates?: Array<{
-      recurrenceType: "weekly" | "biweekly" | "monthly";
+      recurrenceType: RecurrenceType;
       dayOfWeek: number;
       weekOfMonth?: number;
+      dayOfMonth?: number; // recurrenceType === "monthly_day" のとき（1〜31）
       startTimeLocal: string;
       endTimeLocal: string;
       note?: string;
@@ -175,7 +201,7 @@ meetingSeriesRoutes.post("/", async (c) => {
   let occurrences: Array<{ startsAt: number; endsAt: number }> = [];
   let scheduleLabel = "";
   let singleCandidate: {
-    recurrenceType: "weekly" | "biweekly" | "monthly"; dayOfWeek: number; weekOfMonth: number | null;
+    recurrenceType: RecurrenceType; dayOfWeek: number; weekOfMonth: number | null;
     startTimeLocal: string; endTimeLocal: string; note?: string;
   } | null = null;
   let sortedFixedDates: Array<{ startsAt: number; endsAt: number }> = [];
@@ -212,11 +238,17 @@ meetingSeriesRoutes.post("/", async (c) => {
       return c.json({ error: { code: "too_many_candidates", message: `候補パターンは${MAX_CANDIDATES}個までです` } }, 400);
     }
     for (const cand of body.candidates) {
-      if (!["weekly", "biweekly", "monthly"].includes(cand.recurrenceType)) {
+      if (!RECURRENCE_TYPES.includes(cand.recurrenceType)) {
         return c.json({ error: { code: "invalid_input", message: "繰り返しの種類が正しくありません" } }, 400);
       }
-      if (cand.dayOfWeek < 0 || cand.dayOfWeek > 6) {
+      if (usesDayOfWeek(cand.recurrenceType) && (!Number.isInteger(cand.dayOfWeek) || cand.dayOfWeek < 0 || cand.dayOfWeek > 6)) {
         return c.json({ error: { code: "invalid_input", message: "曜日の指定が正しくありません" } }, 400);
+      }
+      if (cand.recurrenceType === "monthly_day") {
+        const dom = cand.dayOfMonth ?? cand.weekOfMonth;
+        if (!Number.isInteger(dom) || dom! < 1 || dom! > 31) {
+          return c.json({ error: { code: "invalid_input", message: "毎月の日にちは1〜31で指定してください" } }, 400);
+        }
       }
       if (!/^\d{2}:\d{2}$/.test(cand.startTimeLocal) || !/^\d{2}:\d{2}$/.test(cand.endTimeLocal)) {
         return c.json({ error: { code: "invalid_input", message: "時刻の指定が正しくありません" } }, 400);
@@ -240,8 +272,7 @@ meetingSeriesRoutes.post("/", async (c) => {
     if (mode === "confirmed") {
       const cand = body.candidates[0];
       singleCandidate = {
-        recurrenceType: cand.recurrenceType, dayOfWeek: cand.dayOfWeek,
-        weekOfMonth: cand.recurrenceType === "monthly" ? (cand.weekOfMonth ?? 1) : null,
+        ...normalizeCandidatePattern(cand),
         startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal, note: cand.note?.trim() || undefined,
       };
       const pattern: RecurrencePattern = {
@@ -294,9 +325,7 @@ meetingSeriesRoutes.post("/", async (c) => {
       await db.insert(schema.meetingSeriesPatternCandidates).values({
         id: newId(),
         seriesId,
-        recurrenceType: cand.recurrenceType,
-        dayOfWeek: cand.dayOfWeek,
-        weekOfMonth: cand.recurrenceType === "monthly" ? (cand.weekOfMonth ?? 1) : null,
+        ...normalizeCandidatePattern(cand),
         startTimeLocal: cand.startTimeLocal,
         endTimeLocal: cand.endTimeLocal,
         note: cand.note?.trim() || null,
@@ -817,7 +846,7 @@ meetingSeriesRoutes.patch("/:id/confirm", async (c) => {
   }
 
   const pattern: RecurrencePattern = {
-    recurrenceType: candidate.recurrenceType as RecurrencePattern["recurrenceType"],
+    recurrenceType: candidate.recurrenceType as RecurrenceType,
     dayOfWeek: candidate.dayOfWeek,
     weekOfMonth: candidate.weekOfMonth,
     startTimeLocal: candidate.startTimeLocal,
@@ -912,6 +941,100 @@ meetingSeriesRoutes.patch("/:id/event-type", async (c) => {
   await db.update(schema.meetings).set({ eventTypeDefId: typeDef.id, updatedAt: now }).where(eq(schema.meetings.seriesId, id));
 
   return c.json({ data: { eventTypeDefId: typeDef.id } });
+});
+
+// ----------------------------------------------------------------
+// POST /api/meeting-series/:id/occurrences/delete — 今後の開催回をまとめて削除（主催者のみ）
+// 開始前の回だけが対象。削除後は、残った回の「第N回」を日付順に詰め直す。
+// ----------------------------------------------------------------
+const DELETE_CHUNK = 50; // D1のバインド変数の上限に収まるよう、IN句は分割して発行する
+
+meetingSeriesRoutes.post("/:id/occurrences/delete", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ削除できます" } }, 403);
+  if (series.status !== "confirmed") return c.json({ error: { code: "invalid_status", message: "開催日が確定している定例会でのみ削除できます" } }, 400);
+
+  const body = await c.req.json<{ meetingIds?: string[] }>().catch(() => ({} as { meetingIds?: string[] }));
+  const targetIds = [...new Set(body.meetingIds ?? [])];
+  if (targetIds.length === 0) return c.json({ error: { code: "invalid_input", message: "削除する開催日を選んでください" } }, 400);
+
+  const allMeetings = await db.select().from(schema.meetings).where(eq(schema.meetings.seriesId, id)).all();
+  const candidateIds = allMeetings.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
+  const dateRows = (await Promise.all(chunkOf(candidateIds, DELETE_CHUNK).map((chunk) =>
+    db.select().from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, chunk)).all()
+  ))).flat();
+  const dateById = new Map(dateRows.map((d) => [d.id, d]));
+  const startOf = (m: typeof allMeetings[number]): number => (m.confirmedCandidateId ? dateById.get(m.confirmedCandidateId)?.startsAt : undefined) ?? 0;
+
+  const meetingById = new Map(allMeetings.map((m) => [m.id, m]));
+  const targets = targetIds.map((tid) => meetingById.get(tid));
+  if (targets.some((m) => !m)) {
+    return c.json({ error: { code: "invalid_input", message: "この定例会の開催日ではないものが含まれています" } }, 400);
+  }
+  const targetMeetings = targets as typeof allMeetings;
+  if (targetMeetings.some((m) => startOf(m) < now)) {
+    return c.json({ error: { code: "invalid_input", message: "すでに始まっている（開催済みの）回は削除できません" } }, 400);
+  }
+
+  // 削除でいなくなる前に、カレンダーの更新が必要な人を控えておく
+  const affectedMemberIds = await membersAffectedBySeries(db, id);
+
+  // 会議URL・カレンダーのブロック予定の後始末
+  const deletedCandidates = dateRows.filter((d) => targetIds.includes(d.meetingId));
+  c.executionCtx.waitUntil(Promise.all([
+    ...targetMeetings
+      .filter((m) => m.conferenceType === "zoom" || m.conferenceType === "google_meet")
+      .map((m) => cancelAutoConference(db, c.env, series.hostMemberId, m.conferenceType, m.conferenceMetaJson, m.calendarEventId)),
+    ...deletedCandidates
+      .filter((d) => d.calendarEventId)
+      .map((d) => deleteHostCalendarEvent(db, c.env, series.hostMemberId, d.calendarEventId!)),
+  ]));
+
+  for (const chunk of chunkOf(targetIds, DELETE_CHUNK)) {
+    await db.delete(schema.meetingResponses).where(inArray(schema.meetingResponses.meetingId, chunk));
+    await db.delete(schema.meetingDeclines).where(inArray(schema.meetingDeclines.meetingId, chunk));
+    await db.delete(schema.meetingAttendances).where(inArray(schema.meetingAttendances.meetingId, chunk));
+    await db.delete(schema.meetingNotifications).where(inArray(schema.meetingNotifications.meetingId, chunk));
+    await db.delete(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.meetingId, chunk));
+    await db.delete(schema.meetingInvitees).where(inArray(schema.meetingInvitees.meetingId, chunk));
+    await db.delete(schema.meetingExternalInvitees).where(inArray(schema.meetingExternalInvitees.meetingId, chunk));
+    await db.delete(schema.meetings).where(inArray(schema.meetings.id, chunk));
+  }
+
+  // 残った回（キャンセル済みを除く）の「第N回」を日付順に詰め直す
+  const deletedSet = new Set(targetIds);
+  const remaining = allMeetings
+    .filter((m) => !deletedSet.has(m.id) && m.status !== "cancelled")
+    .sort((a, b) => startOf(a) - startOf(b));
+  const titlePrefix = `${series.title}（第`;
+  let renumbered = 0;
+  for (let i = 0; i < remaining.length; i++) {
+    const m = remaining[i];
+    const newIndex = i + 1;
+    if (m.seriesOccurrenceIndex === newIndex) continue;
+    const newTitle = m.title.startsWith(titlePrefix) ? m.title.replace(/（第\d+回/, `（第${newIndex}回`) : m.title;
+    await db.update(schema.meetings).set({ seriesOccurrenceIndex: newIndex, title: newTitle, updatedAt: now }).where(eq(schema.meetings.id, m.id));
+    renumbered++;
+    // 主催者のカレンダーに入れているブロック予定のタイトルも合わせる
+    const cand = m.confirmedCandidateId ? dateById.get(m.confirmedCandidateId) : undefined;
+    if (cand?.calendarEventId && newTitle !== m.title) {
+      c.executionCtx.waitUntil(renameHostCalendarEvent(
+        db, c.env, series.hostMemberId, cand.calendarEventId, newTitle, cand.startsAt, cand.endsAt ?? cand.startsAt + 3600
+      ));
+    }
+  }
+
+  c.executionCtx.waitUntil(
+    reconcileMembersCalendar(db, c.env, affectedMemberIds).catch((e) => console.error("[member calendar] series occurrence delete failed", e))
+  );
+  return c.json({ ok: true, deleted: targetIds.length, renumbered });
 });
 
 meetingSeriesRoutes.delete("/:id", async (c) => {

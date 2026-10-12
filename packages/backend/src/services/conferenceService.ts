@@ -1,6 +1,6 @@
 // 会議 URL の発行を担うサービス（Google Meet / Zoom 対応）
 
-import { insertCalendarEvent, deleteCalendarEvent, refreshGoogleToken, TokenRefreshError } from "./googleClient.ts";
+import { insertCalendarEvent, deleteCalendarEvent, updateCalendarEvent, refreshGoogleToken, TokenRefreshError } from "./googleClient.ts";
 import { decryptToken, encryptToken } from "./tokenCrypto.ts";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
@@ -624,5 +624,28 @@ export async function deleteHostCalendarEvent(
     if (cred.status === "ok") await deleteCalendarEvent(cred.accessToken, cred.calendarId, calendarEventId);
   } catch (e) {
     console.error("deleteHostCalendarEvent failed:", e);
+  }
+}
+
+/** blockHostCalendarForDate で作成したブロック予定のタイトルを変更する（定例会の回数の振り直しなど）。失敗しても処理は止めない */
+export async function renameHostCalendarEvent(
+  db: Db,
+  env: CalendarBlockEnv,
+  hostMemberId: string,
+  calendarEventId: string,
+  summary: string,
+  startsAt: number,
+  endsAt: number
+): Promise<void> {
+  try {
+    if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET) return;
+    const cred = await getValidGoogleAccessToken(db, hostMemberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
+    if (cred.status !== "ok") return;
+    await updateCalendarEvent({
+      accessToken: cred.accessToken, calendarId: cred.calendarId, eventId: calendarEventId, summary,
+      startAtUtc: new Date(startsAt * 1000).toISOString(), endAtUtc: new Date(endsAt * 1000).toISOString(),
+    });
+  } catch (e) {
+    console.error("renameHostCalendarEvent failed:", e);
   }
 }

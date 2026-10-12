@@ -19,11 +19,20 @@ type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCou
 type Team = { id: string; name: string; emblemEmoji: string };
 type Member = { id: string; name: string; emoji: string; bgColor: string };
 
-type RecurrenceType = "weekly" | "biweekly" | "monthly";
+type RecurrenceType = "weekly" | "biweekly" | "monthly" | "monthly_day" | "monthly_end" | "monthly_end_weekday";
+const isMonthly = (t: RecurrenceType): boolean => t.startsWith("monthly");
+// 毎月の指定方法（recurrenceType がそのまま対応する）
+const MONTHLY_MODE_OPTIONS: { value: RecurrenceType; label: string }[] = [
+  { value: "monthly", label: "第◯ ◯曜日" },
+  { value: "monthly_day", label: "固定日（◯日）" },
+  { value: "monthly_end", label: "月末（土日祝を含む）" },
+  { value: "monthly_end_weekday", label: "月末（土日祝の場合は直前の平日）" },
+];
 type PatternCandidate = {
   recurrenceType: RecurrenceType;
   dayOfWeek: number;
   weekOfMonth: number; // monthlyのみ使用
+  dayOfMonth: number;  // monthly_dayのみ使用（1〜31）
   startTimeLocal: string;
   endTimeLocal: string;
   note: string;
@@ -40,7 +49,7 @@ const MAX_CANDIDATES = 5;
 const MAX_FIXED_DATES = 50;
 
 function emptyCandidate(durationMinutes = 60): PatternCandidate {
-  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, startTimeLocal: DEFAULT_START_TIME, endTimeLocal: addMinutesToTime(DEFAULT_START_TIME, durationMinutes), note: "" };
+  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, dayOfMonth: 1, startTimeLocal: DEFAULT_START_TIME, endTimeLocal: addMinutesToTime(DEFAULT_START_TIME, durationMinutes), note: "" };
 }
 
 function emptyFixedDateRow(durationMinutes = 60): FixedDateRow {
@@ -213,6 +222,7 @@ export function MeetingSeriesNewScreen() {
         recurrenceType: c.recurrenceType,
         dayOfWeek: c.dayOfWeek,
         weekOfMonth: c.recurrenceType === "monthly" ? c.weekOfMonth : undefined,
+        dayOfMonth: c.recurrenceType === "monthly_day" ? c.dayOfMonth : undefined,
         startTimeLocal: c.startTimeLocal,
         endTimeLocal: addMinutesToTime(c.startTimeLocal, duration),
         note: c.note.trim() || undefined,
@@ -482,14 +492,24 @@ export function MeetingSeriesNewScreen() {
                     )}
 
                     <div className="grid grid-cols-3 gap-2 mb-2">
-                      {(["weekly", "biweekly", "monthly"] as RecurrenceType[]).map((rt) => (
-                        <button key={rt} onClick={() => updateCandidate(i, "recurrenceType", rt)}
-                          className="py-1.5 rounded-xl text-xs font-medium transition"
-                          style={{ background: cand.recurrenceType === rt ? "var(--color-accent)" : "var(--color-paper-200)", color: cand.recurrenceType === rt ? "white" : "var(--color-ink-600)" }}>
-                          {rt === "weekly" ? "毎週" : rt === "biweekly" ? "隔週" : "毎月"}
-                        </button>
-                      ))}
+                      {(["weekly", "biweekly", "monthly"] as const).map((rt) => {
+                        const active = rt === "monthly" ? isMonthly(cand.recurrenceType) : cand.recurrenceType === rt;
+                        return (
+                          <button key={rt} onClick={() => { if (!active) updateCandidate(i, "recurrenceType", rt); }}
+                            className="py-1.5 rounded-xl text-xs font-medium transition"
+                            style={{ background: active ? "var(--color-accent)" : "var(--color-paper-200)", color: active ? "white" : "var(--color-ink-600)" }}>
+                            {rt === "weekly" ? "毎週" : rt === "biweekly" ? "隔週" : "毎月"}
+                          </button>
+                        );
+                      })}
                     </div>
+
+                    {isMonthly(cand.recurrenceType) && (
+                      <select value={cand.recurrenceType} onChange={(e) => updateCandidate(i, "recurrenceType", e.target.value as RecurrenceType)}
+                        className="w-full px-2.5 py-2 rounded-xl text-sm border mb-2" style={{ borderColor: "var(--color-paper-300)" }}>
+                        {MONTHLY_MODE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    )}
 
                     <div className="flex flex-wrap gap-2 mb-2">
                       {cand.recurrenceType === "monthly" && (
@@ -498,10 +518,18 @@ export function MeetingSeriesNewScreen() {
                           {WEEK_OPTIONS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
                         </select>
                       )}
-                      <select value={cand.dayOfWeek} onChange={(e) => updateCandidate(i, "dayOfWeek", Number(e.target.value))}
-                        className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }}>
-                        {DOW_OPTIONS.map((d, idx) => <option key={idx} value={idx}>{d}曜</option>)}
-                      </select>
+                      {cand.recurrenceType === "monthly_day" && (
+                        <select value={cand.dayOfMonth} onChange={(e) => updateCandidate(i, "dayOfMonth", Number(e.target.value))}
+                          className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }}>
+                          {Array.from({ length: 31 }, (_, k) => k + 1).map((d) => <option key={d} value={d}>{d}日</option>)}
+                        </select>
+                      )}
+                      {(cand.recurrenceType === "weekly" || cand.recurrenceType === "biweekly" || cand.recurrenceType === "monthly") && (
+                        <select value={cand.dayOfWeek} onChange={(e) => updateCandidate(i, "dayOfWeek", Number(e.target.value))}
+                          className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }}>
+                          {DOW_OPTIONS.map((d, idx) => <option key={idx} value={idx}>{d}曜</option>)}
+                        </select>
+                      )}
                       <input type="time" value={cand.startTimeLocal} onChange={(e) => updateCandidate(i, "startTimeLocal", e.target.value)}
                         className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }} />
                       <span className="self-center text-xs" style={{ color: "var(--color-ink-500)" }}>
@@ -509,6 +537,9 @@ export function MeetingSeriesNewScreen() {
                       </span>
                     </div>
 
+                    {cand.recurrenceType === "monthly_day" && cand.dayOfMonth > 28 && (
+                      <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>※ その日がない月は、その月の末日になります。</p>
+                    )}
                     <input value={cand.note} onChange={(e) => updateCandidate(i, "note", e.target.value)} placeholder="メモ（任意・例：オンライン開催）"
                       className="w-full px-3 py-2 rounded-xl text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
                   </div>

@@ -82,6 +82,10 @@ export function MeetingSeriesDetailScreen() {
   const [confirmCandidateId, setConfirmCandidateId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  // 今後の開催回をまとめて選んで削除するための選択モード（主催者のみ）
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["meeting-series", id],
@@ -126,6 +130,19 @@ export function MeetingSeriesDetailScreen() {
       qc.invalidateQueries({ queryKey: ["meeting-series", id] });
       qc.invalidateQueries({ queryKey: ["meetings"] });
     },
+  });
+
+  const deleteOccurrencesMutation = useMutation({
+    mutationFn: (meetingIds: string[]) => api.post(`/meeting-series/${id}/occurrences/delete`, { meetingIds }),
+    onSuccess: () => {
+      setShowDeleteConfirm(false);
+      setSelectMode(false);
+      setSelectedIds(new Set());
+      qc.invalidateQueries({ queryKey: ["meeting-series", id] });
+      qc.invalidateQueries({ queryKey: ["meeting-series"] });
+      qc.invalidateQueries({ queryKey: ["meetings"] });
+    },
+    onError: (e: Error) => { setShowDeleteConfirm(false); setError(e.message); },
   });
 
   if (isLoading || !data) {
@@ -365,21 +382,91 @@ export function MeetingSeriesDetailScreen() {
         <>
           {upcoming.length > 0 && (
             <section className="mb-5">
-              <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>今後の開催回（{upcoming.length}件）</h2>
-              <div className="space-y-2">
-                {upcoming.map((o) => (
-                  <Link key={o.id} to={`/meetings/${o.id}`}
-                    className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>
-                        第{o.seriesOccurrenceIndex}回・{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
-                        {o.endsAt ? `〜${fmtTime(o.endsAt, tz)}` : ""}
-                      </p>
-                    </div>
-                    <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
-                  </Link>
-                ))}
+              <div className="flex items-center gap-2 mb-2">
+                <h2 className="text-sm font-semibold" style={{ color: "var(--color-ink-700)" }}>今後の開催回（{upcoming.length}件）</h2>
+                {series.isHost && series.status === "confirmed" && (
+                  <button onClick={() => { setSelectMode((v) => !v); setSelectedIds(new Set()); setShowDeleteConfirm(false); setError(""); }}
+                    className="ml-auto text-xs font-medium px-3 py-1.5 rounded-full"
+                    style={{ background: selectMode ? "var(--color-paper-300)" : "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                    {selectMode ? "選択をやめる" : "選んで削除"}
+                  </button>
+                )}
               </div>
+
+              {selectMode && (
+                <div className="flex items-center gap-2 mb-2 text-xs" style={{ color: "var(--color-ink-600)" }}>
+                  <button onClick={() => setSelectedIds(selectedIds.size === upcoming.length ? new Set() : new Set(upcoming.map((o) => o.id)))}
+                    className="px-3 py-1.5 rounded-full" style={{ background: "var(--color-paper-200)" }}>
+                    {selectedIds.size === upcoming.length ? "すべて外す" : "すべて選ぶ"}
+                  </button>
+                  <span>{selectedIds.size}件選択中</span>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {upcoming.map((o, idx) => {
+                  const text = (
+                    <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>
+                      第{o.seriesOccurrenceIndex ?? idx + 1}回・{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
+                      {o.endsAt ? `〜${fmtTime(o.endsAt, tz)}` : ""}
+                    </p>
+                  );
+                  if (selectMode) {
+                    const checked = selectedIds.has(o.id);
+                    return (
+                      <label key={o.id} className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 cursor-pointer"
+                        style={checked ? { boxShadow: "0 0 0 1.5px var(--color-brand)" } : undefined}>
+                        <input type="checkbox" checked={checked} className="w-4 h-4 shrink-0" style={{ accentColor: "var(--color-brand)" }}
+                          onChange={() => setSelectedIds((prev) => { const next = new Set(prev); next.has(o.id) ? next.delete(o.id) : next.add(o.id); return next; })} />
+                        <div className="flex-1 min-w-0">{text}</div>
+                      </label>
+                    );
+                  }
+                  return (
+                    <Link key={o.id} to={`/meetings/${o.id}`}
+                      className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80">
+                      <div className="flex-1 min-w-0">{text}</div>
+                      <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
+                    </Link>
+                  );
+                })}
+              </div>
+
+              {error && selectMode && (
+                <p className="text-xs text-center px-3 py-2 rounded-xl mt-3" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>{error}</p>
+              )}
+
+              {selectMode && selectedIds.size > 0 && (
+                <div className="mt-3">
+                  {!showDeleteConfirm ? (
+                    <button onClick={() => setShowDeleteConfirm(true)}
+                      className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2"
+                      style={{ background: "var(--color-brand)" }}>
+                      <Trash2 size={15} />選んだ{selectedIds.size}件を削除する
+                    </button>
+                  ) : (
+                    <div className="card-paper rounded-2xl px-4 py-4" style={{ border: "1.5px solid rgba(181,56,75,0.3)" }}>
+                      <p className="text-sm mb-1" style={{ color: "var(--color-ink-800)" }}>
+                        選んだ{selectedIds.size}件の開催回を削除します。元に戻せません。
+                      </p>
+                      <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+                        削除した分は「第◯回」の番号が詰められ、カレンダーに入れた予定も更新されます。よろしいですか？
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button onClick={() => setShowDeleteConfirm(false)}
+                          className="py-2.5 rounded-xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                          やめる
+                        </button>
+                        <button onClick={() => deleteOccurrencesMutation.mutate([...selectedIds])} disabled={deleteOccurrencesMutation.isPending}
+                          className="py-2.5 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
+                          style={{ background: "var(--color-brand)" }}>
+                          {deleteOccurrencesMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : "削除する"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           )}
 
@@ -392,7 +479,7 @@ export function MeetingSeriesDetailScreen() {
                     className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80 opacity-70">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium" style={{ color: "var(--color-ink-700)" }}>
-                        第{o.seriesOccurrenceIndex}回・{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
+                        {o.status === "cancelled" ? "キャンセル" : `第${o.seriesOccurrenceIndex}回`}・{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
                       </p>
                     </div>
                     {o.status === "cancelled" && <XCircle size={14} style={{ color: "var(--color-ink-400)" }} />}
