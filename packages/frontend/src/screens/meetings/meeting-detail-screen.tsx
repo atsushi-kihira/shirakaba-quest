@@ -10,6 +10,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { NewPostModal, type GraphTeamLite } from "@/screens/collab/_activity-and-records";
+import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { DEFAULT_START_TIME, defaultEndTime, addMinutesToTime } from "@/lib/meeting-time";
 
 type Availability = "yes" | "maybe" | "no";
@@ -1007,7 +1008,7 @@ export function MeetingDetailScreen() {
             ✏️ あなたの回答（タップで切り替え）
           </h2>
           <div className="flex gap-2 flex-wrap mb-3">
-            {candidates.map((cand) => {
+            {candidates.map((cand, candIdx) => {
               const { date, time } = formatCandidateDate(cand.startsAt, cand.endsAt);
               const av = myAnswers[cand.id];
               const s = availStyle(av);
@@ -1018,6 +1019,7 @@ export function MeetingDetailScreen() {
                   className="flex flex-col items-center gap-1 px-3 py-2 rounded-2xl transition active:opacity-75"
                   style={{ background: av ? s.bg : "var(--color-paper-200)", border: `1.5px solid ${av ? s.color : "transparent"}` }}
                 >
+                  <span className="text-[10px]" style={{ color: "var(--color-ink-400)" }}>候補{candIdx + 1}</span>
                   <span className="text-xs" style={{ color: "var(--color-ink-600)" }}>{date}</span>
                   {time && <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>{time}</span>}
                   <span className="text-xl font-bold" style={{ color: av ? s.color : "var(--color-ink-300)" }}>
@@ -1027,6 +1029,14 @@ export function MeetingDetailScreen() {
               );
             })}
           </div>
+          <CandidateCalendarToggle
+            slots={candidates.map((cand, i) => ({
+              id: cand.id, startAt: cand.startsAt, endAt: cand.endsAt ?? cand.startsAt + 3600,
+              label: `候補${i + 1}`, state: myAnswers[cand.id],
+            }))}
+            onSlotClick={toggleMyAnswer}
+            legend="候補をタップすると ○（参加可）→△（未定）→×（不参加）と切り替わります"
+          />
           <div className="flex gap-1.5 text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
             {AVAIL_OPTIONS.map((o) => (
               <span key={o.value} style={{ color: o.color }}>{o.label}={o.value === "yes" ? "参加可" : o.value === "maybe" ? "未定" : "不参加"}</span>

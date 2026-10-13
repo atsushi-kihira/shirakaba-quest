@@ -9,6 +9,7 @@ import { api, ApiError } from "@/lib/api";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateTimeFull, fmtTime } from "@/lib/date";
 import { AvailabilityNotice, SlotAvailabilityNote, useAvailabilityForSlots } from "@/components/candidate-availability";
+import { CandidateCalendarView } from "@/components/candidate-calendar-view";
 
 export type CandidateSlot = { id: string; startAt: number; endAt: number };
 export type ConferenceType = "google_meet" | "zoom";
@@ -29,6 +30,7 @@ export function CandidateSelectionPanel({
   const availability = useAvailabilityForSlots(candidates);
   const [selectedId, setSelectedId] = useState<string>(candidates[0]?.id ?? "");
   const [error, setError] = useState("");
+  const [showCalendar, setShowCalendar] = useState(false);
   // 2種類連携されている場合、何も選ばずに送信すると先頭固定の候補が黙って選ばれてしまうため、
   // 明示的にZoomを優先した既定値を使う（表示上も選択済みにする）
   const defaultConferenceType = availableConferenceTypes.includes("zoom") ? "zoom" : availableConferenceTypes[0];
@@ -51,8 +53,22 @@ export function CandidateSelectionPanel({
         🗓 提示された候補から、ご都合の良い日時をお選びください
       </p>
       <AvailabilityNotice loggedIn={availability.loggedIn} isLoading={availability.isLoading} connected={availability.connected} />
+      <button type="button" onClick={() => setShowCalendar((v) => !v)}
+        className="mb-2 text-xs font-medium px-3 py-1.5 rounded-full"
+        style={{ background: showCalendar ? "var(--color-brand)" : "white", color: showCalendar ? "white" : "var(--color-ink-700)", border: "1px solid var(--color-paper-300)" }}>
+        📅 {showCalendar ? "カレンダー表示を閉じる" : "自分のカレンダーと重ねて見る"}
+      </button>
+      {showCalendar && (
+        <div className="mb-2.5">
+          <CandidateCalendarView
+            slots={candidates.map((c, i) => ({ id: c.id, startAt: c.startAt, endAt: c.endAt, label: `候補${i + 1}`, state: c.id === selectedId ? "selected" : undefined }))}
+            onSlotClick={setSelectedId}
+            legend="候補をタップして選べます"
+          />
+        </div>
+      )}
       <div className="space-y-1.5 mb-2.5">
-        {candidates.map((c) => {
+        {candidates.map((c, i) => {
           const selected = c.id === selectedId;
           return (
             <label
@@ -70,7 +86,7 @@ export function CandidateSelectionPanel({
               />
               <span className="flex flex-col min-w-0">
                 <span className="text-sm" style={{ color: "var(--color-ink-800)", fontWeight: selected ? 700 : 400 }}>
-                  {fmtDateTimeFull(c.startAt, tz)}〜{fmtTime(c.endAt, tz)}
+                  <span className="text-[11px] mr-1.5" style={{ color: "var(--color-ink-400)" }}>候補{i + 1}</span>{fmtDateTimeFull(c.startAt, tz)}〜{fmtTime(c.endAt, tz)}
                 </span>
                 <SlotAvailabilityNote availability={availability.byId.get(c.id)} />
               </span>

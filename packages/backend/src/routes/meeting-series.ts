@@ -64,6 +64,22 @@ function normalizeCandidatePattern(cand: CandidateInput): { recurrenceType: Recu
     default: return { recurrenceType: cand.recurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: null };
   }
 }
+const UPCOMING_PREVIEW_COUNT = 8;
+function upcomingDatesFor(
+  cand: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string },
+  series: { endCondition: string | null; endDate: number | null },
+  now: number
+): Array<{ startsAt: number; endsAt: number }> {
+  const pattern: RecurrencePattern = {
+    recurrenceType: cand.recurrenceType as RecurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: cand.weekOfMonth,
+    startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal,
+  };
+  const end = series.endCondition === "date" && series.endDate
+    ? { type: "date" as const, endDate: series.endDate }
+    : { type: "count" as const, count: UPCOMING_PREVIEW_COUNT };
+  return computeOccurrences(pattern, now, end).slice(0, UPCOMING_PREVIEW_COUNT);
+}
+
 function usesDayOfWeek(t: RecurrenceType): boolean {
   return t === "weekly" || t === "biweekly" || t === "monthly";
 }
@@ -629,6 +645,8 @@ meetingSeriesRoutes.get("/:id", async (c) => {
         id: cand.id, recurrenceType: cand.recurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: cand.weekOfMonth,
         startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal, note: cand.note,
         label: patternLabel(cand), isConfirmed: cand.isConfirmed === 1,
+        // 投票中は、この候補パターンで開催されたときの直近の開催日（自分のカレンダーと重ねて確認するため）
+        upcomingDates: series.status === "voting" ? upcomingDatesFor(cand, series, Math.floor(Date.now() / 1000)) : [],
         respondents: respondentsByCandidate[cand.id] ?? [],
       })),
       myResponses,

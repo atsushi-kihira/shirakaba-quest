@@ -12,6 +12,7 @@ import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime, fmtDateTimeFull, fmtTime } from "@/lib/date";
 import { useAuthStore } from "@/stores/auth-store";
 import { AvailabilityNotice, SlotAvailabilityNote, useAvailabilityForSlots } from "@/components/candidate-availability";
+import { CandidateCalendarView } from "@/components/candidate-calendar-view";
 
 type CandidateSlot = { id: string; startAt: number; endAt: number };
 
@@ -52,6 +53,7 @@ export function OneOnOneRespondScreen() {
   const [resultScheduledFor, setResultScheduledFor] = useState<number | null>(null);
   const [resultConference, setResultConference] = useState<{ type: string | null; url: string | null } | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>("");
+  const [showCalendar, setShowCalendar] = useState(false);
   const [conferenceType, setConferenceType] = useState<"google_meet" | "zoom" | undefined>(undefined);
 
   // 自分のカレンダーで候補日時が空いているかの確認。ログイン中のアカウントが、この申込の宛先本人の場合だけ行う
@@ -254,6 +256,19 @@ export function OneOnOneRespondScreen() {
                 connected={availability.connected}
                 loginRedirectPath={availability.loggedIn ? undefined : `/oneonone/respond/${token}`}
               />
+              <button type="button" onClick={() => setShowCalendar((v) => !v)}
+                className="text-xs font-medium px-3 py-1.5 rounded-full"
+                style={{ background: showCalendar ? "var(--color-brand)" : "white", color: showCalendar ? "white" : "var(--color-ink-700)", border: "1px solid var(--color-paper-300)" }}>
+                📅 {showCalendar ? "カレンダー表示を閉じる" : "自分のカレンダーと重ねて見る"}
+              </button>
+              {showCalendar && (
+                <CandidateCalendarView
+                  slots={d.candidateSlots.map((slot, i) => ({ id: slot.id, startAt: slot.startAt, endAt: slot.endAt, label: `候補${i + 1}`, state: slot.id === selectedCandidateId ? "selected" : undefined }))}
+                  onSlotClick={setSelectedCandidateId}
+                  canCheckCalendar={isResponder}
+                  legend="候補をタップして選べます"
+                />
+              )}
               <div className="space-y-1.5">
                 {d.candidateSlots.map((slot) => {
                   const selected = slot.id === selectedCandidateId;

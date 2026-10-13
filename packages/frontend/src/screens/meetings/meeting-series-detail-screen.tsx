@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateJP, fmtTime } from "@/lib/date";
+import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 
 type Availability = "yes" | "maybe" | "no";
@@ -19,6 +20,7 @@ type Candidate = {
   id: string; recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null;
   startTimeLocal: string; endTimeLocal: string; note: string | null;
   label: string; isConfirmed: boolean; respondents: Respondent[];
+  upcomingDates?: { startsAt: number; endsAt: number }[];
 };
 type TargetMember = { id: string; name: string; emoji: string; bgColor: string };
 type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null };
@@ -318,13 +320,14 @@ export function MeetingSeriesDetailScreen() {
               ✏️ あなたの回答（タップで切り替え）
             </h2>
             <div className="flex gap-2 flex-wrap mb-3">
-              {series.candidates.map((cand) => {
+              {series.candidates.map((cand, candIdx) => {
                 const av = myAnswers[cand.id] ?? series.myResponses[cand.id];
                 const s = availStyle(av);
                 return (
                   <button key={cand.id} onClick={() => toggleMyAnswer(cand.id)}
                     className="flex flex-col items-center gap-1 px-3 py-2 rounded-2xl transition active:opacity-75"
                     style={{ background: av ? s.bg : "var(--color-paper-200)", border: `1.5px solid ${av ? s.color : "transparent"}` }}>
+                    <span className="text-[10px]" style={{ color: "var(--color-ink-400)" }}>候補{candIdx + 1}</span>
                     <span className="text-xs" style={{ color: "var(--color-ink-600)" }}>{cand.label}</span>
                     <span className="text-xl font-bold" style={{ color: av ? s.color : "var(--color-ink-300)" }}>
                       {av ? s.label : "?"}
@@ -333,6 +336,15 @@ export function MeetingSeriesDetailScreen() {
                 );
               })}
             </div>
+            <CandidateCalendarToggle
+              slots={series.candidates.flatMap((cand, i) =>
+                (cand.upcomingDates ?? []).map((d) => ({
+                  id: cand.id, startAt: d.startsAt, endAt: d.endsAt, label: `候補${i + 1}`,
+                  state: myAnswers[cand.id] ?? series.myResponses[cand.id],
+                })))}
+              onSlotClick={toggleMyAnswer}
+              legend="各候補パターンの直近の開催日を表示しています。タップすると ○→△→× と切り替わります"
+            />
             <div className="flex gap-1.5 text-xs mb-3" style={{ color: "var(--color-ink-400)" }}>
               {AVAIL_OPTIONS.map((o) => (
                 <span key={o.value} style={{ color: o.color }}>{o.label}={o.value === "yes" ? "参加可" : o.value === "maybe" ? "未定" : "不参加"}</span>
