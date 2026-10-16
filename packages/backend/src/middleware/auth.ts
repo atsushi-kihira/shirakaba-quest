@@ -4,6 +4,7 @@
 import { createMiddleware } from "hono/factory";
 import { createDb } from "../db/index.ts";
 import { verifySession } from "../services/auth.ts";
+import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import type { Env, Variables } from "../types.ts";
 
 /** 認証必須ミドルウェア */
@@ -32,6 +33,20 @@ export const authMiddleware = createMiddleware<{
 
   c.set("userId", result.userId);
   c.set("userType", result.userType);
+
+  // 管理者でログインしていても、同じメールアドレスのメンバー登録がある人は、管理画面以外ではメンバー本人として扱う。
+  // （管理者ログインで入った人が、マイページや各種機能でメンバーとしての機能を使えない状態を防ぐため。
+  //   メンバーとしてログインした場合と同じ機能・同じ表示になる。管理画面とログイン情報の取得は管理者のまま）
+  if (result.userType === "admin") {
+    const path = c.req.path;
+    if (!path.startsWith("/api/admin") && !path.startsWith("/api/auth")) {
+      const memberId = await resolveEffectiveMemberId(db, result.userId, "admin");
+      if (memberId) {
+        c.set("userId", memberId);
+        c.set("userType", "member");
+      }
+    }
+  }
   await next();
 });
 

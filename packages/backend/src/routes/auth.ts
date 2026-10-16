@@ -181,6 +181,11 @@ authRoutes.post("/logout", async (c) => {
   return c.json({ ok: true });
 });
 
+/** 管理者と同じメールアドレスのメンバー登録（なければ null） */
+async function findLinkedMember(db: ReturnType<typeof createDb>, email: string) {
+  return (await db.select().from(schema.members).where(eq(schema.members.email, email)).get()) ?? null;
+}
+
 // ---- GET /api/auth/me ----
 authRoutes.get("/me", authMiddleware, async (c) => {
   const userId = c.get("userId");
@@ -237,6 +242,35 @@ authRoutes.get("/me", authMiddleware, async (c) => {
       { error: { code: "not_found", message: "管理者が見つかりません" } },
       404
     );
+  }
+
+  // 同じメールアドレスのメンバー登録がある管理者は、メンバーとしての情報も返す
+  // （id はメンバーIDにして、メンバー向け画面の「自分」の判定をメンバーでログインした場合と同じにする。adminId が管理者ID）
+  const linked = await findLinkedMember(db, admin.email);
+  if (linked) {
+    const [isPilot1, isPilot2] = await Promise.all([
+      hasMemberRole(db, linked.id, "pilot1"),
+      hasMemberRole(db, linked.id, "pilot2"),
+    ]);
+    return c.json({
+      data: {
+        id: linked.id,
+        adminId: admin.id,
+        name: linked.name,
+        email: admin.email,
+        emoji: linked.emoji,
+        bgColor: linked.bgColor,
+        userType: "admin",
+        role: admin.role,
+        status: linked.status,
+        avatarImageKey: linked.avatarImageKey ?? null,
+        timezone: linked.timezone ?? null,
+        personalTheme: linked.personalTheme ?? null,
+        businessCommunityJoinedDate: linked.businessCommunityJoinedDate ?? null,
+        isPilot1,
+        isPilot2,
+      },
+    });
   }
 
   return c.json({

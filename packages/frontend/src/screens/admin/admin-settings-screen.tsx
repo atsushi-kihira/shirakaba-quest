@@ -562,7 +562,7 @@ export function AdminSettingsScreen() {
       </button>
 
       {/* ---- 管理者ユーザー管理 ---- */}
-      <AdminUsersSection currentAdminId={user?.id ?? ""} qc={qc} />
+      <AdminUsersSection currentAdminId={user?.adminId ?? user?.id ?? ""} qc={qc} />
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { queryClient } from "@/lib/query-client";
 
 type AuthUser = {
   id: string;
+  /** 管理者でログインしていて、同じメールアドレスのメンバー登録がある場合の管理者ID（このとき id はメンバーID） */
+  adminId?: string | null;
   userType: UserType;
   name: string;
   email: string;

@@ -7,6 +7,8 @@ import { useAuthStore } from "@/stores/auth-store";
 type MeResponse = {
   data: {
     id: string;
+    adminId?: string | null;
+    timezone?: string | null;
     name: string;
     email: string;
     emoji: string;
@@ -38,6 +40,7 @@ export function useMe() {
       const u = query.data.data;
       setAuth(token!, {
         id: u.id,
+        adminId: u.adminId ?? null,
         userType: u.userType,
         name: u.name,
         email: u.email,
@@ -49,6 +52,7 @@ export function useMe() {
         personalTheme: u.personalTheme ?? null,
         businessCommunityJoinedDate: u.businessCommunityJoinedDate ?? null,
         status: u.status ?? null,
+        timezone: u.timezone ?? null,
       });
     }
     if (query.error) {

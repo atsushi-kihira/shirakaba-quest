@@ -21,7 +21,7 @@ import { CARD_CHARACTERS } from "@/screens/card-order/card-order-screen";
 
 import type { MemberBadge } from "@shared/types";
 
-type MeResponse      = { data: { id: string; name: string; email: string; emoji: string; bgColor: string; userType: string } };
+type MeResponse      = { data: { id: string; adminId?: string | null; name: string; email: string; emoji: string; bgColor: string; userType: string } };
 type MemberResponse  = { data: PublicMember };
 type MyRankResponse  = { data: { points: number; rank: number } };
 type HistoryItem     = { id: string; delta: number; reason: string; label: string; detail?: string; createdAt: number };
@@ -60,60 +60,63 @@ export function MypageScreen() {
 
   const memberId = meData?.data?.id ?? user?.id;
   const isAdmin = meData?.data?.userType === "admin";
+  // 管理者でログインしていても、同じメールアドレスのメンバー登録がある人（adminId が付く）は、メンバーとしての表示・機能をすべて使える。
+  // 「メンバーとしての情報がない管理者」だけが、簡易表示になる。
+  const isAdminOnly = isAdmin && !meData?.data?.adminId;
 
   // 管理者の場合: 同メールアドレスのメンバーレコードを検索
   const { data: adminMemberData } = useQuery({
     queryKey: ["admin-my-member"],
     queryFn: () => api.get<AdminMemberResponse>("/admin/my-member"),
-    enabled: isAdmin,
+    enabled: isAdminOnly,
   });
 
   const { data: memberData, isLoading } = useQuery({
     queryKey: ["member", memberId],
     queryFn: () => api.get<MemberResponse>(`/members/${memberId}`),
-    enabled: !!memberId && !isAdmin,
+    enabled: !!memberId && !isAdminOnly,
   });
 
   const { data: rankData } = useQuery({
     queryKey: ["ranking", "me"],
     queryFn: () => api.get<MyRankResponse>("/ranking/me"),
-    enabled: !isAdmin,
+    enabled: !isAdminOnly,
   });
 
   // 表示の主役はシーズンポイント（累計は rankData.points を「累計ポイントを見る」で表示）
   const { data: seasonRankData } = useQuery({
     queryKey: ["season", "ranking", "me"],
     queryFn: () => api.get<{ data: { points: number; rank: number | null; seasonName: string | null } }>("/season/ranking/me"),
-    enabled: !isAdmin,
+    enabled: !isAdminOnly,
   });
 
   const { data: historyData } = useQuery({
     queryKey: ["points-history"],
     queryFn: () => api.get<HistoryResponse>("/ranking/history"),
-    enabled: tab === "history" && !isAdmin && approved,
+    enabled: tab === "history" && !isAdminOnly && approved,
   });
 
   const { data: badgesData } = useQuery({
     queryKey: ["my-badges"],
     queryFn: () => api.get<BadgesResponse>("/members/me/badges"),
-    enabled: !isAdmin && !!memberId,
+    enabled: !isAdminOnly && !!memberId,
   });
 
   const { data: goldenEggsData } = useQuery({
     queryKey: ["enishi", "eggs"],
     queryFn: () => api.get<GoldenEggsResponse>("/enishi/eggs"),
-    enabled: !isAdmin,
+    enabled: !isAdminOnly,
   });
   const { data: goldenGeeseData } = useQuery({
     queryKey: ["enishi", "geese"],
     queryFn: () => api.get<GoldenGeeseResponse>("/enishi/geese"),
-    enabled: !isAdmin,
+    enabled: !isAdminOnly,
   });
 
   // 管理者の場合はadminMemberData、それ以外はmemberData
   const adminMember = adminMemberData?.data ?? null;
-  const hasMemberProfile = isAdmin ? adminMember !== null : !!memberData?.data;
-  const effectiveMemberId = isAdmin ? (adminMember?.id ?? null) : (memberId ?? null);
+  const hasMemberProfile = isAdminOnly ? adminMember !== null : !!memberData?.data;
+  const effectiveMemberId = isAdminOnly ? (adminMember?.id ?? null) : (memberId ?? null);
 
   // ---- 自分のカード画像（表面） ----
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -152,7 +155,7 @@ export function MypageScreen() {
     navigate("/login");
   }
 
-  const member = isAdmin ? (adminMember as unknown as PublicMember | null) : (memberData?.data ?? null);
+  const member = isAdminOnly ? (adminMember as unknown as PublicMember | null) : (memberData?.data ?? null);
   const rank   = rankData?.data;
 
   if (isLoading) {
@@ -222,7 +225,7 @@ export function MypageScreen() {
                 {member?.furigana && <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>{member.furigana}</p>}
                 {member?.category && <p className="text-sm font-medium mt-0.5" style={{ color: "var(--color-ink-600)" }}>{member.category}</p>}
               </div>
-              {!isAdmin && hasMemberProfile && (
+              {!isAdminOnly && hasMemberProfile && (
                 <button onClick={() => setShowEdit(true)} className="p-2 rounded-xl active:opacity-70 hover:opacity-80 transition"
                   style={{ background: "var(--color-paper-200)" }}>
                   <Pencil size={16} style={{ color: "var(--color-ink-500)" }} />
@@ -271,7 +274,7 @@ export function MypageScreen() {
             </Link>
 
             {/* プッシュ通知設定 */}
-            {!isAdmin && push.support !== "unsupported" && (
+            {!isAdminOnly && push.support !== "unsupported" && (
               <div className="mt-2 flex items-center gap-3 px-3 py-2.5 rounded-2xl"
                 style={{ background: "var(--color-paper-100)" }}>
                 <span className="text-lg">🔔</span>
@@ -323,7 +326,7 @@ export function MypageScreen() {
                   <div className="rounded-2xl overflow-hidden border" style={{ borderColor: "var(--color-paper-300)" }}>
                     <img src={cardImageData.data.imageDataUrl} alt="マイカード" className="w-full object-contain max-h-72" />
                   </div>
-                  {!isAdmin && (
+                  {!isAdminOnly && (
                     <button
                       onClick={() => cameraRef.current?.click()}
                       disabled={cardImageMutation.isPending}
@@ -337,7 +340,7 @@ export function MypageScreen() {
                     </button>
                   )}
                 </div>
-              ) : !isAdmin ? (
+              ) : !isAdminOnly ? (
                 <button
                   onClick={() => cameraRef.current?.click()}
                   disabled={cardImageMutation.isPending}
@@ -357,7 +360,7 @@ export function MypageScreen() {
                 <p className="text-sm" style={{ color: "var(--color-ink-400)" }}>カード画像はまだありません</p>
               )}
 
-              {!isAdmin && (
+              {!isAdminOnly && (
                 <>
                   <button
                     onClick={() => galleryRef.current?.click()}
@@ -374,7 +377,7 @@ export function MypageScreen() {
           )}
 
           {/* カード発注 */}
-          {!isAdmin && hasMemberProfile && (
+          {!isAdminOnly && hasMemberProfile && (
             <CardOrderSection hasCardImage={!!cardImageData?.data?.imageDataUrl} />
           )}
         </div>
@@ -382,7 +385,7 @@ export function MypageScreen() {
         {/* ===== 右カラム: ポイント + バッジ + 1to1 + USP/履歴タブ ===== */}
         <div className="space-y-4">
           {/* ポイント */}
-          {!isAdmin && !approved && (
+          {!isAdminOnly && !approved && (
             <div className="card-paper rounded-3xl p-5 opacity-50">
               <div className="flex items-center gap-2 mb-1">
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>⭐ ポイント</h2>
@@ -391,7 +394,7 @@ export function MypageScreen() {
               <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>承認されると表示されます</p>
             </div>
           )}
-          {!isAdmin && approved && rank && (
+          {!isAdminOnly && approved && rank && (
             <div className="card-paper rounded-3xl p-5">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>⭐ ポイント</h2>
@@ -415,7 +418,7 @@ export function MypageScreen() {
           )}
 
           {/* バッジ */}
-          {!isAdmin && approved && badgesData && badgesData.data.length > 0 && (
+          {!isAdminOnly && approved && badgesData && badgesData.data.length > 0 && (
             <div className="card-paper rounded-3xl p-5">
               <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>🏅 獲得バッジ</h2>
               <div className="flex flex-wrap gap-2">
@@ -431,7 +434,7 @@ export function MypageScreen() {
           )}
 
           {/* 1to1リンク */}
-          {!isAdmin && (
+          {!isAdminOnly && (
             <Link to="/oneonone"
               className="card-paper rounded-3xl p-4 flex items-center gap-3 active:opacity-80 hover:opacity-90 transition block">
               <span className="text-2xl">🤝</span>
@@ -447,7 +450,7 @@ export function MypageScreen() {
           {hasMemberProfile && (
             <div>
               {/* タブ（管理者の場合はタブ切替なし・スキルのみ直接表示） */}
-              {!isAdmin && (
+              {!isAdminOnly && (
                 <div className="flex gap-2 mb-4">
                   {(["profile", "history"] as const).map((t) => {
                     const locked = t === "history" && !approved;
@@ -469,7 +472,7 @@ export function MypageScreen() {
               )}
 
               {/* スキルタブ（管理者は常に表示、一般ユーザーはtab選択時） */}
-              {(tab === "profile" || isAdmin) && (
+              {(tab === "profile" || isAdminOnly) && (
                 <div className="card-paper rounded-3xl p-5">
                   <h2 className="text-base font-semibold mb-3" style={{ fontFamily: "var(--font-klee)" }}>✨ 私の{termUsp}</h2>
                   {member?.skills && member.skills.length > 0 ? (
@@ -489,7 +492,7 @@ export function MypageScreen() {
                   ) : (
                     <div className="text-center py-4">
                       <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>スキルが登録されていません</p>
-                      {!isAdmin && (
+                      {!isAdminOnly && (
                         <button onClick={() => setShowEdit(true)}
                           className="mt-3 text-sm px-4 py-2 rounded-2xl hover:opacity-80 transition"
                           style={{ background: "var(--color-brand)", color: "white" }}>
@@ -539,7 +542,7 @@ export function MypageScreen() {
           )}
 
           {/* 金の卵・金のガチョウ */}
-          {!isAdmin && !approved && (
+          {!isAdminOnly && !approved && (
             <div className="card-paper rounded-3xl p-5 opacity-50">
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>🥚 金の卵・🪙 金のガチョウ</h2>
@@ -548,7 +551,7 @@ export function MypageScreen() {
               <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>承認されると利用できます</p>
             </div>
           )}
-          {!isAdmin && approved && (
+          {!isAdminOnly && approved && (
             <div className="card-paper rounded-3xl p-5">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>🥚 金の卵・🪙 金のガチョウ</h2>
@@ -595,7 +598,7 @@ export function MypageScreen() {
       )}
 
       {/* 編集モーダル（管理者セッションでは編集不可） */}
-      {showEdit && member && memberId && !isAdmin && (
+      {showEdit && member && memberId && !isAdminOnly && (
         <EditModal
           member={member}
           memberId={memberId}
