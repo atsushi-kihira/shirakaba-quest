@@ -23,7 +23,7 @@ export const oneOnOneGuestInviteRoutes = new Hono<{ Bindings: Env; Variables: Va
 oneOnOneGuestInviteRoutes.use("*", authMiddleware);
 
 const MIN_ONEONONE_CANDIDATES = 2;
-const MAX_ONEONONE_CANDIDATES = 5;
+const MAX_ONEONONE_CANDIDATES = 20;
 
 type CandidateSlotInput = { startAtUtc: string; endAtUtc: string };
 

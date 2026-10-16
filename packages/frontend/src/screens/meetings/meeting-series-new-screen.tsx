@@ -45,7 +45,7 @@ const WEEK_OPTIONS: { value: number; label: string }[] = [
   { value: 1, label: "第1" }, { value: 2, label: "第2" }, { value: 3, label: "第3" },
   { value: 4, label: "第4" }, { value: 5, label: "第5" }, { value: -1, label: "最終" },
 ];
-const MAX_CANDIDATES = 5;
+const MAX_CANDIDATES = 20;
 const MAX_FIXED_DATES = 50;
 
 function emptyCandidate(durationMinutes = 60): PatternCandidate {

@@ -105,7 +105,7 @@ export function GuestInvitePanel() {
   function handleSubmit() {
     setError("");
     if (schedulingMethod === "candidates" && !isValidCandidateSet(candidateRows)) {
-      setError("候補日時を2〜5件、正しく入力してください（終了時刻は開始時刻より後にしてください）");
+      setError("候補日時を2〜20件、正しく入力してください（終了時刻は開始時刻より後にしてください）");
       return;
     }
     if (nameRequired && !guestName.trim()) {

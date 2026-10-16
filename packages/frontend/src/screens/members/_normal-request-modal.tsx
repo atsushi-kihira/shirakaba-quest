@@ -1,7 +1,7 @@
 // =============================================================
 // 「1to1を申し込む」モーダル（通常申込）
 // タイトル・所要時間・メッセージ・メール通知の可否に加え、日程の決め方
-// （公開予約URL／候補日提示）を選べる。候補日提示の場合、ここで2〜5件の候補日時を用意する。
+// （公開予約URL／候補日提示）を選べる。候補日提示の場合、ここで2〜20件の候補日時を用意する。
 // =============================================================
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
@@ -75,7 +75,7 @@ export function NormalRequestModal({
   function handleSubmit() {
     setError("");
     if (schedulingMethod === "candidates" && !isValidCandidateSet(candidateRows)) {
-      setError("候補日時を2〜5件、正しく入力してください（終了時刻は開始時刻より後にしてください）");
+      setError("候補日時を2〜20件、正しく入力してください（終了時刻は開始時刻より後にしてください）");
       return;
     }
     submitMutation.mutate();

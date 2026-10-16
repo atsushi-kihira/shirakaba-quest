@@ -1,5 +1,5 @@
 // =============================================================
-// 「候補日提示」方式の候補日時入力（2〜5件）
+// 「候補日提示」方式の候補日時入力（2〜20件）
 // カレンダー連携済みなら自分の予定を見ながら選べるトグルを提供し（定例会の確定日入力と同じパターン）、
 // 未連携の場合は手入力のみを表示する。メンバー向け・外部ゲスト招待向けの両方から共通で使う。
 // =============================================================
@@ -13,7 +13,7 @@ import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 export type CandidateRow = { id: string; date: string; time: string; endTime: string };
 
 export const MIN_ONEONONE_CANDIDATES = 2;
-export const MAX_ONEONONE_CANDIDATES = 5;
+export const MAX_ONEONONE_CANDIDATES = 20;
 
 export function emptyCandidateRow(durationMinutes = 60): CandidateRow {
   return { id: crypto.randomUUID(), date: "", time: DEFAULT_START_TIME, endTime: addMinutesToTime(DEFAULT_START_TIME, durationMinutes) };
@@ -24,7 +24,7 @@ function todayDateStr(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** 送信前バリデーション: 開始日時が入力済みの行が2〜5件、重複なし（終了は共通の所要時間から決まる） */
+/** 送信前バリデーション: 開始日時が入力済みの行が2〜20件、重複なし（終了は共通の所要時間から決まる） */
 export function isValidCandidateSet(rows: CandidateRow[]): boolean {
   const filled = rows.filter((r) => r.date && r.time);
   if (filled.length < MIN_ONEONONE_CANDIDATES || filled.length > MAX_ONEONONE_CANDIDATES) return false;

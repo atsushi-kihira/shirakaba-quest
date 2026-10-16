@@ -24,7 +24,7 @@ import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoCo
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
-const MAX_CANDIDATES = 5;
+const MAX_CANDIDATES = 20;
 
 function chunkOf<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];

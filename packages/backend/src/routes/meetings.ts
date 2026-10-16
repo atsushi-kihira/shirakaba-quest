@@ -52,7 +52,7 @@ import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
 
-const MAX_CANDIDATES = 10;
+const MAX_CANDIDATES = 20;
 const REMINDER_COOLDOWN_SECONDS = 6 * 60 * 60; // 6時間
 // AIの空き時間検索で指定できる所要時間は、ほかの所要時間の設定と同じ 5分〜12時間
 
