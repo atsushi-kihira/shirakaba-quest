@@ -13,6 +13,8 @@ import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
 import { useIntroRequestCount } from "@/hooks/use-collab-alerts";
 import { fmtDateShort } from "@/lib/date";
+import { matchesSearchQuery } from "@/lib/contact-search";
+import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActive, type JoinedRange } from "@/components/joined-range-filter";
 import { ExternalContactsTab } from "./_external-contacts-tab";
 import type { PublicMember } from "@shared/types";
 
@@ -189,6 +191,7 @@ function TeamMemberCard({ tm, isMe }: { tm: TeamMemberEntry; isMe: boolean }) {
 export function MembersScreen() {
   const me = useAuthStore((s) => s.user);
   const [search, setSearch] = useState("");
+  const [joinedRange, setJoinedRange] = useState<JoinedRange>(EMPTY_JOINED_RANGE);
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>(searchParams.get("tab") === "contacts" ? "contacts" : "all");
   const introRequestCount = useIntroRequestCount();
@@ -215,8 +218,13 @@ export function MembersScreen() {
 
   // タブごとのフィルタ
   const filteredMembers = members.filter((m) => {
-    const matchSearch = search === "" || m.name.includes(search) || m.furigana.includes(search) || m.category.includes(search);
+    // キーワード：名前・ふりがな・職種・事業内容・スキル名・会社名（1to1後に見えるもの）。スペース区切り=AND、OR・括弧にも対応
+    const matchSearch = matchesSearchQuery(
+      [m.name, m.furigana, m.category, m.businessDescription, m.company, m.role, ...m.skills.map((sk) => sk.name)],
+      search
+    );
     if (!matchSearch) return false;
+    if (!inJoinedRange(m.businessCommunityJoinedDate, joinedRange)) return false;
     if (activeTab === "all") return true;
     if (activeTab === "done") return m.connectionStatus === "digital" || m.connectionStatus === "real";
     if (activeTab === "undone") return m.connectionStatus === "none";
@@ -270,7 +278,7 @@ export function MembersScreen() {
         <div className="relative mb-4">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--color-ink-400)" }} />
           <input
-            type="text" placeholder="名前・職種で検索..."
+            type="text" placeholder="名前・職種・事業内容・スキルで検索（スペース区切りで絞り込み）..."
             value={search} onChange={(e) => setSearch(e.target.value)}
             className="w-full rounded-2xl pl-9 pr-9 py-2.5 text-sm outline-none"
             style={{ background: "var(--color-paper-50)", border: "1.5px solid var(--color-paper-300)", color: "var(--color-ink-800)" }}
@@ -284,6 +292,10 @@ export function MembersScreen() {
             </button>
           )}
         </div>
+      )}
+
+      {activeTab !== "team" && activeTab !== "contacts" && (
+        <JoinedRangeFilter value={joinedRange} onChange={setJoinedRange} />
       )}
 
       {/* ローディング */}
@@ -363,7 +375,8 @@ export function MembersScreen() {
         <div className="space-y-3">
           {filteredMembers.length === 0 && (
             <p className="text-center py-8 text-sm" style={{ color: "var(--color-ink-400)" }}>
-              {activeTab === "done" ? "1to1を実施した仲間がいません" :
+              {search !== "" || isJoinedRangeActive(joinedRange) ? "条件に合うメンバーが見つかりませんでした" :
+               activeTab === "done" ? "1to1を実施した仲間がいません" :
                activeTab === "undone" ? "1to1未実施のメンバーはいません" :
                "見つかりませんでした"}
             </p>

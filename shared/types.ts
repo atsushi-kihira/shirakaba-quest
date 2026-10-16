@@ -108,6 +108,7 @@ export type PublicMember = Omit<
   characterKey: string | null;
   oneOnOneCount: number; // 自分との完了済み1to1回数
   lastOneOnOneAt: number | null; // 自分との直近1to1完了日時（Unix秒）
+  businessCommunityJoinedDate?: string | null; // ビジネスコミュニティ入会日（"YYYY-MM-DD"。日は正確でなくてよい）
   externalContactCount: number; // 登録している外部人脈の件数（非公開を除く）
   externalContactDetailCount: number; // うち「詳細まで公開」の件数
 };

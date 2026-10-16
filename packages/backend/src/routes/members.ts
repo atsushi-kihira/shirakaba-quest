@@ -156,6 +156,7 @@ memberRoutes.get("/", async (c) => {
       instagramUrl: isUnlocked ? member.instagramUrl : null,
       customFields: isUnlocked ? parseJson(member.customFields, {}) : null,
       characterKey: member.characterKey ?? null,
+      businessCommunityJoinedDate: member.businessCommunityJoinedDate ?? null,
       oneOnOneCount: oneOnOneStatsMap.get(member.id)?.count ?? 0,
       lastOneOnOneAt: oneOnOneStatsMap.get(member.id)?.lastAt ?? null,
       externalContactCount: contactStatsMap.get(member.id)?.total ?? 0,

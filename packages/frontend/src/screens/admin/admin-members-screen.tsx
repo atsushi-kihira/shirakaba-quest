@@ -7,6 +7,9 @@ import { CheckCircle, UserMinus, UserCheck, Trash2, ChevronDown, ChevronUp, Ghos
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { fmtDateISO } from "@/lib/date";
+import { Search, X } from "lucide-react";
+import { matchesSearchQuery } from "@/lib/contact-search";
+import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActive, type JoinedRange } from "@/components/joined-range-filter";
 import { AdminMemberDetailModal, type AdminMemberDetailBase } from "./_admin-member-detail-modal";
 
 type AdminMember = AdminMemberDetailBase & {
@@ -37,6 +40,8 @@ export function AdminMembersScreen() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detailMemberId, setDetailMemberId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [joinedRange, setJoinedRange] = useState<JoinedRange>(EMPTY_JOINED_RANGE);
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "members"],
@@ -86,9 +91,17 @@ export function AdminMembersScreen() {
   // 「すべて」には休会中・ゲストユーザー・利用却下・削除済みは含めない（アクティブなメンバーと
   // 混ざって見づらくなるため、それぞれ専用タブから見る）
   const SIDE_STATUSES = ["deleted", "on_leave", "guest", "rejected"];
-  const filtered = filter === "all"
+  const byStatus = filter === "all"
     ? members.filter((m) => !SIDE_STATUSES.includes(m.status))
     : members.filter((m) => m.status === filter);
+  // キーワード（名前・ふりがな・メール・会社・役職・職種・事業内容・スキル名。スペース区切り=AND、OR・括弧にも対応）と入会日の範囲で絞り込む
+  const filtered = byStatus.filter((m) =>
+    matchesSearchQuery(
+      [m.name, m.furigana, m.romaji, m.email, m.company, m.role, m.category, m.businessDescription, m.phone, ...(m.skills ?? []).map((sk) => sk.name)],
+      search
+    ) && inJoinedRange(m.businessCommunityJoinedDate, joinedRange)
+  );
+  const isSearching = search.trim() !== "" || isJoinedRangeActive(joinedRange);
 
   const pendingCount = members.filter((m) => m.status === "pending").length;
 
@@ -126,12 +139,34 @@ export function AdminMembersScreen() {
         ))}
       </div>
 
+      {/* キーワード検索・入会日の範囲 */}
+      <div className="relative mb-3">
+        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--color-ink-400)" }} />
+        <input
+          type="text" placeholder="名前・メール・会社・職種・事業内容・スキルで検索（スペース区切りで絞り込み）..."
+          value={search} onChange={(e) => setSearch(e.target.value)}
+          className="w-full rounded-2xl pl-9 pr-9 py-2.5 text-sm outline-none"
+          style={{ background: "var(--color-paper-50)", border: "1.5px solid var(--color-paper-300)", color: "var(--color-ink-800)" }}
+        />
+        {search && (
+          <button type="button" onClick={() => setSearch("")} aria-label="検索条件をクリア"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full" style={{ color: "var(--color-ink-400)" }}>
+            <X size={14} />
+          </button>
+        )}
+      </div>
+      <JoinedRangeFilter value={joinedRange} onChange={setJoinedRange} />
+      {isSearching && !isLoading && (
+        <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>該当 {filtered.length} 名（このタブの {byStatus.length} 名中）</p>
+      )}
+
       {/* メンバー一覧 */}
       {isLoading ? (
         <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>読み込み中...</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12" style={{ color: "var(--color-ink-400)" }}>
-          {filter === "pending" ? "承認待ちのメンバーはいません"
+          {isSearching ? "条件に合うメンバーが見つかりませんでした"
+            : filter === "pending" ? "承認待ちのメンバーはいません"
             : filter === "on_leave" ? "休会中のメンバーはいません"
             : filter === "guest" ? "ゲストユーザーはいません"
             : filter === "rejected" ? "利用却下したメンバーはいません"
@@ -167,7 +202,7 @@ export function AdminMembersScreen() {
                       </div>
                     )}
                     <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-                      登録: {fmtDateISO(m.createdAt, tz)}
+                      登録: {fmtDateISO(m.createdAt, tz)}{m.businessCommunityJoinedDate ? `　入会: ${m.businessCommunityJoinedDate.slice(0, 7).replace("-", "年")}月` : ""}
                     </div>
                     {m.status === "active" && (
                       <div className="flex gap-1.5 mt-2 flex-wrap">
