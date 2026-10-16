@@ -28,21 +28,56 @@ function ymLabel(ym: string): string {
   return `${y}年${Number(m)}月`;
 }
 
+const FIRST_YEAR = 1995;
+
+/**
+ * 年と月を選ぶ入力。ブラウザ標準の月ピッカー（<input type="month">）は Safari などの一部ブラウザで
+ * 使えず、ただの空欄に見えてしまうため、どのブラウザでも同じに動く選択式にしている。
+ * 値は "YYYY-MM"（未指定は空文字）。年だけ・月だけを選んだときは、もう一方を自動で補う
+ * （開始側は1月、終了側は12月）。
+ */
+function YearMonthSelect({ value, onChange, label, defaultMonth }: {
+  value: string; onChange: (v: string) => void; label: string; defaultMonth: number;
+}) {
+  const thisYear = new Date().getFullYear();
+  const [y, m] = value ? value.split("-") : ["", ""];
+  const years = Array.from({ length: thisYear - FIRST_YEAR + 1 }, (_, i) => thisYear - i);
+  const compose = (year: string, month: string): string => (year && month ? `${year}-${month.padStart(2, "0")}` : "");
+  const selectStyle = { background: "var(--color-paper-50)", border: "1.5px solid var(--color-paper-300)", color: "var(--color-ink-800)" } as const;
+  return (
+    <span className="inline-flex items-center gap-1">
+      <select aria-label={`${label}（年）`} value={y}
+        onChange={(e) => {
+          const year = e.target.value;
+          onChange(year ? compose(year, m || String(defaultMonth)) : "");
+        }}
+        className="rounded-xl px-2 py-1.5 text-sm outline-none" style={selectStyle}>
+        <option value="">----</option>
+        {years.map((yr) => <option key={yr} value={yr}>{yr}年</option>)}
+      </select>
+      <select aria-label={`${label}（月）`} value={m ? String(Number(m)) : ""}
+        onChange={(e) => {
+          const month = e.target.value;
+          onChange(month ? compose(y || String(thisYear), month) : "");
+        }}
+        className="rounded-xl px-2 py-1.5 text-sm outline-none" style={selectStyle}>
+        <option value="">--</option>
+        {Array.from({ length: 12 }, (_, i) => i + 1).map((mo) => <option key={mo} value={mo}>{mo}月</option>)}
+      </select>
+    </span>
+  );
+}
+
 export function JoinedRangeFilter({ value, onChange }: { value: JoinedRange; onChange: (r: JoinedRange) => void }) {
   const { termBusinessCommunity } = useSettings();
   const swapped = !!value.from && !!value.to && value.from > value.to;
-  const inputStyle = { background: "var(--color-paper-50)", border: "1.5px solid var(--color-paper-300)", color: "var(--color-ink-800)" } as const;
   return (
     <div className="mb-4">
       <div className="flex items-center gap-2 flex-wrap text-sm" style={{ color: "var(--color-ink-600)" }}>
         <span className="font-medium">📅 {termBusinessCommunity}入会日</span>
-        <input type="month" value={value.from} max={value.to || undefined} aria-label="入会日（開始）"
-          onChange={(e) => onChange({ ...value, from: e.target.value })}
-          className="rounded-xl px-2.5 py-1.5 text-sm outline-none" style={inputStyle} />
+        <YearMonthSelect value={value.from} label="入会日（開始）" defaultMonth={1} onChange={(v) => onChange({ ...value, from: v })} />
         <span>〜</span>
-        <input type="month" value={value.to} min={value.from || undefined} aria-label="入会日（終了）"
-          onChange={(e) => onChange({ ...value, to: e.target.value })}
-          className="rounded-xl px-2.5 py-1.5 text-sm outline-none" style={inputStyle} />
+        <YearMonthSelect value={value.to} label="入会日（終了）" defaultMonth={12} onChange={(v) => onChange({ ...value, to: v })} />
         {isJoinedRangeActive(value) && (
           <button type="button" onClick={() => onChange(EMPTY_JOINED_RANGE)}
             className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-full"
