@@ -12,6 +12,14 @@ export type MemberSearchResult = { results: { memberId: string; why: string }[];
 const MAX_CANDIDATES = 150;
 const MAX_RESULTS = 20;
 
+// 専門分野の絞り込みに対して、メンバー本人の職種（category）が合うか（全角半角・空白・大文字小文字の違いを無視し、部分一致で判定）
+export function memberMatchesSpecialties(category: string, specialties: string[]): boolean {
+  const norm = (v: string) => v.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  const c = norm(category ?? "");
+  if (!c) return false;
+  return specialties.some((sp) => { const t = norm(sp); return !!t && (c.includes(t) || t.includes(c)); });
+}
+
 export const uspKeyOf = (name: string): string => name.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 
 type Candidate = { id: string; name: string; category: string; businessDescription: string; skills: { name: string; description: string }[] };
@@ -31,13 +39,16 @@ function parseSkills(raw: string | null): Candidate["skills"] {
   } catch { return []; }
 }
 
-async function collectCandidates(db: Db, meId: string, usps: string[]): Promise<Candidate[]> {
+async function collectCandidates(db: Db, meId: string, usps: string[], specialties: string[]): Promise<Candidate[]> {
   const rows = await db.select().from(schema.members)
     .where(and(eq(schema.members.status, "active"), ne(schema.members.id, meId))).all();
   const wanted = new Set(usps.map(uspKeyOf));
   return rows
     .map((m) => ({ id: m.id, name: m.name, category: m.category, businessDescription: m.businessDescription, skills: parseSkills(m.skills) }))
     .filter((m) => wanted.size === 0 || m.skills.some((sk) => wanted.has(uspKeyOf(sk.name))))
+    // 職種・事業内容・USPのどれも未入力のメンバーは、手がかりがなく検索の対象にならない
+    .filter((m) => m.category || m.businessDescription || m.skills.length > 0)
+    .filter((m) => specialties.length === 0 || memberMatchesSpecialties(m.category, specialties))
     .slice(0, MAX_CANDIDATES);
 }
 
@@ -127,9 +138,11 @@ function keywordFallback(freeText: string, cands: Candidate[]): { memberId: stri
 
 export async function runMemberSearch(args: {
   db: Db; apiKey: string | undefined; isDev: boolean; meId: string; usps: string[]; freeText: string;
+  /** 専門分野で絞り込む場合（人脈検索）。メンバー本人は、職種がこの専門分野に合う人だけが対象になる */
+  specialties?: string[];
 }): Promise<MemberSearchResult> {
   const { db, apiKey, isDev, meId, usps, freeText } = args;
-  const cands = await collectCandidates(db, meId, usps);
+  const cands = await collectCandidates(db, meId, usps, args.specialties ?? []);
   if (cands.length === 0) return { results: [], candidateCount: 0 };
 
   if (isDev || !apiKey || apiKey === "dev-not-set") {
