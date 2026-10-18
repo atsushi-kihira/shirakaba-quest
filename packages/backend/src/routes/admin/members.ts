@@ -329,7 +329,7 @@ adminMemberRoutes.delete("/:id", async (c) => {
 
   if (!member) return c.json({ error: { code: "NOT_FOUND", message: "メンバーが見つかりません" } }, 404);
 
-  await hardDeleteMember(db, c.env, id);
+  await hardDeleteMember(db, c.env, id, c.env.KV);
 
   return c.json({ ok: true });
 });

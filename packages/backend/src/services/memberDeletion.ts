@@ -11,10 +11,14 @@ import { and, eq, inArray, ne, or } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 import { cancelAutoConference, type AutoConferenceEnv } from "./conferenceService.ts";
+import { deleteDraft } from "./registration.ts";
 
-export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId: string): Promise<void> {
+export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId: string, kv?: KVNamespace): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const m = schema;
+
+  // 削除後に、登録時のメール確認・入力内容の下書き・USP申請などがメールアドレスだけを手がかりに残らないよう、先にメールアドレスを控える
+  const target = await db.select({ email: m.members.email }).from(m.members).where(eq(m.members.id, memberId)).get();
 
   // ---- 予約(bookings)とその子テーブル ----
   const bookingRows = await db.select({ id: m.bookings.id })
@@ -169,10 +173,22 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
   await db.delete(m.availabilityRules).where(eq(m.availabilityRules.memberId, memberId));
   await db.delete(m.availabilityOverrides).where(eq(m.availabilityOverrides.memberId, memberId));
 
+  // ---- 「今週のクエスト」の選出 ----
+  await db.delete(m.questWeeklySelections).where(eq(m.questWeeklySelections.memberId, memberId));
+
   // ---- カード注文・Push購読 ----
   await db.delete(m.cardOrders).where(eq(m.cardOrders.memberId, memberId));
   await db.delete(m.pushSubscriptions).where(eq(m.pushSubscriptions.memberId, memberId));
 
   // ---- 最後にメンバー本体を削除（メールアドレスが再登録可能になる）----
   await db.delete(m.members).where(eq(m.members.id, memberId));
+
+  // ---- メールアドレスだけで結びついている登録時のデータ ----
+  // これらが残ると、管理画面の「登録の途中の方」に、削除したはずの人が表示されてしまう。
+  if (target?.email) {
+    const email = target.email.toLowerCase();
+    await db.delete(m.emailVerifications).where(eq(m.emailVerifications.email, email));
+    await db.delete(m.uspRequests).where(eq(m.uspRequests.requesterEmail, email));
+    if (kv) await deleteDraft(kv, email).catch((e) => console.error("[member delete] 登録の下書きの削除に失敗", e));
+  }
 }
