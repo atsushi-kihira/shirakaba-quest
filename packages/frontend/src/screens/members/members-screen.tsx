@@ -71,7 +71,7 @@ const STATUS_LABEL: Record<string, { label: string; className: string }> = {
   self:    { label: "自分",     className: "bg-violet-100 text-violet-700 ring-violet-300" },
 };
 
-function MemberCard({ member, collabTeams }: { member: PublicMember; collabTeams?: { name: string; type: "loose" | "power" }[] }) {
+export function MemberCard({ member, collabTeams }: { member: PublicMember; collabTeams?: { name: string; type: "loose" | "power" }[] }) {
   const connStatus = member.connectionStatus;
   const badge = STATUS_LABEL[connStatus] ?? STATUS_LABEL.none;
   const tz = useTimezone();

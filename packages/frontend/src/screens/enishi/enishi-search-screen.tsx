@@ -4,10 +4,12 @@
 // =============================================================
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Loader2, Search, Gift, Users, ChevronRight, ChevronLeft, History, Star, Trash2, FileDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { MemberCard } from "@/screens/members/members-screen";
+import type { PublicMember } from "@shared/types";
 
 export type Hop = "direct" | "2hop" | "3hop";
 export const HOP_LABEL: Record<Hop, string> = { direct: "1次（直接）", "2hop": "2次", "3hop": "3次" };
@@ -88,8 +90,14 @@ export function removeCards(result: SearchResult, cardIds: Set<string> | string[
   };
 }
 
+type SearchMode = "for-me" | "giver" | "contact-search";
+
 export function EnishiSearchScreen() {
-  const [mode, setMode] = useState<"for-me" | "giver" | "contact-search">("for-me");
+  // 視点（モード）はURLに持たせる。なかまの詳細などから「戻る」で戻ったときに、同じ視点・同じ絞り込みの状態で表示できるようにするため
+  const [searchParams, setSearchParams] = useSearchParams();
+  const modeParam = searchParams.get("mode");
+  const mode: SearchMode = modeParam === "giver" || modeParam === "contact-search" ? modeParam : "for-me";
+  const setMode = (m: SearchMode) => setSearchParams(m === "for-me" ? {} : { mode: m }, { replace: true });
   const { termEnishi } = useSettings();
 
   return (
@@ -1190,6 +1198,142 @@ function useContactSearchSpecialtyOptions(): string[] {
   return data?.data ?? [];
 }
 
+// ---- 人脈検索：絞り込みの方法の切り替え（専門分野で絞り込む／メンバーのUSPから絞り込む） ----
+function ContactSearchPanel() {
+  const [params, setParams] = useSearchParams();
+  const filter: "specialty" | "usp" = params.get("filter") === "usp" ? "usp" : "specialty";
+  const setFilter = (f: "specialty" | "usp") => {
+    const next = new URLSearchParams();
+    next.set("mode", "contact-search");
+    if (f === "usp") next.set("filter", "usp");
+    setParams(next, { replace: true });
+  };
+  const tabs: { key: "specialty" | "usp"; label: string }[] = [
+    { key: "specialty", label: "専門分野で絞り込む" },
+    { key: "usp", label: "メンバーのUSPから絞り込む" },
+  ];
+  return (
+    <div>
+      <div className="flex gap-1.5 mb-4 flex-wrap">
+        {tabs.map((t) => (
+          <button key={t.key} onClick={() => setFilter(t.key)} className="px-4 py-2 rounded-full text-sm font-medium transition"
+            style={{
+              background: filter === t.key ? "var(--color-accent)" : "var(--color-paper-200)",
+              color: filter === t.key ? "white" : "var(--color-ink-600)",
+            }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {filter === "specialty" ? <ContactSpecialtySearchPanel /> : <UspFilterPanel />}
+    </div>
+  );
+}
+
+// 同じ名前のUSPをまとめるための比較用キー（全角・半角、空白、大文字小文字の違いを無視）
+const uspKey = (name: string): string => name.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+
+// ---- メンバーのUSPから絞り込む：USPを選ぶと、そのUSPを持つメンバーを「なかま」と同じ表示で並べる ----
+// 選んだUSPはURLに持つので、メンバーの詳細から「戻る」で戻ってきても、同じ状態で表示される。
+function UspFilterPanel() {
+  const [params, setParams] = useSearchParams();
+  const selectedKeys = useMemo(() => new Set(params.getAll("usp").map(uspKey)), [params]);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["members"],
+    queryFn: () => api.get<{ data: PublicMember[] }>("/members"),
+  });
+  const members = data?.data ?? [];
+
+  // USP名ごとに集計（同じ名前はまとめる。表示名は、最も多く使われている表記）
+  const usps = useMemo(() => {
+    const map = new Map<string, { key: string; variants: Map<string, number>; memberIds: Set<string> }>();
+    for (const m of members) {
+      for (const sk of m.skills ?? []) {
+        const name = sk.name?.trim();
+        if (!name) continue;
+        const key = uspKey(name);
+        const e = map.get(key) ?? { key, variants: new Map<string, number>(), memberIds: new Set<string>() };
+        e.variants.set(name, (e.variants.get(name) ?? 0) + 1);
+        e.memberIds.add(m.id);
+        map.set(key, e);
+      }
+    }
+    return [...map.values()]
+      .map((e) => ({ key: e.key, label: [...e.variants.entries()].sort((a, b) => b[1] - a[1])[0][0], count: e.memberIds.size }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "ja"));
+  }, [members]);
+
+  const toggle = (label: string) => {
+    const next = new URLSearchParams(params);
+    next.set("mode", "contact-search");
+    next.set("filter", "usp");
+    const current = next.getAll("usp");
+    next.delete("usp");
+    const key = uspKey(label);
+    const has = current.some((u) => uspKey(u) === key);
+    (has ? current.filter((u) => uspKey(u) !== key) : [...current, label]).forEach((u) => next.append("usp", u));
+    setParams(next, { replace: true });
+  };
+  const clear = () => {
+    const next = new URLSearchParams(params);
+    next.delete("usp");
+    setParams(next, { replace: true });
+  };
+
+  const matched = members.filter((m) => (m.skills ?? []).some((sk) => selectedKeys.has(uspKey(sk.name ?? ""))));
+
+  return (
+    <div>
+      <div className="card-paper rounded-2xl p-4 mb-4">
+        <h2 className="text-sm font-bold mb-1" style={{ color: "var(--color-ink-800)" }}>USPを選んでください</h2>
+        <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+          選んだUSPを持つメンバーが表示されます（複数選ぶと、どれかを持つメンバーが表示されます）。数字は、そのUSPを持つメンバーの人数です。
+        </p>
+        {isLoading ? (
+          <div className="flex justify-center py-4"><Loader2 size={20} className="animate-spin" style={{ color: "var(--color-brand)" }} /></div>
+        ) : error ? (
+          <p className="text-xs" style={{ color: "var(--color-brand)" }}>データの取得に失敗しました。しばらくしてからもう一度お試しください。</p>
+        ) : usps.length === 0 ? (
+          <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>USPを登録しているメンバーがまだいません。</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {selectedKeys.size > 0 && (
+              <button onClick={clear} className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: "var(--color-accent)", color: "white" }}>
+                選択をクリア
+              </button>
+            )}
+            {usps.map((u) => {
+              const on = selectedKeys.has(u.key);
+              return (
+                <button key={u.key} onClick={() => toggle(u.label)} className="text-xs font-medium px-3 py-1.5 rounded-full"
+                  style={{
+                    background: on ? "var(--color-paper-200)" : "white",
+                    border: `1px solid ${on ? "var(--color-accent)" : "var(--color-paper-300)"}`,
+                    color: on ? "var(--color-accent)" : "var(--color-ink-600)",
+                  }}>
+                  {u.label} <span className="opacity-70">{u.count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {selectedKeys.size > 0 && !isLoading && (
+        <>
+          <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>該当するメンバー（{matched.length}名）</p>
+          <div className="space-y-3">
+            {matched.length === 0
+              ? <p className="text-center py-6 text-sm" style={{ color: "var(--color-ink-400)" }}>該当するメンバーはいません</p>
+              : matched.map((m) => <MemberCard key={m.id} member={m} />)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 type ContactSearchScope = "all" | "mine_and_members" | "mine_only" | "others_only" | "specific_members";
 type ContactOwner = { id: string; name: string; emoji: string; contactCount: number };
 
@@ -1201,7 +1345,7 @@ const CONTACT_SEARCH_SCOPE_OPTIONS: { value: ContactSearchScope; title: string; 
   { value: "specific_members", title: "特定のメンバーの外部人脈", desc: "選んだメンバーの外部人脈の中からさがします" },
 ];
 
-function ContactSearchPanel() {
+function ContactSpecialtySearchPanel() {
   const specialtyOptions = useContactSearchSpecialtyOptions();
 
   const [specialties, setSpecialties] = useState<Set<string>>(new Set());
