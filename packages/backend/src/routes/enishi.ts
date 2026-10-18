@@ -20,8 +20,8 @@ import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-searc
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
 
-const MAX_EGGS = 8;
-const MAX_GEESE = 8;
+const MAX_EGGS = 15;
+const MAX_GEESE = 15;
 // 貢献のご縁で一度に指定できる貢献先メンバー数（登録者が増えてもAI消費量が際限なく増えないようにする上限）
 const MAX_GIVER_TARGET_MEMBERS = 5;
 // 検索履歴の一覧表示件数の上限

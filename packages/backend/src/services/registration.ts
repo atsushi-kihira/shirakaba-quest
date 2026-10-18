@@ -160,7 +160,7 @@ export async function createPendingMember(
   });
 
   // 金の卵・金のガチョウ（旧来の登録画面から送られた分のみ登録する）
-  const goldenEggs = (body.goldenEggs ?? []).filter((e) => e.description?.trim()).slice(0, 8);
+  const goldenEggs = (body.goldenEggs ?? []).filter((e) => e.description?.trim()).slice(0, 15);
   if (goldenEggs.length > 0) {
     await db.insert(schema.goldenEggs).values(goldenEggs.map((e) => ({
       id: newId(), memberId: id, description: e.description.trim(),
@@ -168,7 +168,7 @@ export async function createPendingMember(
       createdAt: now, updatedAt: now,
     })));
   }
-  const goldenGeese = (body.goldenGeese ?? []).filter((g) => g.description?.trim()).slice(0, 8);
+  const goldenGeese = (body.goldenGeese ?? []).filter((g) => g.description?.trim()).slice(0, 15);
   if (goldenGeese.length > 0) {
     await db.insert(schema.goldenGeese).values(goldenGeese.map((g) => ({
       id: newId(), memberId: id, description: g.description.trim(),

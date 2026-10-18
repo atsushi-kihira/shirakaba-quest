@@ -8,7 +8,7 @@ import { Link } from "react-router-dom";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 
-const MAX_ITEMS = 8;
+const MAX_ITEMS = 15;
 
 type GoldenEgg = { id: string; description: string; issue: string | null; priceRange: string | null; region: string | null };
 type GoldenGoose = { id: string; description: string; contactHypothesis: string | null; priority: string | null };
@@ -110,7 +110,7 @@ function EnishiRegisterContent() {
         🥚 金の卵・🪙 金のガチョウの登録
       </h1>
       <p className="text-sm mt-1 mb-5" style={{ color: "var(--color-ink-500)" }}>
-        それぞれ最大8個まで登録できます。「どんな企業か／どんな立場の人か」を一文で具体的に書くほど、{termEnishi}さがしの精度が上がります。
+        それぞれ最大15個まで登録できます。「どんな企業か／どんな立場の人か」を一文で具体的に書くほど、{termEnishi}さがしの精度が上がります。
       </p>
 
       <div className="grid lg:grid-cols-2 gap-6">

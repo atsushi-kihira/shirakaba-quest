@@ -557,7 +557,7 @@ export function MypageScreen() {
                 <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>🥚 金の卵・🪙 金のガチョウ</h2>
                 {goldenEggsData && goldenGeeseData && (
                   <span className="text-xs font-bold shrink-0 ml-2" style={{ color: "var(--color-accent)" }}>
-                    卵 {goldenEggsData.data.length}/8 ・ ガチョウ {goldenGeeseData.data.length}/8
+                    卵 {goldenEggsData.data.length}/15 ・ ガチョウ {goldenGeeseData.data.length}/15
                   </span>
                 )}
               </div>

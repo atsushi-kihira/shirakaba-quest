@@ -291,7 +291,7 @@ export const collabIntroRequests = sqliteTable("collab_intro_requests", {
 
 // ---- ご縁さがし（金の卵・金のガチョウ） ----
 // メンバーが登録する「たどり着きたい理想の案件・お客様（卵）」と
-// 「その卵を継続的に運んでくれる立場の人（ガチョウ）」。各メンバー最大8件ずつ（route側でバリデーション）。
+// 「その卵を継続的に運んでくれる立場の人（ガチョウ）」。各メンバー最大15件ずつ（route側でバリデーション）。
 
 export const goldenEggs = sqliteTable("golden_eggs", {
   id:          text("id").primaryKey(),
