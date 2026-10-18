@@ -44,7 +44,9 @@ import {
   cancelAutoConference,
   blockHostCalendarForDate,
   deleteHostCalendarEvent,
+  createSharedSeriesConference,
 } from "../services/conferenceService.ts";
+import { formatScheduleBlock } from "../services/schedule-text.ts";
 import { insertCalendarEvent } from "../services/googleClient.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { searchCommonFreeSlots } from "../services/meetingSlotSearch.ts";
@@ -2004,6 +2006,189 @@ async function getTargetMembers(db: ReturnType<typeof import("../db/index.ts").c
   const declinedIds = new Set(declines.map((d) => d.memberId));
   return result.filter((m) => !declinedIds.has(m.id));
 }
+
+// ----------------------------------------------------------------
+// POST /api/meetings/:id/confirm-bulk — 複数の候補日をまとめて確定し、会議URLもまとめて設定する（主催者のみ）
+//  body: {
+//    candidateIds: string[],
+//    conference?: {
+//      mode: "none" | "same" | "per_day",       // none=URLなし／same=全日程で同じURL／per_day=日ごとに別のURL
+//      type?: "manual" | "zoom" | "google_meet", // same: 手入力・Zoom・Google Meet ／ per_day: 手入力・Google Meet
+//      url?: string,                             // same + manual
+//      urls?: Record<candidateId, string>        // per_day + manual
+//    }
+//  }
+//  通知は、確定した全日程と会議URLを1通にまとめて送る（日程・URLごとにメールは送らない）。
+//  外部サービス（Zoom・Googleカレンダー）での会議URLの発行を先に行い、失敗した場合は何も確定しない。
+// ----------------------------------------------------------------
+type BulkConference = {
+  mode: "none" | "same" | "per_day";
+  type?: "manual" | "zoom" | "google_meet";
+  url?: string;
+  urls?: Record<string, string>;
+};
+
+meetingRoutes.post("/:id/confirm-bulk", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ日程を確定できます" } }, 403);
+  if (meeting.status === "cancelled") return c.json({ error: { code: "invalid_status", message: "キャンセル済みのミーティングは変更できません" } }, 400);
+
+  const body = await c.req.json<{ candidateIds?: string[]; conference?: BulkConference }>().catch(() => ({} as { candidateIds?: string[]; conference?: BulkConference }));
+  const candidateIds = [...new Set(body.candidateIds ?? [])];
+  if (candidateIds.length === 0) return c.json({ error: { code: "invalid_input", message: "確定する日程を選んでください" } }, 400);
+
+  const allCandidates = await db.select().from(schema.meetingDateCandidates).where(eq(schema.meetingDateCandidates.meetingId, id)).all();
+  const targets = candidateIds.map((cid) => allCandidates.find((cd) => cd.id === cid));
+  if (targets.some((t) => !t)) return c.json({ error: { code: "invalid_input", message: "候補日が見つかりません" } }, 400);
+  const selected = (targets as typeof allCandidates).sort((a, b) => a.startsAt - b.startsAt);
+  const endOf = (cd: typeof allCandidates[number]) => cd.endsAt ?? cd.startsAt + 3600;
+
+  // ---- 会議URLの検証と、外部サービスでの発行（DBを変える前に行う） ----
+  const conf: BulkConference = body.conference ?? { mode: "none" };
+  const urlByCandidate = new Map<string, string>();
+  let sharedMeta: { conferenceUrl: string; conferenceMetaJson: string | null; calendarEventId: string | null } | null = null;
+  const isHttp = (u: string | undefined) => !!u && /^https?:\/\//.test(u.trim());
+
+  if (conf.mode === "same") {
+    if (conf.type === "manual") {
+      if (!isHttp(conf.url)) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
+      for (const cd of selected) urlByCandidate.set(cd.id, conf.url!.trim());
+    } else if (conf.type === "zoom" || conf.type === "google_meet") {
+      const available = await getAvailableConferenceTypes(db, memberId);
+      if (!available.includes(conf.type)) return c.json({ error: { code: "not_connected", message: conf.type === "zoom" ? "Zoomと連携してください" : "Googleカレンダーと連携してください" } }, 400);
+      sharedMeta = await createSharedSeriesConference(db, c.env, meeting.hostMemberId, conf.type, meeting.title, meeting.description ?? "", selected[0].startsAt, endOf(selected[0]));
+      if (!sharedMeta) return c.json({ error: { code: "conference_error", message: "会議URLの発行に失敗しました。時間をおいて、もう一度お試しください" } }, 502);
+      for (const cd of selected) urlByCandidate.set(cd.id, sharedMeta.conferenceUrl);
+    } else {
+      return c.json({ error: { code: "invalid_input", message: "会議URLの種類を選んでください" } }, 400);
+    }
+  } else if (conf.mode === "per_day") {
+    if (conf.type === "manual") {
+      for (const cd of selected) {
+        const u = conf.urls?.[cd.id];
+        if (!isHttp(u)) return c.json({ error: { code: "invalid_input", message: "すべての日程の会議URLを、http:// または https:// で始めて入力してください" } }, 400);
+        urlByCandidate.set(cd.id, u!.trim());
+      }
+    } else if (conf.type === "google_meet") {
+      const googleCred = await getValidGoogleAccessToken(db, memberId, c.env.SCHEDULER_TOKEN_KEY, c.env.GOOGLE_OAUTH_CLIENT_ID, c.env.GOOGLE_OAUTH_CLIENT_SECRET);
+      if (googleCred.status === "not_connected") return c.json({ error: { code: "not_connected", message: "Googleカレンダーと連携してください" } }, 400);
+      if (googleCred.status === "refresh_failed") return c.json({ error: { code: "calendar_unavailable", message: "Googleとの連携情報を一時的に取得できませんでした。少し時間をおいてから、もう一度お試しください。" } }, 503);
+      const host = await db.select({ email: schema.members.email }).from(schema.members).where(eq(schema.members.id, memberId)).get();
+      for (const cd of selected) {
+        // この日用のブロック予定が既にあれば、Meet付きの予定に差し替える
+        if (cd.calendarEventId) await deleteHostCalendarEvent(db, c.env, meeting.hostMemberId, cd.calendarEventId);
+        const r = await insertCalendarEvent({
+          accessToken: googleCred.accessToken, calendarId: googleCred.calendarId,
+          summary: meeting.title, description: meeting.description ?? "",
+          startAtUtc: new Date(cd.startsAt * 1000).toISOString(), endAtUtc: new Date(endOf(cd) * 1000).toISOString(),
+          attendeeEmails: host?.email ? [host.email] : [], requestId: `${id}-${cd.id}`, withMeet: true,
+        });
+        if (!r.meetUrl) return c.json({ error: { code: "google_error", message: "Google Meet URLの発行に失敗しました" } }, 502);
+        urlByCandidate.set(cd.id, r.meetUrl);
+        await db.update(schema.meetingDateCandidates).set({ calendarEventId: r.eventId ?? null }).where(eq(schema.meetingDateCandidates.id, cd.id));
+        cd.calendarEventId = r.eventId ?? null;
+      }
+    } else {
+      return c.json({ error: { code: "invalid_input", message: "日ごとに別のURLにする場合は、Google Meetの自動発行か、URLの手入力を選んでください" } }, 400);
+    }
+  }
+
+  // 以前の会議ツール（Zoom／Meet用の予定）が残らないよう後始末する
+  if (conf.mode !== "none" && meeting.conferenceType && meeting.conferenceType !== "manual") {
+    const sameKind = (conf.mode === "same" && conf.type === meeting.conferenceType) || (conf.mode === "per_day" && conf.type === meeting.conferenceType && meeting.conferenceType === "google_meet");
+    if (!sameKind) await cancelAutoConference(db, c.env, meeting.hostMemberId, meeting.conferenceType, meeting.conferenceMetaJson, meeting.calendarEventId).catch(console.error);
+  }
+
+  // ---- 確定の反映 ----
+  const newlyConfirmed = selected.filter((cd) => cd.isConfirmed !== 1);
+  await db.update(schema.meetingDateCandidates).set({ isConfirmed: 1 }).where(inArray(schema.meetingDateCandidates.id, selected.map((cd) => cd.id)));
+  for (const cd of selected) {
+    const url = urlByCandidate.get(cd.id);
+    if (url) await db.update(schema.meetingDateCandidates).set({ conferenceUrl: url }).where(eq(schema.meetingDateCandidates.id, cd.id));
+  }
+
+  // 主催者のGoogleカレンダーに、確定した日をブロック予定として入れる（Meet付きで作成済みの日は除く）
+  for (const cd of newlyConfirmed) {
+    if (cd.calendarEventId) continue;
+    const blocked = await blockHostCalendarForDate({
+      db, env: c.env, hostMemberId: meeting.hostMemberId, summary: meeting.title, description: meeting.description ?? "",
+      startAtUtc: new Date(cd.startsAt * 1000).toISOString(), endAtUtc: new Date(endOf(cd) * 1000).toISOString(),
+      requestId: `${id}-${cd.id}`,
+    });
+    if (blocked.eventId) await db.update(schema.meetingDateCandidates).set({ calendarEventId: blocked.eventId }).where(eq(schema.meetingDateCandidates.id, cd.id));
+  }
+
+  const confirmedAll = (await db.select().from(schema.meetingDateCandidates)
+    .where(and(eq(schema.meetingDateCandidates.meetingId, id), eq(schema.meetingDateCandidates.isConfirmed, 1)))
+    .orderBy(schema.meetingDateCandidates.startsAt).all());
+  const firstUrl = urlByCandidate.get(selected[0].id) ?? meeting.conferenceUrl ?? null;
+  const meetingUpdate: Partial<typeof schema.meetings.$inferInsert> = {
+    status: "confirmed", confirmedCandidateId: confirmedAll[0]?.id ?? null, updatedAt: now,
+  };
+  if (conf.mode !== "none") {
+    meetingUpdate.conferenceType = conf.type === "manual" ? "manual" : (conf.type as "zoom" | "google_meet");
+    meetingUpdate.conferenceUrl = firstUrl;
+    meetingUpdate.conferenceMetaJson = sharedMeta?.conferenceMetaJson ?? null;
+    meetingUpdate.calendarEventId = sharedMeta?.calendarEventId ?? (conf.mode === "per_day" && conf.type === "google_meet" ? selected[0].calendarEventId ?? null : null);
+  }
+  await db.update(schema.meetings).set(meetingUpdate).where(eq(schema.meetings.id, id));
+
+  // ---- 通知：確定した全日程と会議URLを1通にまとめる ----
+  const wasAlreadyConfirmed = meeting.status === "confirmed";
+  const host = await db.select({ name: schema.members.name, email: schema.members.email }).from(schema.members).where(eq(schema.members.id, meeting.hostMemberId)).get();
+  const hostName = host?.name ?? "主催者";
+  const design = await db.select({ timezone: schema.cardDesigns.timezone, appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
+  const tz = design?.timezone ?? "Asia/Tokyo";
+  const appTitle = design?.appTitle ?? "白樺クエスト";
+  const appUrl = getFrontendUrl(c.env);
+  const block = formatScheduleBlock(
+    selected.map((cd) => ({ startsAt: cd.startsAt, endsAt: cd.endsAt, url: urlByCandidate.get(cd.id) ?? cd.conferenceUrl })),
+    tz, meeting.conferenceUrl
+  );
+  const firstText = block.count === 1 ? block.dateText : `${block.dateText.split("\n")[1]?.replace(/^・/, "") ?? ""}ほか`;
+  const notifyMsg = block.count === 1
+    ? (wasAlreadyConfirmed ? `「${meeting.title}」に${block.dateText}が追加されました` : `「${meeting.title}」の日程が${block.dateText}に確定しました`)
+    : `「${meeting.title}」の日程が${block.count}日程に確定しました（${firstText}）${urlByCandidate.size > 0 ? "。会議URLも届いています" : ""}`;
+
+  const targetMembers = await getTargetMembers(db, meeting);
+  const mailer = new MailService(db, c.env);
+  const mails: Promise<void>[] = [];
+  for (const m of targetMembers.filter((x) => x.id !== meeting.hostMemberId)) {
+    await db.insert(schema.meetingNotifications).values({ id: newId(), meetingId: id, memberId: m.id, type: "confirmed", message: notifyMsg, readAt: null, createdAt: now });
+    if (m.email) {
+      mails.push(mailer.send("meeting_confirmed_member", m.email, {
+        appTitle, memberName: m.name, meetingTitle: meeting.title, hostName,
+        confirmedDate: block.dateText, urlPendingNote: block.urlText, meetingUrl: `${appUrl}/meetings/${id}`,
+      }).catch(console.error));
+    }
+  }
+  if (host?.email) {
+    mails.push(mailer.send("meeting_confirmed_member", host.email, {
+      appTitle, memberName: hostName, meetingTitle: meeting.title, hostName,
+      confirmedDate: block.dateText, urlPendingNote: block.urlText, meetingUrl: `${appUrl}/meetings/${id}`,
+    }).catch(console.error));
+  }
+  const extInvitees = await db.select().from(schema.meetingExternalInvitees).where(eq(schema.meetingExternalInvitees.meetingId, id)).all();
+  for (const ext of extInvitees) {
+    if (ext.email && ext.name) {
+      mails.push(mailer.send("meeting_confirmed_guest", ext.email, {
+        appTitle, guestName: ext.name, meetingTitle: meeting.title, hostName,
+        confirmedDate: block.dateText, urlPendingNote: block.urlText, scheduleUrl: `${appUrl}/schedule/${ext.token}`,
+      }).catch(console.error));
+    }
+  }
+  c.executionCtx.waitUntil(Promise.all(mails));
+
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
+  return c.json({ ok: true, confirmedCount: selected.length, mailCount: mails.length });
+});
 
 // ----------------------------------------------------------------
 // PATCH /api/meetings/:id/confirm — 日程確定トグル（主催者のみ）複数日程対応

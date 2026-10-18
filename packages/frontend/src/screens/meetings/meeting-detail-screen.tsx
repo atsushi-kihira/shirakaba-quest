@@ -4,13 +4,15 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, ChevronLeft, Check, Link as LinkIcon, Copy, CheckCircle, Edit2, UserPlus, Trash2, Video, ExternalLink, X, Plus } from "lucide-react";
-import { api } from "@/lib/api";
+import { Loader2, ChevronLeft, Check, Link as LinkIcon, Copy, CheckCircle, Edit2, UserPlus, Trash2, Video, X, Plus } from "lucide-react";
+import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { NewPostModal, type GraphTeamLite } from "@/screens/collab/_activity-and-records";
 import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
+import { ConfirmDatesModal, type ConfirmBulkPayload } from "./_confirm-dates-modal";
+import { ScheduleTextModal } from "@/components/schedule-text-modal";
 import { DEFAULT_START_TIME, defaultEndTime, addMinutesToTime } from "@/lib/meeting-time";
 
 type Availability = "yes" | "maybe" | "no";
@@ -194,8 +196,8 @@ export function MeetingDetailScreen() {
   // 確定モーダル
   type ConfirmModal = { candidateId: string; dateText: string };
   const [confirmModal, setConfirmModal] = useState<ConfirmModal | null>(null);
-  const [confirmUrlType, setConfirmUrlType] = useState<"google_meet" | "zoom" | "manual" | null>(null);
-  const [confirmManualUrl, setConfirmManualUrl] = useState("");
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [showScheduleText, setShowScheduleText] = useState(false);
   const [sharedInviteUrl, setSharedInviteUrl] = useState<string | null>(null);
   const [copiedSharedUrl, setCopiedSharedUrl] = useState(false);
   // 出席確認後、活動タイムラインへの投稿を促すプロンプト（パイロット限定・相手が1名の時のみ）
@@ -341,19 +343,17 @@ export function MeetingDetailScreen() {
     },
   });
 
-  // 日程確定 + 会議URL設定を同時に行う複合ミューテーション
-  const confirmWithUrlMutation = useMutation({
-    mutationFn: async ({ candidateId, urlType, url }: { candidateId: string; urlType: "google_meet" | "zoom" | "manual"; url?: string }) => {
-      await api.patch(`/meetings/${id}/confirm`, { candidateId, deferNotification: true });
-      await api.patch(`/meetings/${id}/conference`, { type: urlType, url, justConfirmed: true });
-    },
+  // 複数の日程をまとめて確定し、会議URLもまとめて設定する（関係者への通知メールは1通にまとまる）
+  const confirmBulkMutation = useMutation({
+    mutationFn: (payload: ConfirmBulkPayload) => api.post(`/meetings/${id}/confirm-bulk`, payload),
     onSuccess: () => {
       setConfirmModal(null);
-      setConfirmUrlType(null);
-      setConfirmManualUrl("");
+      setConfirmError(null);
       qc.invalidateQueries({ queryKey: ["meetings", id] });
+      qc.invalidateQueries({ queryKey: ["meetings"] });
       qc.invalidateQueries({ queryKey: ["meetings", "notifications"] });
     },
+    onError: (e) => setConfirmError(e instanceof ApiError ? e.message : "エラーが発生しました。もう一度お試しください。"),
   });
 
   const cancelMutation = useMutation({
@@ -1603,6 +1603,15 @@ export function MeetingDetailScreen() {
 
           {/* 日程確定（複数選択可・確定済みもトグル解除可） */}
           <div>
+            {confirmedCandidates.length > 0 && (
+              <button
+                onClick={() => setShowScheduleText(true)}
+                className="w-full mb-3 py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+              >
+                📋 確定した日程と会議URLをテキストで出力（メール・DM用）
+              </button>
+            )}
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
               日程の確定（複数選択可・タップで確定／解除）
             </p>
@@ -1621,13 +1630,12 @@ export function MeetingDetailScreen() {
                       if (!isConf) {
                         // 確定モーダルを開く
                         setConfirmModal({ candidateId: cand.id, dateText: `${date}${time ? ` ${time}` : ""}` });
-                        setConfirmUrlType(null);
-                        setConfirmManualUrl("");
+                        setConfirmError(null);
                       } else {
                         confirmMutation.mutate({ candidateId: cand.id });
                       }
                     }}
-                    disabled={confirmMutation.isPending || confirmWithUrlMutation.isPending}
+                    disabled={confirmMutation.isPending || confirmBulkMutation.isPending}
                     className="w-full flex items-center justify-between px-4 py-2.5 rounded-2xl text-sm font-medium transition hover:opacity-80 disabled:opacity-50"
                     style={{
                       background: isConf ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)",
@@ -1919,133 +1927,27 @@ export function MeetingDetailScreen() {
       )}
 
       {confirmModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
-          style={{ background: "rgba(26,20,16,0.5)" }}
-          onClick={(e) => { if (e.target === e.currentTarget) setConfirmModal(null); }}
-        >
-          <div className="card-paper rounded-3xl w-full max-w-sm p-6 space-y-4">
-            <div>
-              <p className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-                📅 日程を確定しますか？
-              </p>
-              <p className="text-sm mt-1 font-medium" style={{ color: "var(--color-success)" }}>
-                {confirmModal.dateText}
-              </p>
-              <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-                関係者にメールとホーム画面で通知されます
-              </p>
-            </div>
+        <ConfirmDatesModal
+          candidates={candidates.filter((cd) => cd.isConfirmed !== 1).map((cd) => ({ id: cd.id, startsAt: cd.startsAt, endsAt: cd.endsAt }))}
+          initialSelectedId={confirmModal.candidateId}
+          availableConferenceTypes={availableConferenceTypes}
+          pending={confirmBulkMutation.isPending}
+          error={confirmError}
+          onClose={() => setConfirmModal(null)}
+          onSubmit={(payload) => { setConfirmError(null); confirmBulkMutation.mutate(payload); }}
+        />
+      )}
 
-            <div>
-              <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-600)" }}>
-                📹 会議URLを同時に設定する（任意）
-              </p>
-              <div className="space-y-2">
-                {availableConferenceTypes.includes("google_meet") && (
-                  <button
-                    onClick={() => setConfirmUrlType(confirmUrlType === "google_meet" ? null : "google_meet")}
-                    className="w-full px-4 py-2.5 rounded-2xl text-sm font-medium transition flex items-center gap-2"
-                    style={{
-                      background: confirmUrlType === "google_meet" ? "rgba(90,140,92,0.15)" : "var(--color-paper-200)",
-                      color: confirmUrlType === "google_meet" ? "var(--color-success)" : "var(--color-ink-700)",
-                      border: confirmUrlType === "google_meet" ? "1.5px solid rgba(90,140,92,0.4)" : "1.5px solid transparent",
-                    }}
-                  >
-                    <Video size={14} />
-                    Google Meetを発行して確定
-                    {confirmUrlType === "google_meet" && <Check size={14} className="ml-auto" />}
-                  </button>
-                )}
-                {availableConferenceTypes.includes("zoom") && (
-                  <button
-                    onClick={() => setConfirmUrlType(confirmUrlType === "zoom" ? null : "zoom")}
-                    className="w-full px-4 py-2.5 rounded-2xl text-sm font-medium transition flex items-center gap-2"
-                    style={{
-                      background: confirmUrlType === "zoom" ? "rgba(90,140,92,0.15)" : "var(--color-paper-200)",
-                      color: confirmUrlType === "zoom" ? "var(--color-success)" : "var(--color-ink-700)",
-                      border: confirmUrlType === "zoom" ? "1.5px solid rgba(90,140,92,0.4)" : "1.5px solid transparent",
-                    }}
-                  >
-                    <Video size={14} />
-                    Zoomを発行して確定
-                    {confirmUrlType === "zoom" && <Check size={14} className="ml-auto" />}
-                  </button>
-                )}
-                <button
-                  onClick={() => setConfirmUrlType(confirmUrlType === "manual" ? null : "manual")}
-                  className="w-full px-4 py-2.5 rounded-2xl text-sm font-medium transition flex items-center gap-2"
-                  style={{
-                    background: confirmUrlType === "manual" ? "rgba(90,140,92,0.15)" : "var(--color-paper-200)",
-                    color: confirmUrlType === "manual" ? "var(--color-success)" : "var(--color-ink-700)",
-                    border: confirmUrlType === "manual" ? "1.5px solid rgba(90,140,92,0.4)" : "1.5px solid transparent",
-                  }}
-                >
-                  <ExternalLink size={14} />
-                  URLを手動入力して確定
-                  {confirmUrlType === "manual" && <Check size={14} className="ml-auto" />}
-                </button>
-                {confirmUrlType === "manual" && (
-                  <input
-                    type="url"
-                    placeholder="https://..."
-                    value={confirmManualUrl}
-                    onChange={(e) => setConfirmManualUrl(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl text-sm border"
-                    style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
-                    autoFocus
-                  />
-                )}
-              </div>
-            </div>
-
-            {confirmWithUrlMutation.isError && (
-              <p className="text-xs" style={{ color: "var(--color-brand)" }}>
-                エラーが発生しました。もう一度お試しください。
-              </p>
-            )}
-
-            <div className="flex gap-2 pt-1">
-              <button
-                onClick={() => setConfirmModal(null)}
-                className="flex-1 py-2.5 rounded-2xl text-sm border"
-                style={{ borderColor: "var(--color-paper-300)", color: "var(--color-ink-600)" }}
-                disabled={confirmWithUrlMutation.isPending || confirmMutation.isPending}
-              >
-                キャンセル
-              </button>
-              {confirmUrlType ? (
-                <button
-                  onClick={() => {
-                    if (confirmUrlType === "manual" && !confirmManualUrl.trim()) return;
-                    confirmWithUrlMutation.mutate({
-                      candidateId: confirmModal.candidateId,
-                      urlType: confirmUrlType,
-                      url: confirmUrlType === "manual" ? confirmManualUrl.trim() : undefined,
-                    });
-                  }}
-                  disabled={confirmWithUrlMutation.isPending || (confirmUrlType === "manual" && !confirmManualUrl.trim())}
-                  className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
-                  style={{ background: "var(--color-success)" }}
-                >
-                  {confirmWithUrlMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : "URLを設定して確定"}
-                </button>
-              ) : (
-                <button
-                  onClick={() => {
-                    confirmMutation.mutate({ candidateId: confirmModal.candidateId, deferNotification: false });
-                    setConfirmModal(null);
-                  }}
-                  disabled={confirmMutation.isPending}
-                  className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50"
-                  style={{ background: "var(--color-ink-600)" }}
-                >
-                  URLなしで確定
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+      {/* 確定した日程と会議URLのテキスト出力（メール・DM用） */}
+      {showScheduleText && (
+        <ScheduleTextModal
+          title={meeting.title}
+          hostName={meeting.host?.name}
+          items={confirmedCandidates.map((cd) => ({ startsAt: cd.startsAt, endsAt: cd.endsAt, url: cd.conferenceUrl }))}
+          fallbackUrl={meeting.conferenceUrl}
+          pageUrl={`${window.location.origin}/meetings/${id}`}
+          onClose={() => setShowScheduleText(false)}
+        />
       )}
 
       {/* 出席確認後：活動タイムラインへの投稿を促すプロンプト（パイロット限定） */}

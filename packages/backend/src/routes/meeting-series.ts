@@ -14,6 +14,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { candidateEndSeconds } from "../services/candidate-length.ts";
+import { formatScheduleBlock } from "../services/schedule-text.ts";
 import { queueSeriesCalendarSync, membersAffectedBySeries, reconcileMembersCalendar } from "../services/memberCalendarSync.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
@@ -597,13 +598,14 @@ meetingSeriesRoutes.get("/:id", async (c) => {
   const myResponses: Record<string, Availability> = {};
   for (const r of responses) if (r.memberId === memberId) myResponses[r.candidateId] = r.availability as Availability;
 
-  let occurrences: Array<{ id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null }> = [];
+  let occurrences: Array<{ id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null; conferenceUrl: string | null }> = [];
   if (series.status === "confirmed" || series.status === "ended" || series.status === "cancelled") {
     const meetingsRows = await db.select().from(schema.meetings).where(eq(schema.meetings.seriesId, id)).all();
     const candidateIds = meetingsRows.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
-    const dateCandidates = candidateIds.length > 0
-      ? await db.select().from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, candidateIds)).all()
-      : [];
+    // 開催回が多い定例会でも、D1のバインド変数の上限に収まるよう分割して取得する
+    const dateCandidates = (await Promise.all(chunkOf(candidateIds, 50).map((chunk) =>
+      db.select().from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, chunk)).all()
+    ))).flat();
     const dateCandidateMap = new Map(dateCandidates.map((d) => [d.id, d]));
     occurrences = meetingsRows
       .map((m) => {
@@ -611,6 +613,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
         return {
           id: m.id, startsAt: dc?.startsAt ?? 0, endsAt: dc?.endsAt ?? null,
           status: m.status, seriesOccurrenceIndex: m.seriesOccurrenceIndex,
+          conferenceUrl: dc?.conferenceUrl ?? m.conferenceUrl ?? null,
         };
       })
       .sort((a, b) => a.startsAt - b.startsAt);
@@ -636,6 +639,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       event: linkedEvent ? { id: linkedEvent.id, title: linkedEvent.title, ended: linkedEvent.status !== "active", points: eventPoints } : null,
       eventType: eventType ?? null,
       hostMemberId: series.hostMemberId, isHost: series.hostMemberId === memberId,
+      hostName: targets.find((t) => t.id === series.hostMemberId)?.name ?? null,
       scope: series.scope, teamId: series.teamId, collabTeamId: series.collabTeamId,
       status: series.status, deadline: series.deadline,
       endCondition: series.endCondition, endDate: series.endDate, occurrenceCount: series.occurrenceCount,
@@ -792,14 +796,18 @@ async function generateSeriesOccurrences(
     : [];
   const host = await db.select({ name: schema.members.name, email: schema.members.email }).from(schema.members).where(eq(schema.members.id, series.hostMemberId)).get();
   const appUrl = getFrontendUrl(env);
-  const design = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
+  const design = await db.select({ appTitle: schema.cardDesigns.appTitle, timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get();
   const mailer = new MailService(db, env);
   const firstDate = new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric" }).format(new Date(occurrences[0].startsAt * 1000));
   const confNote = sharedUrl ? "会議URLは毎回同じURLをご利用ください。" : "";
-  // メール本文にも共通の会議URLを載せる（毎回ログインしなくても確認できるように）
-  const urlNote = sharedUrl ? `\n▼ 会議URL（毎回共通）\n${sharedUrl}\n` : "";
+  // メール本文には、全日程の一覧と会議URL（毎回共通なら1つだけ）を載せる
+  const block = formatScheduleBlock(
+    occurrences.map((o) => ({ startsAt: o.startsAt, endsAt: o.endsAt, url: sharedUrl })),
+    design?.timezone ?? "Asia/Tokyo"
+  );
+  const urlNote = sharedUrl ? `\n${block.urlText}\n` : "";
   const notifyMsg = `「${series.title}」が「${scheduleLabel}」で確定しました（全${occurrences.length}回、初回：${firstDate}〜）${confNote}`;
-  const confirmedDateText = `${scheduleLabel}（全${occurrences.length}回、初回：${firstDate}〜）`;
+  const confirmedDateText = `${scheduleLabel}\n${block.dateText}`;
   const mailPromises: Promise<void>[] = [];
   for (const m of targets) {
     await db.insert(schema.meetingNotifications).values({
@@ -959,6 +967,109 @@ meetingSeriesRoutes.patch("/:id/event-type", async (c) => {
   await db.update(schema.meetings).set({ eventTypeDefId: typeDef.id, updatedAt: now }).where(eq(schema.meetings.seriesId, id));
 
   return c.json({ data: { eventTypeDefId: typeDef.id } });
+});
+
+// ----------------------------------------------------------------
+// PATCH /api/meeting-series/:id/conference-urls — 各回の会議URLをまとめて設定（主催者のみ・手入力のURL）
+//  body: { mode: "same", url } 今後の全開催回を同じURLにする
+//        { mode: "per_day", urls: { [meetingId]: url } } 日ごとに別のURLを設定する（指定した回だけ変更）
+//  変更した回は、1通のメールにまとめて知らせる（URLを変えるたびにメールは送らない）。
+// ----------------------------------------------------------------
+meetingSeriesRoutes.patch("/:id/conference-urls", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ設定できます" } }, 403);
+  if (series.status !== "confirmed") return c.json({ error: { code: "invalid_status", message: "開催日が確定している定例会でのみ設定できます" } }, 400);
+
+  const body = await c.req.json<{ mode?: "same" | "per_day"; url?: string; urls?: Record<string, string> }>().catch(() => ({} as { mode?: "same" | "per_day"; url?: string; urls?: Record<string, string> }));
+  const isHttp = (u: string | undefined) => !!u && /^https?:\/\//.test(u.trim());
+
+  const meetingsRows = await db.select().from(schema.meetings).where(eq(schema.meetings.seriesId, id)).all();
+  const candidateIds = meetingsRows.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
+  const dateRows = (await Promise.all(chunkOf(candidateIds, 50).map((chunk) =>
+    db.select().from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, chunk)).all()
+  ))).flat();
+  const dateById = new Map(dateRows.map((d) => [d.id, d]));
+  // 開始前で、キャンセルされていない回だけが対象
+  const upcoming = meetingsRows
+    .filter((m) => m.status !== "cancelled")
+    .map((m) => ({ m, d: m.confirmedCandidateId ? dateById.get(m.confirmedCandidateId) : undefined }))
+    .filter((x): x is { m: typeof meetingsRows[number]; d: typeof dateRows[number] } => !!x.d && x.d.startsAt >= now)
+    .sort((a, b) => a.d.startsAt - b.d.startsAt);
+  if (upcoming.length === 0) return c.json({ error: { code: "invalid_input", message: "会議URLを設定できる今後の開催回がありません" } }, 400);
+
+  const changes = new Map<string, string>(); // meetingId -> url
+  if (body.mode === "same") {
+    if (!isHttp(body.url)) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
+    for (const x of upcoming) changes.set(x.m.id, body.url!.trim());
+  } else if (body.mode === "per_day") {
+    for (const [mid, url] of Object.entries(body.urls ?? {})) {
+      if (!url?.trim()) continue;
+      if (!upcoming.some((x) => x.m.id === mid)) return c.json({ error: { code: "invalid_input", message: "この定例会の今後の開催回ではないものが含まれています" } }, 400);
+      if (!isHttp(url)) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
+      changes.set(mid, url.trim());
+    }
+    if (changes.size === 0) return c.json({ error: { code: "invalid_input", message: "設定する会議URLを入力してください" } }, 400);
+  } else {
+    return c.json({ error: { code: "invalid_input", message: "設定方法を選んでください" } }, 400);
+  }
+
+  // 全回共通で自動発行していた会議URL（Zoom／Meet用の予定）を、手入力のURLに置き換える場合は後始末する
+  if (body.mode === "same" && (series.conferenceType === "zoom" || series.conferenceType === "google_meet") && (series.conferenceMetaJson || series.conferenceCalendarEventId)) {
+    c.executionCtx.waitUntil(cancelAutoConference(db, c.env, series.hostMemberId, series.conferenceType, series.conferenceMetaJson, series.conferenceCalendarEventId));
+  }
+  if (body.mode === "same") {
+    await db.update(schema.meetingSeries).set({
+      conferenceType: "manual", conferenceUrl: body.url!.trim(), conferenceMetaJson: null, conferenceCalendarEventId: null, updatedAt: now,
+    }).where(eq(schema.meetingSeries.id, id));
+  }
+  for (const x of upcoming) {
+    const url = changes.get(x.m.id);
+    if (!url) continue;
+    await db.update(schema.meetings).set({ conferenceType: "manual", conferenceUrl: url, conferenceMetaJson: null, updatedAt: now }).where(eq(schema.meetings.id, x.m.id));
+    await db.update(schema.meetingDateCandidates).set({ conferenceUrl: url }).where(eq(schema.meetingDateCandidates.id, x.d.id));
+  }
+
+  // ---- 1通にまとめて通知 ----
+  const design = await db.select({ appTitle: schema.cardDesigns.appTitle, timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get();
+  const tz = design?.timezone ?? "Asia/Tokyo";
+  const changed = upcoming.filter((x) => changes.has(x.m.id));
+  const block = formatScheduleBlock(changed.map((x) => ({ startsAt: x.d.startsAt, endsAt: x.d.endsAt, url: changes.get(x.m.id) })), tz);
+  // 「▼ オンライン会議参加URL」の下に入る文面（共通なら1つ、違うなら日ごと）
+  const urlBody = block.urlText.replace(/^📹[^\n]*\n?/, "");
+  const memberIds = await resolveSeriesMemberIds(db, series);
+  const targets = memberIds.length > 0
+    ? await db.select({ id: schema.members.id, name: schema.members.name, email: schema.members.email }).from(schema.members).where(inArray(schema.members.id, memberIds)).all()
+    : [];
+  const host = targets.find((t) => t.id === series.hostMemberId);
+  const appUrl = getFrontendUrl(c.env);
+  const mailer = new MailService(db, c.env);
+  const notifyMsg = `「${series.title}」の会議URLが設定されました（${changed.length}回分）`;
+  const mails: Promise<void>[] = [];
+  for (const m of targets) {
+    if (m.id !== series.hostMemberId) {
+      await db.insert(schema.meetingNotifications).values({ id: newId(), meetingId: changed[0].m.id, memberId: m.id, type: "conference_url_set", message: notifyMsg, readAt: null, createdAt: now });
+    }
+    if (m.email) {
+      mails.push(mailer.send("meeting_conference_member", m.email, {
+        appTitle: design?.appTitle ?? "白樺クエスト", memberName: m.name, meetingTitle: `【定例会】${series.title}`,
+        hostName: host?.name ?? "主催者", confirmedDate: block.dateText, conferenceUrl: urlBody, conferenceType: "オンライン会議",
+        subjectAction: "会議URLが届きました — ", confirmHeading: "会議URLのお知らせ",
+        confirmIntro: `「${series.title}」の会議URLが設定されました（${changed.length}回分）。`,
+        meetingUrl: `${appUrl}/meetings/series/${id}`,
+      }).catch(console.error));
+    }
+  }
+  c.executionCtx.waitUntil(Promise.all(mails));
+
+  queueSeriesCalendarSync(c.executionCtx, db, c.env, id);
+  return c.json({ ok: true, updated: changed.length });
 });
 
 // ----------------------------------------------------------------

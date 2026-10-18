@@ -7,11 +7,13 @@ import { useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Loader2, CheckCircle, XCircle, Trash2, Check } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateJP, fmtTime } from "@/lib/date";
 import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
+import { ScheduleTextModal } from "@/components/schedule-text-modal";
+import { SeriesConferenceUrlsModal, type SeriesUrlPayload } from "./_series-conference-urls-modal";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 
 type Availability = "yes" | "maybe" | "no";
@@ -23,12 +25,12 @@ type Candidate = {
   upcomingDates?: { startsAt: number; endsAt: number }[];
 };
 type TargetMember = { id: string; name: string; emoji: string; bgColor: string };
-type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null };
+type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null; conferenceUrl: string | null };
 type SeriesDetail = {
   id: string; title: string; description: string | null;
   event: { id: string; title: string; ended: boolean; points: number } | null;
   eventType: { id: string; name: string; emoji: string; pointValue: number } | null;
-  hostMemberId: string; isHost: boolean;
+  hostMemberId: string; isHost: boolean; hostName: string | null;
   scope: "collab_team" | "selected"; collabTeamId: string | null;
   status: "voting" | "confirmed" | "ended" | "cancelled";
   deadline: number | null;
@@ -88,6 +90,9 @@ export function MeetingSeriesDetailScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showScheduleText, setShowScheduleText] = useState(false);
+  const [showUrlsModal, setShowUrlsModal] = useState(false);
+  const [urlsError, setUrlsError] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["meeting-series", id],
@@ -145,6 +150,17 @@ export function MeetingSeriesDetailScreen() {
       qc.invalidateQueries({ queryKey: ["meetings"] });
     },
     onError: (e: Error) => { setShowDeleteConfirm(false); setError(e.message); },
+  });
+
+  const conferenceUrlsMutation = useMutation({
+    mutationFn: (payload: SeriesUrlPayload) => api.patch(`/meeting-series/${id}/conference-urls`, payload),
+    onSuccess: () => {
+      setShowUrlsModal(false);
+      setUrlsError(null);
+      qc.invalidateQueries({ queryKey: ["meeting-series", id] });
+      qc.invalidateQueries({ queryKey: ["meetings"] });
+    },
+    onError: (e) => setUrlsError(e instanceof ApiError ? e.message : "エラーが発生しました。もう一度お試しください。"),
   });
 
   if (isLoading || !data) {
@@ -392,6 +408,20 @@ export function MeetingSeriesDetailScreen() {
 
       {(series.status === "confirmed" || series.status === "ended" || series.status === "cancelled") && (
         <>
+          {upcoming.length > 0 && series.status === "confirmed" && (
+            <div className="grid gap-2 mb-4">
+              <button onClick={() => setShowScheduleText(true)} className="py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                📋 確定した日程と会議URLをテキストで出力（メール・DM用）
+              </button>
+              {series.isHost && (
+                <button onClick={() => { setUrlsError(null); setShowUrlsModal(true); }} className="py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                  📹 各回の会議URLをまとめて設定
+                </button>
+              )}
+            </div>
+          )}
           {upcoming.length > 0 && (
             <section className="mb-5">
               <div className="flex items-center gap-2 mb-2">
@@ -531,6 +561,25 @@ export function MeetingSeriesDetailScreen() {
             </div>
           )}
         </>
+      )}
+      {showScheduleText && (
+        <ScheduleTextModal
+          title={`【定例会】${series.title}`}
+          hostName={series.hostName}
+          items={upcoming.map((o) => ({ startsAt: o.startsAt, endsAt: o.endsAt, url: o.conferenceUrl }))}
+          fallbackUrl={series.conferenceUrl}
+          pageUrl={`${window.location.origin}/meetings/series/${id}`}
+          onClose={() => setShowScheduleText(false)}
+        />
+      )}
+      {showUrlsModal && (
+        <SeriesConferenceUrlsModal
+          occurrences={upcoming}
+          pending={conferenceUrlsMutation.isPending}
+          error={urlsError}
+          onClose={() => setShowUrlsModal(false)}
+          onSubmit={(p) => { setUrlsError(null); conferenceUrlsMutation.mutate(p); }}
+        />
       )}
     </div>
   );
