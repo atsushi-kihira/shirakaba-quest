@@ -470,6 +470,14 @@ async function collectMemberCandidates(db: Db, meId: string): Promise<MemberCand
   });
 }
 
+// 専門分野の絞り込みに対して、メンバー本人の職種（category）が合うか（全角半角・空白・大文字小文字の違いを無視し、部分一致で判定）
+function memberMatchesSpecialties(category: string, specialties: string[]): boolean {
+  const norm = (v: string) => v.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  const c = norm(category ?? "");
+  if (!c) return false;
+  return specialties.some((sp) => { const t = norm(sp); return !!t && (c.includes(t) || t.includes(c)); });
+}
+
 // メンバー候補のIDは外部人脈のIDと混ざらないよう接頭辞を付ける
 const MEMBER_CANDIDATE_PREFIX = "member:";
 
@@ -615,7 +623,10 @@ export async function runEnishiSearch(params: ForMeParams | GiverParams | Contac
     });
     if (specialties.length > 0) candidates = candidates.filter((cnd) => cnd.specialty && specialties.includes(cnd.specialty));
     // 「すべて」のときだけ、メンバー本人も候補にする（専門分野の絞り込みは外部人脈の属性なので、指定時はメンバー本人は対象外）
-    const memberCandidates = scope === "all" && specialties.length === 0 ? await collectMemberCandidates(db, params.meId) : [];
+    // 専門分野を絞り込んでいる場合は、メンバー本人も「職種」が選んだ専門分野に合う人だけを対象にする
+    const memberCandidates = scope === "all"
+      ? (await collectMemberCandidates(db, params.meId)).filter((m) => specialties.length === 0 || memberMatchesSpecialties(m.category, specialties))
+      : [];
     if (candidates.length === 0 && memberCandidates.length === 0) {
       return { groups: [{ hop: "direct", label: "検索結果", results: [] }], truncated: false };
     }

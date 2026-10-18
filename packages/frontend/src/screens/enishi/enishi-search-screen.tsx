@@ -1534,7 +1534,7 @@ function ContactSpecialtySearchPanel() {
         </div>
         {scope === "all" && specialties.size > 0 && (
           <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
-            ※ 専門分野を絞り込んでいる間は、外部人脈のみが対象になります（メンバー本人は対象外）
+            ※ 専門分野を絞り込んでいる間は、外部人脈の専門分野と、メンバー本人の職種が、選んだ専門分野に合うものが対象になります
           </p>
         )}
         {scope === "specific_members" && (
