@@ -15,6 +15,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
+import { splitMultiEntries } from "../services/split-entries.ts";
 import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
@@ -249,17 +250,24 @@ enishiRoutes.post("/eggs", async (c) => {
     return c.json({ error: { code: "egg_limit_exceeded", message: `金の卵は最大${MAX_EGGS}件まで登録できます。すでに上限に達しています。` } }, 400);
   }
 
+  // 1つの入力欄に複数の相手をまとめて書かれている場合は、1件ずつに分けて登録する（上限を超える分は登録しない）
+  const parts = splitMultiEntries(body.description);
+  const accepted = parts.slice(0, Math.max(MAX_EGGS - existing.length, 0));
   const now = Math.floor(Date.now() / 1000);
-  const id = newId();
-  await db.insert(schema.goldenEggs).values({
-    id, memberId: meId,
-    description: body.description.trim(),
-    issue: body.issue?.trim() || null,
-    priceRange: body.priceRange?.trim() || null,
-    region: body.region?.trim() || null,
-    createdAt: now, updatedAt: now,
-  });
-  return c.json({ data: { id } }, 201);
+  const ids: string[] = [];
+  for (const description of accepted) {
+    const id = newId();
+    ids.push(id);
+    await db.insert(schema.goldenEggs).values({
+      id, memberId: meId,
+      description,
+      issue: body.issue?.trim() || null,
+      priceRange: body.priceRange?.trim() || null,
+      region: body.region?.trim() || null,
+      createdAt: now, updatedAt: now,
+    });
+  }
+  return c.json({ data: { id: ids[0], ids, splitCount: parts.length, skippedCount: parts.length - accepted.length } }, 201);
 });
 
 // ---- PATCH /api/enishi/eggs/:id ----
@@ -330,16 +338,23 @@ enishiRoutes.post("/geese", async (c) => {
   }
 
   const priority = ["高", "中", "低"].includes(body.priority ?? "") ? body.priority : null;
+  // 1つの入力欄に複数の相手をまとめて書かれている場合は、1件ずつに分けて登録する（上限を超える分は登録しない）
+  const parts = splitMultiEntries(body.description);
+  const accepted = parts.slice(0, Math.max(MAX_GEESE - existing.length, 0));
   const now = Math.floor(Date.now() / 1000);
-  const id = newId();
-  await db.insert(schema.goldenGeese).values({
-    id, memberId: meId,
-    description: body.description.trim(),
-    contactHypothesis: body.contactHypothesis?.trim() || null,
-    priority,
-    createdAt: now, updatedAt: now,
-  });
-  return c.json({ data: { id } }, 201);
+  const ids: string[] = [];
+  for (const description of accepted) {
+    const id = newId();
+    ids.push(id);
+    await db.insert(schema.goldenGeese).values({
+      id, memberId: meId,
+      description,
+      contactHypothesis: body.contactHypothesis?.trim() || null,
+      priority,
+      createdAt: now, updatedAt: now,
+    });
+  }
+  return c.json({ data: { id: ids[0], ids, splitCount: parts.length, skippedCount: parts.length - accepted.length } }, 201);
 });
 
 // ---- PATCH /api/enishi/geese/:id ----

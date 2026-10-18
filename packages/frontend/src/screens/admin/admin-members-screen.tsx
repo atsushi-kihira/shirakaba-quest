@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle, UserMinus, UserCheck, Trash2, ChevronDown, ChevronUp, Ghost, Ban, Eye } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
-import { fmtDateISO } from "@/lib/date";
+import { fmtDateISO, fmtDateTimeFull } from "@/lib/date";
 import { Search, X } from "lucide-react";
 import { matchesSearchQuery } from "@/lib/contact-search";
 import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActive, type JoinedRange } from "@/components/joined-range-filter";
@@ -32,6 +32,70 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   rejected: { label: "利用却下", color: "var(--color-brand)" },
   deleted:  { label: "削除済み", color: "var(--color-ink-300)" },
 };
+
+// ---- 登録を始めたが、確認メールのリンクを開いていない（承認待ちに出てこない）人 ----
+type PendingRegistration = { email: string; name: string | null; requestedAt: number; hasDraft: boolean; linkOpened: boolean };
+
+function PendingRegistrationsSection({ tz }: { tz: string }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["admin", "registration-pending"],
+    queryFn: () => api.get<{ data: PendingRegistration[] }>("/admin/members/registration-pending"),
+  });
+  const resend = useMutation({
+    mutationFn: (email: string) => api.post("/admin/members/registration-pending/resend", { email }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "registration-pending"] }),
+  });
+  const dismiss = useMutation({
+    mutationFn: (email: string) => api.delete(`/admin/members/registration-pending?email=${encodeURIComponent(email)}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "registration-pending"] }),
+  });
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const list = data?.data ?? [];
+  if (list.length === 0) return null;
+  return (
+    <div className="card-paper p-4 mb-4" style={{ border: "1.5px solid rgba(212,160,59,0.45)" }}>
+      <h2 className="text-sm font-semibold mb-1" style={{ color: "var(--color-ink-800)" }}>
+        📧 登録の途中の方（{list.length}名）
+      </h2>
+      <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+        登録を始めたものの、確認メールのリンクをまだ開いていない方です。リンクが開かれると、承認待ちとして下の一覧に表示されます。
+        メールが届いていない・見落としている可能性があるので、ご本人へ声をかけるか、確認メールを再送してください。
+      </p>
+      <div className="flex flex-col gap-2">
+        {list.map((r) => (
+          <div key={r.email} className="flex items-center gap-2 flex-wrap rounded-xl px-3 py-2" style={{ background: "var(--color-paper-100)" }}>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>
+                {r.name ?? "（お名前は未入力・保存なし）"}
+              </div>
+              <div className="text-xs truncate" style={{ color: "var(--color-ink-500)" }}>{r.email}</div>
+              <div className="text-xs" style={{ color: "var(--color-ink-400)" }}>
+                {fmtDateTimeFull(r.requestedAt, tz)} にメール送信　
+                <span style={{ color: r.linkOpened ? "var(--color-brand)" : "var(--color-accent)", fontWeight: 600 }}>
+                  {r.linkOpened ? "リンクは開かれたが登録は未完了" : "リンク未開封"}
+                </span>
+              </div>
+            </div>
+            {r.hasDraft && (
+              <button onClick={() => resend.mutate(r.email, { onSuccess: () => setSentTo(r.email) })} disabled={resend.isPending}
+                className="px-3 py-1.5 rounded-full text-xs font-medium disabled:opacity-50"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                {sentTo === r.email ? "再送しました" : "確認メールを再送"}
+              </button>
+            )}
+            <button onClick={() => { if (confirm(`${r.name ?? r.email} さんを、この一覧から外します（入力内容も削除されます）。よろしいですか？`)) dismiss.mutate(r.email); }}
+              disabled={dismiss.isPending} className="px-3 py-1.5 rounded-full text-xs font-medium disabled:opacity-50"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+              一覧から外す
+            </button>
+          </div>
+        ))}
+      </div>
+      {resend.isError && <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>{(resend.error as Error).message}</p>}
+    </div>
+  );
+}
 
 export function AdminMembersScreen() {
   const qc = useQueryClient();
@@ -116,6 +180,8 @@ export function AdminMembersScreen() {
           ⚠️ 承認待ちのメンバーが {pendingCount} 名います
         </div>
       )}
+
+      <PendingRegistrationsSection tz={tz} />
 
       {/* フィルター */}
       <div className="flex gap-2 mb-4 flex-wrap">

@@ -97,6 +97,46 @@ type PendingConfirmationsResponse = { data: PendingConfirmation[] };
 type GuestFollowup = { id: string; guestName: string; guestMessage: string | null; guestCompany: string | null; startAtUtc: string; endAtUtc: string };
 type GuestFollowupsResponse = { data: GuestFollowup[] };
 
+// ---- 初めてのログインで、金の卵・金のガチョウの登録をご案内するダイアログ ----
+// 登録時にはこの入力を求めないため、承認後に初めて開いたときに一度だけ案内する（「あとで」を押したら、その端末では再表示しない）。
+// 未登録の間は、ホームの先頭に案内（下の profilePromptItems）が出続ける。
+function EnishiFirstLoginDialog({ userId, enabled }: { userId: string | undefined; enabled: boolean }) {
+  const navigate = useNavigate();
+  const key = `enishi-first-prompt-dismissed:${userId ?? ""}`;
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem(key) === "1"; } catch { return false; }
+  });
+  if (!enabled || dismissed || !userId) return null;
+  const close = () => {
+    try { localStorage.setItem(key, "1"); } catch { /* 保存できない環境では、閉じるだけにする */ }
+    setDismissed(true);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.4)" }} onClick={close}>
+      <div className="card-paper p-5 w-full max-w-sm rounded-3xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-base font-bold mb-2" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          🥚🪙 金の卵・金のガチョウを登録しましょう
+        </h3>
+        <p className="text-sm mb-2" style={{ color: "var(--color-ink-700)" }}>
+          「たどり着きたい理想の相手」（金の卵）と、「そこへ運んでくれそうな立場の人」（金のガチョウ）を登録しておくと、AIによる「ご縁さがし」の精度が上がります。
+        </p>
+        <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+          💡 1つの欄には1件ずつ入力してください（複数あるときは、行を分けて書いても、自動で1件ずつに分けて登録されます）。あとからいつでも追加・編集できます。
+        </p>
+        <div className="flex gap-2">
+          <button onClick={close} className="flex-1 py-3 rounded-2xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+            あとで
+          </button>
+          <button onClick={() => { close(); navigate("/enishi/register"); }}
+            className="flex-1 py-3 rounded-2xl text-sm font-semibold text-white" style={{ background: "var(--color-brand)" }}>
+            登録する
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
   const approved = isApprovedMember(user);
@@ -402,8 +442,11 @@ export function HomeScreen() {
     });
   }
 
+  const needsEnishiPrompt = !!(goldenEggsData && goldenGeeseData && goldenEggsData.data.length === 0 && goldenGeeseData.data.length === 0);
+
   return (
     <div className="px-4 py-6 space-y-5 max-w-xl mx-auto lg:max-w-none pb-24">
+      <EnishiFirstLoginDialog userId={user?.id} enabled={approved && needsEnishiPrompt} />
 
       {/* 承認待ち（ゲスト）向けのご案内 */}
       {!approved && (

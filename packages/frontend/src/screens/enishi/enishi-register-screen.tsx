@@ -12,6 +12,18 @@ const MAX_ITEMS = 8;
 
 type GoldenEgg = { id: string; description: string; issue: string | null; priceRange: string | null; region: string | null };
 type GoldenGoose = { id: string; description: string; contactHypothesis: string | null; priority: string | null };
+// 1つの入力欄に複数まとめて入力された場合、サーバー側で1件ずつに分けて登録される。そのことをお知らせする
+type SplitResult = { data?: { splitCount?: number; skippedCount?: number } } | { ok: boolean } | null;
+function notifySplit(res: unknown, label: string): void {
+  const d = (res as { data?: { splitCount?: number; skippedCount?: number } } | null)?.data;
+  if (!d?.splitCount || d.splitCount < 2) return;
+  const registered = d.splitCount - (d.skippedCount ?? 0);
+  alert(
+    `複数の内容が入力されていたため、${d.splitCount}件の${label}に分けました。` +
+    (d.skippedCount ? `\n（登録できる上限を超えた${d.skippedCount}件は登録していません。登録できたのは${registered}件です）` : "\n内容は「登録・編集」の一覧から確認・修正できます。")
+  );
+}
+
 type EggsResponse = { data: GoldenEgg[] };
 type GeeseResponse = { data: GoldenGoose[] };
 
@@ -141,9 +153,9 @@ function EggForm({ mode, egg, onDone, onCancel }: { mode: "create" | "edit"; egg
   const save = useMutation({
     mutationFn: () => {
       const body = { description, issue: issue || undefined, priceRange: priceRange || undefined, region: region || undefined };
-      return mode === "create" ? api.post("/enishi/eggs", body) : api.patch(`/enishi/eggs/${egg!.id}`, body);
+      return mode === "create" ? api.post<SplitResult>("/enishi/eggs", body) : api.patch(`/enishi/eggs/${egg!.id}`, body);
     },
-    onSuccess: onDone,
+    onSuccess: (res) => { notifySplit(res, "金の卵"); onDone(); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "保存に失敗しました"),
   });
 
@@ -267,9 +279,9 @@ function GooseForm({ mode, goose, onDone, onCancel }: { mode: "create" | "edit";
   const save = useMutation({
     mutationFn: () => {
       const body = { description, contactHypothesis: contactHypothesis || undefined, priority };
-      return mode === "create" ? api.post("/enishi/geese", body) : api.patch(`/enishi/geese/${goose!.id}`, body);
+      return mode === "create" ? api.post<SplitResult>("/enishi/geese", body) : api.patch(`/enishi/geese/${goose!.id}`, body);
     },
-    onSuccess: onDone,
+    onSuccess: (res) => { notifySplit(res, "金のガチョウ"); onDone(); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "保存に失敗しました"),
   });
 

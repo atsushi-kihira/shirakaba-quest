@@ -1,69 +1,65 @@
 // =============================================================
 // メンバー登録ルート
 // POST /api/register/scan-card                    — カード画像OCR + Claude 構造化
-// POST /api/register/request-email-verification    — 手入力登録時のメールアドレス確認メール送信
-// GET  /api/register/email-verification-status     — 確認メールのリンククリック待ちポーリング用
-// POST /api/register/verify-email                  — メール内リンクからの確認完了
-// POST /api/register/submit                        — 仮登録申請
+// POST /api/register/request-email-verification    — 手入力登録時：入力内容を下書き保存し、確認メールを送る
+// GET  /api/register/email-verification-status     — 確認メールのリンククリック待ちポーリング用（登録完了も返す）
+// POST /api/register/verify-email                  — メール内リンクからの確認完了＝下書きの内容で仮登録（承認待ち）を作成
+// POST /api/register/resume                        — 前回の入力（下書き）が残っていれば、確認メールを再送して続きから登録
+// POST /api/register/submit                        — 仮登録申請（カードを読み取れた場合など、メール確認なしの登録）
 // =============================================================
 import { Hono } from "hono";
 import { eq, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
-import { newId, generateUrlSafeToken } from "../services/auth.ts";
+import { newId } from "../services/auth.ts";
 import { scanCard } from "../services/ocr.ts";
-import { saveCardImage } from "../services/card-image.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { MailService, buildMemberTableHtml, buildSkillsHtml } from "../services/mailer.ts";
+import {
+  createPendingMember, deleteDraft, isEmailAlreadyRegistered, loadDraft, normalizeEmail, saveDraft,
+  sendVerificationMail, validateRegistrationBody, type RegistrationBody,
+} from "../services/registration.ts";
 import type { CardOrderMailData } from "../services/mailer.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const registerRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-const EMAIL_VERIFICATION_VALIDITY_SECONDS = 24 * 60 * 60; // 24時間
-
-async function isEmailAlreadyRegistered(db: ReturnType<typeof createDb>, email: string): Promise<boolean> {
-  const existing = await db.select({ id: schema.members.id }).from(schema.members)
-    .where(eq(schema.members.email, email)).get();
-  return !!existing;
-}
-
 // ---- POST /api/register/request-email-verification ----
-// 手入力での登録時、プロフィール入力（メールアドレス）後に確認メールを送る
+// 手入力での登録時、プロフィール入力（メールアドレス）後に確認メールを送る。
+// 入力内容（registration）が付いていれば下書きとして保存し、メール内のリンクが開かれた時点で仮登録を完了させる。
 registerRoutes.post("/request-email-verification", async (c) => {
   const db = createDb(c.env.DB);
-  const now = Math.floor(Date.now() / 1000);
-  const { email } = await c.req.json<{ email: string }>();
+  const body = await c.req.json<{ email: string; registration?: RegistrationBody }>();
+  const email = body.email;
 
   if (!email || !email.includes("@")) {
     return c.json({ error: { code: "invalid_email", message: "メールアドレスが正しくありません" } }, 400);
   }
-  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedEmail = normalizeEmail(email);
 
   if (await isEmailAlreadyRegistered(db, normalizedEmail)) {
     return c.json({ error: { code: "email_taken", message: "このメールアドレスはすでに登録されています" } }, 409);
   }
 
-  const token = generateUrlSafeToken();
-  await db.insert(schema.emailVerifications).values({
-    token,
-    email: normalizedEmail,
-    verifiedAt: null,
-    expiresAt: now + EMAIL_VERIFICATION_VALIDITY_SECONDS,
-    createdAt: now,
-  });
+  let draftSaved = false;
+  if (body.registration) {
+    const registration = { ...body.registration, email: normalizedEmail };
+    const problem = validateRegistrationBody(registration);
+    if (problem) return c.json({ error: { code: "bad_request", message: problem } }, 400);
+    try {
+      await saveDraft(c.env.KV, registration);
+      draftSaved = true;
+    } catch (e) {
+      // 下書きの保存に失敗しても確認メールは送る（その場合は、画面側から従来どおり登録を送信する）
+      console.error("[register] 下書きの保存に失敗", e);
+    }
+  }
 
-  const design = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
-  const appTitle = design?.appTitle ?? "白樺クエスト";
-  const verifyUrl = `${getFrontendUrl(c.env)}/register/verify?token=${token}`;
-
-  const mailer = new MailService(db, c.env);
-  await mailer.send("register_email_verify", normalizedEmail, { appTitle, verifyUrl });
-
-  return c.json({ data: { token } }, 201);
+  const token = await sendVerificationMail(db, c.env, normalizedEmail);
+  return c.json({ data: { token, draftSaved } }, 201);
 });
 
 // ---- GET /api/register/email-verification-status?token=... ----
-// 登録画面側が、メール内リンクがクリックされたかをポーリングして確認する
+// 登録画面側が、メール内リンクがクリックされたか（＝登録が完了したか）をポーリングして確認する
 registerRoutes.get("/email-verification-status", async (c) => {
   const db = createDb(c.env.DB);
   const token = c.req.query("token");
@@ -73,11 +69,17 @@ registerRoutes.get("/email-verification-status", async (c) => {
   if (!row) return c.json({ error: { code: "not_found", message: "確認リンクが見つかりません" } }, 404);
 
   const now = Math.floor(Date.now() / 1000);
-  return c.json({ data: { verified: !!row.verifiedAt, expired: row.expiresAt < now } });
+  let memberId: string | null = null;
+  if (row.verifiedAt) {
+    const member = await db.select({ id: schema.members.id }).from(schema.members)
+      .where(eq(schema.members.email, row.email)).get();
+    memberId = member?.id ?? null;
+  }
+  return c.json({ data: { verified: !!row.verifiedAt, expired: row.expiresAt < now, registered: !!memberId, memberId } });
 });
 
 // ---- POST /api/register/verify-email ----
-// メール内のリンクをクリックした先（別タブ）から呼ばれる。確認完了をマークする。
+// メール内のリンクをクリックした先から呼ばれる。確認完了をマークし、保存済みの下書きがあれば、その内容で仮登録（承認待ち）を作成する。
 registerRoutes.post("/verify-email", async (c) => {
   const db = createDb(c.env.DB);
   const now = Math.floor(Date.now() / 1000);
@@ -96,7 +98,42 @@ registerRoutes.post("/verify-email", async (c) => {
     await db.update(schema.emailVerifications).set({ verifiedAt: now }).where(eq(schema.emailVerifications.token, token));
   }
 
-  return c.json({ data: { email: row.email } });
+  // すでに登録済み（リンクを2回開いた・画面側が先に登録した等）ならそのまま完了として返す
+  const existing = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.email, row.email)).get();
+  if (existing) return c.json({ data: { email: row.email, registered: true, memberId: existing.id } });
+
+  // 下書きがあれば、その内容で仮登録を作成する。失敗しても確認自体は完了とする（画面側から続きを送信できる）
+  try {
+    const draft = await loadDraft(c.env.KV, row.email);
+    if (draft && !validateRegistrationBody(draft)) {
+      const memberId = await createPendingMember(db, c.env, (p) => c.executionCtx.waitUntil(p), draft);
+      await deleteDraft(c.env.KV, row.email);
+      return c.json({ data: { email: row.email, registered: true, memberId } });
+    }
+  } catch (e) {
+    console.error("[register] 下書きからの仮登録に失敗", e);
+  }
+  return c.json({ data: { email: row.email, registered: false, memberId: null } });
+});
+
+// ---- POST /api/register/resume ----
+// 前回の入力（下書き）が残っているメールアドレスなら、確認メールを送り直す。メール内のリンクを開くと、前回の内容で仮登録が完了する。
+// メールアドレスの登録状況を第三者に知られないよう、下書きの有無にかかわらず同じ応答を返す。
+registerRoutes.post("/resume", async (c) => {
+  const db = createDb(c.env.DB);
+  const { email } = await c.req.json<{ email?: string }>().catch(() => ({} as { email?: string }));
+  if (!email || !email.includes("@")) {
+    return c.json({ error: { code: "invalid_email", message: "メールアドレスが正しくありません" } }, 400);
+  }
+  const normalized = normalizeEmail(email);
+  try {
+    if (!(await isEmailAlreadyRegistered(db, normalized)) && (await loadDraft(c.env.KV, normalized))) {
+      await sendVerificationMail(db, c.env, normalized);
+    }
+  } catch (e) {
+    console.error("[register] 続きからの登録メール送信に失敗", e);
+  }
+  return c.json({ data: { ok: true } });
 });
 
 // ---- POST /api/register/scan-card ----
@@ -137,65 +174,15 @@ registerRoutes.post("/scan-card", async (c) => {
 });
 
 // ---- POST /api/register/submit ----
+// メール確認を挟まない登録（カードを読み取れた場合）、および、メール確認後に下書きから仮登録できなかった場合の送信用
 registerRoutes.post("/submit", async (c) => {
   const db = createDb(c.env.DB);
-  const now = Math.floor(Date.now() / 1000);
+  const body = await c.req.json<RegistrationBody>();
 
-  const body = await c.req.json<{
-    email: string;
-    name: string;
-    furigana?: string;
-    romaji?: string;
-    emoji?: string;
-    bgColor?: string;
-    category?: string;
-    businessDescription?: string;
-    company?: string;
-    role?: string;
-    phone?: string;
-    address?: string;
-    businessCommunityJoinedDate?: string; // "YYYY-MM-DD"（日は正確でなくてよい）
-    cardImageBase64?: string;
-    // 実際に白樺クエストカードを読み取れた（＝カード保有が確認できた）場合はtrue。
-    // その場合はメールアドレスの事前確認を省略する（手入力登録のみ確認必須）。
-    cardScanVerified?: boolean;
-    skills?: Array<{
-      name: string;
-      emoji: string;
-      issue: string;
-      connector: string;
-      solution: string;
-    }>;
-    uspRequests?: Array<{
-      uspName: string;
-      emoji: string;
-      description: string;
-    }>;
-    goldenEggs?: Array<{
-      description: string;
-      issue?: string;
-      priceRange?: string;
-      region?: string;
-    }>;
-    goldenGeese?: Array<{
-      description: string;
-      contactHypothesis?: string;
-      priority?: string;
-    }>;
-  }>();
+  const problem = validateRegistrationBody(body);
+  if (problem) return c.json({ error: { code: "bad_request", message: problem } }, 400);
 
-  if (!body.email || !body.name) {
-    return c.json({
-      error: { code: "bad_request", message: "メールアドレスと名前は必須です" },
-    }, 400);
-  }
-  if (!body.businessCommunityJoinedDate || !/^\d{4}-\d{2}-\d{2}$/.test(body.businessCommunityJoinedDate)) {
-    return c.json({
-      error: { code: "bad_request", message: "入会日を入力してください" },
-    }, 400);
-  }
-
-  const normalizedEmail = body.email.toLowerCase().trim();
+  const normalizedEmail = normalizeEmail(body.email);
 
   // メールアドレス重複チェック
   if (await isEmailAlreadyRegistered(db, normalizedEmail)) {
@@ -217,125 +204,9 @@ registerRoutes.post("/submit", async (c) => {
     }
   }
 
-  const id = newId();
-
-  // カード画像（表面）をR2に保存
-  let cardImageKey: string | null = null;
-  if (body.cardImageBase64) {
-    try {
-      cardImageKey = await saveCardImage(c.env.R2, id, body.cardImageBase64);
-    } catch (err) {
-      console.error("[register/submit] カード画像の保存に失敗", err);
-    }
-  }
-
-  await db.insert(schema.members).values({
-    id,
-    email: body.email.toLowerCase().trim(),
-    name: body.name.trim(),
-    furigana: body.furigana?.trim() ?? "",
-    romaji: body.romaji?.trim() ?? null,
-    emoji: body.emoji ?? "😊",
-    bgColor: body.bgColor ?? "bg-rose-100",
-    category: body.category ?? "",
-    businessDescription: body.businessDescription ?? "",
-    company: body.company ?? "",
-    role: body.role ?? "",
-    phone: body.phone ?? null,
-    address: body.address ?? null,
-    businessCommunityJoinedDate: body.businessCommunityJoinedDate,
-    skills: JSON.stringify(body.skills ?? []),
-    customFields: JSON.stringify({}),
-    cardImageKey,
-    status: "pending",
-    approvedAt: null,
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  // 金の卵・金のガチョウ（任意入力。登録ウィザードで入力された分のみ登録する）
-  const goldenEggs = (body.goldenEggs ?? []).filter((e) => e.description?.trim()).slice(0, 8);
-  if (goldenEggs.length > 0) {
-    await db.insert(schema.goldenEggs).values(
-      goldenEggs.map((e) => ({
-        id: newId(),
-        memberId: id,
-        description: e.description.trim(),
-        issue: e.issue?.trim() || null,
-        priceRange: e.priceRange?.trim() || null,
-        region: e.region?.trim() || null,
-        createdAt: now,
-        updatedAt: now,
-      }))
-    );
-  }
-  const goldenGeese = (body.goldenGeese ?? []).filter((g) => g.description?.trim()).slice(0, 8);
-  if (goldenGeese.length > 0) {
-    await db.insert(schema.goldenGeese).values(
-      goldenGeese.map((g) => ({
-        id: newId(),
-        memberId: id,
-        description: g.description.trim(),
-        contactHypothesis: g.contactHypothesis?.trim() || null,
-        priority: g.priority?.trim() || null,
-        createdAt: now,
-        updatedAt: now,
-      }))
-    );
-  }
-
-  // USP承認申請を登録し、管理者にメール通知
-  if (body.uspRequests && body.uspRequests.length > 0) {
-    const now2 = Math.floor(Date.now() / 1000);
-    const { eq: eq2 } = await import("drizzle-orm");
-    const isDev = c.env.ENVIRONMENT === "development";
-
-    for (const req of body.uspRequests) {
-      if (!req.uspName?.trim()) continue;
-      const reqId = newId();
-      await db.insert(schema.uspRequests).values({
-        id: reqId,
-        requesterEmail: body.email.toLowerCase().trim(),
-        requesterName: body.name.trim(),
-        uspName: req.uspName.trim(),
-        emoji: req.emoji || "⭐",
-        description: req.description?.trim() || null,
-        status: "pending",
-        createdAt: now2,
-      });
-    }
-
-    // 管理者全員にメール通知
-    const admins = await db.select({ email: schema.admins.email, name: schema.admins.name })
-      .from(schema.admins)
-      .all();
-
-    const appDesign = await db.select({ appTitle: schema.cardDesigns.appTitle })
-      .from(schema.cardDesigns)
-      .get();
-    const appTitle = appDesign?.appTitle ?? "白樺クエスト";
-
-    const mailerReg = new MailService(db, c.env);
-    const uspMailPromises: Promise<void>[] = [];
-    for (const req of body.uspRequests) {
-      if (!req.uspName?.trim()) continue;
-      for (const admin of admins) {
-        uspMailPromises.push(
-          mailerReg.send("usp_request_admin", admin.email, {
-            appTitle,
-            adminName: admin.name,
-            requesterName: body.name.trim(),
-            requesterEmail: body.email.toLowerCase().trim(),
-            uspEmoji: req.emoji || "⭐",
-            uspName: req.uspName.trim(),
-            uspDescription: req.description?.trim() ?? "",
-          }).catch((e) => console.error("[usp-request-mail]", e))
-        );
-      }
-    }
-    // waitUntil でレスポンス後もメール送信を完走させる
-    c.executionCtx.waitUntil(Promise.all(uspMailPromises));
-  }
+  const id = await createPendingMember(db, c.env, (p) => c.executionCtx.waitUntil(p), { ...body, email: normalizedEmail });
+  // 同じメールアドレスの下書きが残っていれば不要になるので消す
+  await deleteDraft(c.env.KV, normalizedEmail).catch(() => {});
 
   return c.json({
     data: {

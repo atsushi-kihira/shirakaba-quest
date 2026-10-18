@@ -8,12 +8,16 @@
 // PATCH  /api/admin/members/:id/reactivate   — 休会からアクティブに戻す
 // DELETE /api/admin/members/:id              — 完全削除（記録ごと全削除。メールアドレスが再登録可能になる）
 // PATCH  /api/admin/members/:id/roles
+// GET    /api/admin/members/registration-pending   — メール確認が済んでいない（登録が完了していない）人の一覧
+// POST   /api/admin/members/registration-pending/resend — 確認メールを再送（入力内容の下書きが残っている人のみ）
+// DELETE /api/admin/members/registration-pending?email=…  — 一覧から外す（下書きを削除）
 // =============================================================
 import { Hono } from "hono";
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, gt, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { MailService } from "../../services/mailer.ts";
 import { getFrontendUrl } from "../../services/frontendUrl.ts";
+import { deleteDraft, listDrafts, loadDraft, normalizeEmail, sendVerificationMail } from "../../services/registration.ts";
 import { hardDeleteMember } from "../../services/memberDeletion.ts";
 import { getCardImageDataUrl } from "../../services/card-image.ts";
 import {
@@ -54,6 +58,71 @@ adminMemberRoutes.get("/", async (c) => {
       isTopicMentor: tmIds.has(m.id),
     })),
   });
+});
+
+// ---- GET /api/admin/members/registration-pending ----
+// 手入力で登録を始めたが、確認メールのリンクを開いていない（＝まだ承認待ちに出てこない）人の一覧。
+// ・入力内容の下書きが残っている人（リンクを開けば仮登録が完了する）
+// ・下書きはないが、直近14日間に確認メールを送ったまま登録が完了していないメールアドレス
+adminMemberRoutes.get("/registration-pending", async (c) => {
+  const db = createDb(c.env.DB);
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  const drafts = await listDrafts(c.env.KV);
+  const verifications = await db.select({
+    email: schema.emailVerifications.email,
+    createdAt: schema.emailVerifications.createdAt,
+    verifiedAt: schema.emailVerifications.verifiedAt,
+  }).from(schema.emailVerifications)
+    .where(gt(schema.emailVerifications.createdAt, nowSec - 14 * 24 * 3600))
+    .all();
+
+  const memberEmails = new Set((await db.select({ email: schema.members.email }).from(schema.members).all()).map((m) => m.email.toLowerCase()));
+
+  const byEmail = new Map<string, { email: string; name: string | null; requestedAt: number; hasDraft: boolean; linkOpened: boolean }>();
+  for (const d of drafts) {
+    if (memberEmails.has(d.email)) continue;
+    byEmail.set(d.email, { email: d.email, name: d.name, requestedAt: d.requestedAt, hasDraft: true, linkOpened: false });
+  }
+  for (const v of verifications) {
+    const email = v.email.toLowerCase();
+    if (memberEmails.has(email)) continue;
+    const cur = byEmail.get(email);
+    if (cur) {
+      cur.requestedAt = Math.max(cur.requestedAt, v.createdAt);
+      if (v.verifiedAt) cur.linkOpened = true;
+    } else {
+      byEmail.set(email, { email, name: null, requestedAt: v.createdAt, hasDraft: false, linkOpened: !!v.verifiedAt });
+    }
+  }
+  const data = [...byEmail.values()].sort((a, b) => b.requestedAt - a.requestedAt);
+  return c.json({ data });
+});
+
+// ---- POST /api/admin/members/registration-pending/resend ----
+adminMemberRoutes.post("/registration-pending/resend", async (c) => {
+  const db = createDb(c.env.DB);
+  const { email } = await c.req.json<{ email?: string }>().catch(() => ({} as { email?: string }));
+  if (!email) return c.json({ error: { code: "invalid_input", message: "メールアドレスを指定してください" } }, 400);
+  const normalized = normalizeEmail(email);
+  if (!(await loadDraft(c.env.KV, normalized))) {
+    return c.json({ error: { code: "no_draft", message: "入力内容が残っていないため、確認メールを再送できません。ご本人に登録をやり直していただいてください" } }, 400);
+  }
+  await sendVerificationMail(db, c.env, normalized);
+  return c.json({ ok: true });
+});
+
+// ---- DELETE /api/admin/members/registration-pending?email=... ----
+adminMemberRoutes.delete("/registration-pending", async (c) => {
+  const email = c.req.query("email");
+  if (!email) return c.json({ error: { code: "invalid_input", message: "メールアドレスを指定してください" } }, 400);
+  const db = createDb(c.env.DB);
+  const normalized = normalizeEmail(email);
+  await deleteDraft(c.env.KV, normalized);
+  // 確認メールの送信記録も消して、一覧に残らないようにする（メンバー登録済みのアドレスの記録は消さない）
+  const registered = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.email, normalized)).get();
+  if (!registered) await db.delete(schema.emailVerifications).where(eq(schema.emailVerifications.email, normalized));
+  return c.json({ ok: true });
 });
 
 // ---- GET /api/admin/members/:id/detail ----

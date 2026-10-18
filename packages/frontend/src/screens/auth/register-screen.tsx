@@ -1,16 +1,18 @@
 // =============================================================
-// メンバー登録画面 — iPhone 最適化 5ステップウィザード
+// メンバー登録画面 — iPhone 最適化 ウィザード
 // Step 1: カード表面撮影（OCR）
 // Step 2: スキル確認・補足入力
 // Step 3: プロフィール（名前・メール）
-// Step 4: 金の卵・金のガチョウ（任意）
-// Step 5: 完了
+//   ・手入力の場合は「確認メール」を送る。入力内容はサーバーに下書き保存され、メール内のリンクを開いた時点で仮登録（承認待ち）が完了する
+//   ・カードを読み取れた場合は、そのまま仮登録する
+// Step 5: 完了（金の卵・金のガチョウは、承認後の初回ログインでご案内する）
+// ・入力途中の内容はこのブラウザにも自動保存し、画面が閉じても続きから再開できる
 // =============================================================
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Camera, ArrowLeft, ArrowRight, Check, Loader2, RefreshCw, Plus, X, Upload, Mail } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { LogoOrbit } from "@/components/logo-orbit";
 import { useSettings } from "@/hooks/use-settings";
 import { AuthFooterLinks } from "@/screens/auth/_auth-footer-links";
@@ -55,52 +57,107 @@ const AVATAR_BG_OPTIONS = [
 ];
 const AVATAR_EMOJIS = ["😊","😄","🤗","😎","🥰","🌟","💪","🎯","🌸","🦁","🐯","🦊"];
 
+// ---- 入力途中の内容の自動保存（このブラウザ内のみ。メール確認後は不要になるため、完了したら消す） ----
+const SNAPSHOT_KEY = "register-wizard-snapshot-v1";
+type WizardSnapshot = {
+  step: number;
+  profile: Record<string, string>;
+  skills: SkillForm[];
+  pendingUspRequests: PendingUspRequest[];
+  frontImage: string | null;
+  ocrDone: boolean;
+  cardMismatch: boolean;
+  awaitingVerification: boolean;
+  verificationToken: string | null;
+  draftSaved: boolean;
+};
+function loadSnapshot(): WizardSnapshot | null {
+  try {
+    const raw = localStorage.getItem(SNAPSHOT_KEY);
+    if (!raw) return null;
+    const snap = JSON.parse(raw) as WizardSnapshot;
+    return snap && typeof snap.step === "number" && snap.profile ? snap : null;
+  } catch { return null; }
+}
+function saveSnapshot(snap: WizardSnapshot): void {
+  try {
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snap));
+  } catch {
+    // 画像が大きくて保存できない場合は、画像と「カードを読み取れた」状態を外して保存する（その場合はメール確認で登録できる）
+    try {
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ ...snap, frontImage: null, ocrDone: false, cardMismatch: false }));
+    } catch { /* 保存できない環境では何もしない */ }
+  }
+}
+function clearSnapshot(): void {
+  try { localStorage.removeItem(SNAPSHOT_KEY); } catch { /* noop */ }
+}
+
 // ---- メインコンポーネント ----
 export function RegisterScreen() {
   const navigate = useNavigate();
   const { appTitle, characterImageUrl, appLogo, termBusinessCommunity, isLoading: settingsLoading } = useSettings();
-  const [step, setStep] = useState(1);
+  const [saved] = useState<WizardSnapshot | null>(() => loadSnapshot());
+  const [restored, setRestored] = useState<boolean>(() => !!saved && (saved.profile.name !== "" || saved.profile.email !== "" || saved.step > 1));
+  const [step, setStep] = useState(() => (saved ? Math.min(Math.max(saved.step, 1), 3) : 1));
 
   // Step1
-  const [frontImage, setFrontImage]   = useState<string | null>(null);
-  const [ocrDone, setOcrDone]         = useState(false);
-  const [cardMismatch, setCardMismatch] = useState(false);
+  const [frontImage, setFrontImage]   = useState<string | null>(saved?.frontImage ?? null);
+  const [ocrDone, setOcrDone]         = useState(saved?.ocrDone ?? false);
+  const [cardMismatch, setCardMismatch] = useState(saved?.cardMismatch ?? false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
   // Step2: スキル（デフォルト3枠）
-  const [skills, setSkills] = useState<SkillForm[]>([
+  const [skills, setSkills] = useState<SkillForm[]>(saved?.skills ?? [
     EMPTY_SKILL("💡"), EMPTY_SKILL("🔧"), EMPTY_SKILL("🎯"),
   ]);
 
   // Step2: USP承認申請（リストにないUSP）
-  const [pendingUspRequests, setPendingUspRequests] = useState<PendingUspRequest[]>([]);
+  const [pendingUspRequests, setPendingUspRequests] = useState<PendingUspRequest[]>(saved?.pendingUspRequests ?? []);
 
   // Step3: プロフィール
-  const [profile, setProfile] = useState({
+  const [profile, setProfile] = useState<Record<string, string>>(saved?.profile ?? {
     name: "", furigana: "", nameRomaji: "", email: "",
     emoji: "😊", bgColor: "bg-rose-100",
     category: "", businessDescription: "",
     company: "", role: "", businessCommunityJoinedDate: "",
   });
 
-  // Step4: 金の卵・金のガチョウ（任意）
-  const [goldenEggDesc, setGoldenEggDesc] = useState("");
-  const [goldenGooseDesc, setGoldenGooseDesc] = useState("");
-
   // 実際にカードを読み取れた場合は、カード保有の確認が取れているためメール確認を省略する
   const cardScanVerified = ocrDone && !cardMismatch;
 
   // Step3: メールアドレス確認（手入力登録時のみ）
-  const [awaitingVerification, setAwaitingVerification] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
-  const [verificationToken, setVerificationToken] = useState<string | null>(null);
+  const [awaitingVerification, setAwaitingVerification] = useState(saved?.awaitingVerification ?? false);
+  const [verificationToken, setVerificationToken] = useState<string | null>(saved?.verificationToken ?? null);
+  // 入力内容の下書きがサーバーに保存できたか。保存できていれば、メールのリンクを開いた時点でサーバー側で仮登録が完了する
+  const [draftSaved, setDraftSaved] = useState(saved?.draftSaved ?? false);
+  const [registeredMemberId, setRegisteredMemberId] = useState<string | null>(null);
+
+  // 登録に送る内容（仮登録の下書き保存・直接登録の両方で使う）
+  function buildRegistration() {
+    return {
+      ...profile,
+      email: profile.email.trim(),
+      romaji: profile.nameRomaji,
+      skills: skills.filter((sk) => sk.name.trim()),
+      cardImageBase64: frontImage ? frontImage.split(",")[1] : undefined,
+      cardScanVerified,
+      uspRequests: pendingUspRequests.length > 0 ? pendingUspRequests : undefined,
+    };
+  }
 
   const requestVerificationMutation = useMutation({
     mutationFn: () =>
-      api.post<{ data: { token: string } }>("/register/request-email-verification", { email: profile.email.trim() }),
+      api.post<{ data: { token: string; draftSaved?: boolean } }>("/register/request-email-verification", {
+        email: profile.email.trim(),
+        registration: buildRegistration(),
+      }),
     onSuccess: (res) => {
       setVerificationToken(res.data.token);
+      setDraftSaved(!!res.data.draftSaved);
+      unregisteredPolls.current = 0;
+      autoSubmitted.current = false;
       setAwaitingVerification(true);
     },
   });
@@ -114,17 +171,35 @@ export function RegisterScreen() {
     refetchInterval: 3000,
   });
 
+  // メールのリンクが開かれると、サーバー側で仮登録が完了する（registered）。それを検知したら完了画面へ進む。
+  // 下書きが保存できていなかった等で「確認済みなのに未登録」のままの場合だけ、この画面から登録を送信する。
+  const unregisteredPolls = useRef(0);
+  const autoSubmitted = useRef(false);
   useEffect(() => {
-    if (verificationStatus?.data.verified) {
-      setEmailVerified(true);
+    const d = verificationStatus?.data;
+    if (!d) return;
+    if (d.registered && d.memberId) {
+      setRegisteredMemberId(d.memberId);
       setAwaitingVerification(false);
-      setStep(4);
+      clearSnapshot();
+      setStep(5);
+      return;
     }
+    if (d.verified) {
+      unregisteredPolls.current += 1;
+      // サーバー側の仮登録作成と行き違いにならないよう、下書きがある場合は数回待ってから送信する
+      if (!autoSubmitted.current && (!draftSaved || unregisteredPolls.current >= 3)) {
+        autoSubmitted.current = true;
+        submitMutation.mutate();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verificationStatus]);
 
   function handleStep3Next() {
-    if (cardScanVerified || emailVerified) {
-      setStep(4);
+    // カードを読み取れた場合は、メール確認なしでそのまま仮登録する。手入力の場合は確認メールを送る
+    if (cardScanVerified) {
+      submitMutation.mutate();
       return;
     }
     requestVerificationMutation.mutate();
@@ -159,26 +234,34 @@ export function RegisterScreen() {
     },
   });
 
-  const [registeredMemberId, setRegisteredMemberId] = useState<string | null>(null);
-
   // ---- 登録 mutation ----
   const submitMutation = useMutation({
-    mutationFn: () =>
-      api.post<{ data: { id: string; message: string } }>("/register/submit", {
-        ...profile,
-        romaji: profile.nameRomaji,
-        skills: skills.filter((s) => s.name.trim()),
-        cardImageBase64: frontImage ? frontImage.split(",")[1] : undefined,
-        cardScanVerified,
-        uspRequests: pendingUspRequests.length > 0 ? pendingUspRequests : undefined,
-        goldenEggs: goldenEggDesc.trim() ? [{ description: goldenEggDesc.trim() }] : undefined,
-        goldenGeese: goldenGooseDesc.trim() ? [{ description: goldenGooseDesc.trim() }] : undefined,
-      }),
+    mutationFn: () => api.post<{ data: { id: string; message: string } }>("/register/submit", buildRegistration()),
     onSuccess: (res) => {
       setRegisteredMemberId(res.data?.id ?? null);
+      setAwaitingVerification(false);
+      clearSnapshot();
       setStep(5);
     },
+    onError: (e) => {
+      // すでにサーバー側で登録が完了していた場合（メールのリンクが先に処理された等）は、次のポーリングで完了画面に進む
+      if (e instanceof ApiError && e.status === 409) autoSubmitted.current = false;
+    },
   });
+
+  // ---- 入力途中の内容を、このブラウザに自動保存する ----
+  useEffect(() => {
+    if (step >= 5) return;
+    saveSnapshot({
+      step, profile, skills, pendingUspRequests, frontImage, ocrDone, cardMismatch,
+      awaitingVerification, verificationToken, draftSaved,
+    });
+  }, [step, profile, skills, pendingUspRequests, frontImage, ocrDone, cardMismatch, awaitingVerification, verificationToken, draftSaved]);
+
+  function startOver() {
+    clearSnapshot();
+    window.location.reload();
+  }
 
   // ---- ファイル選択ハンドラー ----
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -239,20 +322,27 @@ export function RegisterScreen() {
               メンバー登録
             </span>
           </div>
-          {step < 5 && <StepDots current={step} total={4} />}
+          {step < 5 && <StepDots current={step} total={3} />}
         </div>
 
         <div
           className="text-xs font-medium px-2 py-1 rounded-full"
           style={{ background: "var(--color-paper-300)", color: "var(--color-ink-500)" }}
         >
-          {step < 5 ? `${step} / 4` : "完了"}
+          {step < 5 ? `${step} / 3` : "完了"}
         </div>
       </div>
 
       {/* メインコンテンツ */}
       <div className="flex-1 overflow-y-auto">
         <div className="px-4 pt-5 pb-8 max-w-lg mx-auto w-full">
+          {restored && step < 5 && (
+            <div className="mb-4 px-3 py-2 rounded-2xl text-xs flex items-center justify-between gap-2"
+              style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-ink-700)" }}>
+              <span>✅ 前回の入力内容を復元しました。続きから登録できます。</span>
+              <button type="button" onClick={startOver} className="underline shrink-0" style={{ color: "var(--color-brand)" }}>最初からやり直す</button>
+            </div>
+          )}
           {step === 1 && (
             <Step1Scan
               frontImage={frontImage}
@@ -285,6 +375,8 @@ export function RegisterScreen() {
               onResend={() => requestVerificationMutation.mutate()}
               resending={requestVerificationMutation.isPending}
               onBack={() => setAwaitingVerification(false)}
+              submitError={submitMutation.error?.message}
+              submitting={submitMutation.isPending}
             />
           )}
           {step === 3 && !awaitingVerification && (
@@ -293,21 +385,19 @@ export function RegisterScreen() {
               onUpdate={(field, value) => setProfile((p) => ({ ...p, [field]: value }))}
               onNext={handleStep3Next}
               termBusinessCommunity={termBusinessCommunity}
-              requestingVerification={requestVerificationMutation.isPending}
-              verificationError={requestVerificationMutation.error?.message}
+              requestingVerification={requestVerificationMutation.isPending || submitMutation.isPending}
+              verificationError={requestVerificationMutation.error?.message ?? submitMutation.error?.message}
+              nextLabel={cardScanVerified ? "登録する" : "確認メールを送る"}
             />
           )}
-          {step === 4 && (
-            <Step4Enishi
-              goldenEggDesc={goldenEggDesc}
-              onGoldenEggDescChange={setGoldenEggDesc}
-              goldenGooseDesc={goldenGooseDesc}
-              onGoldenGooseDescChange={setGoldenGooseDesc}
-              onSubmit={() => submitMutation.mutate()}
-              loading={submitMutation.isPending}
-              error={submitMutation.error?.message}
-            />
+          {(step === 2 || (step === 3 && !awaitingVerification)) && (
+            <button type="button" onClick={() => setStep(step - 1)}
+              className="mt-3 w-full py-3 rounded-2xl text-sm font-medium active:opacity-70 flex items-center justify-center gap-1.5"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+              <ArrowLeft size={15} />前の画面に戻る
+            </button>
           )}
+          {step === 1 && <ResumeByEmail />}
           {step === 5 && (
             <Step5Done
               memberId={registeredMemberId}
@@ -879,7 +969,7 @@ function SkillCard({
 // Step 3: プロフィール
 // ================================================================
 function Step3Profile({
-  profile, onUpdate, onNext, termBusinessCommunity, requestingVerification, verificationError,
+  profile, onUpdate, onNext, termBusinessCommunity, requestingVerification, verificationError, nextLabel,
 }: {
   profile: Record<string, string>;
   onUpdate: (field: string, value: string) => void;
@@ -887,6 +977,7 @@ function Step3Profile({
   termBusinessCommunity: string;
   requestingVerification?: boolean;
   verificationError?: string;
+  nextLabel: string;
 }) {
   const canSubmit = profile.name.trim() && profile.email.trim() && profile.businessCommunityJoinedDate.trim();
 
@@ -1031,8 +1122,13 @@ function Step3Profile({
         className="mt-6 w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50 transition"
         style={{ background: "var(--color-brand)", minHeight: "52px" }}
       >
-        {requestingVerification ? <Loader2 size={18} className="animate-spin" /> : <>次へ <ArrowRight size={18} /></>}
+        {requestingVerification ? <Loader2 size={18} className="animate-spin" /> : <>{nextLabel} <ArrowRight size={18} /></>}
       </button>
+      {nextLabel !== "登録する" && (
+        <p className="text-xs mt-2 text-center" style={{ color: "var(--color-ink-400)" }}>
+          ご入力のメールアドレスに確認メールをお送りします。メール内のリンクを開くと、登録申請が完了します（管理者の承認待ちになります）。
+        </p>
+      )}
     </div>
   );
 }
@@ -1041,12 +1137,14 @@ function Step3Profile({
 // Step 3.5: メールアドレス確認待ち（手入力登録のみ）
 // ================================================================
 function Step3AwaitingVerification({
-  email, onResend, resending, onBack,
+  email, onResend, resending, onBack, submitError, submitting,
 }: {
   email: string;
   onResend: () => void;
   resending: boolean;
   onBack: () => void;
+  submitError?: string;
+  submitting?: boolean;
 }) {
   return (
     <div className="flex flex-col items-center text-center pt-10">
@@ -1063,14 +1161,19 @@ function Step3AwaitingVerification({
         <strong style={{ color: "var(--color-ink-800)" }}>{email}</strong> 宛に
       </p>
       <p className="text-sm mb-6" style={{ color: "var(--color-ink-500)" }}>
-        確認メールを送信しました。メール内のリンクをクリックすると、<br />
-        このまま自動的に登録を続けられます。
+        確認メールを送信しました。<strong style={{ color: "var(--color-ink-800)" }}>メール内のリンクを開くと、登録申請が完了します。</strong><br />
+        （入力内容は保存してあります。このタブを閉じても大丈夫です）
       </p>
 
       <div className="flex items-center gap-2 mb-6" style={{ color: "var(--color-ink-400)" }}>
         <Loader2 size={16} className="animate-spin" />
-        <span className="text-xs">確認をお待ちしています...</span>
+        <span className="text-xs">{submitting ? "登録しています..." : "確認をお待ちしています..."}</span>
       </div>
+      {submitError && (
+        <div className="mb-4 p-3 rounded-2xl text-sm w-full" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>
+          ⚠️ {submitError}
+        </div>
+      )}
 
       <button
         type="button"
@@ -1094,98 +1197,49 @@ function Step3AwaitingVerification({
 }
 
 // ================================================================
-// Step 4: 金の卵・金のガチョウ（任意）
+// 前回の続きから登録（確認メールの送信まで進んだ方向け）
+// 同じメールアドレスの入力内容がサーバーに残っていれば、確認メールを送り直す。メール内のリンクを開くと登録申請が完了する。
 // ================================================================
-function Step4Enishi({
-  goldenEggDesc, onGoldenEggDescChange, goldenGooseDesc, onGoldenGooseDescChange, onSubmit, loading, error,
-}: {
-  goldenEggDesc: string;
-  onGoldenEggDescChange: (v: string) => void;
-  goldenGooseDesc: string;
-  onGoldenGooseDescChange: (v: string) => void;
-  onSubmit: () => void;
-  loading: boolean;
-  error?: string;
-}) {
+function ResumeByEmail() {
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const resume = useMutation({
+    mutationFn: () => api.post("/register/resume", { email: email.trim() }),
+  });
   return (
-    <div>
-      <h2
-        className="text-xl font-semibold mb-1"
-        style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}
-      >
-        🥚🪙 金の卵・金のガチョウ
-      </h2>
-      <p className="text-sm mb-5" style={{ color: "var(--color-ink-500)" }}>
-        「たどり着きたい理想の案件」と「そこへ運んでくれそうな立場の人」を登録しておくと、
-        AIによる「ご縁さがし」の精度が上がります。<br />
-        <strong style={{ color: "var(--color-ink-700)" }}>任意です。今は入力しなくても、あとからマイページでいつでも登録・編集できます。</strong>
-      </p>
-
-      {error && (
-        <div
-          className="mb-4 p-3 rounded-2xl text-sm"
-          style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}
-        >
-          ⚠️ {error}
+    <div className="mt-8 pt-5 text-center" style={{ borderTop: "1px solid var(--color-paper-200)" }}>
+      {!open ? (
+        <button type="button" onClick={() => setOpen(true)} className="text-sm underline" style={{ color: "var(--color-ink-500)" }}>
+          前回、確認メールまで進んだ方（続きから登録する）
+        </button>
+      ) : resume.isSuccess ? (
+        <div className="p-4 rounded-2xl text-sm text-left" style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-ink-700)" }}>
+          ✅ 前回の入力内容が保存されている場合は、<strong>{email}</strong> 宛に確認メールをお送りしました。<br />
+          メール内のリンクを開くと、登録申請が完了します。メールが届かない場合は、お手数ですが最初から登録をやり直してください。
+        </div>
+      ) : (
+        <div className="text-left">
+          <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
+            前回ご入力のメールアドレスを入力してください。入力内容が残っていれば、確認メールをお送りします。
+          </p>
+          <div className="flex gap-2">
+            <input type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="taro@example.com"
+              className="flex-1 rounded-2xl border min-w-0"
+              style={{ fontSize: "16px", padding: "10px 14px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-800)" }} />
+            <button type="button" onClick={() => resume.mutate()} disabled={!email.includes("@") || resume.isPending}
+              className="px-4 rounded-2xl text-sm font-semibold text-white disabled:opacity-50 shrink-0" style={{ background: "var(--color-brand)" }}>
+              {resume.isPending ? <Loader2 size={16} className="animate-spin" /> : "送る"}
+            </button>
+          </div>
+          {resume.isError && (
+            <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>送信できませんでした。メールアドレスをご確認ください。</p>
+          )}
         </div>
       )}
-
-      <div className="card-paper p-4 mb-4 rounded-3xl">
-        <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>
-          🥚 金の卵（狙いたい案件・紹介先）
-        </label>
-        <textarea
-          value={goldenEggDesc}
-          onChange={(e) => onGoldenEggDescChange(e.target.value)}
-          placeholder="例: 首都圏の中堅製造・卸（従業員50〜300名）で、DXの旗振り役が社内におらず経営者が投資判断をする会社"
-          className="w-full rounded-2xl border"
-          style={{
-            fontSize: "16px", padding: "12px 16px", minHeight: 80,
-            borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)",
-            color: "var(--color-ink-800)", WebkitAppearance: "none",
-          }}
-        />
-      </div>
-
-      <div className="card-paper p-4 mb-4 rounded-3xl">
-        <label className="block text-sm font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>
-          🪙 金のガチョウ（運んでくれそうな立場の人）
-        </label>
-        <textarea
-          value={goldenGooseDesc}
-          onChange={(e) => onGoldenGooseDescChange(e.target.value)}
-          placeholder="例: 中小製造業の経営者と日常的に接している士業（税理士・社労士）"
-          className="w-full rounded-2xl border"
-          style={{
-            fontSize: "16px", padding: "12px 16px", minHeight: 80,
-            borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)",
-            color: "var(--color-ink-800)", WebkitAppearance: "none",
-          }}
-        />
-      </div>
-
-      <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
-        💡 それぞれ最大8件まで登録できます。2件目以降や詳細項目（課題・単価帯・地域など）は、あとからマイページの編集画面で追加できます。
-      </p>
-
-      <button
-        type="button"
-        onClick={onSubmit}
-        disabled={loading}
-        className="w-full py-4 rounded-2xl font-semibold text-base text-white flex items-center justify-center gap-2 active:opacity-80 disabled:opacity-50 transition"
-        style={{ background: "var(--color-brand)", minHeight: "52px" }}
-      >
-        {loading ? (
-          <><Loader2 size={18} className="animate-spin" />送信中...</>
-        ) : (
-          <>登録申請する <ArrowRight size={18} /></>
-        )}
-      </button>
     </div>
   );
 }
 
-// ---- 汎用フォームフィールド ----
 function FormField({
   label, value, onChange, placeholder, type = "text", inputMode,
 }: {
