@@ -168,12 +168,22 @@ export function AdminMembersScreen() {
   const isSearching = search.trim() !== "" || isJoinedRangeActive(joinedRange);
 
   const pendingCount = members.filter((m) => m.status === "pending").length;
+  // 各タブの人数（検索条件にかかわらず、そのステータスの全員）
+  const tabCount = (f: typeof filter): number =>
+    f === "all" ? members.filter((m) => !SIDE_STATUSES.includes(m.status)).length : members.filter((m) => m.status === f).length;
 
   return (
     <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-24">
-      <h1 className="text-2xl font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+      <div className="flex items-baseline gap-3 flex-wrap mb-1">
+        <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
         👥 メンバー管理
-      </h1>
+        </h1>
+        {!isLoading && (
+          <span className="text-sm font-semibold px-3 py-1 rounded-full" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+            表示中 {filtered.length} 名{isSearching ? `（このタブの ${byStatus.length} 名中）` : ""}
+          </span>
+        )}
+      </div>
       {pendingCount > 0 && (
         <div className="mb-4 px-4 py-2 rounded-2xl text-sm font-medium text-white"
           style={{ background: "var(--color-brand)" }}>
@@ -198,9 +208,7 @@ export function AdminMembersScreen() {
             }}
           >
             {{ all: "すべて", pending: "承認待ち", active: "アクティブ", guest: "ゲストユーザー", on_leave: "休会中", rejected: "利用却下" }[f]}
-            {f === "pending" && pendingCount > 0 && (
-              <span className="ml-1 text-xs">({pendingCount})</span>
-            )}
+            {!isLoading && <span className="ml-1 text-xs">({tabCount(f)})</span>}
           </button>
         ))}
       </div>
@@ -222,9 +230,6 @@ export function AdminMembersScreen() {
         )}
       </div>
       <JoinedRangeFilter value={joinedRange} onChange={setJoinedRange} />
-      {isSearching && !isLoading && (
-        <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>該当 {filtered.length} 名（このタブの {byStatus.length} 名中）</p>
-      )}
 
       {/* メンバー一覧 */}
       {isLoading ? (
