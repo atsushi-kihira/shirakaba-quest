@@ -4,11 +4,11 @@
 // =============================================================
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Loader2, Search, Gift, Users, ChevronRight, ChevronLeft, History, Star, Trash2, FileDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
-import { MemberCard } from "@/screens/members/members-screen";
+import { MemberCard, type MemberBackTarget } from "@/screens/members/members-screen";
 import type { PublicMember } from "@shared/types";
 
 export type Hop = "direct" | "2hop" | "3hop";
@@ -403,6 +403,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
   onToggleSelect?: () => void;
 }) {
   const { termEnishi } = useSettings();
+  const resultLocation = useLocation();
   const [showContactCard, setShowContactCard] = useState(false);
   const [showRemoveModal, setShowRemoveModal] = useState(false);
   const contactIdForCard = mode === "giver" ? r.myContactId : r.candidateId;
@@ -518,6 +519,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
 
       <div className="mt-3 flex items-center gap-2 flex-wrap">
         <Link to={r.isOwnContact ? "/members?tab=contacts" : `/members/${r.linkedMemberId}`}
+          state={r.isOwnContact ? undefined : { from: { path: `${resultLocation.pathname}${resultLocation.search}`, label: resultLocation.pathname.startsWith("/enishi/history") ? "検索履歴に戻る" : `${termEnishi}さがしに戻る` } }}
           className="inline-flex items-center gap-1.5 text-xs font-medium px-3.5 py-2 rounded-xl text-white hover:opacity-90 transition"
           style={{ background: "var(--color-brand)" }}>
           {r.actionLabel} <ChevronRight size={13} />
@@ -1233,17 +1235,28 @@ function ContactSearchPanel() {
 // 同じ名前のUSPをまとめるための比較用キー（全角・半角、空白、大文字小文字の違いを無視）
 const uspKey = (name: string): string => name.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 
-// ---- メンバーのUSPから絞り込む：USPを選ぶと、そのUSPを持つメンバーを「なかま」と同じ表示で並べる ----
-// 選んだUSPはURLに持つので、メンバーの詳細から「戻る」で戻ってきても、同じ状態で表示される。
+// ---- メンバーのUSPから絞り込む ----
+// ・USPを選ぶと、そのUSPを持つメンバーを「なかま」と同じカードで並べる
+// ・「さがしたい人の条件」を書いて検索すると、AIが各メンバーの業種・事業内容・USPの説明を読んで、条件に近いメンバーを探す
+//   （USPを選んでいれば、そのUSPを持つメンバーの中から探す）
+// 選んだUSP・条件はURLに持つので、メンバーの詳細から「戻る」で戻ってきても、同じ状態で表示される（AI検索の結果もキャッシュされる）。
+type MemberSearchResponse = { data: { results: { memberId: string; why: string }[]; candidateCount: number; aiCallFailed?: boolean } };
+
 function UspFilterPanel() {
   const [params, setParams] = useSearchParams();
-  const selectedKeys = useMemo(() => new Set(params.getAll("usp").map(uspKey)), [params]);
+  const location = useLocation();
+  const backTo: MemberBackTarget = { path: `${location.pathname}${location.search}`, label: "人脈検索に戻る" };
+  const selectedLabels = params.getAll("usp");
+  const selectedKeys = useMemo(() => new Set(selectedLabels.map(uspKey)), [selectedLabels.join("\u0000")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const query = params.get("q") ?? "";
+  const [text, setText] = useState(query);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["members"],
     queryFn: () => api.get<{ data: PublicMember[] }>("/members"),
   });
   const members = data?.data ?? [];
+  const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
 
   // USP名ごとに集計（同じ名前はまとめる。表示名は、最も多く使われている表記）
   const usps = useMemo(() => {
@@ -1264,29 +1277,40 @@ function UspFilterPanel() {
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, "ja"));
   }, [members]);
 
-  const toggle = (label: string) => {
+  const updateParams = (mutate: (next: URLSearchParams) => void) => {
     const next = new URLSearchParams(params);
     next.set("mode", "contact-search");
     next.set("filter", "usp");
+    mutate(next);
+    setParams(next, { replace: true });
+  };
+  const toggle = (label: string) => updateParams((next) => {
     const current = next.getAll("usp");
     next.delete("usp");
     const key = uspKey(label);
     const has = current.some((u) => uspKey(u) === key);
     (has ? current.filter((u) => uspKey(u) !== key) : [...current, label]).forEach((u) => next.append("usp", u));
-    setParams(next, { replace: true });
-  };
-  const clear = () => {
-    const next = new URLSearchParams(params);
-    next.delete("usp");
-    setParams(next, { replace: true });
-  };
+  });
+  const clearUsps = () => updateParams((next) => next.delete("usp"));
+  const runSearch = () => { if (text.trim()) updateParams((next) => next.set("q", text.trim())); };
+  const clearQuery = () => { setText(""); updateParams((next) => next.delete("q")); };
+
+  // 条件が入力されて検索されたときだけ、AIで探す（同じ条件・同じUSPなら、結果はキャッシュされる）
+  const ai = useQuery({
+    queryKey: ["enishi", "member-search", [...selectedKeys].sort().join("|"), query],
+    queryFn: () => api.post<MemberSearchResponse>("/enishi/search/members", { freeText: query, usps: selectedLabels }),
+    enabled: query.trim() !== "",
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
 
   const matched = members.filter((m) => (m.skills ?? []).some((sk) => selectedKeys.has(uspKey(sk.name ?? ""))));
+  const aiResults = (ai.data?.data.results ?? []).flatMap((r) => { const m = memberById.get(r.memberId); return m ? [{ member: m, why: r.why }] : []; });
 
   return (
     <div>
       <div className="card-paper rounded-2xl p-4 mb-4">
-        <h2 className="text-sm font-bold mb-1" style={{ color: "var(--color-ink-800)" }}>USPを選んでください</h2>
+        <h2 className="text-sm font-bold mb-1" style={{ color: "var(--color-ink-800)" }}>① USPを選んでください（任意）</h2>
         <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
           選んだUSPを持つメンバーが表示されます（複数選ぶと、どれかを持つメンバーが表示されます）。数字は、そのUSPを持つメンバーの人数です。
         </p>
@@ -1299,7 +1323,7 @@ function UspFilterPanel() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {selectedKeys.size > 0 && (
-              <button onClick={clear} className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: "var(--color-accent)", color: "white" }}>
+              <button onClick={clearUsps} className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: "var(--color-accent)", color: "white" }}>
                 選択をクリア
               </button>
             )}
@@ -1318,18 +1342,75 @@ function UspFilterPanel() {
             })}
           </div>
         )}
+
+        <h2 className="text-sm font-bold mt-5 mb-1" style={{ color: "var(--color-ink-800)" }}>② さがしたい人の条件（自由記述・任意）</h2>
+        <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
+          入力して検索すると、AIがメンバーの業種・事業内容・各USPの説明を読んで、条件に近い人を見つけます。{selectedKeys.size > 0 ? "①で選んだUSPを持つメンバーの中からさがします。" : "①でUSPを選ばない場合は、メンバー全員の中からさがします。"}
+        </p>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3}
+          placeholder="例：広報・PR領域に強く、スタートアップ支援の実績がある人"
+          className="w-full rounded-xl px-3 py-2 text-sm mb-2" style={{ border: "1px solid var(--color-paper-300)" }} />
+        <div className="flex gap-2">
+          <button onClick={runSearch} disabled={!text.trim() || ai.isFetching}
+            className="flex-1 py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+            {ai.isFetching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />} この条件でメンバーをさがす
+          </button>
+          {query && (
+            <button onClick={clearQuery} className="px-4 rounded-2xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+              条件をクリア
+            </button>
+          )}
+        </div>
       </div>
 
-      {selectedKeys.size > 0 && !isLoading && (
+      {query ? (
+        <>
+          {ai.isFetching ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm" style={{ color: "var(--color-ink-500)" }}>
+              <Loader2 size={18} className="animate-spin" style={{ color: "var(--color-brand)" }} /> AIがメンバーの情報を読んでさがしています…
+            </div>
+          ) : ai.isError ? (
+            <p className="text-center py-6 text-sm" style={{ color: "var(--color-brand)" }}>
+              検索に失敗しました。{ai.error instanceof ApiError ? ai.error.message : "しばらくしてからもう一度お試しください。"}
+            </p>
+          ) : (
+            <>
+              <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>
+                条件に近いメンバー（{aiResults.length}名）
+                {selectedKeys.size > 0 ? `　※選んだUSPを持つ${ai.data?.data.candidateCount ?? 0}名の中から` : ""}
+              </p>
+              {ai.data?.data.aiCallFailed && (
+                <p className="text-xs mb-2 px-3 py-2 rounded-xl" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-600)" }}>
+                  ※ AIでの検索がうまくいかなかったため、条件の言葉が含まれるメンバーを表示しています。時間をおいてもう一度お試しください。
+                </p>
+              )}
+              <div className="space-y-3">
+                {aiResults.length === 0
+                  ? <p className="text-center py-6 text-sm" style={{ color: "var(--color-ink-400)" }}>条件に近いメンバーは見つかりませんでした</p>
+                  : aiResults.map(({ member, why }) => (
+                    <div key={member.id}>
+                      <MemberCard member={member} backTo={backTo} />
+                      {why && (
+                        <p className="text-[11px] mt-1.5 mx-1 rounded-lg px-2.5 py-1.5" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-600)" }}>
+                          🔎 <b style={{ color: "var(--color-brand)" }}>なぜこの人？</b> {why}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </>
+          )}
+        </>
+      ) : selectedKeys.size > 0 && !isLoading ? (
         <>
           <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-600)" }}>該当するメンバー（{matched.length}名）</p>
           <div className="space-y-3">
             {matched.length === 0
               ? <p className="text-center py-6 text-sm" style={{ color: "var(--color-ink-400)" }}>該当するメンバーはいません</p>
-              : matched.map((m) => <MemberCard key={m.id} member={m} />)}
+              : matched.map((m) => <MemberCard key={m.id} member={m} backTo={backTo} />)}
           </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

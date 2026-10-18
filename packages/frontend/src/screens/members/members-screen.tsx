@@ -71,7 +71,10 @@ const STATUS_LABEL: Record<string, { label: string; className: string }> = {
   self:    { label: "自分",     className: "bg-violet-100 text-violet-700 ring-violet-300" },
 };
 
-export function MemberCard({ member, collabTeams }: { member: PublicMember; collabTeams?: { name: string; type: "loose" | "power" }[] }) {
+/** メンバー詳細の「戻る」ボタンの表示と戻り先（呼び出し元の画面が指定する。未指定ならなかま一覧） */
+export type MemberBackTarget = { path: string; label: string };
+
+export function MemberCard({ member, collabTeams, backTo }: { member: PublicMember; collabTeams?: { name: string; type: "loose" | "power" }[]; backTo?: MemberBackTarget }) {
   const connStatus = member.connectionStatus;
   const badge = STATUS_LABEL[connStatus] ?? STATUS_LABEL.none;
   const tz = useTimezone();
@@ -79,6 +82,7 @@ export function MemberCard({ member, collabTeams }: { member: PublicMember; coll
   return (
     <Link
       to={`/members/${member.id}`}
+      state={backTo ? { from: backTo } : undefined}
       className="card-paper rounded-2xl p-4 flex items-start gap-3 block transition hover:opacity-90 active:scale-[0.98]"
     >
       <MemberAvatar

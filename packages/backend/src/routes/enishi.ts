@@ -16,6 +16,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { suggestSplit } from "../services/split-suggest.ts";
+import { runMemberSearch } from "../services/member-search.ts";
 import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
@@ -655,6 +656,23 @@ enishiRoutes.post("/search/contacts", async (c) => {
     db, meId, "contact-search", title, { specialties, freeText, scope, memberIds, count }, result, now
   );
   return c.json({ data: augmented, historyId });
+});
+
+// ---- POST /api/enishi/search/members ---- 人脈検索（メンバーのUSPから絞り込む）：条件に近いメンバーをAIでさがす
+// body: { freeText: string, usps?: string[] }  usps を指定した場合は、そのUSPを持つメンバーの中からさがす
+enishiRoutes.post("/search/members", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const body = await c.req.json<{ freeText?: string; usps?: string[] }>().catch(() => ({} as { freeText?: string; usps?: string[] }));
+  const freeText = body.freeText?.trim() ?? "";
+  if (!freeText) return c.json({ error: { code: "invalid_input", message: "さがしたい人の条件を入力してください" } }, 400);
+  if (freeText.length > 1000) return c.json({ error: { code: "invalid_input", message: "条件は1000文字以内で入力してください" } }, 400);
+  const usps = [...new Set((body.usps ?? []).filter((u) => typeof u === "string" && u.trim()))].slice(0, 50);
+  const result = await runMemberSearch({
+    db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", meId, usps, freeText,
+  });
+  return c.json({ data: result });
 });
 
 // ---- GET /api/enishi/history ---- 検索履歴一覧（新しい順・自分の分のみ）

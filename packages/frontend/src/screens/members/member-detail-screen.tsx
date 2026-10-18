@@ -2,7 +2,7 @@
 // メンバー詳細画面 + 1to1フロー
 // =============================================================
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Handshake, CheckCircle2, Clock, Phone, Mail, MapPin, Building2, Camera, Calendar } from "lucide-react";
 import { ImportCardModal } from "@/screens/oneonone/import-card-modal";
@@ -55,6 +55,9 @@ const STATUS_LABEL: Record<string, { label: string; emoji: string; className: st
 export function MemberDetailScreen() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  // どの画面から開いたか（呼び出し元の画面が渡す）。戻るボタンの表示と戻り先を、呼び出し元に合わせる
+  const location = useLocation();
+  const from = (location.state as { from?: { path: string; label: string } } | null)?.from;
   const qc = useQueryClient();
   const me = useAuthStore((s) => s.user);
   const { termUsp, termBusinessCommunity } = useSettings();
@@ -243,11 +246,11 @@ export function MemberDetailScreen() {
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto">
       {/* 戻るボタン */}
       <button
-        onClick={() => navigate(-1)}
+        onClick={() => (from ? navigate(from.path) : navigate(-1))}
         className="flex items-center gap-1 text-sm mb-5"
         style={{ color: "var(--color-ink-500)" }}
       >
-        <ArrowLeft size={16} /> なかま一覧に戻る
+        <ArrowLeft size={16} /> {from?.label ?? "なかま一覧に戻る"}
       </button>
 
       {/* プロフィールカード */}
