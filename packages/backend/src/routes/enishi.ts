@@ -15,7 +15,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
-import { splitMultiEntries } from "../services/split-entries.ts";
+import { suggestSplit } from "../services/split-suggest.ts";
 import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
@@ -235,14 +235,35 @@ enishiRoutes.get("/eggs", async (c) => {
   return c.json({ data: rows });
 });
 
+/** 登録する内容を1件ずつの配列にそろえる（空・重複は除く）。descriptions がなければ description を1件として扱う */
+function normalizeDescriptions(descriptions: string[] | undefined, description: string | undefined): string[] {
+  const list = Array.isArray(descriptions) && descriptions.some((d) => d?.trim()) ? descriptions : [description ?? ""];
+  return [...new Set(list.map((d) => (typeof d === "string" ? d.trim() : "")).filter(Boolean))];
+}
+
+// ---- POST /api/enishi/split-suggestion ----
+// 金の卵・金のガチョウの入力欄に複数の相手がまとめて書かれていそうなとき、1件ずつに分けた案を返す（登録はしない）。
+// 保存の直前に画面から呼び、ユーザーが分割案を確認・修正してから登録する。
+enishiRoutes.post("/split-suggestion", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const body = await c.req.json<{ kind?: string; description?: string }>().catch(() => ({} as { kind?: string; description?: string }));
+  const text = (body.description ?? "").trim();
+  if (!text) return c.json({ error: { code: "invalid_input", message: "内容を入力してください" } }, 400);
+  if (text.length > 2000) return c.json({ data: { items: [text], source: "rules" } });
+  const result = await suggestSplit(c.env, body.kind === "goose" ? "goose" : "egg", text);
+  return c.json({ data: result });
+});
+
 // ---- POST /api/enishi/eggs ----
 enishiRoutes.post("/eggs", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
 
-  const body = await c.req.json<{ description: string; issue?: string; priceRange?: string; region?: string }>();
-  if (!body.description?.trim()) return c.json({ error: { code: "invalid_input", message: "「どんな企業か」を入力してください" } }, 400);
+  const body = await c.req.json<{ description: string; descriptions?: string[]; issue?: string; priceRange?: string; region?: string }>();
+  if (!body.description?.trim() && !(body.descriptions ?? []).some((d) => d?.trim())) return c.json({ error: { code: "invalid_input", message: "「どんな企業か」を入力してください" } }, 400);
 
   const existing = await db.select({ id: schema.goldenEggs.id }).from(schema.goldenEggs)
     .where(eq(schema.goldenEggs.memberId, meId)).all();
@@ -250,8 +271,8 @@ enishiRoutes.post("/eggs", async (c) => {
     return c.json({ error: { code: "egg_limit_exceeded", message: `金の卵は最大${MAX_EGGS}件まで登録できます。すでに上限に達しています。` } }, 400);
   }
 
-  // 1つの入力欄に複数の相手をまとめて書かれている場合は、1件ずつに分けて登録する（上限を超える分は登録しない）
-  const parts = splitMultiEntries(body.description);
+  // 画面で分割案を確認した場合は descriptions（1件ずつの内容）が届く。なければ、入力されたとおり1件で登録する
+  const parts = normalizeDescriptions(body.descriptions, body.description);
   const accepted = parts.slice(0, Math.max(MAX_EGGS - existing.length, 0));
   const now = Math.floor(Date.now() / 1000);
   const ids: string[] = [];
@@ -267,7 +288,7 @@ enishiRoutes.post("/eggs", async (c) => {
       createdAt: now, updatedAt: now,
     });
   }
-  return c.json({ data: { id: ids[0], ids, splitCount: parts.length, skippedCount: parts.length - accepted.length } }, 201);
+  return c.json({ data: { id: ids[0], ids, count: ids.length, skippedCount: parts.length - accepted.length } }, 201);
 });
 
 // ---- PATCH /api/enishi/eggs/:id ----
@@ -328,8 +349,8 @@ enishiRoutes.post("/geese", async (c) => {
   const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
 
-  const body = await c.req.json<{ description: string; contactHypothesis?: string; priority?: string }>();
-  if (!body.description?.trim()) return c.json({ error: { code: "invalid_input", message: "「どんな立場の人か」を入力してください" } }, 400);
+  const body = await c.req.json<{ description: string; descriptions?: string[]; contactHypothesis?: string; priority?: string }>();
+  if (!body.description?.trim() && !(body.descriptions ?? []).some((d) => d?.trim())) return c.json({ error: { code: "invalid_input", message: "「どんな立場の人か」を入力してください" } }, 400);
 
   const existing = await db.select({ id: schema.goldenGeese.id }).from(schema.goldenGeese)
     .where(eq(schema.goldenGeese.memberId, meId)).all();
@@ -338,8 +359,8 @@ enishiRoutes.post("/geese", async (c) => {
   }
 
   const priority = ["高", "中", "低"].includes(body.priority ?? "") ? body.priority : null;
-  // 1つの入力欄に複数の相手をまとめて書かれている場合は、1件ずつに分けて登録する（上限を超える分は登録しない）
-  const parts = splitMultiEntries(body.description);
+  // 画面で分割案を確認した場合は descriptions（1件ずつの内容）が届く。なければ、入力されたとおり1件で登録する
+  const parts = normalizeDescriptions(body.descriptions, body.description);
   const accepted = parts.slice(0, Math.max(MAX_GEESE - existing.length, 0));
   const now = Math.floor(Date.now() / 1000);
   const ids: string[] = [];
@@ -354,7 +375,7 @@ enishiRoutes.post("/geese", async (c) => {
       createdAt: now, updatedAt: now,
     });
   }
-  return c.json({ data: { id: ids[0], ids, splitCount: parts.length, skippedCount: parts.length - accepted.length } }, 201);
+  return c.json({ data: { id: ids[0], ids, count: ids.length, skippedCount: parts.length - accepted.length } }, 201);
 });
 
 // ---- PATCH /api/enishi/geese/:id ----

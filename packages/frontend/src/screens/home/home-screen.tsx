@@ -121,7 +121,7 @@ function EnishiFirstLoginDialog({ userId, enabled }: { userId: string | undefine
           「たどり着きたい理想の相手」（金の卵）と、「そこへ運んでくれそうな立場の人」（金のガチョウ）を登録しておくと、AIによる「ご縁さがし」の精度が上がります。
         </p>
         <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
-          💡 1つの欄には1件ずつ入力してください（複数あるときは、行を分けて書いても、自動で1件ずつに分けて登録されます）。あとからいつでも追加・編集できます。
+          💡 いくつかまとめて入力しても大丈夫です。保存のときに、他のメンバーから紹介しやすいよう1件ずつに分ける案をお見せします。あとからいつでも追加・編集できます。
         </p>
         <div className="flex gap-2">
           <button onClick={close} className="flex-1 py-3 rounded-2xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>

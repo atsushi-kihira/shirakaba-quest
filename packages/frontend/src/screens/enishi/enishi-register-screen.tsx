@@ -12,15 +12,64 @@ const MAX_ITEMS = 8;
 
 type GoldenEgg = { id: string; description: string; issue: string | null; priceRange: string | null; region: string | null };
 type GoldenGoose = { id: string; description: string; contactHypothesis: string | null; priority: string | null };
-// 1つの入力欄に複数まとめて入力された場合、サーバー側で1件ずつに分けて登録される。そのことをお知らせする
-type SplitResult = { data?: { splitCount?: number; skippedCount?: number } } | { ok: boolean } | null;
-function notifySplit(res: unknown, label: string): void {
-  const d = (res as { data?: { splitCount?: number; skippedCount?: number } } | null)?.data;
-  if (!d?.splitCount || d.splitCount < 2) return;
-  const registered = d.splitCount - (d.skippedCount ?? 0);
-  alert(
-    `複数の内容が入力されていたため、${d.splitCount}件の${label}に分けました。` +
-    (d.skippedCount ? `\n（登録できる上限を超えた${d.skippedCount}件は登録していません。登録できたのは${registered}件です）` : "\n内容は「登録・編集」の一覧から確認・修正できます。")
+// 登録結果（分割して複数件登録した場合のお知らせ用）
+type CreateResult = { data?: { count?: number; skippedCount?: number } } | { ok: boolean } | null;
+function notifySkipped(res: unknown, label: string): void {
+  const d = (res as { data?: { count?: number; skippedCount?: number } } | null)?.data;
+  if (d?.skippedCount) alert(`登録できる上限を超えたため、${d.skippedCount}件の${label}は登録していません（登録できたのは${d.count ?? 0}件です）。`);
+}
+
+// ---- 分割案（保存の直前に、複数の相手がまとめて書かれていそうなら、1件ずつに分けた案を見せて確認する） ----
+type SplitSuggestionResponse = { data: { items: string[]; source: "ai" | "rules" } };
+function useSplitSuggestion(kind: "egg" | "goose") {
+  return useMutation({
+    mutationFn: (description: string) => api.post<SplitSuggestionResponse>("/enishi/split-suggestion", { kind, description }),
+  });
+}
+
+function SplitProposalPanel({ label, items, onChange, onConfirm, onKeepOne, onBack, pending, error }: {
+  label: string; items: string[]; onChange: (items: string[]) => void;
+  onConfirm: () => void; onKeepOne: () => void; onBack: () => void; pending: boolean; error: string | null;
+}) {
+  const filled = items.map((t) => t.trim()).filter(Boolean);
+  return (
+    <div className="card-paper rounded-2xl p-4 border-2" style={{ borderColor: "var(--color-accent)" }}>
+      <p className="text-sm font-bold mb-1" style={{ color: "var(--color-ink-800)" }}>✂️ 分割して登録しませんか？</p>
+      <p className="text-xs mb-3" style={{ color: "var(--color-ink-600)" }}>
+        他のメンバーから紹介しやすいように、次のように{items.length}件に分割して登録しようと思いますが、いかがでしょうか？
+        必要であれば修正してください（内容の書き換え・不要な項目の削除・項目の追加ができます）。
+      </p>
+      <div className="space-y-2 mb-2">
+        {items.map((t, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <span className="mt-2 text-xs font-bold shrink-0" style={{ color: "var(--color-accent)" }}>{label}{i + 1}</span>
+            <textarea value={t} onChange={(e) => onChange(items.map((x, j) => (j === i ? e.target.value : x)))} rows={2}
+              className="flex-1 rounded-xl px-3 py-2 text-sm" style={{ border: "1px solid var(--color-paper-300)" }} />
+            <button type="button" onClick={() => onChange(items.filter((_, j) => j !== i))} aria-label="この項目を削除"
+              className="mt-1.5 p-1.5 rounded-lg hover:opacity-70" style={{ color: "var(--color-brand)" }}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <button type="button" onClick={() => onChange([...items, ""])} className="text-xs font-medium mb-3 underline" style={{ color: "var(--color-ink-500)" }}>
+        ＋ 項目を追加する
+      </button>
+      {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
+      <div className="flex flex-col gap-2">
+        <button onClick={onConfirm} disabled={pending || filled.length === 0}
+          className="py-2.5 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+          {pending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} この内容で{filled.length}件登録する
+        </button>
+        <button onClick={onKeepOne} disabled={pending} className="py-2.5 rounded-xl text-sm font-medium disabled:opacity-50"
+          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+          分割せず、入力したとおり1件で登録する
+        </button>
+        <button onClick={onBack} disabled={pending} className="py-2 text-xs underline disabled:opacity-50" style={{ color: "var(--color-ink-500)" }}>
+          入力に戻って直す
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -149,15 +198,35 @@ function EggForm({ mode, egg, onDone, onCancel }: { mode: "create" | "edit"; egg
   const [priceRange, setPriceRange] = useState(egg?.priceRange ?? "");
   const [region, setRegion] = useState(egg?.region ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<string[] | null>(null);
+  const suggest = useSplitSuggestion("egg");
 
+  // descriptions を渡すと、その内容で1件ずつ登録する（分割案を確認した場合）。渡さなければ入力どおり1件で登録する
   const save = useMutation({
-    mutationFn: () => {
-      const body = { description, issue: issue || undefined, priceRange: priceRange || undefined, region: region || undefined };
-      return mode === "create" ? api.post<SplitResult>("/enishi/eggs", body) : api.patch(`/enishi/eggs/${egg!.id}`, body);
+    mutationFn: (descriptions?: string[]) => {
+      const body = { description, descriptions, issue: issue || undefined, priceRange: priceRange || undefined, region: region || undefined };
+      return mode === "create" ? api.post<CreateResult>("/enishi/eggs", body) : api.patch(`/enishi/eggs/${egg!.id}`, body);
     },
-    onSuccess: (res) => { notifySplit(res, "金の卵"); onDone(); },
+    onSuccess: (res) => { notifySkipped(res, "金の卵"); onDone(); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "保存に失敗しました"),
   });
+
+  // 新規登録のときは、保存の直前に分割案を作り、複数に分けられそうなら確認する（AIが使えない場合も、ルールで案を作る）
+  function handleSave() {
+    if (!description.trim()) { setError("「どんな企業か」を入力してください"); return; }
+    setError(null);
+    if (mode === "edit") { save.mutate(undefined); return; }
+    suggest.mutate(description, {
+      onSuccess: (res) => (res.data.items.length >= 2 ? setProposal(res.data.items) : save.mutate(undefined)),
+      onError: () => save.mutate(undefined),
+    });
+  }
+
+  if (proposal) {
+    return <SplitProposalPanel label="卵" items={proposal} onChange={setProposal} pending={save.isPending} error={error}
+      onConfirm={() => save.mutate(proposal.map((t) => t.trim()).filter(Boolean))}
+      onKeepOne={() => save.mutate(undefined)} onBack={() => { setProposal(null); setError(null); }} />;
+  }
 
   return (
     <div className="card-paper rounded-2xl p-4 border-2" style={{ borderColor: "var(--color-accent)" }}>
@@ -186,11 +255,11 @@ function EggForm({ mode, egg, onDone, onCancel }: { mode: "create" | "edit"; egg
       {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
       <div className="flex gap-2">
-        <button onClick={() => description.trim() ? save.mutate() : setError("「どんな企業か」を入力してください")}
-          disabled={save.isPending}
+        <button onClick={handleSave}
+          disabled={save.isPending || suggest.isPending}
           className="flex-1 py-2 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}>
-          {save.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 保存する
+          {save.isPending || suggest.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 保存する
         </button>
         <button onClick={onCancel} className="px-4 py-2 rounded-xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
           <X size={14} />
@@ -275,15 +344,34 @@ function GooseForm({ mode, goose, onDone, onCancel }: { mode: "create" | "edit";
   const [contactHypothesis, setContactHypothesis] = useState(goose?.contactHypothesis ?? "");
   const [priority, setPriority] = useState(goose?.priority ?? "中");
   const [error, setError] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<string[] | null>(null);
+  const suggest = useSplitSuggestion("goose");
 
+  // descriptions を渡すと、その内容で1件ずつ登録する（分割案を確認した場合）。渡さなければ入力どおり1件で登録する
   const save = useMutation({
-    mutationFn: () => {
-      const body = { description, contactHypothesis: contactHypothesis || undefined, priority };
-      return mode === "create" ? api.post<SplitResult>("/enishi/geese", body) : api.patch(`/enishi/geese/${goose!.id}`, body);
+    mutationFn: (descriptions?: string[]) => {
+      const body = { description, descriptions, contactHypothesis: contactHypothesis || undefined, priority };
+      return mode === "create" ? api.post<CreateResult>("/enishi/geese", body) : api.patch(`/enishi/geese/${goose!.id}`, body);
     },
-    onSuccess: (res) => { notifySplit(res, "金のガチョウ"); onDone(); },
+    onSuccess: (res) => { notifySkipped(res, "金のガチョウ"); onDone(); },
     onError: (e) => setError(e instanceof ApiError ? e.message : "保存に失敗しました"),
   });
+
+  function handleSave() {
+    if (!description.trim()) { setError("「どんな立場の人か」を入力してください"); return; }
+    setError(null);
+    if (mode === "edit") { save.mutate(undefined); return; }
+    suggest.mutate(description, {
+      onSuccess: (res) => (res.data.items.length >= 2 ? setProposal(res.data.items) : save.mutate(undefined)),
+      onError: () => save.mutate(undefined),
+    });
+  }
+
+  if (proposal) {
+    return <SplitProposalPanel label="ガチョウ" items={proposal} onChange={setProposal} pending={save.isPending} error={error}
+      onConfirm={() => save.mutate(proposal.map((t) => t.trim()).filter(Boolean))}
+      onKeepOne={() => save.mutate(undefined)} onBack={() => { setProposal(null); setError(null); }} />;
+  }
 
   return (
     <div className="card-paper rounded-2xl p-4 border-2" style={{ borderColor: "var(--color-accent)" }}>
@@ -307,11 +395,11 @@ function GooseForm({ mode, goose, onDone, onCancel }: { mode: "create" | "edit";
       {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
       <div className="flex gap-2">
-        <button onClick={() => description.trim() ? save.mutate() : setError("「どんな立場の人か」を入力してください")}
-          disabled={save.isPending}
+        <button onClick={handleSave}
+          disabled={save.isPending || suggest.isPending}
           className="flex-1 py-2 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}>
-          {save.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 保存する
+          {save.isPending || suggest.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} 保存する
         </button>
         <button onClick={onCancel} className="px-4 py-2 rounded-xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
           <X size={14} />
