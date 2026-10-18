@@ -305,6 +305,11 @@ function GoogleAccountsCard({
                   <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
                     🗓️ 空き状況の確認に使うカレンダー：{acc.busyCalendars.length > 0 ? acc.busyCalendars.map((c) => c.summary).join("、") : "メインカレンダー"}
                   </p>
+                  {acc.busyCalendars.length <= 1 && (
+                    <p className="text-xs mt-1.5 px-2.5 py-1.5 rounded-lg" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-700)" }}>
+                      💡 Googleカレンダーの予定が複数のカレンダーに分かれている場合は、「カレンダー設定を変更する」から、空き状況を確認するカレンダーを追加してください。
+                    </p>
+                  )}
                   <div className="flex items-center gap-3 mt-2">
                     {!acc.isDefault && (
                       <button
@@ -430,7 +435,10 @@ function IntegrationCard({
 }
 
 // ---- Google カレンダー設定モーダル（書き込み先カレンダーの単一選択＋空き状況判定に使うカレンダーの複数選択） ----
-type GoogleCalendarOption = { id: string; summary: string; primary: boolean };
+type GoogleCalendarOption = {
+  id: string; summary: string; primary: boolean;
+  selected: boolean; accessRole: string; kind: "normal" | "holiday" | "birthday";
+};
 
 function GoogleCalendarSettingsModal({
   accountId, onClose, onSaved,
@@ -446,7 +454,7 @@ function GoogleCalendarSettingsModal({
   const [writeId, setWriteId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const { data, isLoading, error: loadError } = useQuery<{ data: { calendars: GoogleCalendarOption[]; selectedBusyIds: string[]; writeCalendarId: string } }>({
+  const { data, isLoading, error: loadError } = useQuery<{ data: { calendars: GoogleCalendarOption[]; selectedBusyIds: string[]; writeCalendarId: string; googleSelectedIds: string[] } }>({
     queryKey: ["scheduler", "google-calendars", accountId],
     queryFn: () => request(`/scheduler/oauth/google/accounts/${accountId}/calendars`),
   });
@@ -536,26 +544,42 @@ function GoogleCalendarSettingsModal({
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
               チェックしたカレンダーの予定がまとめて「予約不可（埋まっている）」時間として扱われます。複数選択できます。
             </p>
-            <div className="space-y-1.5 mb-3 max-h-40 overflow-y-auto">
-              {calendars.map((cal) => (
-                <label
-                  key={cal.id}
-                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer"
-                  style={{
-                    background: checked.has(cal.id) ? "rgba(90,140,92,0.1)" : "var(--color-paper-100)",
-                    border: checked.has(cal.id) ? "1.5px solid rgba(90,140,92,0.3)" : "1.5px solid transparent",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked.has(cal.id)}
-                    onChange={() => toggleBusy(cal.id)}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm flex-1" style={{ color: "var(--color-ink-800)" }}>
-                    {cal.summary}{cal.primary && "（メイン）"}
-                  </span>
-                </label>
+            <button
+              type="button"
+              onClick={() => setBusyIds(new Set(data?.data.googleSelectedIds ?? []))}
+              className="text-xs font-medium px-3 py-1.5 rounded-xl mb-2"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-brand)" }}>
+              ✨ Googleカレンダーで表示中のものに合わせる
+            </button>
+            <div className="space-y-3 mb-3 max-h-64 overflow-y-auto">
+              {[
+                { title: "マイカレンダー", items: calendars.filter((cal) => cal.accessRole === "owner") },
+                { title: "他のカレンダー", items: calendars.filter((cal) => cal.accessRole !== "owner") },
+              ].filter((g) => g.items.length > 0).map((g) => (
+                <div key={g.title} className="space-y-1.5">
+                  <p className="text-[11px] font-bold" style={{ color: "var(--color-ink-500)" }}>{g.title}</p>
+                  {g.items.map((cal) => (
+                    <label
+                      key={cal.id}
+                      className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer"
+                      style={{
+                        background: checked.has(cal.id) ? "rgba(90,140,92,0.1)" : "var(--color-paper-100)",
+                        border: checked.has(cal.id) ? "1.5px solid rgba(90,140,92,0.3)" : "1.5px solid transparent",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked.has(cal.id)}
+                        onChange={() => toggleBusy(cal.id)}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm flex-1" style={{ color: "var(--color-ink-800)" }}>
+                        {cal.summary}{cal.primary && "（メイン）"}
+                        {cal.kind !== "normal" && <span className="text-[11px] ml-1.5" style={{ color: "var(--color-ink-400)" }}>{cal.kind === "holiday" ? "祝日" : "誕生日"}</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
               ))}
             </div>
           </>

@@ -11,7 +11,7 @@ import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { encryptToken, decryptToken } from "../../services/tokenCrypto.ts";
-import { refreshGoogleToken, fetchGoogleUserInfo, fetchCalendarList } from "../../services/googleClient.ts";
+import { refreshGoogleToken, fetchGoogleUserInfo, fetchCalendarList, suggestBusyCalendars } from "../../services/googleClient.ts";
 import { getValidGoogleAccessTokenForAccount, parseBusyCalendars, type BusyCalendar } from "../../services/conferenceService.ts";
 import { getFrontendUrl } from "../../services/frontendUrl.ts";
 import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
@@ -204,13 +204,25 @@ oauthGoogleRoutes.get("/callback", async (c) => {
         .from(schema.googleCalendarAccounts)
         .where(eq(schema.googleCalendarAccounts.memberId, memberId))
         .get();
+      // 空き状況の確認対象は、Googleでチェックが付いているカレンダーを初期値にする（取得できなければメインのみ）
+      let initialBusy: BusyCalendar[] = [{ id: "primary", summary: "メインカレンダー" }];
+      let initialWriteId = "primary";
+      try {
+        const calendars = await fetchCalendarList(tokens.access_token);
+        const suggested = suggestBusyCalendars(calendars);
+        if (suggested.length > 0) initialBusy = suggested;
+        const primaryEntry = calendars.find((cal) => cal.primary);
+        if (primaryEntry) initialWriteId = primaryEntry.id;
+      } catch (e) {
+        console.error("fetchCalendarList (initial) failed:", e);
+      }
       await db.insert(schema.googleCalendarAccounts).values({
         id: newId(),
         memberId,
         googleAccountEmail: userEmail,
         isDefault: otherAccount ? 0 : 1,
-        primaryCalendarId: "primary",
-        busyCalendars: JSON.stringify([{ id: "primary", summary: "メインカレンダー" }] satisfies BusyCalendar[]),
+        primaryCalendarId: initialWriteId,
+        busyCalendars: JSON.stringify(initialBusy),
         accessTokenEnc,
         refreshTokenEnc,
         accessTokenExpiresAt: expiresAt,
@@ -383,7 +395,9 @@ oauthGoogleRoutes.get("/accounts/:accountId/calendars", async (c) => {
     const normalize = (id: string) => (id === "primary" && primaryEntry ? primaryEntry.id : id);
     const selectedBusyIds = googleCred.busyCalendars.map((cal) => normalize(cal.id));
     const writeCalendarId = normalize(googleCred.calendarId);
-    return c.json({ data: { calendars, selectedBusyIds, writeCalendarId } });
+    // 「Googleの表示に合わせる」ボタン用：Googleでチェックが付いているカレンダー（祝日・誕生日は除く）
+    const googleSelectedIds = suggestBusyCalendars(calendars).map((cal) => cal.id);
+    return c.json({ data: { calendars, selectedBusyIds, writeCalendarId, googleSelectedIds } });
   } catch (e) {
     console.error("fetchCalendarList failed:", e);
     return c.json({ error: { code: "calendar_list_failed", message: "カレンダー一覧の取得に失敗しました。時間をおいて再度お試しください。" } }, 502);

@@ -7,24 +7,54 @@ export type CalendarEventResult = {
   meetUrl: string | null;
 };
 
-export type CalendarListEntry = { id: string; summary: string; primary: boolean };
+export type CalendarListEntry = {
+  id: string;
+  summary: string;
+  primary: boolean;
+  /** Googleのカレンダー画面で、左のチェックボックスが付いている（表示中）かどうか */
+  selected: boolean;
+  /** owner: 自分のカレンダー（Googleの「マイカレンダー」）／それ以外: 共有・購読しているカレンダー（「他のカレンダー」） */
+  accessRole: string;
+  /** 祝日・誕生日などの自動カレンダー。予定が多く「埋まっている時間」として扱うと困るため、初期選択から外す */
+  kind: "normal" | "holiday" | "birthday";
+};
+
+function calendarKind(id: string): CalendarListEntry["kind"] {
+  if (id.endsWith("#holiday@group.v.calendar.google.com")) return "holiday";
+  if (id.endsWith("#contacts@group.v.calendar.google.com")) return "birthday";
+  return "normal";
+}
 
 /** 連携アカウントが参照可能なカレンダー一覧（空き状況判定の選択肢用） */
 export async function fetchCalendarList(accessToken: string): Promise<CalendarListEntry[]> {
   const res = await fetch(
-    "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=freeBusyReader",
+    "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=freeBusyReader&maxResults=250",
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Google calendarList failed: ${res.status} ${body}`);
   }
-  const json = (await res.json()) as { items?: { id: string; summary?: string; primary?: boolean }[] };
+  const json = (await res.json()) as {
+    items?: { id: string; summary?: string; summaryOverride?: string; primary?: boolean; selected?: boolean; accessRole?: string }[];
+  };
   return (json.items ?? []).map((it) => ({
     id: it.id,
-    summary: it.summary ?? it.id,
+    summary: it.summaryOverride ?? it.summary ?? it.id,
     primary: !!it.primary,
+    selected: !!it.selected,
+    accessRole: it.accessRole ?? "reader",
+    kind: calendarKind(it.id),
   }));
+}
+
+/**
+ * 空き状況の確認対象の初期値。Googleでチェックが付いているカレンダー（祝日・誕生日は除く）。
+ * メインカレンダーは必ず含める。
+ */
+export function suggestBusyCalendars(calendars: CalendarListEntry[]): { id: string; summary: string }[] {
+  const picked = calendars.filter((cal) => cal.primary || (cal.selected && cal.kind === "normal"));
+  return picked.map((cal) => ({ id: cal.id, summary: cal.summary }));
 }
 
 export type InsertEventArgs = {
