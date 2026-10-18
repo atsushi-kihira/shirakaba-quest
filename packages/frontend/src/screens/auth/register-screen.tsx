@@ -59,9 +59,15 @@ const AVATAR_EMOJIS = ["😊","😄","🤗","😎","🥰","🌟","💪","🎯","
 
 // ---- 入力途中の内容の自動保存（このブラウザ内のみ。メール確認後は不要になるため、完了したら消す） ----
 const SNAPSHOT_KEY = "register-wizard-snapshot-v1";
+type ProfileState = {
+  name: string; furigana: string; nameRomaji: string; email: string;
+  emoji: string; bgColor: string;
+  category: string; businessDescription: string;
+  company: string; role: string; businessCommunityJoinedDate: string;
+};
 type WizardSnapshot = {
   step: number;
-  profile: Record<string, string>;
+  profile: ProfileState;
   skills: SkillForm[];
   pendingUspRequests: PendingUspRequest[];
   frontImage: string | null;
@@ -98,7 +104,7 @@ export function RegisterScreen() {
   const navigate = useNavigate();
   const { appTitle, characterImageUrl, appLogo, termBusinessCommunity, isLoading: settingsLoading } = useSettings();
   const [saved] = useState<WizardSnapshot | null>(() => loadSnapshot());
-  const [restored, setRestored] = useState<boolean>(() => !!saved && (saved.profile.name !== "" || saved.profile.email !== "" || saved.step > 1));
+  const [restored] = useState<boolean>(() => !!saved && (saved.profile.name !== "" || saved.profile.email !== "" || saved.step > 1));
   const [step, setStep] = useState(() => (saved ? Math.min(Math.max(saved.step, 1), 3) : 1));
 
   // Step1
@@ -117,7 +123,7 @@ export function RegisterScreen() {
   const [pendingUspRequests, setPendingUspRequests] = useState<PendingUspRequest[]>(saved?.pendingUspRequests ?? []);
 
   // Step3: プロフィール
-  const [profile, setProfile] = useState<Record<string, string>>(saved?.profile ?? {
+  const [profile, setProfile] = useState<ProfileState>(saved?.profile ?? {
     name: "", furigana: "", nameRomaji: "", email: "",
     emoji: "😊", bgColor: "bg-rose-100",
     category: "", businessDescription: "",
@@ -164,7 +170,7 @@ export function RegisterScreen() {
 
   const { data: verificationStatus } = useQuery({
     queryKey: ["register", "email-verification-status", verificationToken],
-    queryFn: () => api.get<{ data: { verified: boolean; expired: boolean } }>(
+    queryFn: () => api.get<{ data: { verified: boolean; expired: boolean; registered: boolean; memberId: string | null } }>(
       `/register/email-verification-status?token=${verificationToken}`
     ),
     enabled: awaitingVerification && !!verificationToken,
