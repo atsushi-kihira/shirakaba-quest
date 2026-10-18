@@ -361,6 +361,24 @@ export function HomeScreen() {
     staleTime: 60_000,
   });
 
+  // Googleカレンダーが複数に分かれているのに、一部しか空き状況の確認対象になっていない連携済みアカウントの案内
+  const CAL_HINT_DISMISS_KEY = "calendar-hint-dismissed-v1";
+  const [dismissedCalHint, setDismissedCalHint] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(CAL_HINT_DISMISS_KEY) ?? "[]") as string[]; } catch { return []; }
+  });
+  const { data: calendarHintData } = useQuery({
+    queryKey: ["scheduler", "calendar-hint"],
+    queryFn: () => api.get<{ data: { accounts: { accountId: string; email: string; missingCount: number }[] } }>("/scheduler/oauth/google/calendar-hint"),
+    enabled: !!user && user.userType === "member",
+    staleTime: 10 * 60_000,
+  });
+  const calendarHintAccounts = (calendarHintData?.data.accounts ?? []).filter((a) => !dismissedCalHint.includes(a.accountId));
+  function dismissCalendarHint() {
+    const next = [...dismissedCalHint, ...calendarHintAccounts.map((a) => a.accountId)];
+    setDismissedCalHint(next);
+    try { localStorage.setItem(CAL_HINT_DISMISS_KEY, JSON.stringify(next)); } catch { /* 保存できなくても動作に影響なし */ }
+  }
+
   function handleReactionNotifOpen(n: CollabReactionNotification) {
     setOpenReactionNotif(n);
     api.post(`/collab/reaction-notifications/${n.id}/read`)
@@ -416,7 +434,7 @@ export function HomeScreen() {
 
   // プロフィール補完の入力促し（後から必須にした項目・登録が推奨される項目）。
   // 各項目は「未入力・未登録」の場合のみ表示し、ホーム画面の一番先頭に並べる。
-  type ProfilePromptItem = { key: string; message: string; linkTo: string; restricted?: boolean };
+  type ProfilePromptItem = { key: string; message: string; linkTo: string; restricted?: boolean; actionLabel?: string; onDismiss?: () => void };
   const profilePromptItems: ProfilePromptItem[] = [];
   if (user && !user.businessCommunityJoinedDate) {
     profilePromptItems.push({
@@ -439,6 +457,16 @@ export function HomeScreen() {
       message: "📇 外部人脈を登録しましょう",
       linkTo: "/members?tab=contacts",
       restricted: true,
+    });
+  }
+
+  if (calendarHintAccounts.length > 0) {
+    profilePromptItems.push({
+      key: "calendar-hint",
+      message: "📆 Googleカレンダーが複数に分かれている場合は、Google連携の設定で、空き状況を確認するカレンダーを追加してください",
+      linkTo: "/scheduler/integrations",
+      actionLabel: "設定する",
+      onDismiss: dismissCalendarHint,
     });
   }
 
@@ -485,8 +513,18 @@ export function HomeScreen() {
               >
                 <p className="text-sm font-medium flex-1" style={{ color: "var(--color-ink-800)" }}>{item.message}</p>
                 <span className="flex items-center gap-0.5 text-xs font-medium shrink-0" style={{ color: "var(--color-brand)" }}>
-                  入力する <ChevronRight size={14} />
+                  {item.actionLabel ?? "入力する"} <ChevronRight size={14} />
                 </span>
+                {item.onDismiss && (
+                  <button
+                    type="button"
+                    aria-label="この案内を閉じる"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); item.onDismiss?.(); }}
+                    className="shrink-0 p-1"
+                  >
+                    <X size={14} style={{ color: "var(--color-ink-400)" }} />
+                  </button>
+                )}
               </Link>
             );
           })}

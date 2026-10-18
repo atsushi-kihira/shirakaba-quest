@@ -360,6 +360,47 @@ oauthGoogleRoutes.patch("/accounts/:accountId/default", async (c) => {
   return c.json({ data: { ok: true } });
 });
 
+/**
+ * ホーム画面の案内用。Googleでチェックが付いているカレンダーのうち、まだ空き状況の確認対象に入っていないものがある
+ * 連携済みアカウントを返す（連携直後からメインカレンダーだけが対象になっている既存の連携の方への案内）。
+ * Googleとの通信に失敗したアカウントは案内の対象から外す（案内が出ないだけで、他の機能には影響しない）。
+ */
+oauthGoogleRoutes.get("/calendar-hint", async (c) => {
+  const userId = c.get("userId");
+  const userType = c.get("userType");
+  if (!userId) return c.json({ error: { code: "unauthorized", message: "ログインが必要です" } }, 401);
+
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, userId, userType);
+  if (!memberId) return c.json({ data: { accounts: [] } });
+
+  const accounts = await db
+    .select({ id: schema.googleCalendarAccounts.id, email: schema.googleCalendarAccounts.googleAccountEmail })
+    .from(schema.googleCalendarAccounts)
+    .where(eq(schema.googleCalendarAccounts.memberId, memberId))
+    .all();
+
+  const results = await Promise.all(accounts.map(async (a) => {
+    try {
+      const cred = await getValidGoogleAccessTokenForAccount(
+        db, a.id, memberId,
+        c.env.SCHEDULER_TOKEN_KEY, c.env.GOOGLE_OAUTH_CLIENT_ID, c.env.GOOGLE_OAUTH_CLIENT_SECRET
+      );
+      if (cred.status !== "ok") return null;
+      const calendars = await fetchCalendarList(cred.accessToken);
+      const primaryEntry = calendars.find((cal) => cal.primary);
+      const normalize = (id: string) => (id === "primary" && primaryEntry ? primaryEntry.id : id);
+      const selected = new Set(cred.busyCalendars.map((cal) => normalize(cal.id)));
+      const missing = suggestBusyCalendars(calendars).filter((cal) => !selected.has(cal.id));
+      return missing.length > 0 ? { accountId: a.id, email: a.email, missingCount: missing.length } : null;
+    } catch (e) {
+      console.error("calendar-hint failed:", e);
+      return null;
+    }
+  }));
+  return c.json({ data: { accounts: results.filter((r): r is NonNullable<typeof r> => r !== null) } });
+});
+
 /** 指定アカウントで選べるカレンダー一覧（Googleから取得）と、現在の選択状態（書き込み先・空き状況判定対象）を返す */
 oauthGoogleRoutes.get("/accounts/:accountId/calendars", async (c) => {
   const userId = c.get("userId");
