@@ -44,7 +44,7 @@ publicBookingRoutes.get("/:memberSlug", async (c) => {
     return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
   }
 
-  const availableConferenceTypes = await getAvailableConferenceTypes(db, settings.memberId);
+  const availableConferenceTypes = await getAvailableConferenceTypes(db, settings.memberId, { forGuest: true });
 
   // この1to1申込がすでに予約確定済みなら、その内容を伝えて二重予約を防ぐ
   let existingBooking: { startAtUtc: string; endAtUtc: string; conferenceType: string; conferenceUrl: string | null } | null = null;
@@ -301,7 +301,7 @@ publicBookingRoutes.get("/:memberSlug/slots", async (c) => {
     if (key) businessHours[key] = { start: rule.startTimeLocal, end: rule.endTimeLocal };
   }
 
-  const availableConferenceTypes = await getAvailableConferenceTypes(db, settings.memberId);
+  const availableConferenceTypes = await getAvailableConferenceTypes(db, settings.memberId, { forGuest: true });
 
   return c.json({
     data: {
@@ -380,7 +380,11 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
   }
 
   const timezone = body.timezone ?? "Asia/Tokyo";
-  const requestedType = body.conferenceType ?? "google_meet";
+  // 主催者が会議ツールを固定している場合は、予約する側の指定にかかわらずそのツールにする
+  const guestTypes = await getAvailableConferenceTypes(db, member.id, { forGuest: true });
+  const requestedType = guestTypes.length === 1
+    ? guestTypes[0]
+    : (body.conferenceType ?? "google_meet");
 
   // 1to1申込からの予約なら、申込に記録されている「相手（回答者）」の登録情報を正として使う。
   // メール未ログインでリンクを開いた場合、外部ゲストと同様に名前・メールを手入力させると

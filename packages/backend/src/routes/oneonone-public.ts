@@ -62,7 +62,7 @@ oneOnOnePublicRoutes.get("/:token", async (c) => {
           .orderBy(schema.oneOnOneCandidateSlots.sortOrder)
           .all()
       : Promise.resolve([]),
-    isPendingCandidateSelection ? getAvailableConferenceTypes(db, session.requesterId) : Promise.resolve([]),
+    isPendingCandidateSelection ? getAvailableConferenceTypes(db, session.requesterId, { forGuest: true }) : Promise.resolve([]),
   ]);
 
   return c.json({
@@ -151,7 +151,7 @@ oneOnOnePublicRoutes.post("/:token/select-candidate", async (c) => {
     .get();
   if (!slot) return c.json({ error: { code: "not_found", message: "候補日が見つかりません" } }, 404);
 
-  const availableTypes = await getAvailableConferenceTypes(db, session.requesterId);
+  const availableTypes = await getAvailableConferenceTypes(db, session.requesterId, { forGuest: true });
   const resolvedConferenceType: "google_meet" | "zoom" | null = availableTypes.length === 0
     ? null
     : availableTypes.length === 1

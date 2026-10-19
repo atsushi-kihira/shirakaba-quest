@@ -48,7 +48,7 @@ oneOnOneGuestInvitePublicRoutes.get("/:token", async (c) => {
     : [];
 
   const availableConferenceTypes = effectiveStatus === "pending"
-    ? await getAvailableConferenceTypes(db, invite.hostMemberId)
+    ? await getAvailableConferenceTypes(db, invite.hostMemberId, { forGuest: true })
     : [];
 
   return c.json({
@@ -130,7 +130,7 @@ oneOnOneGuestInvitePublicRoutes.post("/:token/select", async (c) => {
 
   // 会議ツールは、連携済みが2種類ある場合はゲストが選んだもの（未指定ならZoomを優先）、1種類ならそれ、
   // 0種類ならmanualにする。ホスト・ゲストどちらも選ばずに常にGoogle Meetへ固定されることがないようにする。
-  const availableConferenceTypes = await getAvailableConferenceTypes(db, hostMember.id);
+  const availableConferenceTypes = await getAvailableConferenceTypes(db, hostMember.id, { forGuest: true });
   const defaultConferenceType: "google_meet" | "zoom" | undefined = availableConferenceTypes.includes("zoom")
     ? "zoom"
     : availableConferenceTypes[0];

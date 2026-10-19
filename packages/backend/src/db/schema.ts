@@ -36,6 +36,8 @@ export const members = sqliteTable("members", {
 
   // 個人用カラーテーマ（null = アプリ全体のテーマに従う）
   personalTheme:       text("personal_theme"),
+  // 会議ツールの選び方: 'choose'（相手に選んでもらう）| 'google_meet' | 'zoom'（相手には選ばせず、常にそのツールを使う）
+  conferencePreference: text("conference_preference").notNull().default("choose"),
 
   // ビジネスコミュニティ（用語は card_designs.term_business_community でチャプターごとにカスタマイズ可能。
   // 例: 白樺チャプターでは「BNI」）への入会日（"YYYY-MM-DD"形式）。日にちは正確でなくてもよく、

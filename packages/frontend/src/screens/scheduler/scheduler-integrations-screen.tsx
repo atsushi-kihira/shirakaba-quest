@@ -201,6 +201,9 @@ export function SchedulerIntegrationsScreen() {
         disconnectPending={disconnectZoom.isPending}
       />
 
+      {/* 会議ツールの選び方（GoogleとZoomの両方を連携しているときだけ） */}
+      {googleAccounts.length > 0 && zoomStatus?.connected && <ConferencePreferenceCard />}
+
       {/* 次のステップ */}
       {(googleAccounts.length > 0 || zoomStatus?.connected) && (
         <div className="mt-6">
@@ -214,6 +217,70 @@ export function SchedulerIntegrationsScreen() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- 会議ツールの選び方（相手に選んでもらうか、Google Meet／Zoomのどちらかに固定するか） ----
+type ConferencePreference = "choose" | "google_meet" | "zoom";
+const CONFERENCE_PREFERENCE_OPTIONS: { value: ConferencePreference; label: string; note: string }[] = [
+  { value: "choose", label: "相手に選んでもらう", note: "予約する人・日程を選ぶ人が、Google MeetかZoomを選びます" },
+  { value: "google_meet", label: "Google Meetだけ使う", note: "相手にはZoomの選択肢を出さず、常にGoogle Meetで会議URLを作ります" },
+  { value: "zoom", label: "Zoomだけ使う", note: "相手にはGoogle Meetの選択肢を出さず、常にZoomで会議URLを作ります" },
+];
+
+function ConferencePreferenceCard() {
+  const queryClient = useQueryClient();
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const { data, isLoading } = useQuery<{ data: { preference: ConferencePreference } }>({
+    queryKey: ["scheduler", "conference-preference"],
+    queryFn: () => request("/scheduler/me/conference-preference"),
+  });
+  const save = useMutation({
+    mutationFn: (preference: ConferencePreference) =>
+      request("/scheduler/me/conference-preference", { method: "PUT", body: { preference } }),
+    onSuccess: () => { setSaveError(null); queryClient.invalidateQueries({ queryKey: ["scheduler", "conference-preference"] }); },
+    onError: (e) => setSaveError(e instanceof ApiError ? e.message : "保存できませんでした。もう一度お試しください。"),
+  });
+  const current = data?.data.preference ?? "choose";
+
+  return (
+    <div className="card-paper p-4 mt-4">
+      <h2 className="text-sm font-bold mb-1" style={{ color: "var(--color-ink-900)" }}>🎛️ 会議ツールの選び方</h2>
+      <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+        GoogleとZoomの両方を連携しているときの、1to1・公開予約URLでの会議ツールの決め方です。
+        複数人ミーティング・定例会では、これまでどおり主催者が選べます。
+      </p>
+      {isLoading ? (
+        <div className="flex justify-center py-3"><Loader2 size={16} className="animate-spin" style={{ color: "var(--color-ink-400)" }} /></div>
+      ) : (
+        <div className="space-y-1.5">
+          {CONFERENCE_PREFERENCE_OPTIONS.map((opt) => (
+            <label
+              key={opt.value}
+              className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl cursor-pointer"
+              style={{
+                background: current === opt.value ? "rgba(181,56,75,0.08)" : "var(--color-paper-100)",
+                border: current === opt.value ? "1.5px solid var(--color-brand)" : "1.5px solid transparent",
+              }}
+            >
+              <input
+                type="radio"
+                name="conference-preference"
+                checked={current === opt.value}
+                disabled={save.isPending}
+                onChange={() => save.mutate(opt.value)}
+                className="w-4 h-4 mt-0.5"
+              />
+              <span className="flex-1">
+                <span className="block text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{opt.label}</span>
+                <span className="block text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>{opt.note}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {saveError && <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>{saveError}</p>}
     </div>
   );
 }

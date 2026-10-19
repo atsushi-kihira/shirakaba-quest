@@ -13,13 +13,40 @@ import { eq } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import { getActiveShareLink, issueNewShareLink, ensureActiveShareLink } from "../../services/schedulerShareToken.ts";
-import { getValidGoogleAccessToken } from "../../services/conferenceService.ts";
+import { getValidGoogleAccessToken, getAvailableConferenceTypes } from "../../services/conferenceService.ts";
 import { getBusySources, listEventsAcrossAccounts } from "../../services/googleBusySources.ts";
 import { listEvents, insertCalendarEvent, updateCalendarEvent, deleteCalendarEvent } from "../../services/googleClient.ts";
 import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const schedulerSettingsRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// ---- 会議ツールの選び方（Google Meet・Zoomの両方を連携しているときに、相手に選ばせるか、どちらかに固定するか） ----
+// GET /api/scheduler/me/conference-preference → { preference, connected: { googleMeet, zoom } }
+// PUT /api/scheduler/me/conference-preference  → { preference: "choose" | "google_meet" | "zoom" }
+schedulerSettingsRoutes.get("/conference-preference", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const member = await db.select({ pref: schema.members.conferencePreference }).from(schema.members).where(eq(schema.members.id, memberId)).get();
+  const connected = await getAvailableConferenceTypes(db, memberId);
+  return c.json({ data: {
+    preference: member?.pref ?? "choose",
+    connected: { googleMeet: connected.includes("google_meet"), zoom: connected.includes("zoom") },
+  } });
+});
+
+schedulerSettingsRoutes.put("/conference-preference", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { preference } = await c.req.json<{ preference?: string }>().catch(() => ({} as { preference?: string }));
+  if (preference !== "choose" && preference !== "google_meet" && preference !== "zoom") {
+    return c.json({ error: { code: "invalid_input", message: "会議ツールの選び方が正しくありません" } }, 400);
+  }
+  await db.update(schema.members).set({ conferencePreference: preference }).where(eq(schema.members.id, memberId));
+  return c.json({ data: { preference } });
+});
 
 // ---- settings ----
 

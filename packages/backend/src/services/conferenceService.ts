@@ -544,7 +544,10 @@ export async function cancelAutoConference(
 /** ホストの利用可能な会議ツール一覧を返す（スロット API レスポンス用） */
 export async function getAvailableConferenceTypes(
   db: Db,
-  hostMemberId: string
+  hostMemberId: string,
+  // 予約する側・回答する側（相手）に見せる選択肢のときは true。会議ツールの固定設定（members.conferencePreference）を反映する。
+  // 主催者自身が選ぶ場面（複数人ミーティング・定例会・日程の編集など）では反映しない
+  opts?: { forGuest?: boolean }
 ): Promise<("google_meet" | "zoom")[]> {
   const [googleCred, zoomCred] = await Promise.all([
     db
@@ -562,6 +565,17 @@ export async function getAvailableConferenceTypes(
   const types: ("google_meet" | "zoom")[] = [];
   if (googleCred) types.push("google_meet");
   if (zoomCred) types.push("zoom");
+
+  if (opts?.forGuest && types.length >= 2) {
+    const member = await db
+      .select({ pref: schema.members.conferencePreference })
+      .from(schema.members)
+      .where(eq(schema.members.id, hostMemberId))
+      .get();
+    if (member && (member.pref === "google_meet" || member.pref === "zoom") && types.includes(member.pref)) {
+      return [member.pref];
+    }
+  }
   return types;
 }
 
