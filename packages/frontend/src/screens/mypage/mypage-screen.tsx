@@ -18,6 +18,7 @@ import { fmtDateTime } from "@/lib/date";
 import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
 import { CARD_CHARACTERS } from "@/screens/card-order/card-order-screen";
+import { ChangeEmailModal } from "./change-email-modal";
 
 import type { MemberBadge } from "@shared/types";
 
@@ -52,6 +53,7 @@ export function MypageScreen() {
   const [tab, setTab] = useState<"profile" | "history">("profile");
   const [showQr, setShowQr] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [showChangeEmail, setShowChangeEmail] = useState(false);
 
   const { data: meData } = useQuery({
     queryKey: ["me"],
@@ -246,6 +248,22 @@ export function MypageScreen() {
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
                 <QrCode size={18} />
                 自分のQRコードを表示
+              </button>
+            )}
+
+            {/* メールアドレスの変更（プロフィール編集とは別の独立した機能） */}
+            {effectiveMemberId && (
+              <button type="button" onClick={() => setShowChangeEmail(true)}
+                className="mt-2 w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-2xl active:opacity-80 hover:opacity-90 transition"
+                style={{ background: "var(--color-paper-100)" }}>
+                <span className="text-lg">✉️</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>メールアドレスを変更する</div>
+                  <div className="text-xs mt-0.5 break-all" style={{ color: "var(--color-ink-500)" }}>
+                    ログインや各種のお知らせの送り先です。いまのメールアドレス：{meData?.data?.email ?? user?.email ?? ""}
+                  </div>
+                </div>
+                <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
               </button>
             )}
 
@@ -595,6 +613,11 @@ export function MypageScreen() {
       {/* QRモーダル（PC ではセンタリング） */}
       {showQr && effectiveMemberId && (
         <QrModal memberId={effectiveMemberId} memberName={member?.name ?? user?.name ?? ""} onClose={() => setShowQr(false)} />
+      )}
+
+      {/* メールアドレス変更モーダル */}
+      {showChangeEmail && effectiveMemberId && (
+        <ChangeEmailModal currentEmail={meData?.data?.email ?? user?.email ?? ""} onClose={() => setShowChangeEmail(false)} />
       )}
 
       {/* 編集モーダル（管理者セッションでは編集不可） */}

@@ -11,6 +11,7 @@ import { Search, X } from "lucide-react";
 import { matchesSearchQuery } from "@/lib/contact-search";
 import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActive, type JoinedRange } from "@/components/joined-range-filter";
 import { AdminMemberDetailModal, type AdminMemberDetailBase } from "./_admin-member-detail-modal";
+import { AdminChangeEmailModal } from "./_admin-change-email-modal";
 
 type AdminMember = AdminMemberDetailBase & {
   status: "pending" | "active" | "guest" | "on_leave" | "rejected" | "deleted";
@@ -104,6 +105,7 @@ export function AdminMembersScreen() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detailMemberId, setDetailMemberId] = useState<string | null>(null);
+  const [emailEditMemberId, setEmailEditMemberId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [joinedRange, setJoinedRange] = useState<JoinedRange>(EMPTY_JOINED_RANGE);
 
@@ -264,8 +266,15 @@ export function AdminMembersScreen() {
                         {st.label}
                       </span>
                     </div>
-                    <div className="text-xs mt-0.5 truncate" style={{ color: "var(--color-ink-400)" }}>
-                      {m.email}
+                    <div className="flex items-center gap-2 mt-0.5 min-w-0">
+                      <span className="text-xs truncate" style={{ color: "var(--color-ink-400)" }}>{m.email}</span>
+                      <button
+                        onClick={() => setEmailEditMemberId(m.id)}
+                        className="text-xs font-medium shrink-0 underline"
+                        style={{ color: "var(--color-brand)" }}
+                        title="メールアドレスを代行で変更します">
+                        変更
+                      </button>
                     </div>
                     {m.category && (
                       <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
@@ -489,6 +498,16 @@ export function AdminMembersScreen() {
       )}
 
       {/* メンバー詳細 */}
+      {emailEditMemberId && (() => {
+        const target = members.find((x) => x.id === emailEditMemberId);
+        return target ? (
+          <AdminChangeEmailModal
+            member={{ id: target.id, name: target.name, email: target.email }}
+            onClose={() => setEmailEditMemberId(null)}
+            onDone={() => { setEmailEditMemberId(null); qc.invalidateQueries({ queryKey: ["admin", "members"] }); }}
+          />
+        ) : null;
+      })()}
       {detailMemberId && (() => {
         const target = members.find((x) => x.id === detailMemberId);
         return target ? <AdminMemberDetailModal member={target} onClose={() => setDetailMemberId(null)} /> : null;

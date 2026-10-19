@@ -6,6 +6,7 @@ import { AppLayout } from "@/components/layout";
 import { LoginScreen } from "@/screens/auth/login-screen";
 import { RegisterScreen } from "@/screens/auth/register-screen";
 import { RegisterVerifyScreen } from "@/screens/auth/register-verify-screen";
+import { EmailChangeVerifyScreen } from "@/screens/auth/email-change-verify-screen";
 import { HomeScreen } from "@/screens/home/home-screen";
 import { MembersScreen } from "@/screens/members/members-screen";
 import { MemberDetailScreen } from "@/screens/members/member-detail-screen";
@@ -95,6 +96,7 @@ export default function App() {
             <Route path="/login" element={<LoginScreen />} />
             <Route path="/register" element={<RegisterScreen />} />
             <Route path="/register/verify" element={<RegisterVerifyScreen />} />
+            <Route path="/email-change/verify" element={<EmailChangeVerifyScreen />} />
 
             {/* リアルカード受け取り（ログイン必要だが AppLayout 外） */}
             <Route path="/receive-card/:memberId" element={<ReceiveCardScreen />} />

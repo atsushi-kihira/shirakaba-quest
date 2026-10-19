@@ -8,6 +8,7 @@
 // PATCH  /api/admin/members/:id/reactivate   — 休会からアクティブに戻す
 // DELETE /api/admin/members/:id              — 完全削除（記録ごと全削除。メールアドレスが再登録可能になる）
 // PATCH  /api/admin/members/:id/roles
+// PATCH  /api/admin/members/:id/email         — メールアドレスを代行で変更（本人が確認メールを受け取れない場合用）
 // GET    /api/admin/members/registration-pending   — メール確認が済んでいない（登録が完了していない）人の一覧
 // POST   /api/admin/members/registration-pending/resend — 確認メールを再送（入力内容の下書きが残っている人のみ）
 // DELETE /api/admin/members/registration-pending?email=…  — 一覧から外す（下書きを削除）
@@ -19,6 +20,7 @@ import { MailService } from "../../services/mailer.ts";
 import { getFrontendUrl } from "../../services/frontendUrl.ts";
 import { deleteDraft, listDrafts, loadDraft, normalizeEmail, sendVerificationMail } from "../../services/registration.ts";
 import { hardDeleteMember } from "../../services/memberDeletion.ts";
+import { applyEmailChange, findLinkedAdmin, isEmailInUse, isValidEmailFormat } from "../../services/email-change.ts";
 import { getCardImageDataUrl } from "../../services/card-image.ts";
 import {
   getActiveMemberIdsWithRole,
@@ -224,6 +226,32 @@ adminMemberRoutes.patch("/:id/roles", async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+// ---- PATCH /api/admin/members/:id/email ----
+// 本人が古いメールアドレスを使えず、確認メールを受け取れない場合に、管理者が代わりに変更する。
+// 管理者アカウントを兼ねているメンバーは、管理者権限の乗っ取りを防ぐため、本人がマイページから変更する。
+adminMemberRoutes.patch("/:id/email", async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param("id");
+  const { email: rawEmail } = await c.req.json<{ email?: string }>().catch(() => ({} as { email?: string }));
+  const email = normalizeEmail(rawEmail ?? "");
+  if (!isValidEmailFormat(email)) {
+    return c.json({ error: { code: "invalid_email", message: "メールアドレスの形式が正しくありません。もう一度ご確認ください。" } }, 400);
+  }
+  const member = await db.select({ email: schema.members.email }).from(schema.members).where(eq(schema.members.id, id)).get();
+  if (!member) return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+  if (normalizeEmail(member.email) === email) {
+    return c.json({ error: { code: "same_email", message: "いま登録されているメールアドレスと同じです" } }, 400);
+  }
+  if (await findLinkedAdmin(db, member.email)) {
+    return c.json({ error: { code: "linked_admin", message: "このメンバーは管理者アカウントを兼ねているため、ここでは変更できません。本人にマイページの「メールアドレスを変更する」から変更してもらってください。" } }, 409);
+  }
+  if (await isEmailInUse(db, email, id)) {
+    return c.json({ error: { code: "email_taken", message: "このメールアドレスは、すでに別の方が使っています" } }, 409);
+  }
+  await applyEmailChange(db, c.env, (p) => c.executionCtx.waitUntil(p), id, email, { syncLinkedAdmin: false });
+  return c.json({ ok: true, data: { email } });
 });
 
 // ---- PATCH /api/admin/members/:id/approve ----

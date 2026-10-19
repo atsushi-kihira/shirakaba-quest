@@ -366,6 +366,16 @@ export const emailVerifications = sqliteTable("email_verifications", {
   createdAt:  integer("created_at").notNull(),
 });
 
+// メンバー本人によるメールアドレス変更の申請（新しいアドレスに届く確認リンクのトークン）
+export const emailChangeRequests = sqliteTable("email_change_requests", {
+  token:     text("token").primaryKey(),
+  memberId:  text("member_id").notNull(),
+  newEmail:  text("new_email").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  usedAt:    integer("used_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
 export const authSessions = sqliteTable("auth_sessions", {
   id:        text("id").primaryKey(),
   userId:    text("user_id").notNull(),

@@ -103,6 +103,60 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     ],
   },
 
+  {
+    emailKey: "email_change_verify",
+    label: "メールアドレス変更の確認",
+    category: "auth",
+    triggerDescription: "メンバーがマイページでメールアドレスの変更を申請したとき（新しいメールアドレスに送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】メールアドレス変更のご確認",
+    bodyText: `{{memberName}} さん
+
+{{appTitle}} のメールアドレスを、このアドレスに変更するお申し込みがありました。
+
+変更を完了するには、以下のリンクをクリックしてください。
+
+{{verifyUrl}}
+
+※ このリンクの有効期限は24時間です。
+※ リンクをクリックするまでは、これまでのメールアドレスのままです。
+※ ご自身で申し込んだ覚えがない場合は、このメールを無視してください。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "verifyUrl", label: "確認用URL", example: "https://shirakaba-quest.pages.dev/email-change/verify?token=xxxx" },
+    ],
+  },
+  {
+    emailKey: "email_change_done",
+    label: "メールアドレス変更のお知らせ",
+    category: "auth",
+    triggerDescription: "メールアドレスが変更されたとき（変更前のメールアドレスに送信。管理者が変更した場合も送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】メールアドレスが変更されました",
+    bodyText: `{{memberName}} さん
+
+{{appTitle}} に登録のメールアドレスが、以下のとおり変更されました。
+
+▼ 変更後のメールアドレス
+{{newEmail}}
+
+今後のログインや各種のお知らせは、変更後のメールアドレスをご利用ください。
+
+※ 身に覚えのない場合は、お手数ですが管理者までご連絡ください。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "newEmail", label: "変更後のメールアドレス", example: "new@example.com" },
+    ],
+  },
+
   // ============================================================
   // USP
   // ============================================================

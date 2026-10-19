@@ -21,6 +21,7 @@ import { collabRoutes, sweepPendingCompanySummaries } from "./routes/collab.ts";
 import { shareStoryRoutes } from "./routes/share-stories.ts";
 import { enishiRoutes } from "./routes/enishi.ts";
 import { registerRoutes } from "./routes/register.ts";
+import { emailChangeRoutes } from "./routes/email-change.ts";
 import { adminRoutes } from "./routes/admin/index.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { meetingSeriesRoutes } from "./routes/meeting-series.ts";
@@ -65,6 +66,7 @@ app.get("/api/health", (c) =>
 // ---- ルート ----
 app.route("/api/auth", authRoutes);
 app.route("/api/register", registerRoutes);
+app.route("/api/email-change", emailChangeRoutes);
 app.route("/api/members", memberRoutes);
 app.route("/api/ranking", rankingRoutes);
 app.route("/api/oneonone/public", oneOnOnePublicRoutes); // 認証なし（メール経由の承諾/辞退用）
