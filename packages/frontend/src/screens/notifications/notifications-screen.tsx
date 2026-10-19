@@ -10,6 +10,8 @@ import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateShort, fmtTime } from "@/lib/date";
 import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
 import { LinkifiedText } from "@/components/linkified-text";
+import { meetingNotifIcon as notifIcon, meetingNotifDefaultMessage as notifDefaultMessage } from "@/lib/meeting-notification-text";
+import { useActionItems, type ActionItem } from "@/hooks/use-action-items";
 
 type PastNotification = {
   id: string;
@@ -20,32 +22,6 @@ type PastNotification = {
   readAt: number | null;
 };
 type PastNotificationsResponse = { data: PastNotification[] };
-
-function notifIcon(type: string): string {
-  if (type === "conference_url_set") return "📹";
-  if (type === "confirmed") return "✅";
-  if (type === "invited") return "📨";
-  if (type === "candidates_added") return "🗓️";
-  if (type === "candidate_removed") return "🗑️";
-  if (type === "candidate_updated") return "🗓️";
-  if (type === "declined") return "🙇";
-  if (type === "reminder") return "⏰";
-  if (type === "unavailable_contact") return "💬";
-  return "📝";
-}
-
-function notifDefaultMessage(type: string): string {
-  if (type === "conference_url_set") return "会議URLが届きました";
-  if (type === "confirmed") return "ミーティングの日程が確定しました";
-  if (type === "invited") return "ミーティングに招待されました";
-  if (type === "candidates_added") return "新しい候補日が追加されました";
-  if (type === "candidate_removed") return "候補日が削除されました";
-  if (type === "candidate_updated") return "候補日が変更されました";
-  if (type === "declined") return "辞退の連絡がありました";
-  if (type === "reminder") return "まだご回答いただいていません";
-  if (type === "unavailable_contact") return "都合が悪い旨のご連絡がありました";
-  return "ミーティングに詳細が追加されました";
-}
 
 export function NotificationsScreen() {
   const tz = useTimezone();
@@ -80,6 +56,9 @@ export function NotificationsScreen() {
           🔔 通知
         </h1>
       </div>
+
+      {/* 対応が必要なこと（各メニューのバッジの元になっている出来事を、すべてここにもまとめる） */}
+      <ActionItemsSection />
 
       {/* 運営からのお知らせ */}
       <div className="flex items-center justify-between mb-2">
@@ -175,5 +154,65 @@ export function NotificationsScreen() {
         </div>
       )}
     </div>
+  );
+}
+
+// ---- 対応が必要なこと（1to1の申込・日程回答の依頼・協働の新着など。各メニューのバッジと同じ内容） ----
+const GROUP_LABEL: Record<ActionItem["group"], string> = {
+  oneonone: "🤝 1to1",
+  meeting: "📅 ミーティング・定例会",
+  collab: "💬 協働・人脈",
+};
+
+function ActionItemsSection() {
+  const { items, count } = useActionItems();
+  return (
+    <section className="mb-8">
+      <div className="flex items-center gap-2 mb-2">
+        <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
+          📌 対応が必要なこと
+        </h2>
+        {count > 0 && (
+          <span className="min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
+            style={{ background: "var(--color-brand)" }}>
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <div className="card-paper rounded-2xl p-6 text-center">
+          <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>いま対応が必要なことはありません 🎉</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {(["oneonone", "meeting", "collab"] as const).map((group) => {
+            const groupItems = items.filter((it) => it.group === group);
+            if (groupItems.length === 0) return null;
+            return (
+              <div key={group}>
+                <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-500)" }}>{GROUP_LABEL[group]}</p>
+                <div className="space-y-2">
+                  {groupItems.map((it) => (
+                    <Link
+                      key={it.key}
+                      to={it.to}
+                      className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                      style={{ borderLeft: `3px solid ${it.urgent ? "var(--color-brand)" : "rgba(107,125,179,0.5)"}` }}
+                    >
+                      <span className="text-2xl shrink-0">{it.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>{it.title}</p>
+                        {it.detail && <p className="text-xs mt-0.5 line-clamp-2" style={{ color: "var(--color-ink-500)" }}>{it.detail}</p>}
+                      </div>
+                      <ChevronRight size={16} className="shrink-0" style={{ color: "var(--color-ink-400)" }} />
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }

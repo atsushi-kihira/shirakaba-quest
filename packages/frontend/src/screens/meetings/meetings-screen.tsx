@@ -1,8 +1,8 @@
 // =============================================================
 // ミーティング一覧画面
 // =============================================================
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, Calendar, CheckCircle, Clock, XCircle, Handshake, ChevronRight, ChevronDown, Bell, ClipboardList, X, Lock, Flag, FileCheck } from "lucide-react";
 import { api } from "@/lib/api";
@@ -12,6 +12,7 @@ import { fmtDateJP, fmtTime, fmtDateShort } from "@/lib/date";
 import { useMeetingAlerts } from "@/hooks/use-meeting-alerts";
 import { useOneOnOneSessions, filterInFlightOneOnOneForBadge } from "@/hooks/use-oneonone-status";
 import { usePendingExternalOneOnOneCount } from "@/hooks/use-guest-followups";
+import { useActionItems } from "@/hooks/use-action-items";
 import { InProgressOneOnOneSection, OneOnOneHistorySection } from "./_oneonone-sections";
 import { ExternalGuestOneOnOneSection } from "./_external-guest-oneonone-section";
 import { getMeetingEffectiveStatus, STATUS_META, type EffectiveStatus } from "@/lib/meeting-status";
@@ -103,8 +104,17 @@ type Tab = "regular" | "oneonone";
 
 export function MeetingsScreen() {
   const approved = isApprovedMember(useAuthStore((s) => s.user));
-  const [tab, setTab] = useState<Tab>(approved ? "regular" : "oneonone");
+  // 「通知」や「対応が必要なこと」から /meetings?tab=oneonone のように開かれたときは、そのタブを表示する
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const [tab, setTab] = useState<Tab>(tabParam === "oneonone" || !approved ? "oneonone" : "regular");
+  useEffect(() => {
+    if (tabParam === "oneonone") setTab("oneonone");
+    else if (tabParam === "regular" && approved) setTab("regular");
+  }, [tabParam, approved]);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
+  const { items: actionItems } = useActionItems();
+  const meetingActionItems = actionItems.filter((it) => it.group === "oneonone" || it.group === "meeting");
   const oneOnOneData = useOneOnOneSessions();
   const pendingExternal = usePendingExternalOneOnOneCount();
   const oneOnOneCount = filterInFlightOneOnOneForBadge(oneOnOneData.data?.data ?? []).length + pendingExternal;
@@ -130,6 +140,41 @@ export function MeetingsScreen() {
           新規作成
         </button>
       </div>
+
+      {/* 対応が必要なこと（1to1の申込・日程回答の依頼など。どちらのタブを開いていても見える） */}
+      {meetingActionItems.length > 0 && (
+        <section className="mb-5 card-paper rounded-2xl p-3" style={{ borderLeft: "3px solid var(--color-brand)" }}>
+          <h2 className="text-sm font-semibold mb-2 flex items-center gap-1.5" style={{ color: "var(--color-brand)" }}>
+            📌 対応が必要なこと
+            <span className="min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
+              style={{ background: "var(--color-brand)" }}>
+              {meetingActionItems.length}
+            </span>
+          </h2>
+          <div className="space-y-1.5">
+            {meetingActionItems.slice(0, 5).map((it) => (
+              <Link
+                key={it.key}
+                to={it.to}
+                className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition active:opacity-80"
+                style={{ background: it.urgent ? "rgba(181,56,75,0.08)" : "var(--color-paper-100)" }}
+              >
+                <span className="text-lg shrink-0">{it.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{it.title}</p>
+                  {it.detail && <p className="text-xs mt-0.5 line-clamp-2" style={{ color: "var(--color-ink-500)" }}>{it.detail}</p>}
+                </div>
+                <ChevronRight size={14} className="shrink-0" style={{ color: "var(--color-ink-400)" }} />
+              </Link>
+            ))}
+          </div>
+          {meetingActionItems.length > 5 && (
+            <Link to="/notifications" className="block text-xs font-medium text-right mt-2" style={{ color: "var(--color-brand)" }}>
+              ほか{meetingActionItems.length - 5}件を通知で見る →
+            </Link>
+          )}
+        </section>
+      )}
 
       {/* タブ: 通常ミーティング / 1to1ミーティング */}
       <div className="flex gap-2 mb-5">

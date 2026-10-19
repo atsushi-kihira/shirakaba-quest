@@ -13,6 +13,7 @@ import { useCollabAlerts, useCollabReactionNotificationCount } from "@/hooks/use
 import { useGuestFollowups, usePendingExternalOneOnOneCount } from "@/hooks/use-guest-followups";
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
+import { useActionItems } from "@/hooks/use-action-items";
 
 // 承認待ち（ゲスト）状態のメンバーには使わせない画面（ナビ自体を非活性表示にする）
 const GUEST_RESTRICTED_PATHS = new Set(["/members", "/collab", "/enishi", "/quests", "/ranking"]);
@@ -55,15 +56,18 @@ export function AppLayout() {
   const settings = useSettings();
   const approved = isApprovedMember(useAuthStore((s) => s.user));
   const { unreadCount: broadcastUnreadCount } = useBroadcastNotifications();
+  // 「通知」メニューのバッジ = 運営からの未読のお知らせ + 各メニューのバッジの元になっている「対応が必要なこと」すべて
+  const { count: actionItemCount } = useActionItems();
+  const notificationBadgeCount = broadcastUnreadCount + actionItemCount;
 
   const BADGE_COUNTS: Record<string, number> = {
     "/home": pendingCount,
     "/meetings": meetingPendingCount,
     "/collab": collabAlerts.total,
-    "/notifications": broadcastUnreadCount,
+    "/notifications": notificationBadgeCount,
   };
   // スマホの下部メニューには「通知」がないため、マイページ（ここから通知を開ける）に未確認の件数を出す
-  const MOBILE_BADGE_COUNTS: Record<string, number> = { ...BADGE_COUNTS, "/me": broadcastUnreadCount };
+  const MOBILE_BADGE_COUNTS: Record<string, number> = { ...BADGE_COUNTS, "/me": notificationBadgeCount };
 
   // 一般公開したばかりの機能・新機能に一時的に表示するお知らせバッジ（数値バッジがある場合はそちらを優先）
   const TEXT_BADGES: Record<string, string> = {};
