@@ -6,6 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { AccessChart } from "./_access-chart";
+import { PeriodSwitcher, rangeTitle, shiftDate, todayIn, type PeriodChoice } from "./_period-switcher";
+import { useTimezone } from "@/hooks/use-timezone";
 
 type MemberUsage = {
   id: string;
@@ -56,10 +58,20 @@ function fmtDate(ts: number | null): string {
 }
 
 export function AdminUsageReportScreen() {
+  const tz = useTimezone();
+  // 集計期間（日・週・月・累計）。アクセス数のグラフとは別に、サマリー・機能別・メンバー別で共通に使う
+  const [unit, setUnit] = useState<PeriodChoice>("all");
+  const [date, setDate] = useState<string>(() => todayIn(tz));
   const { data, isLoading } = useQuery({
-    queryKey: ["admin", "usage-report"],
-    queryFn: () => api.get<{ data: MemberUsage[]; generatedAt: number }>("/admin/usage-report"),
+    queryKey: ["admin", "usage-report", unit, date, tz],
+    queryFn: () => api.get<{ data: MemberUsage[]; generatedAt: number; unit: PeriodChoice; rangeStart: string | null; rangeEnd: string | null }>(
+      `/admin/usage-report?unit=${unit}&date=${date}&tz=${encodeURIComponent(tz)}`
+    ),
+    // 期間を切り替えている間も、前の表示を残して画面がちらつかないようにする
+    placeholderData: (prev) => prev,
   });
+  const periodLabel = unit === "all" ? "累計" : rangeTitle(unit, data?.rangeStart ?? null, data?.rangeEnd ?? null);
+  const periodNoun = unit === "all" ? "累計" : unit === "day" ? "この日" : unit === "week" ? "この週" : "この月";
 
   const [sortKey, setSortKey] = useState<SortKey>("total");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -130,6 +142,23 @@ export function AdminUsageReportScreen() {
         </div>
       ) : (
         <div className="space-y-6">
+          {/* 集計期間（サマリー・機能別・メンバー別の内訳に反映される） */}
+          <div className="card-paper p-4">
+            <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
+              集計期間（下のサマリー・機能別の利用件数・メンバー別の内訳が、この期間の件数になります）
+            </p>
+            <PeriodSwitcher
+              units={["day", "week", "month", "all"]}
+              unit={unit}
+              rangeStart={data?.rangeStart ?? null}
+              rangeEnd={data?.rangeEnd ?? null}
+              today={todayIn(tz)}
+              onUnitChange={(u) => { setUnit(u); setDate(todayIn(tz)); }}
+              onShift={(dir) => { if (unit !== "all") setDate(shiftDate(data?.rangeStart ?? date, unit, dir)); }}
+              onToday={() => setDate(todayIn(tz))}
+            />
+          </div>
+
           {/* 全体サマリー */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="card-paper p-4">
@@ -137,12 +166,12 @@ export function AdminUsageReportScreen() {
               <p className="text-2xl font-bold" style={{ color: "var(--color-ink-900)" }}>{totalMembers}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>人</span></p>
             </div>
             <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>総ログイン回数</p>
+              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "総ログイン回数" : "ログイン回数"}</p>
               <p className="text-2xl font-bold" style={{ color: "var(--color-brand)" }}>{totalLogins}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>回</span></p>
               <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>平均 {avgLogins} 回/人</p>
             </div>
             <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>ログイン未経験</p>
+              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "ログイン未経験" : `${periodNoun}ログインなし`}</p>
               <p className="text-2xl font-bold" style={{ color: neverLoggedIn.length > 0 ? "var(--color-brand)" : "var(--color-ink-900)" }}>
                 {neverLoggedIn.length}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>人</span>
               </p>
@@ -165,7 +194,7 @@ export function AdminUsageReportScreen() {
           {/* 機能別の利用件数（合計） */}
           <div className="card-paper p-5">
             <h2 className="font-semibold text-base mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
-              機能別の利用件数（合計）
+              機能別の利用件数（{periodLabel}）
             </h2>
             <div className="space-y-2">
               {featureTotals.map((f) => (
@@ -193,10 +222,10 @@ export function AdminUsageReportScreen() {
           {/* メンバー別内訳 */}
           <div className="card-paper p-5">
             <h2 className="font-semibold text-base mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
-              メンバー別 利用件数内訳
+              メンバー別 利用件数内訳（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます
+              列見出しをタップ・クリックすると並び替えできます{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
             <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
               <table className="w-full" style={{ minWidth: 860 }}>
@@ -232,7 +261,7 @@ export function AdminUsageReportScreen() {
                         </span>
                       </td>
                       <td className="px-2.5 py-2 text-right text-xs whitespace-nowrap" style={{ color: "var(--color-ink-600)" }}>
-                        {r.login === 0 ? (
+                        {r.lastLoginAt === null ? (
                           <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>未ログイン</span>
                         ) : fmtDate(r.lastLoginAt)}
                       </td>

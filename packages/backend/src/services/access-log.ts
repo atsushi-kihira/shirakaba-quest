@@ -37,11 +37,11 @@ export type AccessSummary = {
 
 const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
-function isValidTimeZone(tz: string): boolean {
+export function isValidTimeZone(tz: string): boolean {
   try { new Intl.DateTimeFormat("en-CA", { timeZone: tz }); return true; } catch { return false; }
 }
 
-function localParts(tsSec: number, tz: string): { ymd: string; hour: number } {
+export function localParts(tsSec: number, tz: string): { ymd: string; hour: number } {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
   }).formatToParts(new Date(tsSec * 1000));
@@ -59,24 +59,27 @@ function utcMsToYmd(ms: number): string {
 }
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** 指定した日を含む期間（日・週・月）のアクセス数を、指定のタイムゾーンで集計する */
-export async function summarizeAccess(db: Db, unit: AccessUnit, dateYmd: string, tzInput: string): Promise<AccessSummary> {
-  const tz = isValidTimeZone(tzInput) ? tzInput : "Asia/Tokyo";
+/** 指定した日を含む期間（日・週・月）の最初の日・最後の日（月曜始まりの週） */
+export function periodRange(unit: AccessUnit, dateYmd: string): { startMs: number; endMs: number; rangeStart: string; rangeEnd: string } {
   const baseMs = ymdToUtcMs(dateYmd);
-
   let startMs = baseMs;
   let endMs = baseMs;
   if (unit === "week") {
     const dow = new Date(baseMs).getUTCDay(); // 0=日
-    startMs = baseMs - ((dow + 6) % 7) * DAY_MS; // 月曜始まり
+    startMs = baseMs - ((dow + 6) % 7) * DAY_MS;
     endMs = startMs + 6 * DAY_MS;
   } else if (unit === "month") {
     const d = new Date(baseMs);
     startMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
     endMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0);
   }
-  const rangeStart = utcMsToYmd(startMs);
-  const rangeEnd = utcMsToYmd(endMs);
+  return { startMs, endMs, rangeStart: utcMsToYmd(startMs), rangeEnd: utcMsToYmd(endMs) };
+}
+
+/** 指定した日を含む期間（日・週・月）のアクセス数を、指定のタイムゾーンで集計する */
+export async function summarizeAccess(db: Db, unit: AccessUnit, dateYmd: string, tzInput: string): Promise<AccessSummary> {
+  const tz = isValidTimeZone(tzInput) ? tzInput : "Asia/Tokyo";
+  const { startMs, endMs, rangeStart, rangeEnd } = periodRange(unit, dateYmd);
 
   // タイムゾーンのずれを見込んで前後1日ずつ広めに取り、日付で絞り込む
   const fromSec = Math.floor((startMs - DAY_MS) / 1000);

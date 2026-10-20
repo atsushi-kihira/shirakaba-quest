@@ -4,12 +4,13 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateISO } from "@/lib/date";
+import { PeriodSwitcher, shiftDate, todayIn, type PeriodChoice, type PeriodUnit } from "./_period-switcher";
 
-type Unit = "day" | "week" | "month";
+type Unit = PeriodUnit;
 type AccessBucket = { key: string; label: string; count: number; members: number };
 type AccessSummary = {
   unit: Unit;
@@ -20,37 +21,6 @@ type AccessSummary = {
   uniqueMembers: number;
   trackingStartedAt: number | null;
 };
-
-const UNITS: { key: Unit; label: string; prev: string; next: string; current: string }[] = [
-  { key: "day", label: "日", prev: "前日", next: "翌日", current: "今日" },
-  { key: "week", label: "週", prev: "前週", next: "翌週", current: "今週" },
-  { key: "month", label: "月", prev: "前月", next: "翌月", current: "今月" },
-];
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const ymdToMs = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); return Date.UTC(y, m - 1, d); };
-const msToYmd = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-
-function todayIn(tz: string): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-}
-
-/** 基準日を、日・週・月の単位で前後にずらす */
-function shiftDate(ymd: string, unit: Unit, dir: 1 | -1): string {
-  const ms = ymdToMs(ymd);
-  if (unit === "day") return msToYmd(ms + dir * DAY_MS);
-  if (unit === "week") return msToYmd(ms + dir * 7 * DAY_MS);
-  const d = new Date(ms);
-  return msToYmd(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + dir, 1));
-}
-
-function rangeTitle(s: AccessSummary): string {
-  const [sy, sm, sd] = s.rangeStart.split("-").map(Number);
-  const [ey, em, ed] = s.rangeEnd.split("-").map(Number);
-  if (s.unit === "day") return `${sy}年${sm}月${sd}日`;
-  if (s.unit === "month") return `${sy}年${sm}月`;
-  return `${sy}年${sm}月${sd}日 〜 ${ey !== sy ? `${ey}年` : ""}${em}月${ed}日`;
-}
 
 export function AccessChart() {
   const tz = useTimezone();
@@ -63,53 +33,25 @@ export function AccessChart() {
   });
   const summary = data?.data;
   const today = todayIn(tz);
-  const labels = UNITS.find((u) => u.key === unit)!;
-  // 今の期間より先（まだ来ていない期間）には進めない
-  const atCurrent = !!summary && summary.rangeEnd >= today;
   const max = Math.max(1, ...(summary?.buckets.map((b) => b.count) ?? [1]));
   const dense = unit === "month" || unit === "day";
 
   return (
     <div className="card-paper p-5">
-      <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-        <h2 className="font-semibold text-base" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
-          📈 アクセス数
-        </h2>
-        <div className="flex gap-1.5">
-          {UNITS.map((u) => (
-            <button key={u.key}
-              onClick={() => { setUnit(u.key); setDate(todayIn(tz)); }}
-              className="px-3.5 py-1.5 rounded-full text-xs font-medium transition"
-              style={{
-                background: unit === u.key ? "var(--color-brand)" : "var(--color-paper-200)",
-                color: unit === u.key ? "white" : "var(--color-ink-600)",
-              }}>
-              {u.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between gap-2 mb-3">
-        <button onClick={() => setDate(shiftDate(summary?.rangeStart ?? date, unit, -1))}
-          className="flex items-center gap-0.5 px-2.5 py-1.5 rounded-xl text-xs font-medium"
-          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-          <ChevronLeft size={14} />{labels.prev}
-        </button>
-        <div className="text-center">
-          <p className="text-sm font-semibold" style={{ color: "var(--color-ink-900)" }}>{summary ? rangeTitle(summary) : "　"}</p>
-          {!atCurrent && (
-            <button onClick={() => setDate(todayIn(tz))} className="text-xs underline" style={{ color: "var(--color-brand)" }}>
-              {labels.current}に戻る
-            </button>
-          )}
-        </div>
-        <button onClick={() => setDate(shiftDate(summary?.rangeStart ?? date, unit, 1))}
-          disabled={atCurrent}
-          className="flex items-center gap-0.5 px-2.5 py-1.5 rounded-xl text-xs font-medium disabled:opacity-35"
-          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-          {labels.next}<ChevronRight size={14} />
-        </button>
+      <h2 className="font-semibold text-base mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
+        📈 アクセス数
+      </h2>
+      <div className="mb-3">
+        <PeriodSwitcher
+          units={["day", "week", "month"]}
+          unit={unit}
+          rangeStart={summary?.rangeStart ?? null}
+          rangeEnd={summary?.rangeEnd ?? null}
+          today={today}
+          onUnitChange={(u: PeriodChoice) => { if (u !== "all") { setUnit(u); setDate(todayIn(tz)); } }}
+          onShift={(dir) => setDate(shiftDate(summary?.rangeStart ?? date, unit, dir))}
+          onToday={() => setDate(todayIn(tz))}
+        />
       </div>
 
       {isLoading ? (
