@@ -30,8 +30,11 @@ export function getMeetingEffectiveStatus(
   if (m.status === "cancelled") return "cancelled";
 
   if (m.status === "confirmed") {
+    // 終了時刻（なければ開始の1時間後）を過ぎたら「実施済み」。開始した直後に実施済みにはしない。
+    // 複数日を確定したミーティングは、一覧に出す確定日がまだ終わっていない最も近い日になるため、最後の日が終わるまで実施済みにならない
     const startsAt = m.confirmedDate?.startsAt ?? null;
-    if (startsAt !== null && startsAt < nowSec) return "past";
+    const endsAt = m.confirmedDate ? (m.confirmedDate.endsAt ?? m.confirmedDate.startsAt + 3600) : null;
+    if (startsAt !== null && endsAt !== null && endsAt < nowSec) return "past";
     if (m.hasResponded) return "attending";
     return hasUnreadNotification ? "new" : "seen_unresponded";
   }

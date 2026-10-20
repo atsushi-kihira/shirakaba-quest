@@ -323,7 +323,8 @@ const PERIOD_DAYS: Record<Period, number | null> = { "1m": 30, "6m": 182, "1y": 
 // 候補日を過ぎていても日程が確定していない限り「進行中」として扱う
 function isPastMeeting(m: MeetingItem, nowSec: number): boolean {
   if (m.status === "cancelled") return true;
-  if (m.status === "confirmed" && m.confirmedDate) return m.confirmedDate.startsAt < nowSec;
+  // 終了時刻（なければ開始の1時間後）を過ぎたら過去。複数日確定のミーティングは、最後の確定日が終わるまで進行中
+  if (m.status === "confirmed" && m.confirmedDate) return (m.confirmedDate.endsAt ?? m.confirmedDate.startsAt + 3600) < nowSec;
   return false;
 }
 

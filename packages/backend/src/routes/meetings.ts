@@ -522,7 +522,8 @@ meetingRoutes.get("/upcoming", async (c) => {
   const upcoming = confirmed.filter((m) => {
     const cand = repMap.get(m.id);
     if (!cand) return false;
-    return cand.startsAt >= now && cand.startsAt <= weekLater;
+    // 開催中（開始済みでまだ終わっていない）の回も「近日」に含める
+    return (cand.endsAt ?? cand.startsAt + 3600) >= now && cand.startsAt <= weekLater;
   });
 
   if (upcoming.length === 0) return c.json({ data: [] });
