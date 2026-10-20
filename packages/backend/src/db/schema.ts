@@ -378,6 +378,13 @@ export const emailChangeRequests = sqliteTable("email_change_requests", {
   createdAt: integer("created_at").notNull(),
 });
 
+// メンバーのアクセス記録（アプリを開いたときに1行。5分以内の連続アクセスは記録しない）
+export const accessLogs = sqliteTable("access_logs", {
+  id:        integer("id").primaryKey({ autoIncrement: true }),
+  memberId:  text("member_id").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
 export const authSessions = sqliteTable("auth_sessions", {
   id:        text("id").primaryKey(),
   userId:    text("user_id").notNull(),

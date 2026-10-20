@@ -1,6 +1,7 @@
 // =============================================================
 // 管理者向け 利用状況レポート
 // GET /api/admin/usage-report — メンバーごとの利用件数（ログイン・機能別の内訳）
+// GET /api/admin/usage-report/access?unit=day|week|month&date=YYYY-MM-DD&tz=Asia/Tokyo — アクセス数（棒グラフ用）
 //
 // 集計対象は必ず「一般ユーザー（メンバー）向け機能」に限定すること。管理ダッシュボード側の操作
 // （メンバー承認、カード発注ステータス変更、ポイント調整など admin/ 配下のルートが行う操作）は
@@ -13,6 +14,7 @@
 import { Hono } from "hono";
 import { eq, ne, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
+import { summarizeAccess, type AccessUnit } from "../../services/access-log.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminUsageReportRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -24,6 +26,20 @@ function toCountMap(rows: { memberId: string | null; cnt: number }[]): Map<strin
   }
   return map;
 }
+
+// ---- GET /api/admin/usage-report/access ----
+// unit: day（1時間ごと）／ week（曜日ごと・月曜始まり）／ month（その月の日ごと）。date は表示したい期間に含まれる日。
+adminUsageReportRoutes.get("/access", async (c) => {
+  const db = createDb(c.env.DB);
+  const unitParam = c.req.query("unit");
+  const unit: AccessUnit = unitParam === "week" || unitParam === "month" ? unitParam : "day";
+  const date = c.req.query("date") ?? "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: { code: "invalid_input", message: "日付の形式が正しくありません" } }, 400);
+  }
+  const tz = c.req.query("tz") ?? "Asia/Tokyo";
+  return c.json({ data: await summarizeAccess(db, unit, date, tz) });
+});
 
 // ---- GET /api/admin/usage-report ----
 adminUsageReportRoutes.get("/", async (c) => {

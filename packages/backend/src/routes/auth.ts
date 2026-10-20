@@ -18,6 +18,7 @@ import {
 import { MailService } from "../services/mailer.ts";
 import { hasMemberRole } from "../services/member-roles.ts";
 import { sendFirstLoginWelcome } from "../services/first-login-welcome.ts";
+import { recordAccess } from "../services/access-log.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { eq } from "drizzle-orm";
 import type { Env, Variables } from "../types.ts";
@@ -210,6 +211,9 @@ authRoutes.get("/me", authMiddleware, async (c) => {
       hasMemberRole(db, member.id, "pilot1"),
       hasMemberRole(db, member.id, "pilot2"),
     ]);
+
+    // アクセス数の集計用に記録する（管理画面の「利用状況」）。失敗してもログイン情報の取得には影響させない
+    c.executionCtx.waitUntil(recordAccess(db, member.id));
 
     return c.json({
       data: {

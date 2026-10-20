@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { AccessChart } from "./_access-chart";
 
 type MemberUsage = {
   id: string;
@@ -157,6 +158,9 @@ export function AdminUsageReportScreen() {
               <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>合計 {mostActive?.total ?? 0} 件</p>
             </div>
           </div>
+
+          {/* アクセス数（日・週・月の棒グラフ） */}
+          <AccessChart />
 
           {/* 機能別の利用件数（合計） */}
           <div className="card-paper p-5">
