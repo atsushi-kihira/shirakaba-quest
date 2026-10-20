@@ -54,6 +54,50 @@ import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
 
+type DateCandidateRow = typeof schema.meetingDateCandidates.$inferSelect;
+
+/**
+ * 一覧・ホームに出す「代表の確定日」を決める。複数の日程を確定したミーティング（セミナー等の複数回開催）では、
+ * まだ終わっていない最も近い確定日を使い、すべて終わっていれば最後の確定日を使う。
+ * （meetings.confirmed_candidate_id は確定した日のうち最も早い日を指すため、そのまま使うと、
+ *  1回目が終わった時点で、後の回が残っていても「実施済み」として扱われてしまう）
+ * 確定日のフラグ（is_confirmed）が付いていない旧形式のミーティングは、confirmed_candidate_id の日を使う。
+ */
+async function loadRepresentativeConfirmedDates(
+  db: ReturnType<typeof createDb>,
+  meetingList: { id: string; confirmedCandidateId: string | null }[],
+  nowSec: number
+): Promise<Map<string, DateCandidateRow>> {
+  const result = new Map<string, DateCandidateRow>();
+  if (meetingList.length === 0) return result;
+  const ids = meetingList.map((m) => m.id);
+  const flagged = await db.select().from(schema.meetingDateCandidates)
+    .where(and(inArray(schema.meetingDateCandidates.meetingId, ids), eq(schema.meetingDateCandidates.isConfirmed, 1)))
+    .orderBy(schema.meetingDateCandidates.startsAt).all();
+  const byMeeting = new Map<string, DateCandidateRow[]>();
+  for (const cd of flagged) {
+    const list = byMeeting.get(cd.meetingId) ?? [];
+    list.push(cd);
+    byMeeting.set(cd.meetingId, list);
+  }
+  for (const [meetingId, list] of byMeeting) {
+    result.set(meetingId, list.find((cd) => (cd.endsAt ?? cd.startsAt + 3600) >= nowSec) ?? list[list.length - 1]);
+  }
+  // 旧形式（確定日のフラグなし）は confirmed_candidate_id の日を使う
+  const legacyIds = meetingList.filter((m) => !result.has(m.id) && m.confirmedCandidateId).map((m) => m.confirmedCandidateId as string);
+  if (legacyIds.length > 0) {
+    const legacy = await db.select().from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, legacyIds)).all();
+    const legacyById = new Map(legacy.map((cd) => [cd.id, cd]));
+    for (const m of meetingList) {
+      if (result.has(m.id) || !m.confirmedCandidateId) continue;
+      const cd = legacyById.get(m.confirmedCandidateId);
+      if (cd) result.set(m.id, cd);
+    }
+  }
+  return result;
+}
+
+
 const MAX_CANDIDATES = 20;
 const REMINDER_COOLDOWN_SECONDS = 6 * 60 * 60; // 6時間
 // AIの空き時間検索で指定できる所要時間は、ほかの所要時間の設定と同じ 5分〜12時間
@@ -471,20 +515,12 @@ meetingRoutes.get("/upcoming", async (c) => {
 
   if (confirmed.length === 0) return c.json({ data: [] });
 
-  // 候補日を確定候補IDで絞り込み
-  const candidateIds = confirmed.map((m) => m.confirmedCandidateId).filter(Boolean) as string[];
-  const candidates = await db
-    .select()
-    .from(schema.meetingDateCandidates)
-    .where(inArray(schema.meetingDateCandidates.id, candidateIds))
-    .all();
-
-  const candidateMap = new Map(candidates.map((c) => [c.id, c]));
+  // 各ミーティングの代表の確定日（複数日確定なら、まだ終わっていない最も近い日）
+  const repMap = await loadRepresentativeConfirmedDates(db, confirmed, now);
 
   // 近日（7日以内）のもの
   const upcoming = confirmed.filter((m) => {
-    if (!m.confirmedCandidateId) return false;
-    const cand = candidateMap.get(m.confirmedCandidateId);
+    const cand = repMap.get(m.id);
     if (!cand) return false;
     return cand.startsAt >= now && cand.startsAt <= weekLater;
   });
@@ -569,7 +605,7 @@ meetingRoutes.get("/upcoming", async (c) => {
 
   return c.json({
     data: relevant.map((m) => {
-      const cand = candidateMap.get(m.confirmedCandidateId!);
+      const cand = repMap.get(m.id);
       return {
         id: m.id,
         title: m.title,
@@ -782,16 +818,8 @@ meetingRoutes.get("/", async (c) => {
     }
   }
 
-  // 確定候補日情報を取得
-  const confCandIds = all.map((m) => m.confirmedCandidateId).filter(Boolean) as string[];
-  const confCandidates = confCandIds.length > 0
-    ? await db
-        .select()
-        .from(schema.meetingDateCandidates)
-        .where(inArray(schema.meetingDateCandidates.id, confCandIds))
-        .all()
-    : [];
-  const confCandMap = new Map(confCandidates.map((c) => [c.id, c]));
+  // 確定日の情報を取得（複数日確定なら、まだ終わっていない最も近い日。一覧の「実施済み」判定にも使われる）
+  const confCandMap = await loadRepresentativeConfirmedDates(db, all, nowSec);
 
   // 候補日数取得
   const meetingIds = all.map((m) => m.id);
@@ -852,7 +880,7 @@ meetingRoutes.get("/", async (c) => {
   const result = all
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((m) => {
-      const confCand = m.confirmedCandidateId ? confCandMap.get(m.confirmedCandidateId) : null;
+      const confCand = confCandMap.get(m.id) ?? null;
       return {
         id: m.id,
         title: m.title,
