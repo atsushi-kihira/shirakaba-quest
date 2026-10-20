@@ -21,6 +21,42 @@ export async function recordAccess(db: Db, memberId: string): Promise<void> {
   }
 }
 
+/** 画面の閲覧として記録する画面（メンバー向けのメニュー単位）と、管理画面での表示名 */
+export const VIEW_SCREENS: Record<string, string> = {
+  home: "ホーム",
+  members: "なかま",
+  collab: "協働",
+  enishi: "ご縁",
+  quests: "お題",
+  meetings: "ミーティング",
+  oneonone: "1to1",
+  ranking: "順位",
+  notifications: "通知",
+  mypage: "マイページ",
+  scheduler: "日程調整設定",
+};
+
+/**
+ * 画面の閲覧を1件記録する（ホームやミーティングなどを「見ただけ」の利用）。同じメンバー・同じ画面の5分以内の連続閲覧は1回と数える。
+ * あわせてアクセス（訪問）も記録する。ログイン済みのまま使い続けている場合も、これでアクセスとして数えられる。
+ * 記録に失敗しても、呼び出し元の処理は止めない。
+ */
+export async function recordScreenView(db: Db, memberId: string, screen: string): Promise<void> {
+  if (!(screen in VIEW_SCREENS)) return;
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const last = await db.select({ at: schema.screenViews.createdAt }).from(schema.screenViews)
+      .where(and(eq(schema.screenViews.memberId, memberId), eq(schema.screenViews.screen, screen)))
+      .orderBy(desc(schema.screenViews.createdAt)).limit(1).get();
+    if (!last || now - last.at >= DEDUPE_SECONDS) {
+      await db.insert(schema.screenViews).values({ memberId, screen, createdAt: now });
+    }
+  } catch (e) {
+    console.error("[access-log] 画面の閲覧の記録に失敗", e);
+  }
+  await recordAccess(db, memberId);
+}
+
 export type AccessUnit = "day" | "week" | "month";
 export type AccessBucket = { key: string; label: string; count: number; members: number };
 export type AccessSummary = {

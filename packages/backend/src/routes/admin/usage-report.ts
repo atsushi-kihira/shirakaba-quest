@@ -15,7 +15,7 @@
 import { Hono } from "hono";
 import { eq, ne, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
-import { isValidTimeZone, localParts, periodRange, summarizeAccess, type AccessUnit } from "../../services/access-log.ts";
+import { VIEW_SCREENS, isValidTimeZone, localParts, periodRange, summarizeAccess, type AccessUnit } from "../../services/access-log.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminUsageReportRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -71,7 +71,7 @@ adminUsageReportRoutes.get("/", async (c) => {
 
   const [
     logins, lastLogins, oneOnOneAsRequester, oneOnOneAsResponder,
-    contacts, eggs, geese, meetingsHosted, questAttempts, cardOrders, enishiSearches,
+    contacts, eggs, geese, meetingsHosted, questAttempts, cardOrders, enishiSearches, screenViewRows,
   ] = await Promise.all([
     db.select({ memberId: schema.authSessions.userId, at: schema.authSessions.createdAt })
       .from(schema.authSessions)
@@ -107,6 +107,10 @@ adminUsageReportRoutes.get("/", async (c) => {
     db.select({ memberId: schema.enishiSearchHistory.memberId, at: schema.enishiSearchHistory.createdAt })
       .from(schema.enishiSearchHistory)
       .where(sql`${schema.enishiSearchHistory.createdAt} >= ${fromSec} AND ${schema.enishiSearchHistory.createdAt} < ${toSec}`).all(),
+    // 画面の閲覧（ホーム・ミーティング・通知などを見ただけの利用）。記録の仕組みができる前の分はない
+    db.select({ memberId: schema.screenViews.memberId, at: schema.screenViews.createdAt, screen: schema.screenViews.screen })
+      .from(schema.screenViews)
+      .where(sql`${schema.screenViews.createdAt} >= ${fromSec} AND ${schema.screenViews.createdAt} < ${toSec}`).all(),
   ]);
 
   // 指定した期間（タイムゾーンでの日付）に入る行だけを、メンバーごとに数える
@@ -136,6 +140,18 @@ adminUsageReportRoutes.get("/", async (c) => {
   const questMap = countByMember(questAttempts);
   const cardOrderMap = countByMember(cardOrders);
   const enishiMap = countByMember(enishiSearches);
+  const viewMap = countByMember(screenViewRows);
+  // 画面ごとの閲覧回数の内訳（対象メンバーのみ。管理画面の「情報参照」の説明に使う）
+  const memberIdSet = new Set(members.map((m) => m.id));
+  const viewBreakdown: Record<string, number> = {};
+  for (const r of screenViewRows) {
+    if (!r.memberId || !memberIdSet.has(r.memberId)) continue;
+    if (range) {
+      const { ymd } = localParts(r.at, tz);
+      if (ymd < range.rangeStart || ymd > range.rangeEnd) continue;
+    }
+    viewBreakdown[r.screen] = (viewBreakdown[r.screen] ?? 0) + 1;
+  }
 
   const data = members.map((m) => {
     const login = loginMap.get(m.id) ?? 0;
@@ -148,13 +164,15 @@ adminUsageReportRoutes.get("/", async (c) => {
     const quest = questMap.get(m.id) ?? 0;
     const cardOrder = cardOrderMap.get(m.id) ?? 0;
     const enishi = enishiMap.get(m.id) ?? 0;
+    const view = viewMap.get(m.id) ?? 0;
     return {
       id: m.id,
       name: m.name,
       status: m.status,
       registeredAt: m.createdAt,
       lastLoginAt: lastLoginMap.get(m.id) ?? null,
-      login, oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi,
+      login, oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi, view,
+      // 合計は、データを作る・更新する操作の件数（画面を見ただけの「情報参照」は含めない）
       total: login + oneonone + contact + egg + goose + meeting + quest + cardOrder + enishi,
     };
   });
@@ -164,6 +182,9 @@ adminUsageReportRoutes.get("/", async (c) => {
     unit,
     rangeStart: range?.rangeStart ?? null,
     rangeEnd: range?.rangeEnd ?? null,
+    viewBreakdown: Object.entries(viewBreakdown)
+      .map(([screen, count]) => ({ screen, label: VIEW_SCREENS[screen] ?? screen, count }))
+      .sort((a, b) => b.count - a.count),
     generatedAt: Math.floor(Date.now() / 1000),
   });
 });

@@ -25,6 +25,7 @@ type MemberUsage = {
   quest: number;
   cardOrder: number;
   enishi: number;
+  view: number;
   total: number;
 };
 
@@ -36,10 +37,11 @@ const STATUS_LABEL: Record<string, string> = {
   rejected: "利用却下",
 };
 
-type FeatureKey = "login" | "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
+type FeatureKey = "login" | "view" | "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
 
 const FEATURES: { key: FeatureKey; label: string }[] = [
   { key: "login", label: "ログイン" },
+  { key: "view", label: "情報参照" },
   { key: "oneonone", label: "1to1" },
   { key: "contact", label: "人脈登録" },
   { key: "egg", label: "金の卵" },
@@ -64,7 +66,7 @@ export function AdminUsageReportScreen() {
   const [date, setDate] = useState<string>(() => todayIn(tz));
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "usage-report", unit, date, tz],
-    queryFn: () => api.get<{ data: MemberUsage[]; generatedAt: number; unit: PeriodChoice; rangeStart: string | null; rangeEnd: string | null }>(
+    queryFn: () => api.get<{ data: MemberUsage[]; generatedAt: number; unit: PeriodChoice; rangeStart: string | null; rangeEnd: string | null; viewBreakdown: { screen: string; label: string; count: number }[] }>(
       `/admin/usage-report?unit=${unit}&date=${date}&tz=${encodeURIComponent(tz)}`
     ),
     // 期間を切り替えている間も、前の表示を残して画面がちらつかないようにする
@@ -99,7 +101,8 @@ export function AdminUsageReportScreen() {
   }
 
   const totalMembers = rows.length;
-  const neverLoggedIn = rows.filter((r) => r.login === 0);
+  // 累計は「一度もログインしていない人」、期間を指定したときは「その期間にログインも画面の閲覧もない人」
+  const neverLoggedIn = rows.filter((r) => r.login === 0 && (unit === "all" || r.view === 0));
   const totalLogins = rows.reduce((s, r) => s + r.login, 0);
   const mostActive = [...rows].sort((a, b) => b.total - a.total)[0];
   const avgLogins = totalMembers > 0 ? (totalLogins / totalMembers).toFixed(1) : "0";
@@ -171,7 +174,7 @@ export function AdminUsageReportScreen() {
               <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>平均 {avgLogins} 回/人</p>
             </div>
             <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "ログイン未経験" : `${periodNoun}ログインなし`}</p>
+              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "ログイン未経験" : `${periodNoun}アクセスなし`}</p>
               <p className="text-2xl font-bold" style={{ color: neverLoggedIn.length > 0 ? "var(--color-brand)" : "var(--color-ink-900)" }}>
                 {neverLoggedIn.length}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>人</span>
               </p>
@@ -212,6 +215,12 @@ export function AdminUsageReportScreen() {
                 </div>
               ))}
             </div>
+            <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
+              「情報参照」は、ホーム・ミーティング・通知などの画面を開いて見た回数です（ログインしたままの継続利用も含みます。同じ画面の5分以内の連続閲覧は1回）。
+              {data?.viewBreakdown && data.viewBreakdown.length > 0
+                ? ` 内訳：${data.viewBreakdown.map((v) => `${v.label} ${v.count}`).join("、")}`
+                : " まだ記録がありません。これから画面が開かれると、ここに内訳が表示されます。"}
+            </p>
             {mostActive && (
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-400)" }}>
                 カッコ内は「{mostActive.name}」を除いた合計です（最も活発に利用しているメンバーの件数だけで全体の傾向が見えにくくならないよう、参考として併記しています）。
@@ -225,10 +234,10 @@ export function AdminUsageReportScreen() {
               メンバー別 利用件数内訳（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
+              列見出しをタップ・クリックすると並び替えできます。「合計」には、画面を見ただけの「情報参照」は含めていません{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
             <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
-              <table className="w-full" style={{ minWidth: 860 }}>
+              <table className="w-full" style={{ minWidth: 940 }}>
                 <thead>
                   <tr>
                     <th onClick={() => handleSort("name")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 left-0 z-10"
@@ -266,6 +275,7 @@ export function AdminUsageReportScreen() {
                         ) : fmtDate(r.lastLoginAt)}
                       </td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.login === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.login}</td>
+                      <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.view === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.view}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.oneonone === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.oneonone}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums whitespace-nowrap" style={{ color: r.contact === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>
                         {r.contact}{r.contactEight > 0 && <span className="text-xs ml-1" style={{ color: "var(--color-ink-400)" }}>(内Eight{r.contactEight})</span>}

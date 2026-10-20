@@ -385,6 +385,14 @@ export const accessLogs = sqliteTable("access_logs", {
   createdAt: integer("created_at").notNull(),
 });
 
+// メンバーが画面を開いた記録（ホーム・ミーティング・通知などの情報参照。同じ画面の5分以内の連続閲覧は記録しない）
+export const screenViews = sqliteTable("screen_views", {
+  id:        integer("id").primaryKey({ autoIncrement: true }),
+  memberId:  text("member_id").notNull(),
+  screen:    text("screen").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
 export const authSessions = sqliteTable("auth_sessions", {
   id:        text("id").primaryKey(),
   userId:    text("user_id").notNull(),

@@ -3,7 +3,7 @@
 // 1to1 通知バッジ付き
 // =============================================================
 import { useEffect } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { Home, Users, ScrollText, Trophy, User, Calendar, Handshake, Sparkles, Lock, BookOpen, Bell } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { InfoTooltip } from "@/components/info-tooltip";
@@ -14,6 +14,7 @@ import { useGuestFollowups, usePendingExternalOneOnOneCount } from "@/hooks/use-
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
 import { useActionItems } from "@/hooks/use-action-items";
+import { api } from "@/lib/api";
 
 // 承認待ち（ゲスト）状態のメンバーには使わせない画面（ナビ自体を非活性表示にする）
 const GUEST_RESTRICTED_PATHS = new Set(["/members", "/collab", "/enishi", "/quests", "/ranking"]);
@@ -48,8 +49,32 @@ function useMeetingPendingCount() {
   return meetingAlerts.count + inFlightOneOnOne + pendingExternal;
 }
 
+// 画面の閲覧を記録する対象（メニュー単位）。管理画面の「利用状況」の「情報参照」件数に使う
+const VIEW_SCREEN_BY_SEGMENT: Record<string, string> = {
+  home: "home", members: "members", collab: "collab", enishi: "enishi", quests: "quests",
+  meetings: "meetings", oneonone: "oneonone", ranking: "ranking", notifications: "notifications",
+  me: "mypage", scheduler: "scheduler",
+};
+
+/**
+ * メンバーが画面を開いたことを記録する（ログイン済みのまま、ホームやミーティングを見ただけの利用も数えるため）。
+ * 同じ画面の5分以内の連続閲覧は、サーバー側で1回にまとめる。記録に失敗しても画面の動作には影響させない。
+ */
+function useScreenViewTracking() {
+  const { pathname } = useLocation();
+  const user = useAuthStore((s) => s.user);
+  const isMember = user?.userType === "member";
+  useEffect(() => {
+    if (!isMember) return;
+    const screen = VIEW_SCREEN_BY_SEGMENT[pathname.split("/")[1] ?? ""];
+    if (!screen) return;
+    api.post("/access/view", { screen }).catch(() => {});
+  }, [pathname, isMember]);
+}
+
 export function AppLayout() {
   useAppTitle();
+  useScreenViewTracking();
   const pendingCount = usePendingCount();
   const meetingPendingCount = useMeetingPendingCount();
   const collabAlerts = useCollabAlerts();
