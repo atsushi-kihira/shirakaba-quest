@@ -143,9 +143,9 @@ export function AdminUsageReportScreen() {
       ) : (
         <div className="space-y-6">
           {/* 集計期間（サマリー・機能別・メンバー別の内訳に反映される） */}
-          <div className="card-paper p-4">
+          <div className="card-paper p-4 sticky top-0 z-20" style={{ background: "var(--color-paper-50)", boxShadow: "0 2px 10px rgba(60,40,20,0.12)" }}>
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
-              集計期間（下のサマリー・機能別の利用件数・メンバー別の内訳が、この期間の件数になります）
+              📅 集計期間（機能別の利用件数・メンバー別の内訳も、この期間の件数になります。画面を下へ動かしても、ここは見えたままです）
             </p>
             <PeriodSwitcher
               units={["day", "week", "month", "all"]}
