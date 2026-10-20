@@ -47,6 +47,14 @@ function PendingRegistrationsSection({ tz }: { tz: string }) {
     mutationFn: (email: string) => api.post("/admin/members/registration-pending/resend", { email }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "registration-pending"] }),
   });
+  // リンクは開かれているのに登録が作られなかった方を、残っている入力内容から管理者が登録する
+  const complete = useMutation({
+    mutationFn: (email: string) => api.post("/admin/members/registration-pending/complete", { email }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "registration-pending"] });
+      qc.invalidateQueries({ queryKey: ["admin", "members"] });
+    },
+  });
   const dismiss = useMutation({
     mutationFn: (email: string) => api.delete(`/admin/members/registration-pending?email=${encodeURIComponent(email)}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "registration-pending"] }),
@@ -78,7 +86,16 @@ function PendingRegistrationsSection({ tz }: { tz: string }) {
                 </span>
               </div>
             </div>
-            {r.hasDraft && (
+            {r.hasDraft && r.linkOpened && (
+              <button
+                onClick={() => { if (confirm(`${r.name ?? r.email} さんの登録を、入力内容のまま完了します（承認待ちに追加されます）。よろしいですか？`)) complete.mutate(r.email); }}
+                disabled={complete.isPending}
+                className="px-3 py-1.5 rounded-full text-xs font-medium text-white disabled:opacity-50"
+                style={{ background: "var(--color-brand)" }}>
+                {complete.isPending && complete.variables === r.email ? "登録中..." : "登録を完了させる"}
+              </button>
+            )}
+            {r.hasDraft && !r.linkOpened && (
               <button onClick={() => resend.mutate(r.email, { onSuccess: () => setSentTo(r.email) })} disabled={resend.isPending}
                 className="px-3 py-1.5 rounded-full text-xs font-medium disabled:opacity-50"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
@@ -93,6 +110,7 @@ function PendingRegistrationsSection({ tz }: { tz: string }) {
           </div>
         ))}
       </div>
+      {complete.isError && <p className="text-xs mt-2 break-all" style={{ color: "var(--color-brand)" }}>{(complete.error as Error).message}</p>}
       {resend.isError && <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>{(resend.error as Error).message}</p>}
     </div>
   );

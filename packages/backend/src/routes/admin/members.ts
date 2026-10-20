@@ -11,6 +11,7 @@
 // PATCH  /api/admin/members/:id/email         — メールアドレスを代行で変更（本人が確認メールを受け取れない場合用）
 // GET    /api/admin/members/registration-pending   — メール確認が済んでいない（登録が完了していない）人の一覧
 // POST   /api/admin/members/registration-pending/resend — 確認メールを再送（入力内容の下書きが残っている人のみ）
+// POST   /api/admin/members/registration-pending/complete — メールの確認は済んでいるのに登録が作られなかった人を、残っている入力内容から管理者が登録（承認待ちに追加）する
 // DELETE /api/admin/members/registration-pending?email=…  — 一覧から外す（下書きを削除）
 // =============================================================
 import { Hono } from "hono";
@@ -18,7 +19,9 @@ import { and, eq, gt, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { MailService } from "../../services/mailer.ts";
 import { getFrontendUrl } from "../../services/frontendUrl.ts";
-import { deleteDraft, listDrafts, loadDraft, normalizeEmail, sendVerificationMail } from "../../services/registration.ts";
+import {
+  createPendingMember, deleteDraft, isEmailAlreadyRegistered, listDrafts, loadDraft, normalizeEmail, sendVerificationMail, validateRegistrationBody,
+} from "../../services/registration.ts";
 import { hardDeleteMember } from "../../services/memberDeletion.ts";
 import { applyEmailChange, findLinkedAdmin, isEmailInUse, isValidEmailFormat } from "../../services/email-change.ts";
 import { getCardImageDataUrl } from "../../services/card-image.ts";
@@ -112,6 +115,43 @@ adminMemberRoutes.post("/registration-pending/resend", async (c) => {
   }
   await sendVerificationMail(db, c.env, normalized);
   return c.json({ ok: true });
+});
+
+// ---- POST /api/admin/members/registration-pending/complete ----
+// 確認メールのリンクは開かれている（メールアドレスの持ち主であることは確認済み）のに、登録が作られなかった人を、
+// 残っている入力内容から管理者が登録する。登録した方に再度の操作をお願いしなくて済むようにするための操作。
+// 失敗した場合は、原因を調べられるよう、管理者向けにエラーの内容を返す。
+adminMemberRoutes.post("/registration-pending/complete", async (c) => {
+  const db = createDb(c.env.DB);
+  const { email } = await c.req.json<{ email?: string }>().catch(() => ({} as { email?: string }));
+  if (!email) return c.json({ error: { code: "invalid_input", message: "メールアドレスを指定してください" } }, 400);
+  const normalized = normalizeEmail(email);
+
+  if (await isEmailAlreadyRegistered(db, normalized)) {
+    return c.json({ error: { code: "already_registered", message: "このメールアドレスは、すでにメンバーとして登録されています" } }, 409);
+  }
+  const verified = await db.select({ token: schema.emailVerifications.token }).from(schema.emailVerifications)
+    .where(and(eq(schema.emailVerifications.email, normalized), sql`${schema.emailVerifications.verifiedAt} IS NOT NULL`))
+    .get();
+  if (!verified) {
+    return c.json({ error: { code: "not_verified", message: "メールアドレスの確認（リンクを開くこと）がまだ済んでいないため、登録できません" } }, 400);
+  }
+  const draft = await loadDraft(c.env.KV, normalized);
+  if (!draft) {
+    return c.json({ error: { code: "no_draft", message: "入力内容が残っていないため、登録できません。ご本人に登録をやり直していただいてください" } }, 400);
+  }
+  const problem = validateRegistrationBody(draft);
+  if (problem) return c.json({ error: { code: "invalid_draft", message: `入力内容に不足があります：${problem}` } }, 400);
+
+  try {
+    const memberId = await createPendingMember(db, c.env, (p) => c.executionCtx.waitUntil(p), draft);
+    await deleteDraft(c.env.KV, normalized);
+    return c.json({ ok: true, data: { memberId } });
+  } catch (e) {
+    console.error("[admin] 登録の完了に失敗", e);
+    const detail = e instanceof Error ? e.message : String(e);
+    return c.json({ error: { code: "create_failed", message: `登録を作成できませんでした（${detail.slice(0, 300)}）` } }, 500);
+  }
 });
 
 // ---- DELETE /api/admin/members/registration-pending?email=... ----
