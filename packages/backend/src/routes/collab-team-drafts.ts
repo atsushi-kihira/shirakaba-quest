@@ -1,7 +1,9 @@
 // =============================================================
 // 協働チームの「検討中のチーム案」（作った本人だけに見えるローカルな案）
 // GET    /api/collab/team-drafts              — 自分のチーム案の一覧
-// POST   /api/collab/team-drafts              — チーム案を作る
+// POST   /api/collab/team-drafts              — チーム案を作る（メンバーはあとから選ぶ）
+// POST   /api/collab/team-drafts/create-from-members — メンバーを選んで、チーム案のタイトル・協業内容・役割をAIに考えてもらう
+// POST   /api/collab/team-drafts/create-from-idea    — タイトルと協業内容から、チームメンバー案（自分を含む）・協業内容・役割をAIに考えてもらう
 // GET    /api/collab/team-drafts/:id          — チーム案の詳細（構成メンバー・協働事業と役割のまとめ）
 // PATCH  /api/collab/team-drafts/:id          — タイトル・目的・構成メンバー（追加・削除）の更新
 // POST   /api/collab/team-drafts/:id/generate — 協働事業と役割をまとめる（まとめ直し）
@@ -16,7 +18,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { isMemberApproved, resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { loadProfiles } from "../services/member-collab.ts";
-import { generateTeamDraftIdeas, type DraftParticipant, type TeamDraftIdeas } from "../services/team-draft-ideas.ts";
+import { generateTeamDraftIdeas, proposeTeamFromIdea, type DraftParticipant, type TeamDraftIdeas } from "../services/team-draft-ideas.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const collabTeamDraftRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -62,6 +64,36 @@ async function validateSelection(db: Db, meId: string, memberIds: string[], cont
 
 type DraftMemberView = { kind: "member" | "contact"; id: string; name: string; emoji: string; bgColor: string; headline: string; isMe: boolean };
 
+type MemberProfile = Awaited<ReturnType<typeof loadProfiles>>[number];
+const memberProfileText = (p: MemberProfile): string => [
+  p.category && `職種: ${p.category}`, p.businessDescription && `事業内容: ${p.businessDescription}`,
+  p.skills.length > 0 && `USP: ${p.skills.map((s) => (s.description ? `${s.name}（${s.description}）` : s.name)).join(" ／ ")}`,
+].filter(Boolean).join(" / ") || "（情報の登録なし）";
+const contactProfileText = (c: typeof schema.externalContacts.$inferSelect): string => [
+  c.specialty && `専門分野: ${c.specialty}`, c.company && `会社・屋号: ${c.company}`, c.businessSummary && `事業概要: ${c.businessSummary}`, c.note && `備考: ${c.note}`,
+].filter(Boolean).join(" / ") || "（情報の登録なし）";
+
+const CANDIDATE_MEMBER_LIMIT = 150;
+const CANDIDATE_CONTACT_LIMIT = 100;
+const DEFAULT_DRAFT_TITLE = "新しいチーム案";
+
+/** タイトルと協業内容からメンバー案をAIに考えてもらうときの、候補（メンバーと自分の外部人脈）と、本人の情報 */
+async function loadCandidatePeople(db: Db, meId: string): Promise<{ me: DraftParticipant; candidates: DraftParticipant[] }> {
+  const rows = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.status, "active")).all();
+  const ids = [meId, ...rows.map((r) => r.id).filter((id) => id !== meId)].slice(0, CANDIDATE_MEMBER_LIMIT + 1);
+  const profiles = await loadProfiles(db, ids);
+  const toPerson = (p: MemberProfile): DraftParticipant => ({ key: `m:${p.id}`, kind: "member", name: p.name, profile: memberProfileText(p) });
+  const meProfile = profiles.find((p) => p.id === meId);
+  const me: DraftParticipant = meProfile ? toPerson(meProfile) : { key: `m:${meId}`, kind: "member", name: "あなた", profile: "（情報の登録なし）" };
+  const contacts = await db.select().from(schema.externalContacts).where(eq(schema.externalContacts.ownerMemberId, meId))
+    .orderBy(desc(schema.externalContacts.createdAt)).limit(CANDIDATE_CONTACT_LIMIT).all();
+  const candidates: DraftParticipant[] = [
+    ...profiles.filter((p) => p.id !== meId && (p.category || p.businessDescription || p.skills.length > 0)).map(toPerson),
+    ...contacts.map((c) => ({ key: `c:${c.id}`, kind: "contact" as const, name: c.name, profile: contactProfileText(c) })),
+  ];
+  return { me, candidates };
+}
+
 /** 構成メンバーの表示用情報と、AIに渡す情報（自分が先頭） */
 async function loadParticipants(db: Db, meId: string, draftId: string): Promise<{ views: DraftMemberView[]; people: DraftParticipant[] }> {
   const rows = await db.select().from(schema.teamDraftMembers).where(eq(schema.teamDraftMembers.draftId, draftId))
@@ -77,10 +109,8 @@ async function loadParticipants(db: Db, meId: string, draftId: string): Promise<
   const views: DraftMemberView[] = [];
   const people: DraftParticipant[] = [];
   for (const p of profiles) {
-    const parts = [p.category && `職種: ${p.category}`, p.businessDescription && `事業内容: ${p.businessDescription}`,
-      p.skills.length > 0 && `USP: ${p.skills.map((s) => (s.description ? `${s.name}（${s.description}）` : s.name)).join(" ／ ")}`].filter(Boolean);
     views.push({ kind: "member", id: p.id, name: p.name, emoji: p.emoji, bgColor: p.bgColor, headline: p.category, isMe: p.id === meId });
-    people.push({ key: `m:${p.id}`, kind: "member", name: p.name, profile: parts.join(" / ") || "（情報の登録なし）" });
+    people.push({ key: `m:${p.id}`, kind: "member", name: p.name, profile: memberProfileText(p) });
   }
   // 自分が先頭、そのあとは追加した順
   const meIdx = views.findIndex((v) => v.isMe);
@@ -88,9 +118,8 @@ async function loadParticipants(db: Db, meId: string, draftId: string): Promise<
   for (const id of contactIds) {
     const c = contactById.get(id);
     if (!c) continue;
-    const parts = [c.specialty && `専門分野: ${c.specialty}`, c.company && `会社・屋号: ${c.company}`, c.businessSummary && `事業概要: ${c.businessSummary}`, c.note && `備考: ${c.note}`].filter(Boolean);
     views.push({ kind: "contact", id: c.id, name: c.name, emoji: "👤", bgColor: "bg-stone-100", headline: c.specialty ?? c.company ?? "", isMe: false });
-    people.push({ key: `c:${c.id}`, kind: "contact", name: c.name, profile: parts.join(" / ") || "（情報の登録なし）" });
+    people.push({ key: `c:${c.id}`, kind: "contact", name: c.name, profile: contactProfileText(c) });
   }
   return { views, people };
 }
@@ -155,6 +184,69 @@ collabTeamDraftRoutes.post("/", async (c) => {
   await db.insert(schema.teamDrafts).values({ id, ownerMemberId: meId, title, goal, ideasJson: null, ideasGeneratedAt: null, createdAt: now, updatedAt: now });
   await replaceMembers(db, id, memberIds, contactIds, now);
   return c.json({ data: { id } }, 201);
+});
+
+// ---- (1) メンバーを選んで、チーム案のタイトル・協業内容・役割をAIに考えてもらう ----
+collabTeamDraftRoutes.post("/create-from-members", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveMe(c, db);
+  if (!meId) return c.json(err("forbidden", "メンバーとしての承認後にご利用いただけます"), 403);
+  const body = await c.req.json<{ memberIds?: unknown; contactIds?: unknown; goal?: string }>().catch(() => ({} as { goal?: string }));
+  const b = body as { memberIds?: unknown; contactIds?: unknown; goal?: string };
+  const goal = (b.goal ?? "").trim();
+  if (goal.length > GOAL_MAX) return c.json(err("invalid_input", `考えたい方向性は${GOAL_MAX}文字以内で入力してください`), 400);
+  const memberIds = uniqueIds(b.memberIds).filter((id) => id !== meId);
+  const contactIds = uniqueIds(b.contactIds);
+  if (memberIds.length + contactIds.length < 1) return c.json(err("invalid_input", "自分のほかに、メンバーまたは外部人脈を1名以上選んでください"), 400);
+  const problem = await validateSelection(db, meId, memberIds, contactIds);
+  if (problem) return c.json(err("invalid_input", problem), 400);
+
+  const now = Math.floor(Date.now() / 1000);
+  const id = newId();
+  await db.insert(schema.teamDrafts).values({ id, ownerMemberId: meId, title: DEFAULT_DRAFT_TITLE, goal, ideasJson: null, ideasGeneratedAt: null, createdAt: now, updatedAt: now });
+  await replaceMembers(db, id, memberIds, contactIds, now);
+  const { people } = await loadParticipants(db, meId, id);
+  // タイトル・協業内容・役割はAIに考えてもらう。うまくいかなくてもチーム案は残し、画面から「まとめ直す」ができる
+  const ideas = await generateTeamDraftIdeas({ apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: "", goal, people });
+  if (ideas) {
+    await db.update(schema.teamDrafts).set({
+      title: (ideas.teamTitle || ideas.businessTitle || DEFAULT_DRAFT_TITLE).slice(0, TITLE_MAX),
+      ideasJson: JSON.stringify(ideas), ideasGeneratedAt: now, updatedAt: now,
+    }).where(eq(schema.teamDrafts.id, id));
+  }
+  return c.json({ data: await buildDetail(db, meId, (await ownDraft(db, id, meId))!), aiFailed: !ideas }, 201);
+});
+
+// ---- (2) タイトルと協業内容から、チームメンバー案（自分を含む）・協業内容・役割をAIに考えてもらう ----
+collabTeamDraftRoutes.post("/create-from-idea", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveMe(c, db);
+  if (!meId) return c.json(err("forbidden", "メンバーとしての承認後にご利用いただけます"), 403);
+  const body = await c.req.json<{ title?: string; goal?: string }>().catch(() => ({} as { title?: string; goal?: string }));
+  const title = (body.title ?? "").trim();
+  const goal = (body.goal ?? "").trim();
+  if (!title) return c.json(err("invalid_input", "チーム案のタイトルを入力してください"), 400);
+  if (title.length > TITLE_MAX) return c.json(err("invalid_input", `タイトルは${TITLE_MAX}文字以内で入力してください`), 400);
+  if (!goal) return c.json(err("invalid_input", "どんな協業を考えたいかを入力してください"), 400);
+  if (goal.length > GOAL_MAX) return c.json(err("invalid_input", `考えたい協業は${GOAL_MAX}文字以内で入力してください`), 400);
+
+  const { me, candidates } = await loadCandidatePeople(db, meId);
+  if (candidates.length === 0) return c.json(err("invalid_input", "候補になるメンバー・外部人脈がまだいません。外部人脈を登録するか、メンバーの登録を待ってからお試しください"), 400);
+  const proposal = await proposeTeamFromIdea({
+    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title, goal, me, candidates, maxOthers: MAX_TEAM_DRAFT_MEMBERS - 1,
+  });
+  if (!proposal) return c.json(err("ai_failed", "チームメンバー案を考えられませんでした。少し時間をおいて、もう一度お試しください"), 502);
+
+  const memberIds = proposal.otherKeys.filter((k) => k.startsWith("m:")).map((k) => k.slice(2));
+  const contactIds = proposal.otherKeys.filter((k) => k.startsWith("c:")).map((k) => k.slice(2));
+  const problem = await validateSelection(db, meId, memberIds, contactIds);
+  if (problem) return c.json(err("ai_failed", "チームメンバー案を考えられませんでした。もう一度お試しください"), 502);
+
+  const now = Math.floor(Date.now() / 1000);
+  const id = newId();
+  await db.insert(schema.teamDrafts).values({ id, ownerMemberId: meId, title, goal, ideasJson: JSON.stringify(proposal.ideas), ideasGeneratedAt: now, createdAt: now, updatedAt: now });
+  await replaceMembers(db, id, memberIds, contactIds, now);
+  return c.json({ data: await buildDetail(db, meId, (await ownDraft(db, id, meId))!) }, 201);
 });
 
 // ---- 詳細 ----

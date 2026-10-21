@@ -20,6 +20,7 @@ import {
 } from "@/lib/contacts";
 import { useDraggableMapLayout } from "@/hooks/use-draggable-map-layout";
 import { CreateCollabTeamModal } from "./_create-team-modal";
+import { TeamDraftCards } from "./_team-draft-cards";
 import { ActivityAndRecords } from "./_activity-and-records";
 
 type GraphNode = { id: string; name: string; emoji: string; bgColor: string; isMe: boolean; hasActivity: boolean };
@@ -243,6 +244,7 @@ function CollabMap() {
                 </button>
               </div>
             </div>
+            <TeamDraftCards />
             <CollabTeamsList teams={graph.teams} meId={graph.center}
               expandedId={expandedTeamId} onExpandedChange={setExpandedTeamId} scrollNonce={teamScrollNonce}
               candidateMembers={[...graph.nodes.filter((n) => !n.isMe), ...graph.noActivityMembers]} />

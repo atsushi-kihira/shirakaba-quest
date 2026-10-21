@@ -6,22 +6,21 @@
 // チーム案は、作った本人だけに見える（他のユーザーには見えない）
 // =============================================================
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Loader2, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { DialogCloseButton } from "@/components/dialog-close-button";
+import { MemberPickerPanel } from "./_team-draft-picker";
 
 type DraftMember = { kind: "member" | "contact"; id: string; name: string; emoji: string; bgColor: string; headline: string; isMe: boolean };
 type DraftIdeas = {
-  businessTitle: string; summary: string; roles: { key: string; role: string }[]; firstSteps: string[];
+  teamTitle?: string; businessTitle: string; targetCustomers?: string; summary: string; roles: { key: string; role: string }[]; firstSteps: string[];
   generatedAt: number; isMock?: boolean;
 };
 type DraftDetail = {
   id: string; title: string; goal: string; members: DraftMember[]; ideas: DraftIdeas | null; ideasStale: boolean; maxMembers: number; updatedAt: number;
 };
-type PickMember = { id: string; name: string; emoji: string; bgColor: string; category: string | null };
-type PickContact = { id: string; name: string; company: string | null; specialty: string | null };
 
 const keyOf = (m: Pick<DraftMember, "kind" | "id">) => `${m.kind === "member" ? "m" : "c"}:${m.id}`;
 const errText = (e: unknown, fallback: string) => (e instanceof ApiError ? e.message : fallback);
@@ -29,6 +28,8 @@ const errText = (e: unknown, fallback: string) => (e instanceof ApiError ? e.mes
 export function TeamDraftDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const createdAiFailed = (location.state as { aiFailed?: boolean } | null)?.aiFailed === true;
   const qc = useQueryClient();
   const queryKey = ["collab", "team-drafts", id];
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +97,11 @@ export function TeamDraftDetailScreen() {
       </div>
       <p className="text-xs -mt-2" style={{ color: "var(--color-ink-500)" }}>🔒 このチーム案は、あなただけに見えます。</p>
 
+      {createdAiFailed && !draft.ideas && (
+        <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
+          ⚠️ チーム案は作成しましたが、AIがタイトルと協業の内容をまとめられませんでした。下の「まとめる」を押して、もう一度お試しください。
+        </p>
+      )}
       {error && <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>{error}</p>}
 
       {/* 考えたいこと */}
@@ -170,6 +176,11 @@ export function TeamDraftDetailScreen() {
               <p className="text-[10px] font-bold mb-0.5" style={{ color: "var(--color-success)" }}>協働事業のイメージ</p>
               <p className="text-sm font-semibold mb-1" style={{ color: "var(--color-ink-900)" }}>{draft.ideas.businessTitle}</p>
               <p className="text-xs leading-relaxed" style={{ color: "var(--color-ink-700)" }}>{draft.ideas.summary}</p>
+              {draft.ideas.targetCustomers && (
+                <p className="text-xs leading-relaxed mt-2" style={{ color: "var(--color-ink-700)" }}>
+                  <b style={{ color: "var(--color-success)" }}>🎯 お客様・対象：</b>{draft.ideas.targetCustomers}
+                </p>
+              )}
             </div>
             <p className="text-[10px] font-bold mb-1" style={{ color: "var(--color-accent)" }}>それぞれの役割</p>
             <ul className="space-y-1.5 mb-3">
@@ -247,69 +258,17 @@ function TitleEditModal({ current, saving, onClose, onSave }: { current: string;
 function PickerModal({ maxOthers, memberIds, contactIds, saving, onClose, onSave }: {
   maxOthers: number; memberIds: string[]; contactIds: string[]; saving: boolean; onClose: () => void; onSave: (m: string[], c: string[]) => void;
 }) {
-  const [tab, setTab] = useState<"member" | "contact">("member");
-  const [q, setQ] = useState("");
   const [selM, setSelM] = useState<Set<string>>(new Set(memberIds));
   const [selC, setSelC] = useState<Set<string>>(new Set(contactIds));
-  const members = useQuery({ queryKey: ["members"], queryFn: () => api.get<{ data: (PickMember & { id: string })[] }>("/members") });
-  const meQ = useQuery({ queryKey: ["me"], queryFn: () => api.get<{ data: { id: string } }>("/auth/me") });
-  const contacts = useQuery({ queryKey: ["collab", "contacts"], queryFn: () => api.get<{ data: PickContact[] }>("/collab/contacts") });
-  const meId = meQ.data?.data.id;
-  const total = selM.size + selC.size;
-  const norm = (s: string | null | undefined) => (s ?? "").normalize("NFKC").toLowerCase();
-  const needle = norm(q.trim());
-
-  const toggle = (set: Set<string>, setSet: (s: Set<string>) => void, id: string) => {
-    const next = new Set(set);
-    if (next.has(id)) next.delete(id); else if (total < maxOthers) next.add(id);
-    setSet(next);
-  };
-  const memberList = (members.data?.data ?? []).filter((m) => m.id !== meId && (!needle || norm(`${m.name}${m.category ?? ""}`).includes(needle)));
-  const contactList = (contacts.data?.data ?? []).filter((c) => !needle || norm(`${c.name}${c.company ?? ""}${c.specialty ?? ""}`).includes(needle));
-
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.4)" }} onClick={onClose}>
-      <div className="card-paper p-5 w-full max-w-md rounded-3xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between gap-2 mb-1">
+      <div className="card-paper p-5 w-full max-w-md rounded-3xl max-h-[88vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-2">
           <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>メンバーを選ぶ</h2>
           <DialogCloseButton onClick={onClose} />
         </div>
-        <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>自分を含めて最大{maxOthers + 1}名まで（いま自分以外に {total}/{maxOthers} 名を選択中）</p>
-        <div className="flex gap-2 mb-2">
-          {(["member", "contact"] as const).map((t) => (
-            <button key={t} onClick={() => setTab(t)} className="flex-1 py-2 rounded-2xl text-sm font-medium"
-              style={{ background: tab === t ? "var(--color-brand)" : "var(--color-paper-200)", color: tab === t ? "white" : "var(--color-ink-600)" }}>
-              {t === "member" ? `メンバー（${selM.size}）` : `自分の外部人脈（${selC.size}）`}
-            </button>
-          ))}
-        </div>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="名前・職種・会社で絞り込み" className="w-full px-3 py-2 rounded-xl border text-sm mb-2" style={{ borderColor: "var(--color-paper-300)" }} />
-        <div className="flex-1 overflow-y-auto space-y-1 rounded-xl p-2 mb-3" style={{ background: "var(--color-paper-200)", minHeight: 160 }}>
-          {tab === "member"
-            ? (members.isLoading ? <Loader2 size={18} className="animate-spin mx-auto my-4" /> : memberList.length === 0 ? <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-500)" }}>該当するメンバーがいません</p> :
-              memberList.map((m) => {
-                const on = selM.has(m.id);
-                return (
-                  <label key={m.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer" style={{ opacity: !on && total >= maxOthers ? 0.45 : 1 }}>
-                    <input type="checkbox" checked={on} onChange={() => toggle(selM, setSelM, m.id)} />
-                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0 ${m.bgColor}`}>{m.emoji}</span>
-                    <span className="text-sm flex-1 min-w-0 truncate" style={{ color: "var(--color-ink-700)" }}>{m.name}{m.category && <span className="text-xs ml-1.5" style={{ color: "var(--color-ink-500)" }}>{m.category}</span>}</span>
-                  </label>
-                );
-              }))
-            : (contacts.isLoading ? <Loader2 size={18} className="animate-spin mx-auto my-4" /> : contactList.length === 0 ? <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-500)" }}>該当する外部人脈がありません</p> :
-              contactList.map((c) => {
-                const on = selC.has(c.id);
-                return (
-                  <label key={c.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer" style={{ opacity: !on && total >= maxOthers ? 0.45 : 1 }}>
-                    <input type="checkbox" checked={on} onChange={() => toggle(selC, setSelC, c.id)} />
-                    <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0 bg-stone-100">👤</span>
-                    <span className="text-sm flex-1 min-w-0 truncate" style={{ color: "var(--color-ink-700)" }}>{c.name}<span className="text-xs ml-1.5" style={{ color: "var(--color-ink-500)" }}>{[c.specialty, c.company].filter(Boolean).join("／")}</span></span>
-                  </label>
-                );
-              }))}
-        </div>
-        <div className="flex gap-2">
+        <MemberPickerPanel maxOthers={maxOthers} selMembers={selM} selContacts={selC} onChange={(m, c) => { setSelM(m); setSelC(c); }} />
+        <div className="flex gap-2 mt-3">
           <button onClick={onClose} data-dialog-cancel className="flex-1 py-2.5 rounded-2xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>キャンセル</button>
           <button onClick={() => onSave([...selM], [...selC])} disabled={saving}
             className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50 flex items-center justify-center gap-1.5" style={{ background: "var(--color-brand)" }}>
