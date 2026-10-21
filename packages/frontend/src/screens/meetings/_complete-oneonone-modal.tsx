@@ -8,6 +8,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
+import { DialogCloseButton } from "@/components/dialog-close-button";
 
 export function CompleteOneOnOneModal({
   sessionId,
@@ -67,15 +68,24 @@ export function CompleteOneOnOneModal({
     );
   }
 
+  // 「完了」ボタンを押すまでは、1to1は完了になりません。閉じる・キャンセル・Esc は、完了せずにダイアログを閉じます。
+  // （完了の記録が済んだあとのエラー表示中は、閉じても完了は取り消されません）
+  const close = () => { if (!submit.isPending) onClose(); };
+
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.4)" }}>
-      <div className="card-paper p-5 w-full max-w-sm rounded-3xl">
-        <h2 className="text-base font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-          🤝 {partnerName}さんとの1to1、お疲れさまでした！
-        </h2>
+      style={{ background: "rgba(0,0,0,0.4)" }}
+      onClick={close}>
+      <div className="card-paper p-5 w-full max-w-sm rounded-3xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+            🤝 {partnerName}さんとの1to1、お疲れさまでした！
+          </h2>
+          <DialogCloseButton onClick={close} disabled={submit.isPending} />
+        </div>
         <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
-          当てはまるものがあればチェックしてください（なくても大丈夫です）
+          当てはまるものがあればチェックしてください（なくても大丈夫です）。
+          {!completedOnServer && "「完了」を押すと1to1が完了になります。まだ完了しない場合は「キャンセル」で閉じてください。"}
         </p>
 
         <label className="flex items-start gap-2 py-2.5 px-3 rounded-2xl cursor-pointer mb-2"
@@ -101,6 +111,15 @@ export function CompleteOneOnOneModal({
 
         <div className="flex gap-2">
           <button
+            onClick={close}
+            disabled={submit.isPending}
+            data-dialog-cancel
+            className="px-5 py-3 rounded-2xl text-sm font-medium disabled:opacity-50"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+          >
+            {completedOnServer ? "閉じる" : "キャンセル"}
+          </button>
+          <button
             onClick={() => { setError(null); submit.mutate(); }}
             disabled={submit.isPending}
             className="flex-1 py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
@@ -109,15 +128,6 @@ export function CompleteOneOnOneModal({
             {submit.isPending && <Loader2 size={14} className="animate-spin" />}
             {error ? "もう一度試す" : "完了"}
           </button>
-          {error && (
-            <button
-              onClick={onClose}
-              className="px-4 py-3 rounded-2xl text-sm font-medium"
-              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
-            >
-              閉じる
-            </button>
-          )}
         </div>
       </div>
     </div>

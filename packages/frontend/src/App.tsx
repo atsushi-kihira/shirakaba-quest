@@ -51,6 +51,7 @@ import { AdminMeetingsScreen } from "@/screens/admin/admin-meetings-screen";
 import { AdminCollabScreen } from "@/screens/admin/admin-collab-screen";
 import { AdminCardSettingsScreen } from "@/screens/admin/admin-card-settings-screen";
 import { AdminUsageReportScreen } from "@/screens/admin/admin-usage-report-screen";
+import { DialogEscapeSupport } from "@/components/dialog-escape-support";
 import { CardOrderScreen } from "@/screens/card-order/card-order-screen";
 import { SchedulerDashboardScreen } from "@/screens/scheduler/scheduler-dashboard-screen";
 import { SchedulerIntegrationsScreen } from "@/screens/scheduler/scheduler-integrations-screen";
@@ -83,6 +84,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <DialogEscapeSupport />
         <AppWithMe>
           <Routes>
             {/* サービスサイト（認証不要） */}
