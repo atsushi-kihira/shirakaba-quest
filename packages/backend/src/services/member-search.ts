@@ -3,11 +3,13 @@
 // ・人脈検索の「メンバーのUSPから絞り込む」で使う。USPを選んでいれば、そのUSPを持つメンバーの中からさがす
 // ・AIに渡すのは、全員に公開されている項目（名前・職種・事業内容・USPとその説明）のみ。会社名・連絡先などの名刺情報は渡さない
 // =============================================================
-import { and, eq, ne } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 
-export type MemberSearchResult = { results: { memberId: string; why: string }[]; candidateCount: number; aiCallFailed?: boolean };
+/** score: 条件との合致度（0〜100）。isSelf: 検索した本人 */
+export type MemberHit = { memberId: string; why: string; score: number; isSelf: boolean };
+export type MemberSearchResult = { results: MemberHit[]; candidateCount: number; aiCallFailed?: boolean };
 
 const MAX_CANDIDATES = 150;
 const MAX_RESULTS = 20;
@@ -40,8 +42,9 @@ function parseSkills(raw: string | null): Candidate["skills"] {
 }
 
 async function collectCandidates(db: Db, meId: string, usps: string[], specialties: string[]): Promise<Candidate[]> {
+  // 検索した本人も対象に含める（自分自身が条件に合う力を持っているかも確かめられるように）
   const rows = await db.select().from(schema.members)
-    .where(and(eq(schema.members.status, "active"), ne(schema.members.id, meId))).all();
+    .where(eq(schema.members.status, "active")).all();
   const wanted = new Set(usps.map(uspKeyOf));
   return rows
     .map((m) => ({ id: m.id, name: m.name, category: m.category, businessDescription: m.businessDescription, skills: parseSkills(m.skills) }))
@@ -49,6 +52,8 @@ async function collectCandidates(db: Db, meId: string, usps: string[], specialti
     // 職種・事業内容・USPのどれも未入力のメンバーは、手がかりがなく検索の対象にならない
     .filter((m) => m.category || m.businessDescription || m.skills.length > 0)
     .filter((m) => specialties.length === 0 || memberMatchesSpecialties(m.category, specialties))
+    // 候補が多いときも、検索した本人が先頭に来るようにして、件数の上限で外れないようにする
+    .sort((a, b) => (a.id === meId ? -1 : 0) - (b.id === meId ? -1 : 0))
     .slice(0, MAX_CANDIDATES);
 }
 
@@ -76,9 +81,10 @@ ${freeText}
 
 # 出力ルール
 - why（1文・日本語）：その人の職種・事業内容・USPのどこが条件に合うか、根拠を具体的に。
-- 数値スコアは出力しない。検討過程や一覧の読み上げは書かず、結論のJSONだけを出力する。
+- score（0〜100の整数）：条件への合致度。目安は、90以上＝条件にほぼ完全に合う、70〜89＝強く合う、50〜69＝一部が合う、30〜49＝関連はあるが弱い。30未満の人は選ばない。同じ程度の人どうしで同点が並びすぎないよう、根拠の強さに応じて点数に差をつける。
+- results は score の高い順に並べる。検討過程や一覧の読み上げは書かず、結論のJSONだけを出力する。
 - 出力は次のJSON形式のみ。1文字目から必ず「{」で始める（前置き・コードブロックは不要）:
-{"results":[{"memberId":"...","why":"..."}]}
+{"results":[{"memberId":"...","score":85,"why":"..."}]}
 
 # メンバー一覧
 ${formatCandidates(cands)}`;
@@ -102,26 +108,29 @@ async function callClaude(apiKey: string, prompt: string): Promise<string> {
   return data.content.filter((c) => c.type === "text" && c.text).map((c) => c.text).join("\n");
 }
 
-function parseResults(content: string, valid: Set<string>): { memberId: string; why: string }[] | null {
+function parseResults(content: string, valid: Set<string>, meId: string): MemberHit[] | null {
   const m = content.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {
     const parsed = JSON.parse(m[0]) as { results?: unknown };
     if (!Array.isArray(parsed.results)) return null;
     const seen = new Set<string>();
-    const out: { memberId: string; why: string }[] = [];
+    const out: MemberHit[] = [];
     for (const r of parsed.results) {
-      const x = r as { memberId?: unknown; why?: unknown };
+      const x = r as { memberId?: unknown; why?: unknown; score?: unknown };
       if (typeof x?.memberId !== "string" || !valid.has(x.memberId) || seen.has(x.memberId)) continue;
       seen.add(x.memberId);
-      out.push({ memberId: x.memberId, why: typeof x.why === "string" ? x.why : "" });
+      const rawScore = typeof x.score === "number" ? x.score : Number(x.score);
+      const score = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, Math.round(rawScore))) : 50;
+      out.push({ memberId: x.memberId, why: typeof x.why === "string" ? x.why : "", score, isSelf: x.memberId === meId });
     }
-    return out.slice(0, MAX_RESULTS);
+    // AIの並びに関係なく、合致度の高い順にそろえる（同点のときはAIの並びのまま）
+    return out.sort((a, b) => b.score - a.score).slice(0, MAX_RESULTS);
   } catch { return null; }
 }
 
 /** AIが使えないとき（開発環境・キー未設定・失敗）の代替：条件の言葉が、業種・事業内容・USPの説明に含まれるメンバーを返す */
-function keywordFallback(freeText: string, cands: Candidate[]): { memberId: string; why: string }[] {
+function keywordFallback(freeText: string, cands: Candidate[], meId: string): MemberHit[] {
   const terms = freeText.split(/[\s、,，。・/／]+/).map((t) => t.trim()).filter((t) => t.length >= 2);
   if (terms.length === 0) return [];
   return cands
@@ -133,7 +142,13 @@ function keywordFallback(freeText: string, cands: Candidate[]): { memberId: stri
     .filter((x) => x.hits.length > 0)
     .sort((a, b) => b.hits.length - a.hits.length)
     .slice(0, MAX_RESULTS)
-    .map((x) => ({ memberId: x.c.id, why: `業種・事業内容・USPの説明に「${x.hits.slice(0, 3).join("」「")}」が含まれています` }));
+    .map((x) => ({
+      memberId: x.c.id,
+      // 条件の言葉のうち、いくつが含まれているかの割合（開発環境・AIが使えないときの簡易的な合致度）
+      score: Math.min(95, Math.round(30 + (x.hits.length / terms.length) * 65)),
+      isSelf: x.c.id === meId,
+      why: `業種・事業内容・USPの説明に「${x.hits.slice(0, 3).join("」「")}」が含まれています`,
+    }));
 }
 
 export async function runMemberSearch(args: {
@@ -146,17 +161,17 @@ export async function runMemberSearch(args: {
   if (cands.length === 0) return { results: [], candidateCount: 0 };
 
   if (isDev || !apiKey || apiKey === "dev-not-set") {
-    return { results: keywordFallback(freeText, cands), candidateCount: cands.length };
+    return { results: keywordFallback(freeText, cands, meId), candidateCount: cands.length };
   }
   const valid = new Set(cands.map((c) => c.id));
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const results = parseResults(await callClaude(apiKey, buildPrompt(freeText, cands)), valid);
+      const results = parseResults(await callClaude(apiKey, buildPrompt(freeText, cands)), valid, meId);
       if (results) return { results, candidateCount: cands.length };
       console.error(`[member-search] 応答の解析に失敗（試行${attempt}/2）`);
     } catch (e) {
       console.error(`[member-search] 呼び出し失敗（試行${attempt}/2）`, e);
     }
   }
-  return { results: keywordFallback(freeText, cands), candidateCount: cands.length, aiCallFailed: true };
+  return { results: keywordFallback(freeText, cands, meId), candidateCount: cands.length, aiCallFailed: true };
 }

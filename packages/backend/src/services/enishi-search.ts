@@ -13,6 +13,7 @@
 // サーバー側で候補IDから引き直して組み立てる（LLMの出力をそのまま信用しない）。
 // =============================================================
 import { runMemberSearch } from "./member-search.ts";
+import { generateCollabIdeas, type CollabIdeas } from "./member-collab.ts";
 import { and, eq, inArray, ne, or } from "drizzle-orm";
 import { schema } from "../db/index.ts";
 import type { createDb } from "../db/index.ts";
@@ -70,6 +71,8 @@ export type EnishiResultCard = {
   linkedMemberId: string; // 1to1導線に使う相手（for-me: 仲介メンバー本人 / giver: 貢献先メンバー本人）。自分自身の人脈がヒットした場合は空文字
   actionLabel: string;
   isMemberCandidate?: boolean; // 人脈検索限定：外部人脈ではなく「メンバー本人」がヒットした場合true（candidateIdは空）
+  score?: number; // 人脈検索限定（メンバー本人）：条件との合致度（0〜100）
+  isSelfMember?: boolean; // 人脈検索限定：ヒットしたメンバーが、検索した本人自身の場合true
   isOwnContact?: boolean; // for-me限定：仲介者不要で、すでに自分の人脈として登録済みの相手がヒットした場合true
   candidateId: string; // マッチした人脈・卵/ガチョウの元ID（for-me限定：「このご縁で繋がりました」フラグの対象指定に使う）
   myContactId?: string; // giver限定：「あなたの人脈」の元ID（「紹介しました」フラグの対象指定に使う。candidateIdとの組み合わせで一意）
@@ -83,6 +86,8 @@ export type EnishiSearchResult = {
   // AI呼び出しが（リトライしても）失敗し、0件という結果自体が信頼できない場合にtrue。
   // 「該当なし」と区別して、時間をおいて再実行を促すメッセージを出すために使う。
   aiCallFailed?: boolean;
+  // 人脈検索限定：合致度の高い上位メンバーの力を合わせた協業イメージ（全体のチーム活動と、2〜3名の組み合わせ）
+  memberCollab?: CollabIdeas | null;
 };
 
 type ForMeParams = {
@@ -506,24 +511,33 @@ function formatTargets(targets: EnishiTarget[]): string {
 // ---- 開発用モック ----
 function devMockResult(maxHop: Hop, mode: "for-me" | "giver" | "contact-search"): EnishiSearchResult {
   if (mode === "contact-search") {
+    const mockMember = (id: string, name: string, emoji: string, score: number, isSelf = false) => ({
+      hop: "direct" as const, type: "egg" as const,
+      matchedTargetLabel: "検索条件（開発モック）",
+      counterpart: { memberId: id, name, emoji, bgColor: "bg-stone-100" },
+      path: isSelf ? ["あなた自身"] : ["あなた", `${name}さん（メンバー）`],
+      contactPathIndex: -1,
+      dealDescription: "開発環境用のモックです。",
+      why: "開発モックのため根拠は生成されていません。",
+      privacyNote: null,
+      linkedMemberId: id,
+      actionLabel: isSelf ? "あなた自身のカードを見る" : `${name}さんの詳細を見る`,
+      isMemberCandidate: true, score, isSelfMember: isSelf,
+      candidateId: "",
+    });
+    const members = [mockMember("dev-m1", "開発モック 太郎", "🧪", 88), mockMember("dev-m2", "開発モック 花子", "🌸", 74, true), mockMember("dev-m3", "開発モック 次郎", "🦊", 61)];
     return {
-      groups: [{
-        hop: "direct", label: "検索結果",
-        results: [{
-          hop: "direct", type: "egg",
-          matchedTargetLabel: "検索条件（開発モック）",
-          counterpart: { memberId: "dev-member", name: "開発モック 太郎", emoji: "🧪", bgColor: "bg-stone-100" },
-          path: ["あなた", "開発モック 太郎さん", "候補の人脈（属性のみ・開発モック）"],
-          contactPathIndex: 2,
-          dealDescription: "これは開発環境用のモックデータです。本番環境ではAIが実際の候補データから検索します。",
-          why: "開発モックのため根拠は生成されていません。",
-          privacyNote: "相手はなかまの人脈です。実名・連絡先は伏せています。",
-          linkedMemberId: "dev-member",
-          actionLabel: "開発モック 太郎さんに紹介をお願いする",
-          candidateId: "dev-candidate",
-        }],
-      }],
+      groups: [{ hop: "direct", label: "検索結果", results: members }],
       truncated: false,
+      memberCollab: {
+        members: members.map((m) => ({ memberId: m.counterpart.memberId, name: m.counterpart.name, emoji: m.counterpart.emoji, bgColor: m.counterpart.bgColor, category: "（開発モック）" })),
+        team: { title: "開発モックのチーム活動（見本）", summary: "これは開発環境の見本です。本番ではAIが、合致度の高いメンバーの職種・事業内容・USPから協業イメージを提案します。", roles: [{ memberId: "dev-m1", role: "企画を担当します（見本）" }, { memberId: "dev-m2", role: "実施を担当します（見本）" }] },
+        combos: [
+          { memberIds: ["dev-m1", "dev-m2"], title: "太郎×花子の協業（見本）", summary: "2名の組み合わせの見本です。" },
+          { memberIds: ["dev-m1", "dev-m2", "dev-m3"], title: "3名の協業（見本）", summary: "3名の組み合わせの見本です。" },
+        ],
+        isMock: true,
+      },
     };
   }
   const groups = hopsUpTo(maxHop).map((hop) => ({
@@ -607,13 +621,15 @@ export async function runEnishiSearch(params: ForMeParams | GiverParams | Contac
           hop: "direct", type: "egg",
           matchedTargetLabel: freeText,
           counterpart: { memberId: member.id, name: member.name, emoji: member.emoji, bgColor: member.bgColor },
-          path: ["あなた", `${member.name}さん（メンバー）`],
+          path: hit.isSelf ? ["あなた自身"] : ["あなた", `${member.name}さん（メンバー）`],
           contactPathIndex: -1,
           dealDescription: summary || `${member.name}さん`, why: hit.why || "職種・事業内容・USPが条件に近いメンバーです。",
           privacyNote: null,
           linkedMemberId: member.id,
-          actionLabel: `${member.name}さんの詳細を見る`,
+          actionLabel: hit.isSelf ? "あなた自身のカードを見る" : `${member.name}さんの詳細を見る`,
           isMemberCandidate: true,
+          score: hit.score,
+          isSelfMember: hit.isSelf,
           candidateId: "",
         });
       }
@@ -656,8 +672,13 @@ export async function runEnishiSearch(params: ForMeParams | GiverParams | Contac
       });
     }
 
+    // 合致度の高い上位メンバー（最大10名）の力を合わせた協業イメージ。メンバー本人が2名以上ヒットしたときだけ作る
+    const memberCollab = memberHits.length >= 2
+      ? await generateCollabIdeas({ db, apiKey, isDev: false, freeText, rankedMemberIds: memberHits.map((h) => h.memberId) })
+      : null;
+
     const sorted = cards.slice(0, count);
-    return { groups: [{ hop: "direct", label: "検索結果", results: sorted }], truncated: candidatesTruncated, aiCallFailed };
+    return { groups: [{ hop: "direct", label: "検索結果", results: sorted }], truncated: candidatesTruncated, aiCallFailed, memberCollab };
   }
 
   if (params.mode === "for-me") {

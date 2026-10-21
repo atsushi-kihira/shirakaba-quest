@@ -8,6 +8,7 @@ import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Loader2, Search, Gift, Users, ChevronRight, ChevronLeft, History, Star, Trash2, FileDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { MemberScoreBadge, MemberCollabPanel, type CollabIdeas } from "./_member-collab-panel";
 import { MemberCard, type MemberBackTarget } from "@/screens/members/members-screen";
 import type { PublicMember } from "@shared/types";
 
@@ -26,6 +27,8 @@ export type ResultCard = {
   cardId: string; goodMatch: boolean;
   isOwnContact?: boolean;
   isMemberCandidate?: boolean; // 人脈検索で、外部人脈ではなくメンバー本人がヒットした場合
+  score?: number; // メンバー本人がヒットした場合の、条件との合致度（0〜100）
+  isSelfMember?: boolean; // ヒットしたメンバーが、検索した本人自身の場合
   candidateId: string; transacted: boolean;
   myContactId?: string; introduced: boolean;
 };
@@ -34,6 +37,7 @@ export type SearchResult = {
   truncated: boolean;
   usedContactsBreakdown?: { specialty: string; count: number }[];
   aiCallFailed?: boolean;
+  memberCollab?: CollabIdeas | null; // 人脈検索：合致度の上位メンバーの力を合わせた協業イメージ
 };
 type SearchResponse = { data: SearchResult; historyId: string };
 
@@ -311,6 +315,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
   return (
     <div className="mt-5">
       <UsedContactsBreakdownNotice result={result} />
+      {mode === "contact-search" && result.memberCollab && <MemberCollabPanel collab={result.memberCollab} />}
       {(mode === "for-me" || mode === "contact-search") && (
         <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
           ※ 「この{termEnishi}で繋がりました」「今後の表示は不要です」を押した人脈はこの検索結果には表示されません。
@@ -462,7 +467,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
         )}
         {r.isMemberCandidate && (
           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md" style={{ background: "#e7f0dc", color: "var(--color-success)" }}>
-            🌳 メンバー本人
+            {r.isSelfMember ? "👤 あなた自身" : "🌳 メンバー本人"}
           </span>
         )}
         {(mode === "for-me" || mode === "contact-search") && (
@@ -477,6 +482,10 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
           </button>
         )}
       </div>
+
+      {r.isMemberCandidate && typeof r.score === "number" && (
+        <div className="mb-2"><MemberScoreBadge score={r.score} /></div>
+      )}
 
       <div className="rounded-xl px-3 py-2 text-xs mb-1.5 flex flex-wrap items-center gap-1.5" style={{ background: "var(--color-paper-100)" }}>
         {r.path.map((node, i) => {
@@ -1240,7 +1249,7 @@ const uspKey = (name: string): string => name.normalize("NFKC").replace(/\s+/g, 
 // ・「さがしたい人の条件」を書いて検索すると、AIが各メンバーの業種・事業内容・USPの説明を読んで、条件に近いメンバーを探す
 //   （USPを選んでいれば、そのUSPを持つメンバーの中から探す）
 // 選んだUSP・条件はURLに持つので、メンバーの詳細から「戻る」で戻ってきても、同じ状態で表示される（AI検索の結果もキャッシュされる）。
-type MemberSearchResponse = { data: { results: { memberId: string; why: string }[]; candidateCount: number; aiCallFailed?: boolean } };
+type MemberSearchResponse = { data: { results: { memberId: string; why: string; score: number; isSelf: boolean }[]; candidateCount: number; aiCallFailed?: boolean; collab?: CollabIdeas | null } };
 
 function UspFilterPanel() {
   const [params, setParams] = useSearchParams();
@@ -1305,7 +1314,7 @@ function UspFilterPanel() {
   });
 
   const matched = members.filter((m) => (m.skills ?? []).some((sk) => selectedKeys.has(uspKey(sk.name ?? ""))));
-  const aiResults = (ai.data?.data.results ?? []).flatMap((r) => { const m = memberById.get(r.memberId); return m ? [{ member: m, why: r.why }] : []; });
+  const aiResults = (ai.data?.data.results ?? []).flatMap((r) => { const m = memberById.get(r.memberId); return m ? [{ member: m, why: r.why, score: r.score, isSelf: r.isSelf }] : []; });
 
   return (
     <div>
@@ -1384,11 +1393,16 @@ function UspFilterPanel() {
                   ※ AIでの検索がうまくいかなかったため、条件の言葉が含まれるメンバーを表示しています。時間をおいてもう一度お試しください。
                 </p>
               )}
+              {ai.data?.data.collab && <MemberCollabPanel collab={ai.data.data.collab} />}
               <div className="space-y-3">
                 {aiResults.length === 0
                   ? <p className="text-center py-6 text-sm" style={{ color: "var(--color-ink-400)" }}>条件に近いメンバーは見つかりませんでした</p>
-                  : aiResults.map(({ member, why }) => (
+                  : aiResults.map(({ member, why, score, isSelf }) => (
                     <div key={member.id}>
+                      <div className="flex items-center gap-2 mb-1 mx-1">
+                        <MemberScoreBadge score={score} />
+                        {isSelf && <span className="text-[10px] font-bold px-2 py-0.5 rounded-md" style={{ background: "#e7f0dc", color: "var(--color-success)" }}>👤 あなた自身</span>}
+                      </div>
                       <MemberCard member={member} backTo={backTo} />
                       {why && (
                         <p className="text-[11px] mt-1.5 mx-1 rounded-lg px-2.5 py-1.5" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-600)" }}>
@@ -1419,7 +1433,7 @@ type ContactSearchScope = "all" | "mine_and_members" | "mine_only" | "others_onl
 type ContactOwner = { id: string; name: string; emoji: string; contactCount: number };
 
 const CONTACT_SEARCH_SCOPE_OPTIONS: { value: ContactSearchScope; title: string; desc: string }[] = [
-  { value: "all", title: "すべて", desc: "メンバー本人、自分の外部人脈、メンバー全員の外部人脈をまとめてさがします" },
+  { value: "all", title: "すべて", desc: "あなた自身を含むメンバー本人、自分の外部人脈、メンバー全員の外部人脈をまとめてさがします" },
   { value: "mine_and_members", title: "自分の外部人脈 ＋ メンバー全員の外部人脈", desc: "メンバー本人は含めず、外部人脈だけをさがします" },
   { value: "mine_only", title: "自分の外部人脈のみ", desc: "あなたが登録した外部人脈の中からさがします" },
   { value: "others_only", title: "他のメンバー全員の外部人脈", desc: "あなたの人脈は含めず、なかまの外部人脈の中からさがします" },

@@ -16,6 +16,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { suggestSplit } from "../services/split-suggest.ts";
+import { generateCollabIdeas } from "../services/member-collab.ts";
 import { runMemberSearch } from "../services/member-search.ts";
 import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
@@ -669,10 +670,13 @@ enishiRoutes.post("/search/members", async (c) => {
   if (!freeText) return c.json({ error: { code: "invalid_input", message: "さがしたい人の条件を入力してください" } }, 400);
   if (freeText.length > 1000) return c.json({ error: { code: "invalid_input", message: "条件は1000文字以内で入力してください" } }, 400);
   const usps = [...new Set((body.usps ?? []).filter((u) => typeof u === "string" && u.trim()))].slice(0, 50);
-  const result = await runMemberSearch({
-    db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", meId, usps, freeText,
-  });
-  return c.json({ data: result });
+  const isDev = c.env.ENVIRONMENT === "development";
+  const result = await runMemberSearch({ db, apiKey: c.env.ANTHROPIC_API_KEY, isDev, meId, usps, freeText });
+  // 合致度の高い上位メンバー（最大10名）の力を合わせた協業イメージ。2名以上ヒットしたときだけ作る
+  const collab = result.results.length >= 2
+    ? await generateCollabIdeas({ db, apiKey: c.env.ANTHROPIC_API_KEY, isDev, freeText, rankedMemberIds: result.results.map((r) => r.memberId) })
+    : null;
+  return c.json({ data: { ...result, collab } });
 });
 
 // ---- GET /api/enishi/history ---- 検索履歴一覧（新しい順・自分の分のみ）
