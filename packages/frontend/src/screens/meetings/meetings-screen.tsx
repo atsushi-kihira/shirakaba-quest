@@ -108,10 +108,14 @@ export function MeetingsScreen() {
   const [searchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");
   const [tab, setTab] = useState<Tab>(tabParam === "oneonone" || !approved ? "oneonone" : "regular");
+  // 利用者が自分でタブを選んだか。選んでいなければ、ログイン情報の読み込みが終わった時点で、通常ミーティングのタブに切り替える
+  // （読み込み前は承認済みかどうかがわからず、1to1のタブが開いたままになって、通常ミーティングが一覧から消えて見えるのを防ぐ）
+  const [tabPicked, setTabPicked] = useState(false);
   useEffect(() => {
     if (tabParam === "oneonone") setTab("oneonone");
     else if (tabParam === "regular" && approved) setTab("regular");
-  }, [tabParam, approved]);
+    else if (!tabParam && !tabPicked) setTab(approved ? "regular" : "oneonone");
+  }, [tabParam, approved, tabPicked]);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const { items: actionItems } = useActionItems();
   const meetingActionItems = actionItems.filter((it) => it.group === "oneonone" || it.group === "meeting");
@@ -183,7 +187,7 @@ export function MeetingsScreen() {
           return (
           <button
             key={key}
-            onClick={() => !locked && setTab(key)}
+            onClick={() => { if (!locked) { setTab(key); setTabPicked(true); } }}
             disabled={locked}
             className="flex-1 py-2.5 rounded-2xl text-sm font-medium transition relative flex items-center justify-center gap-1.5"
             style={{
