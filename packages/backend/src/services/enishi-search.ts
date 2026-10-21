@@ -562,6 +562,37 @@ function devMockResult(maxHop: Hop, mode: "for-me" | "giver" | "contact-search")
   return { groups, truncated: false };
 }
 
+/** 人脈検索で見つかったメンバー（合致度つき）を、結果のカードにする。人脈検索（すべて）とメンバーのUSPからの検索で共通 */
+export async function buildMemberCards(
+  db: Db, memberHits: { memberId: string; why: string; score: number; isSelf: boolean }[], freeText: string
+): Promise<EnishiResultCard[]> {
+  const cards: EnishiResultCard[] = [];
+  if (memberHits.length === 0) return cards;
+  const rows = await db.select().from(schema.members).where(inArray(schema.members.id, memberHits.map((h) => h.memberId))).all();
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  for (const hit of memberHits) {
+    const member = byId.get(hit.memberId);
+    if (!member) continue;
+    const summary = [member.category, member.businessDescription].filter(Boolean).join("／");
+    cards.push({
+      hop: "direct", type: "egg",
+      matchedTargetLabel: freeText,
+      counterpart: { memberId: member.id, name: member.name, emoji: member.emoji, bgColor: member.bgColor },
+      path: hit.isSelf ? ["あなた自身"] : ["あなた", `${member.name}さん（メンバー）`],
+      contactPathIndex: -1,
+      dealDescription: summary || `${member.name}さん`, why: hit.why || "職種・事業内容・USPが条件に近いメンバーです。",
+      privacyNote: null,
+      linkedMemberId: member.id,
+      actionLabel: hit.isSelf ? "あなた自身のカードを見る" : `${member.name}さんの詳細を見る`,
+      isMemberCandidate: true,
+      score: hit.score,
+      isSelfMember: hit.isSelf,
+      candidateId: "",
+    });
+  }
+  return cards;
+}
+
 // ---- メイン ----
 export async function runEnishiSearch(params: ForMeParams | GiverParams | ContactSearchParams): Promise<EnishiSearchResult> {
   const { db, apiKey, isDev, maxHop, count } = params;
@@ -608,32 +639,9 @@ export async function runEnishiSearch(params: ForMeParams | GiverParams | Contac
 
     const cards: EnishiResultCard[] = [];
 
-    // メンバー本人（関連性の高い順）。外部人脈の結果より先に並べる
+    // メンバー本人（合致度の高い順）。外部人脈の結果より先に並べる
     const memberHits = (memberOut?.results ?? []).slice(0, MEMBER_RESULT_LIMIT);
-    if (memberHits.length > 0) {
-      const rows = await db.select().from(schema.members).where(inArray(schema.members.id, memberHits.map((h) => h.memberId))).all();
-      const byId = new Map(rows.map((r) => [r.id, r]));
-      for (const hit of memberHits) {
-        const member = byId.get(hit.memberId);
-        if (!member) continue;
-        const summary = [member.category, member.businessDescription].filter(Boolean).join("／");
-        cards.push({
-          hop: "direct", type: "egg",
-          matchedTargetLabel: freeText,
-          counterpart: { memberId: member.id, name: member.name, emoji: member.emoji, bgColor: member.bgColor },
-          path: hit.isSelf ? ["あなた自身"] : ["あなた", `${member.name}さん（メンバー）`],
-          contactPathIndex: -1,
-          dealDescription: summary || `${member.name}さん`, why: hit.why || "職種・事業内容・USPが条件に近いメンバーです。",
-          privacyNote: null,
-          linkedMemberId: member.id,
-          actionLabel: hit.isSelf ? "あなた自身のカードを見る" : `${member.name}さんの詳細を見る`,
-          isMemberCandidate: true,
-          score: hit.score,
-          isSelfMember: hit.isSelf,
-          candidateId: "",
-        });
-      }
-    }
+    cards.push(...await buildMemberCards(db, memberHits, freeText));
 
     const candidateMap = new Map(candidates.map((cnd) => [cnd.candidateId, cnd]));
     for (const m of matches) {

@@ -19,6 +19,7 @@ import { suggestSplit } from "../services/split-suggest.ts";
 import { generateCollabIdeas } from "../services/member-collab.ts";
 import { runMemberSearch } from "../services/member-search.ts";
 import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
+import { buildMemberCards } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -111,6 +112,13 @@ function buildGiverTitle(targetMemberNames: string[], createdAt: number, resultC
   const shown = targetMemberNames.slice(0, 3).join("・");
   const suffix = targetMemberNames.length > 3 ? ` ほか${targetMemberNames.length - 3}名` : "";
   return `${formatHistoryDate(createdAt)} 貢献のご縁：${shown || "なかま"}${suffix}へ（${resultCount}件ヒット）`;
+}
+
+/** メンバーのUSPからの検索の履歴タイトル（人脈検索の専門分野での検索と区別できるようにする） */
+function buildMemberUspSearchTitle(usps: string[], freeText: string, createdAt: number, resultCount: number): string {
+  const short = freeText.length > 20 ? `${freeText.slice(0, 20)}…` : freeText;
+  const uspPart = usps.length > 0 ? `［${usps.slice(0, 2).join("・")}${usps.length > 2 ? `ほか${usps.length - 2}件` : ""}］` : "";
+  return `${formatHistoryDate(createdAt)} 人脈検索（メンバーのUSP）${uspPart}：${short}（${resultCount}件ヒット）`;
 }
 
 function buildContactSearchTitle(freeText: string, createdAt: number, resultCount: number): string {
@@ -676,7 +684,25 @@ enishiRoutes.post("/search/members", async (c) => {
   const collab = result.results.length >= 2
     ? await generateCollabIdeas({ db, apiKey: c.env.ANTHROPIC_API_KEY, isDev, freeText, rankedMemberIds: result.results.map((r) => r.memberId) })
     : null;
-  return c.json({ data: { ...result, collab } });
+
+  // 検索履歴に残す（人脈検索の履歴の一覧から、結果と協業イメージを開き直せる）。履歴の保存に失敗しても、検索結果は返す
+  let historyId: string | null = null;
+  try {
+    const cards = await buildMemberCards(db, result.results, freeText);
+    const historyResult: EnishiSearchResult = {
+      groups: [{ hop: "direct", label: "検索結果", results: cards }],
+      truncated: false, aiCallFailed: result.aiCallFailed, memberCollab: collab,
+    };
+    const now = Math.floor(Date.now() / 1000);
+    const saved = await saveSearchHistory(
+      db, meId, "contact-search", buildMemberUspSearchTitle(usps, freeText, now, cards.length),
+      { kind: "member-usp", usps, freeText }, historyResult, now
+    );
+    historyId = saved.historyId;
+  } catch (e) {
+    console.error("[enishi] メンバーのUSPからの検索の履歴保存に失敗", e);
+  }
+  return c.json({ data: { ...result, collab }, historyId });
 });
 
 // ---- GET /api/enishi/history ---- 検索履歴一覧（新しい順・自分の分のみ）

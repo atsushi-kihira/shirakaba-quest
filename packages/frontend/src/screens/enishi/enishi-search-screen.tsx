@@ -1252,6 +1252,7 @@ const uspKey = (name: string): string => name.normalize("NFKC").replace(/\s+/g, 
 type MemberSearchResponse = { data: { results: { memberId: string; why: string; score: number; isSelf: boolean }[]; candidateCount: number; aiCallFailed?: boolean; collab?: CollabIdeas | null } };
 
 function UspFilterPanel() {
+  const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
   const backTo: MemberBackTarget = { path: `${location.pathname}${location.search}`, label: "人脈検索に戻る" };
@@ -1307,7 +1308,12 @@ function UspFilterPanel() {
   // 条件が入力されて検索されたときだけ、AIで探す（同じ条件・同じUSPなら、結果はキャッシュされる）
   const ai = useQuery({
     queryKey: ["enishi", "member-search", [...selectedKeys].sort().join("|"), query],
-    queryFn: () => api.post<MemberSearchResponse>("/enishi/search/members", { freeText: query, usps: selectedLabels }),
+    queryFn: async () => {
+      const res = await api.post<MemberSearchResponse>("/enishi/search/members", { freeText: query, usps: selectedLabels });
+      // 検索の履歴が残るので、検索履歴の一覧を最新にする
+      qc.invalidateQueries({ queryKey: ["enishi", "history"] });
+      return res;
+    },
     enabled: query.trim() !== "",
     staleTime: 10 * 60_000,
     retry: false,
