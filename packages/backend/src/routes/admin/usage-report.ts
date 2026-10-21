@@ -42,6 +42,28 @@ adminUsageReportRoutes.get("/access", async (c) => {
   return c.json({ data: await summarizeAccess(db, unit, date, tz) });
 });
 
+/** メンバーごとの、最も新しい利用の日時（ログイン・アプリを開いた・画面の閲覧・登録や操作のうち最新のもの） */
+async function lastTimesByMember(db: ReturnType<typeof createDb>): Promise<Map<string, number>> {
+  const q = <T extends { memberId: string | null; last: number }>(p: Promise<T[]>) => p;
+  const lists = await Promise.all([
+    q(db.select({ memberId: schema.authSessions.userId, last: sql<number>`max(${schema.authSessions.createdAt})` }).from(schema.authSessions).where(eq(schema.authSessions.userType, "member")).groupBy(schema.authSessions.userId).all()),
+    q(db.select({ memberId: schema.accessLogs.memberId, last: sql<number>`max(${schema.accessLogs.createdAt})` }).from(schema.accessLogs).groupBy(schema.accessLogs.memberId).all()),
+    q(db.select({ memberId: schema.screenViews.memberId, last: sql<number>`max(${schema.screenViews.createdAt})` }).from(schema.screenViews).groupBy(schema.screenViews.memberId).all()),
+    q(db.select({ memberId: schema.externalContacts.ownerMemberId, last: sql<number>`max(${schema.externalContacts.createdAt})` }).from(schema.externalContacts).groupBy(schema.externalContacts.ownerMemberId).all()),
+    q(db.select({ memberId: schema.goldenEggs.memberId, last: sql<number>`max(${schema.goldenEggs.createdAt})` }).from(schema.goldenEggs).groupBy(schema.goldenEggs.memberId).all()),
+    q(db.select({ memberId: schema.goldenGeese.memberId, last: sql<number>`max(${schema.goldenGeese.createdAt})` }).from(schema.goldenGeese).groupBy(schema.goldenGeese.memberId).all()),
+    q(db.select({ memberId: schema.meetings.hostMemberId, last: sql<number>`max(${schema.meetings.createdAt})` }).from(schema.meetings).groupBy(schema.meetings.hostMemberId).all()),
+    q(db.select({ memberId: schema.questAttempts.memberId, last: sql<number>`max(${schema.questAttempts.attemptedAt})` }).from(schema.questAttempts).groupBy(schema.questAttempts.memberId).all()),
+    q(db.select({ memberId: schema.cardOrders.memberId, last: sql<number>`max(${schema.cardOrders.createdAt})` }).from(schema.cardOrders).groupBy(schema.cardOrders.memberId).all()),
+    q(db.select({ memberId: schema.enishiSearchHistory.memberId, last: sql<number>`max(${schema.enishiSearchHistory.createdAt})` }).from(schema.enishiSearchHistory).groupBy(schema.enishiSearchHistory.memberId).all()),
+  ]);
+  const map = new Map<string, number>();
+  for (const list of lists) for (const r of list) {
+    if (r.memberId && r.last != null && r.last > (map.get(r.memberId) ?? 0)) map.set(r.memberId, r.last);
+  }
+  return map;
+}
+
 // ---- GET /api/admin/usage-report ----
 type TimedRow = { memberId: string | null; at: number };
 
@@ -70,22 +92,13 @@ adminUsageReportRoutes.get("/", async (c) => {
     .all();
 
   const [
-    logins, lastLogins, oneOnOneAsRequester, oneOnOneAsResponder,
+    logins,
     contacts, eggs, geese, meetingsHosted, questAttempts, cardOrders, enishiSearches, screenViewRows,
+    accessRows, sessionsAll, bookingRows, lastTimes,
   ] = await Promise.all([
     db.select({ memberId: schema.authSessions.userId, at: schema.authSessions.createdAt })
       .from(schema.authSessions)
       .where(sql`${schema.authSessions.userType} = 'member' AND ${schema.authSessions.createdAt} >= ${fromSec} AND ${schema.authSessions.createdAt} < ${toSec}`).all(),
-    // 最終ログインは、期間に関係なく、これまでで最も新しいログイン
-    db.select({ memberId: schema.authSessions.userId, last: sql<number>`max(${schema.authSessions.createdAt})`.as("last") })
-      .from(schema.authSessions).where(eq(schema.authSessions.userType, "member"))
-      .groupBy(schema.authSessions.userId).all(),
-    db.select({ memberId: schema.oneOnOneSessions.requesterId, at: schema.oneOnOneSessions.requestedAt })
-      .from(schema.oneOnOneSessions)
-      .where(sql`${schema.oneOnOneSessions.requestedAt} >= ${fromSec} AND ${schema.oneOnOneSessions.requestedAt} < ${toSec}`).all(),
-    db.select({ memberId: schema.oneOnOneSessions.responderId, at: schema.oneOnOneSessions.requestedAt })
-      .from(schema.oneOnOneSessions)
-      .where(sql`${schema.oneOnOneSessions.requestedAt} >= ${fromSec} AND ${schema.oneOnOneSessions.requestedAt} < ${toSec}`).all(),
     db.select({ memberId: schema.externalContacts.ownerMemberId, at: schema.externalContacts.createdAt, source: schema.externalContacts.source })
       .from(schema.externalContacts)
       .where(sql`${schema.externalContacts.createdAt} >= ${fromSec} AND ${schema.externalContacts.createdAt} < ${toSec}`).all(),
@@ -111,6 +124,22 @@ adminUsageReportRoutes.get("/", async (c) => {
     db.select({ memberId: schema.screenViews.memberId, at: schema.screenViews.createdAt, screen: schema.screenViews.screen })
       .from(schema.screenViews)
       .where(sql`${schema.screenViews.createdAt} >= ${fromSec} AND ${schema.screenViews.createdAt} < ${toSec}`).all(),
+    // ログイン済みのまま使い続けた日（アプリを開いた記録）
+    db.select({ memberId: schema.accessLogs.memberId, at: schema.accessLogs.createdAt })
+      .from(schema.accessLogs)
+      .where(sql`${schema.accessLogs.createdAt} >= ${fromSec} AND ${schema.accessLogs.createdAt} < ${toSec}`).all(),
+    // 1to1（メンバー同士）。件数の数え方と、「その日に操作があった」ことの確認（申込・回答・完了の日）の両方に使う
+    db.select({
+      requesterId: schema.oneOnOneSessions.requesterId, responderId: schema.oneOnOneSessions.responderId,
+      requestedAt: schema.oneOnOneSessions.requestedAt, respondedAt: schema.oneOnOneSessions.respondedAt,
+      requesterCompletedAt: schema.oneOnOneSessions.requesterCompletedAt, responderCompletedAt: schema.oneOnOneSessions.responderCompletedAt,
+    }).from(schema.oneOnOneSessions).all(),
+    // 1to1（外部ゲストとの予約・公開予約ページ経由の予約）。メンバー同士の1to1の申込に紐づく予約は、そちらで数えるので除く。キャンセルは数えない
+    db.select({
+      hostMemberId: schema.bookings.hostMemberId, guestMemberId: schema.bookings.guestMemberId, createdAt: schema.bookings.createdAt,
+    }).from(schema.bookings).where(sql`${schema.bookings.oneOnOneSessionId} IS NULL AND ${schema.bookings.status} != 'cancelled'`).all(),
+    // 最終ログイン・利用の日時：期間に関係なく、これまでで最も新しいもの（ログイン、アプリを開いた、画面を見た、各種の登録・操作）
+    lastTimesByMember(db),
   ]);
 
   // 指定した期間（タイムゾーンでの日付）に入る行だけを、メンバーごとに数える
@@ -127,11 +156,64 @@ adminUsageReportRoutes.get("/", async (c) => {
     return map;
   }
 
-  const loginMap = countByMember(logins);
-  const lastLoginMap = new Map(lastLogins.filter((r) => r.memberId).map((r) => [r.memberId as string, r.last]));
+  // 指定した期間に入る日時か
+  const inRange = (at: number): boolean => {
+    if (!range) return true;
+    const { ymd } = localParts(at, tz);
+    return ymd >= range.rangeStart && ymd <= range.rangeEnd;
+  };
+  // 外部ゲストとの予約は、作成日時（ISO形式の文字列）を秒に直して数える
+  const bookingEvents = bookingRows.flatMap((b) => {
+    const at = Math.floor(Date.parse(b.createdAt) / 1000);
+    return Number.isFinite(at) ? [{ ...b, at }] : [];
+  });
+
+  // ログイン（回数）＝ログインした日、または、ログイン済みのまま利用した日の数。
+  // ログイン済みだとログイン画面を通らないため、新しいログインの記録だけでは利用が数えられない。そこで、次のどれかがあった日を1日と数える。
+  //  ・新しいログイン、アプリを開いた記録、画面を見た記録
+  //  ・その日に行った操作の記録（1to1の申込・回答・完了、人脈・金の卵・ガチョウの登録、ミーティングの作成、お題への挑戦、カード発注、ご縁さがし、外部ゲストとの予約）
+  //    ※ アプリを開いた・画面を見た記録は、記録の仕組みができた日以降にしかないため、それ以前の分は操作の記録で補っている
+  const loginDays = new Map<string, Set<string>>();
+  const addUseDay = (memberId: string | null | undefined, at: number | null | undefined) => {
+    if (!memberId || at == null || !inRange(at)) return;
+    const set = loginDays.get(memberId) ?? new Set<string>();
+    set.add(localParts(at, tz).ymd);
+    loginDays.set(memberId, set);
+  };
+  for (const list of [logins, accessRows, screenViewRows, contacts, eggs, geese, meetingsHosted, questAttempts, cardOrders, enishiSearches] as TimedRow[][]) {
+    for (const r of list) addUseDay(r.memberId, r.at);
+  }
+  for (const ss of sessionsAll) {
+    addUseDay(ss.requesterId, ss.requestedAt);
+    addUseDay(ss.requesterId, ss.requesterCompletedAt);
+    addUseDay(ss.responderId, ss.respondedAt);
+    addUseDay(ss.responderId, ss.responderCompletedAt);
+  }
+  for (const b of bookingEvents) addUseDay(b.hostMemberId, b.at);
+  const loginMap = new Map([...loginDays].map(([id, days]) => [id, days.size]));
+
+  // 最終ログイン・利用の日時：期間に関係なく、これまでで最も新しいもの
+  const lastLoginMap = new Map(lastTimes);
+  for (const ss of sessionsAll) {
+    for (const [id, at] of [[ss.requesterId, ss.requestedAt], [ss.requesterId, ss.requesterCompletedAt], [ss.responderId, ss.respondedAt], [ss.responderId, ss.responderCompletedAt]] as [string, number | null][]) {
+      if (id && at != null && at > (lastLoginMap.get(id) ?? 0)) lastLoginMap.set(id, at);
+    }
+  }
+  for (const b of bookingEvents) if (b.at > (lastLoginMap.get(b.hostMemberId) ?? 0)) lastLoginMap.set(b.hostMemberId, b.at);
+
+  // 1to1の件数：メンバー同士の申込（申込者・回答者のそれぞれ）＋ 外部ゲストとの予約・公開予約ページ経由の予約（主催者・予約したメンバーのそれぞれ）
   const oneOnOneMap = new Map<string, number>();
-  for (const [id, n] of countByMember(oneOnOneAsRequester)) oneOnOneMap.set(id, (oneOnOneMap.get(id) ?? 0) + n);
-  for (const [id, n] of countByMember(oneOnOneAsResponder)) oneOnOneMap.set(id, (oneOnOneMap.get(id) ?? 0) + n);
+  const addOneOnOne = (id: string | null | undefined) => { if (id) oneOnOneMap.set(id, (oneOnOneMap.get(id) ?? 0) + 1); };
+  for (const ss of sessionsAll) {
+    if (!inRange(ss.requestedAt)) continue;
+    addOneOnOne(ss.requesterId);
+    addOneOnOne(ss.responderId);
+  }
+  for (const b of bookingEvents) {
+    if (!inRange(b.at)) continue;
+    addOneOnOne(b.hostMemberId);
+    if (b.guestMemberId && b.guestMemberId !== b.hostMemberId) addOneOnOne(b.guestMemberId);
+  }
   const contactMap = countByMember(contacts);
   const contactEightMap = countByMember(contacts.filter((r) => r.source === "eight"));
   const eggMap = countByMember(eggs);

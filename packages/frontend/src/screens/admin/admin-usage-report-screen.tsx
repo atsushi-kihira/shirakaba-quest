@@ -40,7 +40,7 @@ const STATUS_LABEL: Record<string, string> = {
 type FeatureKey = "login" | "view" | "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
 
 const FEATURES: { key: FeatureKey; label: string }[] = [
-  { key: "login", label: "ログイン" },
+  { key: "login", label: "ログイン日数" },
   { key: "view", label: "情報参照" },
   { key: "oneonone", label: "1to1" },
   { key: "contact", label: "人脈登録" },
@@ -101,8 +101,8 @@ export function AdminUsageReportScreen() {
   }
 
   const totalMembers = rows.length;
-  // 累計は「一度もログインしていない人」、期間を指定したときは「その期間にログインも画面の閲覧もない人」
-  const neverLoggedIn = rows.filter((r) => r.login === 0 && (unit === "all" || r.view === 0));
+  // 「ログイン日数」には、ログイン済みのままの利用日も含むので、0日の人＝累計では一度も使っていない人、期間指定ではその期間に使っていない人
+  const neverLoggedIn = rows.filter((r) => r.login === 0);
   const totalLogins = rows.reduce((s, r) => s + r.login, 0);
   const mostActive = [...rows].sort((a, b) => b.total - a.total)[0];
   const avgLogins = totalMembers > 0 ? (totalLogins / totalMembers).toFixed(1) : "0";
@@ -136,7 +136,7 @@ export function AdminUsageReportScreen() {
         📊 利用状況レポート
       </h1>
       <p className="text-sm mb-6" style={{ color: "var(--color-ink-500)" }}>
-        メンバーごとのログイン回数・機能別の利用件数を確認できます
+        メンバーごとの利用日数・機能別の利用件数を確認できます
       </p>
 
       {isLoading ? (
@@ -169,12 +169,12 @@ export function AdminUsageReportScreen() {
               <p className="text-2xl font-bold" style={{ color: "var(--color-ink-900)" }}>{totalMembers}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>人</span></p>
             </div>
             <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "総ログイン回数" : "ログイン回数"}</p>
-              <p className="text-2xl font-bold" style={{ color: "var(--color-brand)" }}>{totalLogins}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>回</span></p>
-              <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>平均 {avgLogins} 回/人</p>
+              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "のべ利用日数" : "のべ利用日数（ログイン含む）"}</p>
+              <p className="text-2xl font-bold" style={{ color: "var(--color-brand)" }}>{totalLogins}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>日</span></p>
+              <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>平均 {avgLogins} 日/人</p>
             </div>
             <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "ログイン未経験" : `${periodNoun}アクセスなし`}</p>
+              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "利用実績なし" : `${periodNoun}アクセスなし`}</p>
               <p className="text-2xl font-bold" style={{ color: neverLoggedIn.length > 0 ? "var(--color-brand)" : "var(--color-ink-900)" }}>
                 {neverLoggedIn.length}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>人</span>
               </p>
@@ -234,7 +234,9 @@ export function AdminUsageReportScreen() {
               メンバー別 利用件数内訳（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます。「合計」には、画面を見ただけの「情報参照」は含めていません{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
+              列見出しをタップ・クリックすると並び替えできます。「合計」には、画面を見ただけの「情報参照」は含めていません。
+              「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日（アプリを開いた・画面を見た・何かを登録した日）も1日と数えます。記録の仕組みができる前の分は、1to1や人脈の登録などの操作があった日で補っています。
+              「1to1」は、メンバー同士の1to1に、外部ゲストとの予約・予約ページ経由の1to1（キャンセルを除く）を加えた件数です。{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
             <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
               <table className="w-full" style={{ minWidth: 940 }}>
@@ -250,7 +252,7 @@ export function AdminUsageReportScreen() {
                       style={{ color: sortKey === "status" ? "var(--color-ink-700)" : "var(--color-ink-500)", background: "var(--color-paper-50)" }}>
                       状態
                     </th>
-                    <ThSort label="最終ログイン" sortKeyValue="lastLoginAt" />
+                    <ThSort label="最終ログイン・利用" sortKeyValue="lastLoginAt" />
                     {FEATURES.map((f) => <ThSort key={f.key} label={f.label} sortKeyValue={f.key} />)}
                     <ThSort label="合計" sortKeyValue="total" />
                   </tr>
@@ -271,7 +273,7 @@ export function AdminUsageReportScreen() {
                       </td>
                       <td className="px-2.5 py-2 text-right text-xs whitespace-nowrap" style={{ color: "var(--color-ink-600)" }}>
                         {r.lastLoginAt === null ? (
-                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>未ログイン</span>
+                          <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>利用なし</span>
                         ) : fmtDate(r.lastLoginAt)}
                       </td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.login === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.login}</td>
