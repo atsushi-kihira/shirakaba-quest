@@ -24,7 +24,7 @@ export type CollabIdeas = {
 export const COLLAB_MEMBER_LIMIT = 10;
 const MAX_COMBOS = 6;
 
-type Profile = { id: string; name: string; emoji: string; bgColor: string; category: string; businessDescription: string; skills: { name: string; description: string }[] };
+export type Profile = { id: string; name: string; emoji: string; bgColor: string; category: string; businessDescription: string; skills: { name: string; description: string }[] };
 
 function parseSkills(raw: string | null): Profile["skills"] {
   try {
@@ -41,7 +41,7 @@ function parseSkills(raw: string | null): Profile["skills"] {
   } catch { return []; }
 }
 
-async function loadProfiles(db: Db, memberIds: string[]): Promise<Profile[]> {
+export async function loadProfiles(db: Db, memberIds: string[]): Promise<Profile[]> {
   if (memberIds.length === 0) return [];
   const rows = await db.select().from(schema.members).where(inArray(schema.members.id, memberIds)).all();
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -52,7 +52,7 @@ async function loadProfiles(db: Db, memberIds: string[]): Promise<Profile[]> {
   });
 }
 
-function formatProfiles(profiles: Profile[]): string {
+export function formatProfiles(profiles: Profile[]): string {
   return profiles.map((p) => {
     const parts = [`id: ${p.id}`, `名前: ${p.name}`];
     if (p.category) parts.push(`職種: ${p.category}`);
@@ -90,7 +90,7 @@ ${freeText}
 ${formatProfiles(profiles)}`;
 }
 
-async function callClaude(apiKey: string, prompt: string): Promise<string> {
+export async function callClaude(apiKey: string, prompt: string): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },

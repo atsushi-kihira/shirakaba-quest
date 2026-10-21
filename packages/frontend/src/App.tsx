@@ -41,6 +41,8 @@ import { AdminSeasonsScreen } from "@/screens/admin/admin-seasons-screen";
 import { AdminEventTypesScreen } from "@/screens/admin/admin-event-types-screen";
 import { EventsScreen } from "@/screens/events/events-screen";
 import { CollabScreen } from "@/screens/collab/collab-screen";
+import { TeamDraftsScreen } from "@/screens/collab/team-drafts-screen";
+import { TeamDraftDetailScreen } from "@/screens/collab/team-draft-detail-screen";
 import { EnishiRegisterScreen } from "@/screens/enishi/enishi-register-screen";
 import { EnishiSearchScreen } from "@/screens/enishi/enishi-search-screen";
 import { EnishiHistoryScreen } from "@/screens/enishi/enishi-history-screen";
@@ -128,6 +130,8 @@ export default function App() {
                   <Route path="members/:id" element={<MemberDetailScreen />} />
                   <Route path="quests" element={<QuestsScreen />} />
                   <Route path="collab" element={<CollabScreen />} />
+                  <Route path="collab/drafts" element={<TeamDraftsScreen />} />
+                  <Route path="collab/drafts/:id" element={<TeamDraftDetailScreen />} />
                   <Route path="enishi" element={<EnishiSearchScreen />} />
                   <Route path="enishi/register" element={<EnishiRegisterScreen />} />
                   <Route path="enishi/history" element={<EnishiHistoryScreen />} />

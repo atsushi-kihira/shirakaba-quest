@@ -393,6 +393,30 @@ export const screenViews = sqliteTable("screen_views", {
   createdAt: integer("created_at").notNull(),
 });
 
+// 協働チームの「検討中のチーム案」（作った本人だけに見えるローカルな案）
+export const teamDrafts = sqliteTable("team_drafts", {
+  id:               text("id").primaryKey(),
+  ownerMemberId:    text("owner_member_id").notNull(),
+  title:            text("title").notNull(),
+  goal:             text("goal").notNull().default(""),
+  ideasJson:        text("ideas_json"),
+  ideasGeneratedAt: integer("ideas_generated_at"),
+  createdAt:        integer("created_at").notNull(),
+  updatedAt:        integer("updated_at").notNull(),
+});
+
+export const teamDraftMembers = sqliteTable(
+  "team_draft_members",
+  {
+    id:        text("id").primaryKey(),
+    draftId:   text("draft_id").notNull(),
+    kind:      text("kind").notNull(), // 'member' | 'contact'
+    refId:     text("ref_id").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_team_draft_member").on(t.draftId, t.kind, t.refId)]
+);
+
 export const authSessions = sqliteTable("auth_sessions", {
   id:        text("id").primaryKey(),
   userId:    text("user_id").notNull(),

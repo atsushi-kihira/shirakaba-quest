@@ -23,6 +23,7 @@ import { enishiRoutes } from "./routes/enishi.ts";
 import { registerRoutes } from "./routes/register.ts";
 import { emailChangeRoutes } from "./routes/email-change.ts";
 import { accessRoutes } from "./routes/access.ts";
+import { collabTeamDraftRoutes } from "./routes/collab-team-drafts.ts";
 import { adminRoutes } from "./routes/admin/index.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { meetingSeriesRoutes } from "./routes/meeting-series.ts";
@@ -80,6 +81,7 @@ app.route("/api", badgeRoutes);
 app.route("/api/season", seasonRoutes);
 app.route("/api/events", eventRoutes);
 app.route("/api/teams", teamRoutes);
+app.route("/api/collab/team-drafts", collabTeamDraftRoutes); // 検討中のチーム案（本人だけに見える）。/api/collab より先に登録する
 app.route("/api/collab", collabRoutes);
 app.route("/api/share-stories", shareStoryRoutes);
 app.route("/api/enishi", enishiRoutes);

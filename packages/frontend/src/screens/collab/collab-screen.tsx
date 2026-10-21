@@ -5,6 +5,7 @@
 // 「自分だけに見える私的レイヤー」（自分から見た可能性/リファーラルのチェック、
 // 自分との関係の強さによるレイアウト）の2層構造になっている。
 // =============================================================
+import { useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Handshake, Plus, Home as HomeIcon, RefreshCw, X } from "lucide-react";
@@ -108,6 +109,7 @@ export function CollabScreen() {
 }
 
 function CollabMap() {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const { data, isLoading } = useCollabGraph();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -216,7 +218,15 @@ function CollabMap() {
               <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
                 🦄 協働チーム
               </h2>
-              <div className="flex gap-1.5">
+              <div className="flex gap-1.5 flex-wrap justify-end">
+                <button
+                  onClick={() => navigate("/collab/drafts")}
+                  className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-medium"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)", border: "1px dashed var(--color-ink-400)" }}
+                  title="一緒に組めそうなメンバー・外部人脈の方を選んで、協働事業と役割を検討します（あなただけに見えます）"
+                >
+                  🔍 チームを検討してみる
+                </button>
                 <button
                   onClick={() => setCreateTeamMode("loose")}
                   className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-medium text-white"
