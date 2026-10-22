@@ -2,7 +2,8 @@
 // 管理者向け 利用状況レポート
 // GET /api/admin/usage-report?unit=day|week|month|all&date=YYYY-MM-DD&tz=Asia/Tokyo — メンバーごとの利用件数（ログイン・機能別の内訳）。
 //   unit を省略すると累計。日・週・月を指定すると、その期間（date を含む期間）の件数
-// GET /api/admin/usage-report/access?unit=day|week|month&date=YYYY-MM-DD&tz=Asia/Tokyo — アクセス数（棒グラフ用）
+// GET /api/admin/usage-report/access?unit=day|week|month|all&date=YYYY-MM-DD&tz=Asia/Tokyo[&memberId=] — アクセス数（棒グラフ用。all は月ごと）
+// GET /api/admin/usage-report/members/:id?unit=...&date=...&tz=... — メンバー1人の内訳と、よくやりとりしている相手
 //
 // 集計対象は必ず「一般ユーザー（メンバー）向け機能」に限定すること。管理ダッシュボード側の操作
 // （メンバー承認、カード発注ステータス変更、ポイント調整など admin/ 配下のルートが行う操作）は
@@ -13,8 +14,8 @@
 // 新しい集計項目を追加する際も、この前提（admin/ルートが書き込み元にならないこと）を必ず確認すること。
 // =============================================================
 import { Hono } from "hono";
-import { eq, ne, sql } from "drizzle-orm";
-import { createDb, schema } from "../../db/index.ts";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { createDb, schema, type Db } from "../../db/index.ts";
 import { VIEW_SCREENS, isValidTimeZone, localParts, periodRange, summarizeAccess, type AccessUnit } from "../../services/access-log.ts";
 import type { Env, Variables } from "../../types.ts";
 
@@ -29,17 +30,12 @@ function toCountMap(rows: { memberId: string | null; cnt: number }[]): Map<strin
 }
 
 // ---- GET /api/admin/usage-report/access ----
-// unit: day（1時間ごと）／ week（曜日ごと・月曜始まり）／ month（その月の日ごと）。date は表示したい期間に含まれる日。
+// unit: day（1時間ごと）／ week（曜日ごと・月曜始まり）／ month（その月の日ごと）／ all（月ごと・これまでの累計）。
+// date は表示したい期間に含まれる日（all では不要）。memberId を付けると、そのメンバーだけのアクセス数。
 adminUsageReportRoutes.get("/access", async (c) => {
-  const db = createDb(c.env.DB);
-  const unitParam = c.req.query("unit");
-  const unit: AccessUnit = unitParam === "week" || unitParam === "month" ? unitParam : "day";
-  const date = c.req.query("date") ?? "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return c.json({ error: { code: "invalid_input", message: "日付の形式が正しくありません" } }, 400);
-  }
-  const tz = c.req.query("tz") ?? "Asia/Tokyo";
-  return c.json({ data: await summarizeAccess(db, unit, date, tz) });
+  const period = parsePeriodQuery(c);
+  if (!period) return c.json(INVALID_DATE, 400);
+  return c.json({ data: await summarizeAccess(createDb(c.env.DB), period.unit, period.date, period.tz, c.req.query("memberId") || undefined) });
 });
 
 /** メンバーごとの、最も新しい利用の日時（ログイン・アプリを開いた・画面の閲覧・登録や操作のうち最新のもの） */
@@ -67,18 +63,8 @@ async function lastTimesByMember(db: ReturnType<typeof createDb>): Promise<Map<s
 // ---- GET /api/admin/usage-report ----
 type TimedRow = { memberId: string | null; at: number };
 
-adminUsageReportRoutes.get("/", async (c) => {
-  const db = createDb(c.env.DB);
-
-  const unitParam = c.req.query("unit");
-  const unit: AccessUnit | "all" = unitParam === "day" || unitParam === "week" || unitParam === "month" ? unitParam : "all";
-  const date = c.req.query("date") ?? "";
-  if (unit !== "all" && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return c.json({ error: { code: "invalid_input", message: "日付の形式が正しくありません" } }, 400);
-  }
-  const tzParam = c.req.query("tz") ?? "Asia/Tokyo";
-  const tz = isValidTimeZone(tzParam) ? tzParam : "Asia/Tokyo";
-
+/** 全メンバーの利用件数の集計（期間は unit・date・tz で指定。累計は unit="all"） */
+async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, tz: string) {
   // 期間の指定があるときは、タイムゾーンのずれを見込んで前後1日ずつ広めに取り、日付で絞り込む
   const range = unit === "all" ? null : periodRange(unit, date);
   const DAY_SEC = 24 * 60 * 60;
@@ -259,7 +245,7 @@ adminUsageReportRoutes.get("/", async (c) => {
     };
   });
 
-  return c.json({
+  return {
     data,
     unit,
     rangeStart: range?.rangeStart ?? null,
@@ -268,5 +254,147 @@ adminUsageReportRoutes.get("/", async (c) => {
       .map(([screen, count]) => ({ screen, label: VIEW_SCREENS[screen] ?? screen, count }))
       .sort((a, b) => b.count - a.count),
     generatedAt: Math.floor(Date.now() / 1000),
-  });
+  };
+}
+
+/** クエリの期間指定（unit・date・tz）を読み取る。日付の形式が正しくなければ null */
+function parsePeriodQuery(c: { req: { query: (k: string) => string | undefined } }): { unit: AccessUnit | "all"; date: string; tz: string } | null {
+  const unitParam = c.req.query("unit");
+  const unit: AccessUnit | "all" = unitParam === "day" || unitParam === "week" || unitParam === "month" ? unitParam : "all";
+  const date = c.req.query("date") ?? "";
+  if (unit !== "all" && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const tzParam = c.req.query("tz") ?? "Asia/Tokyo";
+  return { unit, date, tz: isValidTimeZone(tzParam) ? tzParam : "Asia/Tokyo" };
+}
+
+const INVALID_DATE = { error: { code: "invalid_input", message: "日付の形式が正しくありません" } } as const;
+
+adminUsageReportRoutes.get("/", async (c) => {
+  const period = parsePeriodQuery(c);
+  if (!period) return c.json(INVALID_DATE, 400);
+  return c.json(await buildUsageReport(createDb(c.env.DB), period.unit, period.date, period.tz));
+});
+
+
+// ---- GET /api/admin/usage-report/members/:id ----
+// メンバー1人の利用状況の詳細。期間は一覧と同じ指定（unit・date・tz）。
+//   row: 一覧の1行と同じ内訳、partners: よくやりとりしている相手（1to1・ミーティング）、externalOneOnOne: 外部ゲストとの1to1の件数。
+// アクセス数の棒グラフは GET /access?memberId=... で取得する。
+
+/** ミーティングの参加者が多すぎる回（全員向けの定例会など）は、「よく一緒になる相手」の判定から外す */
+const PARTNER_MEETING_MAX_PARTICIPANTS = 15;
+const PARTNER_LIMIT = 10;
+const IN_CHUNK = 80;
+
+async function selectInChunks<T>(ids: string[], run: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) out.push(...(await run(ids.slice(i, i + IN_CHUNK))));
+  return out;
+}
+
+type Partner = {
+  id: string; name: string; emoji: string; bgColor: string; avatarImageKey: string | null; status: string;
+  oneonone: number; meeting: number; total: number;
+};
+
+async function buildPartners(
+  db: Db, memberId: string, range: { rangeStart: string; rangeEnd: string } | null, tz: string,
+): Promise<{ partners: Partner[]; externalOneOnOne: number }> {
+  const inRange = (at: number): boolean => {
+    if (!range) return true;
+    const { ymd } = localParts(at, tz);
+    return ymd >= range.rangeStart && ymd <= range.rangeEnd;
+  };
+  const oneonone = new Map<string, number>();
+  const meeting = new Map<string, number>();
+  const bump = (map: Map<string, number>, id: string | null | undefined) => {
+    if (id && id !== memberId) map.set(id, (map.get(id) ?? 0) + 1);
+  };
+
+  // 1to1（メンバー同士）
+  const sessions = await db.select({ requesterId: schema.oneOnOneSessions.requesterId, responderId: schema.oneOnOneSessions.responderId, at: schema.oneOnOneSessions.requestedAt })
+    .from(schema.oneOnOneSessions)
+    .where(or(eq(schema.oneOnOneSessions.requesterId, memberId), eq(schema.oneOnOneSessions.responderId, memberId))).all();
+  for (const ss of sessions) {
+    if (!inRange(ss.at)) continue;
+    bump(oneonone, ss.requesterId === memberId ? ss.responderId : ss.requesterId);
+  }
+
+  // 1to1（予約ページ経由）。相手がメンバーならその相手、外部ゲストなら件数だけ
+  let externalOneOnOne = 0;
+  const bookings = await db.select({ hostMemberId: schema.bookings.hostMemberId, guestMemberId: schema.bookings.guestMemberId, createdAt: schema.bookings.createdAt })
+    .from(schema.bookings)
+    .where(and(
+      sql`${schema.bookings.oneOnOneSessionId} IS NULL AND ${schema.bookings.status} != 'cancelled'`,
+      or(eq(schema.bookings.hostMemberId, memberId), eq(schema.bookings.guestMemberId, memberId)),
+    )).all();
+  for (const b of bookings) {
+    const at = Math.floor(Date.parse(b.createdAt) / 1000);
+    if (!Number.isFinite(at) || !inRange(at)) continue;
+    if (b.hostMemberId === memberId) {
+      if (b.guestMemberId) bump(oneonone, b.guestMemberId); else externalOneOnOne++;
+    } else {
+      bump(oneonone, b.hostMemberId);
+    }
+  }
+
+  // ミーティング：主催・招待・出欠の回答・参加記録のいずれかで関わった回の、他の参加者
+  const [hosted, invited, attended, answered] = await Promise.all([
+    db.select({ id: schema.meetings.id }).from(schema.meetings).where(eq(schema.meetings.hostMemberId, memberId)).all(),
+    db.select({ id: schema.meetingInvitees.meetingId }).from(schema.meetingInvitees).where(eq(schema.meetingInvitees.memberId, memberId)).all(),
+    db.select({ id: schema.meetingAttendances.meetingId }).from(schema.meetingAttendances)
+      .where(and(eq(schema.meetingAttendances.memberId, memberId), eq(schema.meetingAttendances.status, "attended"))).all(),
+    db.select({ id: schema.meetingResponses.meetingId }).from(schema.meetingResponses)
+      .where(and(eq(schema.meetingResponses.memberId, memberId), ne(schema.meetingResponses.availability, "no"))).all(),
+  ]);
+  const meetingIds = [...new Set([...hosted, ...invited, ...attended, ...answered].map((r) => r.id))];
+  if (meetingIds.length > 0) {
+    const meetingRows = await selectInChunks(meetingIds, (chunk) =>
+      db.select({ id: schema.meetings.id, hostMemberId: schema.meetings.hostMemberId, createdAt: schema.meetings.createdAt })
+        .from(schema.meetings).where(and(inArray(schema.meetings.id, chunk), ne(schema.meetings.status, "cancelled"))).all());
+    const targets = meetingRows.filter((m) => inRange(m.createdAt));
+    const targetIds = targets.map((m) => m.id);
+    const [inviteeRows, attendRows, responseRows] = await Promise.all([
+      selectInChunks(targetIds, (chunk) => db.select({ meetingId: schema.meetingInvitees.meetingId, memberId: schema.meetingInvitees.memberId })
+        .from(schema.meetingInvitees).where(inArray(schema.meetingInvitees.meetingId, chunk)).all()),
+      selectInChunks(targetIds, (chunk) => db.select({ meetingId: schema.meetingAttendances.meetingId, memberId: schema.meetingAttendances.memberId })
+        .from(schema.meetingAttendances)
+        .where(and(inArray(schema.meetingAttendances.meetingId, chunk), eq(schema.meetingAttendances.status, "attended"))).all()),
+      selectInChunks(targetIds, (chunk) => db.select({ meetingId: schema.meetingResponses.meetingId, memberId: schema.meetingResponses.memberId })
+        .from(schema.meetingResponses)
+        .where(and(inArray(schema.meetingResponses.meetingId, chunk), ne(schema.meetingResponses.availability, "no"))).all()),
+    ]);
+    const participants = new Map<string, Set<string>>(targets.map((m) => [m.id, new Set([m.hostMemberId])]));
+    for (const r of [...inviteeRows, ...attendRows, ...responseRows]) {
+      if (r.memberId) participants.get(r.meetingId)?.add(r.memberId);
+    }
+    for (const set of participants.values()) {
+      if (!set.has(memberId) || set.size < 2 || set.size > PARTNER_MEETING_MAX_PARTICIPANTS) continue;
+      for (const id of set) bump(meeting, id);
+    }
+  }
+
+  const ids = [...new Set([...oneonone.keys(), ...meeting.keys()])];
+  const infos = await selectInChunks(ids, (chunk) =>
+    db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor, avatarImageKey: schema.members.avatarImageKey, status: schema.members.status })
+      .from(schema.members).where(and(inArray(schema.members.id, chunk), ne(schema.members.status, "deleted"))).all());
+  const partners: Partner[] = infos.map((m) => {
+    const o = oneonone.get(m.id) ?? 0;
+    const mt = meeting.get(m.id) ?? 0;
+    return { ...m, oneonone: o, meeting: mt, total: o + mt };
+  }).sort((a, b) => b.total - a.total || b.oneonone - a.oneonone).slice(0, PARTNER_LIMIT);
+  return { partners, externalOneOnOne };
+}
+
+adminUsageReportRoutes.get("/members/:id", async (c) => {
+  const period = parsePeriodQuery(c);
+  if (!period) return c.json(INVALID_DATE, 400);
+  const db = createDb(c.env.DB);
+  const memberId = c.req.param("id");
+  const report = await buildUsageReport(db, period.unit, period.date, period.tz);
+  const row = report.data.find((r) => r.id === memberId);
+  if (!row) return c.json({ error: { code: "not_found", message: "メンバーが見つかりませんでした" } }, 404);
+  const range = report.rangeStart && report.rangeEnd ? { rangeStart: report.rangeStart, rangeEnd: report.rangeEnd } : null;
+  const { partners, externalOneOnOne } = await buildPartners(db, memberId, range, period.tz);
+  return c.json({ data: { row, partners, externalOneOnOne, unit: report.unit, rangeStart: report.rangeStart, rangeEnd: report.rangeEnd } });
 });

@@ -1,7 +1,7 @@
 // =============================================================
 // 協働マップ — 検討中のチーム案の詳細
 //   ・構成メンバー（自分＋メンバー＋自分の外部人脈、合計10名まで）の追加・削除
-//   ・協働事業と、それぞれの役割のまとめ（AIで作成・まとめ直し）
+//   ・協働事業と、それぞれの役割のまとめ（AIで作成・まとめ直し。まとめ直すときは、追加の観点を与えられる）
 //   ・十分に検討できたら、緩いチーム／パワーチームとして正式に結成
 // チーム案は、作った本人だけに見える（他のユーザーには見えない）
 // =============================================================
@@ -14,9 +14,23 @@ import { DialogCloseButton } from "@/components/dialog-close-button";
 import { MemberPickerPanel } from "./_team-draft-picker";
 
 type DraftMember = { kind: "member" | "contact"; id: string; name: string; emoji: string; bgColor: string; headline: string; isMe: boolean };
+type RegeneratePerspective = "broaden" | "suggest_members" | "new_member_roles" | "reassign_roles";
+type SuggestedMember = { key: string; name: string; kind: "member" | "contact"; reason: string };
 type DraftIdeas = {
   teamTitle?: string; businessTitle: string; targetCustomers?: string; summary: string; roles: { key: string; role: string }[]; firstSteps: string[];
+  /** まとめたときのメンバー構成（"m:…"/"c:…"） */
+  participantKeys: string[];
+  alternativeIdeas?: { title: string; summary: string }[];
+  suggestedMembers?: SuggestedMember[];
+  appliedPerspectives?: RegeneratePerspective[]; appliedNote?: string;
   generatedAt: number; isMock?: boolean;
+};
+
+const PERSPECTIVE_LABEL: Record<RegeneratePerspective, string> = {
+  broaden: "協働ビジネスの幅を広げる",
+  suggest_members: "追加するメンバーの提案",
+  new_member_roles: "追加したメンバーの役割",
+  reassign_roles: "役割の割り振り直し",
 };
 type DraftDetail = {
   id: string; title: string; goal: string; members: DraftMember[]; ideas: DraftIdeas | null; ideasStale: boolean; maxMembers: number; updatedAt: number;
@@ -36,6 +50,7 @@ export function TeamDraftDetailScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [showTitleEdit, setShowTitleEdit] = useState(false);
   const [showPromote, setShowPromote] = useState(false);
+  const [showRegenerate, setShowRegenerate] = useState(false);
   const [goalText, setGoalText] = useState("");
 
   const { data, isLoading, error: loadError } = useQuery({
@@ -57,7 +72,8 @@ export function TeamDraftDetailScreen() {
     onError: (e) => setError(errText(e, "保存できませんでした。もう一度お試しください。")),
   });
   const generate = useMutation({
-    mutationFn: () => api.post<{ data: DraftDetail }>(`/collab/team-drafts/${id}/generate`, {}),
+    mutationFn: (body: { perspectives?: RegeneratePerspective[]; note?: string }) =>
+      api.post<{ data: DraftDetail }>(`/collab/team-drafts/${id}/generate`, body),
     onSuccess: (res) => { setError(null); setDetail(res); },
     onError: (e) => setError(errText(e, "協働事業をまとめられませんでした。少し時間をおいて、もう一度お試しください。")),
   });
@@ -83,6 +99,15 @@ export function TeamDraftDetailScreen() {
   const byKey = new Map(draft.members.map((m) => [keyOf(m), m]));
   const goalChanged = goalText.trim() !== draft.goal;
   const canGenerate = draft.members.length >= 2;
+  // まとめたあとに追加されたメンバー（「追加したメンバーの役割」の観点で使う）
+  const summarizedKeys = new Set(draft.ideas?.participantKeys ?? []);
+  const newMembers = draft.ideas ? draft.members.filter((m) => !m.isMe && !summarizedKeys.has(keyOf(m))) : [];
+  // 追加をおすすめするメンバー（すでにチームにいる人は出さない）
+  const suggestions = (draft.ideas?.suggestedMembers ?? []).filter((m) => !byKey.has(m.key));
+  function addSuggested(m: SuggestedMember) {
+    const targetId = m.key.slice(2);
+    update.mutate(m.kind === "member" ? { memberIds: [...memberIds, targetId] } : { contactIds: [...contactIds, targetId] });
+  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
@@ -156,7 +181,7 @@ export function TeamDraftDetailScreen() {
       <section className="card-paper rounded-2xl p-4" style={{ border: "1.5px solid rgba(90,140,92,0.35)" }}>
         <div className="flex items-center justify-between gap-2 mb-2">
           <h2 className="text-sm font-bold" style={{ color: "var(--color-ink-800)" }}>🤝 協働事業と、それぞれの役割</h2>
-          <button onClick={() => generate.mutate()} disabled={!canGenerate || generate.isPending}
+          <button onClick={() => (draft.ideas ? setShowRegenerate(true) : generate.mutate({}))} disabled={!canGenerate || generate.isPending}
             className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-full font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
             {generate.isPending ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
             {draft.ideas ? "まとめ直す" : "まとめる"}
@@ -166,7 +191,7 @@ export function TeamDraftDetailScreen() {
         {generate.isPending && <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>AIがメンバーの情報を読んで、協働事業を考えています…（少し時間がかかります）</p>}
         {draft.ideas && draft.ideasStale && (
           <p className="text-xs mb-2 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
-            ⚠️ メンバーや「考えたいこと」が、まとめたときから変わっています。「まとめ直す」を押すと、いまの内容で作り直します。
+            ⚠️ メンバーや「考えたいこと」が、まとめたときから変わっています。「まとめ直す」を押すと、いまの内容で作り直します（追加の観点も指定できます）。
           </p>
         )}
         {draft.ideas && (
@@ -182,6 +207,12 @@ export function TeamDraftDetailScreen() {
                 </p>
               )}
             </div>
+            {(draft.ideas.appliedPerspectives?.length || draft.ideas.appliedNote) && (
+              <p className="text-[11px] mb-3 -mt-1" style={{ color: "var(--color-ink-500)" }}>
+                🔎 このまとめの追加の観点：
+                {[...(draft.ideas.appliedPerspectives ?? []).map((p) => PERSPECTIVE_LABEL[p]), ...(draft.ideas.appliedNote ? [`「${draft.ideas.appliedNote}」`] : [])].join("、")}
+              </p>
+            )}
             <p className="text-[10px] font-bold mb-1" style={{ color: "var(--color-accent)" }}>それぞれの役割</p>
             <ul className="space-y-1.5 mb-3">
               {draft.ideas.roles.map((r) => {
@@ -205,6 +236,42 @@ export function TeamDraftDetailScreen() {
                 </ol>
               </>
             )}
+            {draft.ideas.alternativeIdeas && draft.ideas.alternativeIdeas.length > 0 && (
+              <div className="mt-4">
+                <p className="text-[10px] font-bold mb-1" style={{ color: "var(--color-success)" }}>💡 ほかの切り口の協働事業アイデア</p>
+                <ul className="space-y-1.5">
+                  {draft.ideas.alternativeIdeas.map((a, i) => (
+                    <li key={i} className="text-xs rounded-xl px-3 py-2" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
+                      <p className="font-semibold" style={{ color: "var(--color-ink-800)" }}>{a.title}</p>
+                      <p className="leading-relaxed">{a.summary}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {suggestions.length > 0 && (
+              <div className="mt-4">
+                <p className="text-[10px] font-bold mb-1" style={{ color: "var(--color-accent)" }}>👥 追加をおすすめするメンバー</p>
+                <ul className="space-y-1.5">
+                  {suggestions.map((m) => (
+                    <li key={m.key} className="flex items-start gap-2 text-xs rounded-xl px-3 py-2" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold" style={{ color: "var(--color-ink-800)" }}>
+                          {m.name}
+                          {m.kind === "contact" && <span className="text-[10px] font-bold ml-1.5 px-1.5 py-0.5 rounded-md" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>外部人脈</span>}
+                        </p>
+                        {m.reason && <p className="leading-relaxed">{m.reason}</p>}
+                      </div>
+                      <button onClick={() => addSuggested(m)} disabled={update.isPending || draft.members.length >= draft.maxMembers}
+                        className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full font-medium text-white disabled:opacity-50" style={{ background: "var(--color-success)" }}>
+                        <Plus size={11} /> 追加する
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[10px] mt-1.5" style={{ color: "var(--color-ink-500)" }}>追加したあとは「まとめ直す」で、追加したメンバーの役割を考えてもらえます。</p>
+              </div>
+            )}
             <p className="text-[10px] mt-3" style={{ color: "var(--color-ink-400)" }}>実現を約束するものではなく、話し合いのたたき台です。メンバーを変えたあとは「まとめ直す」で作り直せます。</p>
           </div>
         )}
@@ -224,6 +291,11 @@ export function TeamDraftDetailScreen() {
         {memberIds.length < 1 && <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>自分のほかに、メンバーを1名以上選ぶと結成できます。</p>}
       </section>
 
+      {showRegenerate && <RegenerateModal
+        newMemberNames={newMembers.map((m) => m.name)} full={draft.members.length >= draft.maxMembers} maxMembers={draft.maxMembers}
+        pending={generate.isPending} error={error}
+        onClose={() => { setError(null); setShowRegenerate(false); }}
+        onRun={(perspectives, note) => { setError(null); generate.mutate({ perspectives, note }, { onSuccess: () => setShowRegenerate(false) }); }} />}
       {showTitleEdit && <TitleEditModal current={draft.title} saving={update.isPending}
         onClose={() => setShowTitleEdit(false)} onSave={(t) => update.mutate({ title: t }, { onSuccess: () => setShowTitleEdit(false) })} />}
       {showPicker && <PickerModal maxOthers={draft.maxMembers - 1} memberIds={memberIds} contactIds={contactIds} saving={update.isPending}
@@ -231,6 +303,75 @@ export function TeamDraftDetailScreen() {
       {showPromote && <PromoteModal draftId={draft.id} defaultName={draft.title} memberCount={memberIds.length} contactCount={contactIds.length}
         onClose={() => setShowPromote(false)}
         onDone={() => { qc.invalidateQueries({ queryKey: ["collab"] }); navigate("/collab"); }} />}
+    </div>
+  );
+}
+
+const PERSPECTIVE_OPTIONS: { key: RegeneratePerspective; emoji: string; label: string; hint: string }[] = [
+  { key: "broaden", emoji: "🌈", label: "協働ビジネスの幅を広げる", hint: "対象のお客様や提供の形など、別の可能性も取り入れて内容を広げます。ほかの切り口のアイデアも出します。" },
+  { key: "suggest_members", emoji: "👥", label: "追加するメンバーを提案してもらう", hint: "メンバーや外部人脈の中から、加えるとよさそうな人を提案します。気に入れば、そのまま追加できます。" },
+  { key: "new_member_roles", emoji: "➕", label: "自分で追加したメンバーの役割を考えてもらう", hint: "まとめたあとに追加した人の役割を、ほかのメンバーとのつながりも踏まえて考えます。" },
+  { key: "reassign_roles", emoji: "🔄", label: "元のメンバーの役割を割り振り直す", hint: "前回の役割にとらわれず、全員の強みがより活きるように役割を組み直します。" },
+];
+
+/** 「まとめ直す」を押したときに、AIへの追加の観点を選ぶダイアログ */
+function RegenerateModal({ newMemberNames, full, maxMembers, pending, error, onClose, onRun }: {
+  newMemberNames: string[]; full: boolean; maxMembers: number; pending: boolean; error: string | null;
+  onClose: () => void; onRun: (perspectives: RegeneratePerspective[], note: string) => void;
+}) {
+  const [selected, setSelected] = useState<Set<RegeneratePerspective>>(() => new Set(newMemberNames.length > 0 ? ["new_member_roles"] : []));
+  const [note, setNote] = useState("");
+  const disabledReason = (k: RegeneratePerspective): string | null => {
+    if (k === "suggest_members" && full) return `メンバーが上限（${maxMembers}名）のため、提案できません`;
+    if (k === "new_member_roles" && newMemberNames.length === 0) return "前回のまとめのあとに追加したメンバーはいません";
+    return null;
+  };
+  function toggle(k: RegeneratePerspective) {
+    setSelected((prev) => { const next = new Set(prev); if (next.has(k)) next.delete(k); else next.add(k); return next; });
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.4)" }} onClick={() => { if (!pending) onClose(); }}>
+      <div className="card-paper p-5 w-full max-w-md rounded-3xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>✨ まとめ直す</h2>
+          <DialogCloseButton onClick={onClose} disabled={pending} />
+        </div>
+        <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+          AIに伝える「追加の観点」を選べます（いくつでも選べます）。何も選ばなければ、いまの内容でそのまま作り直します。
+        </p>
+        <div className="space-y-2 mb-3">
+          {PERSPECTIVE_OPTIONS.map((o) => {
+            const off = disabledReason(o.key);
+            const on = selected.has(o.key) && !off;
+            return (
+              <label key={o.key} className={`flex items-start gap-2.5 px-3 py-2.5 rounded-2xl border cursor-pointer ${off ? "opacity-50 cursor-not-allowed" : ""}`}
+                style={{ borderColor: on ? "var(--color-brand)" : "var(--color-paper-300)", background: on ? "rgba(181,56,75,0.06)" : "var(--color-paper-50)" }}>
+                <input type="checkbox" checked={on} disabled={!!off || pending} onChange={() => toggle(o.key)} className="mt-1 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{o.emoji} {o.label}</span>
+                  <span className="block text-xs leading-relaxed" style={{ color: "var(--color-ink-500)" }}>{off ?? o.hint}</span>
+                  {o.key === "new_member_roles" && !off && (
+                    <span className="block text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>追加したメンバー：{newMemberNames.join("、")}</span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>💬 さらに伝えたい観点（任意）</label>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={500} disabled={pending}
+          placeholder="例：個人のお客様向けではなく、企業向けのサービスとして考えたい／最初は小さく始められる形にしたい"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+        {error && <p className="text-xs mb-3 px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>{error}</p>}
+        {pending && <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>AIが、選んだ観点も取り入れて考えています…（少し時間がかかります）</p>}
+        <div className="flex gap-2">
+          <button onClick={onClose} disabled={pending} data-dialog-cancel className="flex-1 py-2.5 rounded-2xl text-sm font-medium disabled:opacity-50" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>キャンセル</button>
+          <button onClick={() => onRun(PERSPECTIVE_OPTIONS.map((o) => o.key).filter((k) => selected.has(k) && !disabledReason(k)), note.trim())} disabled={pending}
+            className="flex-1 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50 flex items-center justify-center gap-1.5" style={{ background: "var(--color-brand)" }}>
+            {pending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}まとめ直す
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -60,10 +60,11 @@ export async function recordScreenView(db: Db, memberId: string, screen: string)
 export type AccessUnit = "day" | "week" | "month";
 export type AccessBucket = { key: string; label: string; count: number; members: number };
 export type AccessSummary = {
-  unit: AccessUnit;
-  /** 表示している期間の最初の日・最後の日（YYYY-MM-DD、指定のタイムゾーンでの日付） */
-  rangeStart: string;
-  rangeEnd: string;
+  /** all = これまでの累計（月ごとの棒） */
+  unit: AccessUnit | "all";
+  /** 表示している期間の最初の日・最後の日（YYYY-MM-DD、指定のタイムゾーンでの日付）。累計では null */
+  rangeStart: string | null;
+  rangeEnd: string | null;
   buckets: AccessBucket[];
   total: number;
   uniqueMembers: number;
@@ -112,51 +113,81 @@ export function periodRange(unit: AccessUnit, dateYmd: string): { startMs: numbe
   return { startMs, endMs, rangeStart: utcMsToYmd(startMs), rangeEnd: utcMsToYmd(endMs) };
 }
 
-/** 指定した日を含む期間（日・週・月）のアクセス数を、指定のタイムゾーンで集計する */
-export async function summarizeAccess(db: Db, unit: AccessUnit, dateYmd: string, tzInput: string): Promise<AccessSummary> {
+/**
+ * 指定した日を含む期間（日・週・月）、または累計（月ごと）のアクセス数を、指定のタイムゾーンで集計する。
+ * memberId を指定すると、そのメンバーのアクセスだけを数える。
+ */
+export async function summarizeAccess(db: Db, unit: AccessUnit | "all", dateYmd: string, tzInput: string, memberId?: string): Promise<AccessSummary> {
   const tz = isValidTimeZone(tzInput) ? tzInput : "Asia/Tokyo";
-  const { startMs, endMs, rangeStart, rangeEnd } = periodRange(unit, dateYmd);
+  const who = memberId ? eq(schema.accessLogs.memberId, memberId) : undefined;
 
-  // タイムゾーンのずれを見込んで前後1日ずつ広めに取り、日付で絞り込む
-  const fromSec = Math.floor((startMs - DAY_MS) / 1000);
-  const toSec = Math.floor((endMs + 2 * DAY_MS) / 1000);
-  const rows = await db.select({ memberId: schema.accessLogs.memberId, at: schema.accessLogs.createdAt })
-    .from(schema.accessLogs)
-    .where(and(gte(schema.accessLogs.createdAt, fromSec), lt(schema.accessLogs.createdAt, toSec)))
-    .all();
+  const first = await db.select({ at: schema.accessLogs.createdAt }).from(schema.accessLogs)
+    .where(who).orderBy(schema.accessLogs.createdAt).limit(1).get();
+  const trackingStartedAt = first?.at ?? null;
 
   // バケット（棒）の用意
   const buckets: { key: string; label: string; count: number; members: Set<string> }[] = [];
-  if (unit === "day") {
-    for (let h = 0; h < 24; h++) buckets.push({ key: String(h), label: `${h}`, count: 0, members: new Set() });
-  } else {
-    for (let ms = startMs; ms <= endMs; ms += DAY_MS) {
-      const ymd = utcMsToYmd(ms);
-      const d = new Date(ms);
-      buckets.push({
-        key: ymd,
-        label: unit === "week" ? `${WEEKDAY_LABELS[d.getUTCDay()]} ${d.getUTCMonth() + 1}/${d.getUTCDate()}` : `${d.getUTCDate()}`,
-        count: 0, members: new Set(),
-      });
+  let rangeStart: string | null = null;
+  let rangeEnd: string | null = null;
+  let fromSec = 0;
+  let toSec = Number.MAX_SAFE_INTEGER;
+  /** 日時をどの棒に入れるか（範囲外なら null） */
+  let keyOf: (ymd: string, hour: number) => string | null;
+
+  if (unit === "all") {
+    // 最初の記録の月から今月まで、月ごとに1本（記録がなければ今月だけ）
+    const startYmd = localParts(trackingStartedAt ?? Math.floor(Date.now() / 1000), tz).ymd;
+    const endYmd = localParts(Math.floor(Date.now() / 1000), tz).ymd;
+    let y = Number(startYmd.slice(0, 4)); let m = Number(startYmd.slice(5, 7));
+    const endY = Number(endYmd.slice(0, 4)); const endM = Number(endYmd.slice(5, 7));
+    const multiYear = y !== endY;
+    while (y < endY || (y === endY && m <= endM)) {
+      const key = `${y}-${String(m).padStart(2, "0")}`;
+      buckets.push({ key, label: multiYear ? `${String(y).slice(2)}/${m}` : `${m}月`, count: 0, members: new Set() });
+      m++; if (m > 12) { m = 1; y++; }
     }
+    keyOf = (ymd) => ymd.slice(0, 7);
+  } else {
+    const r = periodRange(unit, dateYmd);
+    rangeStart = r.rangeStart; rangeEnd = r.rangeEnd;
+    // タイムゾーンのずれを見込んで前後1日ずつ広めに取り、日付で絞り込む
+    fromSec = Math.floor((r.startMs - DAY_MS) / 1000);
+    toSec = Math.floor((r.endMs + 2 * DAY_MS) / 1000);
+    if (unit === "day") {
+      for (let h = 0; h < 24; h++) buckets.push({ key: String(h), label: `${h}`, count: 0, members: new Set() });
+    } else {
+      for (let ms = r.startMs; ms <= r.endMs; ms += DAY_MS) {
+        const d = new Date(ms);
+        buckets.push({
+          key: utcMsToYmd(ms),
+          label: unit === "week" ? `${WEEKDAY_LABELS[d.getUTCDay()]} ${d.getUTCMonth() + 1}/${d.getUTCDate()}` : `${d.getUTCDate()}`,
+          count: 0, members: new Set(),
+        });
+      }
+    }
+    const lo = r.rangeStart; const hi = r.rangeEnd;
+    keyOf = (ymd, hour) => (ymd < lo || ymd > hi ? null : unit === "day" ? String(hour) : ymd);
   }
+
+  const rows = await db.select({ memberId: schema.accessLogs.memberId, at: schema.accessLogs.createdAt })
+    .from(schema.accessLogs)
+    .where(and(gte(schema.accessLogs.createdAt, fromSec), lt(schema.accessLogs.createdAt, toSec), who))
+    .all();
+
   const byKey = new Map(buckets.map((b) => [b.key, b]));
   const all = new Set<string>();
   let total = 0;
   for (const r of rows) {
     const { ymd, hour } = localParts(r.at, tz);
-    if (ymd < rangeStart || ymd > rangeEnd) continue;
-    const b = byKey.get(unit === "day" ? String(hour) : ymd);
+    const key = keyOf(ymd, hour);
+    const b = key === null ? undefined : byKey.get(key);
     if (!b) continue;
     b.count++; b.members.add(r.memberId); all.add(r.memberId); total++;
   }
 
-  const first = await db.select({ at: schema.accessLogs.createdAt }).from(schema.accessLogs)
-    .orderBy(schema.accessLogs.createdAt).limit(1).get();
-
   return {
     unit, rangeStart, rangeEnd,
     buckets: buckets.map((b) => ({ key: b.key, label: b.label, count: b.count, members: b.members.size })),
-    total, uniqueMembers: all.size, trackingStartedAt: first?.at ?? null,
+    total, uniqueMembers: all.size, trackingStartedAt,
   };
 }

@@ -6,6 +6,10 @@ import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { AccessChart } from "./_access-chart";
+import { PeriodSwitcher } from "./_period-switcher";
+import { useUsagePeriod, useUsageReport } from "./_usage-shared";
+import { UsageSummaryCards } from "./_usage-summary-cards";
 
 type Member = { id: string; status: string; name: string };
 type Quest = { id: string; status: string; title: string };
@@ -16,6 +20,9 @@ type CardOrder = { id: string; status: string };
 
 export function AdminDashboardScreen() {
   const { termQuest } = useSettings();
+  // 利用状況の概要（集計期間はこの部品の中だけで切り替える）
+  const period = useUsagePeriod("week");
+  const { data: usage } = useUsageReport(period.unit, period.date, period.tz);
   const { data: membersData } = useQuery({
     queryKey: ["admin", "members"],
     queryFn: () => api.get<{ data: Member[] }>("/admin/members"),
@@ -145,6 +152,31 @@ export function AdminDashboardScreen() {
         白樺クエストの運営管理
       </p>
 
+      {/* 利用状況の概要（くわしい内訳は「利用状況」で見られる） */}
+      <section className="mb-8 space-y-3" aria-label="利用状況の概要">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="font-semibold text-base" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>📊 利用状況の概要</h2>
+          <Link to="/admin/usage-report" className="text-xs underline flex items-center" style={{ color: "var(--color-brand)" }}>
+            くわしく見る<ChevronRight size={13} />
+          </Link>
+        </div>
+        <div className="card-paper p-4">
+          <PeriodSwitcher
+            units={["day", "week", "month", "all"]}
+            unit={period.unit}
+            rangeStart={usage?.rangeStart ?? null}
+            rangeEnd={usage?.rangeEnd ?? null}
+            today={period.today}
+            onUnitChange={period.changeUnit}
+            onShift={(dir) => period.shift(usage?.rangeStart ?? null, dir)}
+            onToday={period.backToToday}
+          />
+        </div>
+        <UsageSummaryCards rows={usage?.data ?? []} unit={period.unit} />
+        <AccessChart unit={period.unit} date={period.date} />
+      </section>
+
+      <h2 className="font-semibold text-base mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>🧭 管理メニュー</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {cards.map((card) => (
           <Link

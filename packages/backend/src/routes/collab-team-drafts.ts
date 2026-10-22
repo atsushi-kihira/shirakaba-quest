@@ -6,7 +6,7 @@
 // POST   /api/collab/team-drafts/create-from-idea    — タイトルと協業内容から、チームメンバー案（自分を含む）・協業内容・役割をAIに考えてもらう
 // GET    /api/collab/team-drafts/:id          — チーム案の詳細（構成メンバー・協働事業と役割のまとめ）
 // PATCH  /api/collab/team-drafts/:id          — タイトル・目的・構成メンバー（追加・削除）の更新
-// POST   /api/collab/team-drafts/:id/generate — 協働事業と役割をまとめる（まとめ直し）
+// POST   /api/collab/team-drafts/:id/generate — 協働事業と役割をまとめる（まとめ直し）。body の perspectives・note で、AIに追加の観点を与えられる
 // POST   /api/collab/team-drafts/:id/promote  — 緩いチーム／パワーチームとして正式に昇格させる
 // DELETE /api/collab/team-drafts/:id          — チーム案を削除する
 // 構成は、自分自身（常に含む）＋メンバー＋自分の外部人脈で、合計10名まで。他のユーザーには見えない。
@@ -18,7 +18,10 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { isMemberApproved, resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { loadProfiles } from "../services/member-collab.ts";
-import { generateTeamDraftIdeas, proposeTeamFromIdea, type DraftParticipant, type TeamDraftIdeas } from "../services/team-draft-ideas.ts";
+import {
+  generateTeamDraftIdeas, proposeTeamFromIdea, REGENERATE_NOTE_MAX, REGENERATE_PERSPECTIVES,
+  type DraftParticipant, type RegenerateOptions, type RegeneratePerspective, type TeamDraftIdeas,
+} from "../services/team-draft-ideas.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const collabTeamDraftRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -305,8 +308,26 @@ collabTeamDraftRoutes.post("/:id/generate", async (c) => {
   const { people } = await loadParticipants(db, meId, draft.id);
   if (people.length < 2) return c.json(err("invalid_input", "自分のほかに、メンバーまたは外部人脈を1名以上選んでください"), 400);
 
+  // 「まとめ直す」の追加の観点（幅を広げる・追加メンバーの提案・追加メンバーの役割・役割の割り振り直し・自由記入）。指定がなければ、いまの内容でまとめ直す
+  const body = await c.req.json<{ perspectives?: unknown; note?: unknown }>().catch(() => ({} as { perspectives?: unknown; note?: unknown }));
+  const perspectives = REGENERATE_PERSPECTIVES.filter((p) => Array.isArray(body.perspectives) && (body.perspectives as unknown[]).includes(p)) as RegeneratePerspective[];
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  if (note.length > REGENERATE_NOTE_MAX) return c.json(err("invalid_input", `さらに伝えたい観点は${REGENERATE_NOTE_MAX}文字以内で入力してください`), 400);
+  let regenerate: RegenerateOptions | undefined;
+  if (perspectives.length > 0 || note) {
+    let previous: TeamDraftIdeas | null = null;
+    try { previous = draft.ideasJson ? (JSON.parse(draft.ideasJson) as TeamDraftIdeas) : null; } catch { previous = null; }
+    const maxSuggest = Math.min(3, MAX_TEAM_DRAFT_MEMBERS - people.length);
+    let candidates: DraftParticipant[] = [];
+    if (perspectives.includes("suggest_members") && maxSuggest > 0) {
+      const taken = new Set(people.map((p) => p.key));
+      candidates = (await loadCandidatePeople(db, meId)).candidates.filter((p) => !taken.has(p.key));
+    }
+    regenerate = { perspectives, note, previous, candidates, maxSuggest };
+  }
+
   const ideas = await generateTeamDraftIdeas({
-    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: draft.title, goal: draft.goal, people,
+    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: draft.title, goal: draft.goal, people, regenerate,
   });
   if (!ideas) return c.json(err("ai_failed", "協働事業をまとめられませんでした。少し時間をおいて、もう一度お試しください"), 502);
   const now = Math.floor(Date.now() / 1000);

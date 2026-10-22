@@ -2,78 +2,22 @@
 // 管理画面 — 利用状況レポート（メンバーごとのログイン・機能別利用件数）
 // =============================================================
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronUp, ChevronDown, Loader2 } from "lucide-react";
-import { api } from "@/lib/api";
+import { ChevronUp, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { AccessChart } from "./_access-chart";
-import { PeriodSwitcher, rangeTitle, shiftDate, todayIn, type PeriodChoice } from "./_period-switcher";
-import { useTimezone } from "@/hooks/use-timezone";
-
-type MemberUsage = {
-  id: string;
-  name: string;
-  status: string;
-  registeredAt: number;
-  lastLoginAt: number | null;
-  login: number;
-  oneonone: number;
-  contact: number;
-  contactEight: number;
-  egg: number;
-  goose: number;
-  meeting: number;
-  quest: number;
-  cardOrder: number;
-  enishi: number;
-  view: number;
-  total: number;
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  active: "承認済み",
-  on_leave: "休会中",
-  guest: "ゲスト",
-  pending: "承認待ち",
-  rejected: "利用却下",
-};
-
-type FeatureKey = "login" | "view" | "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
-
-const FEATURES: { key: FeatureKey; label: string }[] = [
-  { key: "login", label: "ログイン日数" },
-  { key: "view", label: "情報参照" },
-  { key: "oneonone", label: "1to1" },
-  { key: "contact", label: "人脈登録" },
-  { key: "egg", label: "金の卵" },
-  { key: "goose", label: "金のガチョウ" },
-  { key: "meeting", label: "ミーティング主催" },
-  { key: "quest", label: "クエスト挑戦" },
-  { key: "cardOrder", label: "カード発注" },
-  { key: "enishi", label: "ご縁さがし" },
-];
+import { PeriodSwitcher, rangeTitle } from "./_period-switcher";
+import { AdminMemberUsageModal } from "./_admin-member-usage-modal";
+import { FEATURES, STATUS_LABEL, fmtDate, useUsagePeriod, useUsageReport, type MemberUsage, type FeatureKey } from "./_usage-shared";
+import { UsageSummaryCards } from "./_usage-summary-cards";
 
 type SortKey = "name" | "status" | "lastLoginAt" | FeatureKey | "total";
 
-function fmtDate(ts: number | null): string {
-  if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleDateString("ja-JP", { year: "numeric", month: "numeric", day: "numeric" });
-}
-
 export function AdminUsageReportScreen() {
-  const tz = useTimezone();
-  // 集計期間（日・週・月・累計）。アクセス数のグラフとは別に、サマリー・機能別・メンバー別で共通に使う
-  const [unit, setUnit] = useState<PeriodChoice>("all");
-  const [date, setDate] = useState<string>(() => todayIn(tz));
-  const { data, isLoading } = useQuery({
-    queryKey: ["admin", "usage-report", unit, date, tz],
-    queryFn: () => api.get<{ data: MemberUsage[]; generatedAt: number; unit: PeriodChoice; rangeStart: string | null; rangeEnd: string | null; viewBreakdown: { screen: string; label: string; count: number }[] }>(
-      `/admin/usage-report?unit=${unit}&date=${date}&tz=${encodeURIComponent(tz)}`
-    ),
-    // 期間を切り替えている間も、前の表示を残して画面がちらつかないようにする
-    placeholderData: (prev) => prev,
-  });
+  // 集計期間（日・週・月・累計）。アクセス数・サマリー・機能別・メンバー別のすべてに共通で反映される
+  const period = useUsagePeriod("all");
+  const { unit, date, tz } = period;
+  const { data, isLoading } = useUsageReport(unit, date, tz);
   const periodLabel = unit === "all" ? "累計" : rangeTitle(unit, data?.rangeStart ?? null, data?.rangeEnd ?? null);
-  const periodNoun = unit === "all" ? "累計" : unit === "day" ? "この日" : unit === "week" ? "この週" : "この月";
+  const [detailMemberId, setDetailMemberId] = useState<string | null>(null);
 
   const [sortKey, setSortKey] = useState<SortKey>("total");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -100,12 +44,7 @@ export function AdminUsageReportScreen() {
     else { setSortKey(key); setSortDir(-1); }
   }
 
-  const totalMembers = rows.length;
-  // 「ログイン日数」には、ログイン済みのままの利用日も含むので、0日の人＝累計では一度も使っていない人、期間指定ではその期間に使っていない人
-  const neverLoggedIn = rows.filter((r) => r.login === 0);
-  const totalLogins = rows.reduce((s, r) => s + r.login, 0);
   const mostActive = [...rows].sort((a, b) => b.total - a.total)[0];
-  const avgLogins = totalMembers > 0 ? (totalLogins / totalMembers).toFixed(1) : "0";
 
   const featureTotals = FEATURES.map((f) => ({
     ...f,
@@ -148,51 +87,25 @@ export function AdminUsageReportScreen() {
           {/* 集計期間（サマリー・機能別・メンバー別の内訳に反映される） */}
           <div className="card-paper p-4 sticky top-0 z-20" style={{ background: "var(--color-paper-50)", boxShadow: "0 2px 10px rgba(60,40,20,0.12)" }}>
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
-              📅 集計期間（機能別の利用件数・メンバー別の内訳も、この期間の件数になります。画面を下へ動かしても、ここは見えたままです）
+              📅 集計期間（アクセス数・機能別の利用件数・メンバー別の内訳のすべてが、この期間の数字になります。画面を下へ動かしても、ここは見えたままです）
             </p>
             <PeriodSwitcher
               units={["day", "week", "month", "all"]}
               unit={unit}
               rangeStart={data?.rangeStart ?? null}
               rangeEnd={data?.rangeEnd ?? null}
-              today={todayIn(tz)}
-              onUnitChange={(u) => { setUnit(u); setDate(todayIn(tz)); }}
-              onShift={(dir) => { if (unit !== "all") setDate(shiftDate(data?.rangeStart ?? date, unit, dir)); }}
-              onToday={() => setDate(todayIn(tz))}
+              today={period.today}
+              onUnitChange={period.changeUnit}
+              onShift={(dir) => period.shift(data?.rangeStart ?? null, dir)}
+              onToday={period.backToToday}
             />
           </div>
 
           {/* 全体サマリー */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>対象メンバー数</p>
-              <p className="text-2xl font-bold" style={{ color: "var(--color-ink-900)" }}>{totalMembers}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>人</span></p>
-            </div>
-            <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "のべ利用日数" : "のべ利用日数（ログイン含む）"}</p>
-              <p className="text-2xl font-bold" style={{ color: "var(--color-brand)" }}>{totalLogins}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>日</span></p>
-              <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>平均 {avgLogins} 日/人</p>
-            </div>
-            <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>{unit === "all" ? "利用実績なし" : `${periodNoun}アクセスなし`}</p>
-              <p className="text-2xl font-bold" style={{ color: neverLoggedIn.length > 0 ? "var(--color-brand)" : "var(--color-ink-900)" }}>
-                {neverLoggedIn.length}<span className="text-sm font-medium ml-0.5" style={{ color: "var(--color-ink-500)" }}>人</span>
-              </p>
-              {neverLoggedIn.length > 0 && (
-                <p className="text-xs mt-1 truncate" style={{ color: "var(--color-ink-400)" }} title={neverLoggedIn.map((r) => r.name).join("・")}>
-                  {neverLoggedIn.map((r) => r.name).join("・")}
-                </p>
-              )}
-            </div>
-            <div className="card-paper p-4">
-              <p className="text-xs mb-1" style={{ color: "var(--color-ink-500)" }}>最も利用件数が多い</p>
-              <p className="text-lg font-bold truncate" style={{ color: "var(--color-accent)" }}>{mostActive?.name ?? "—"}</p>
-              <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>合計 {mostActive?.total ?? 0} 件</p>
-            </div>
-          </div>
+          <UsageSummaryCards rows={rows} unit={unit} />
 
-          {/* アクセス数（日・週・月の棒グラフ） */}
-          <AccessChart />
+          {/* アクセス数（期間に応じた棒グラフ） */}
+          <AccessChart unit={unit} date={date} />
 
           {/* 機能別の利用件数（合計） */}
           <div className="card-paper p-5">
@@ -234,7 +147,7 @@ export function AdminUsageReportScreen() {
               メンバー別 利用件数内訳（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます。「合計」には、画面を見ただけの「情報参照」は含めていません。
+              列見出しをタップ・クリックすると並び替えできます。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「合計」には、画面を見ただけの「情報参照」は含めていません。
               「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日（アプリを開いた・画面を見た・何かを登録した日）も1日と数えます。記録の仕組みができる前の分は、1to1や人脈の登録などの操作があった日で補っています。
               「1to1」は、メンバー同士の1to1に、外部ゲストとの予約・予約ページ経由の1to1（キャンセルを除く）を加えた件数です。{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
@@ -259,9 +172,9 @@ export function AdminUsageReportScreen() {
                 </thead>
                 <tbody>
                   {sortedRows.map((r) => (
-                    <tr key={r.id} style={{ borderTop: "1px solid var(--color-paper-200)" }}>
+                    <tr key={r.id} onClick={() => setDetailMemberId(r.id)} className="cursor-pointer hover:bg-black/5" style={{ borderTop: "1px solid var(--color-paper-200)" }}>
                       <td className="px-2.5 py-2 text-sm font-semibold whitespace-nowrap sticky left-0" style={{ color: "var(--color-ink-900)", background: "var(--color-paper-50)" }}>
-                        {r.name}
+                        <span className="inline-flex items-center gap-0.5">{r.name}<ChevronRight size={13} style={{ color: "var(--color-ink-400)" }} /></span>
                       </td>
                       <td className="px-2.5 py-2 whitespace-nowrap">
                         <span className="text-xs px-2 py-0.5 rounded-full" style={{
@@ -296,6 +209,10 @@ export function AdminUsageReportScreen() {
             </div>
           </div>
         </div>
+      )}
+
+      {detailMemberId && (
+        <AdminMemberUsageModal memberId={detailMemberId} initialUnit={unit} initialDate={date} onClose={() => setDetailMemberId(null)} />
       )}
     </div>
   );
