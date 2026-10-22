@@ -455,3 +455,12 @@ p {
   from { transform: translate(-50%, -62px) rotate(0deg); }
   to   { transform: translate(-50%, -62px) rotate(-360deg); }
 }
+
+/*
+ * 見えない入力（sr-only のチェックボックス・ラジオ）を含むラベルは、その入力の位置の基準にする。
+ * 基準になる親がないと、入力が絶対配置のままスクロール枠（max-h + overflow-y-auto の一覧）の外に取り残され、
+ * 一覧の中をスクロールしてから選んだときに、ブラウザが入力を表示しようとして画面全体を一番下までスクロールしてしまう。
+ */
+label:has(> input.sr-only) {
+  position: relative;
+}
