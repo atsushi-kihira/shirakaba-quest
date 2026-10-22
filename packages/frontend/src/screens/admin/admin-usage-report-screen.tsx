@@ -24,8 +24,18 @@ export function AdminUsageReportScreen() {
 
   const rows = data?.data ?? [];
 
+  // メンバー別の表では、ゲストと休会中の人は、チェックしたときだけ表示する
+  const [showGuests, setShowGuests] = useState(false);
+  const [showOnLeave, setShowOnLeave] = useState(false);
+  const guestCount = rows.filter((r) => r.status === "guest").length;
+  const onLeaveCount = rows.filter((r) => r.status === "on_leave").length;
+  const tableRows = useMemo(
+    () => rows.filter((r) => (r.status !== "guest" || showGuests) && (r.status !== "on_leave" || showOnLeave)),
+    [rows, showGuests, showOnLeave],
+  );
+
   const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) => {
+    return [...tableRows].sort((a, b) => {
       const av = a[sortKey as keyof MemberUsage];
       const bv = b[sortKey as keyof MemberUsage];
       if (typeof av === "string" || typeof bv === "string" || sortKey === "lastLoginAt") {
@@ -37,7 +47,7 @@ export function AdminUsageReportScreen() {
       }
       return ((av as number) - (bv as number)) * sortDir;
     });
-  }, [rows, sortKey, sortDir]);
+  }, [tableRows, sortKey, sortDir]);
 
   function handleSort(key: SortKey) {
     if (key === sortKey) setSortDir((d) => (d === 1 ? -1 : 1));
@@ -147,10 +157,21 @@ export function AdminUsageReportScreen() {
               メンバー別 利用件数内訳（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「合計」には、画面を見ただけの「情報参照」は含めていません。
+              列見出しをタップ・クリックすると並び替えできます。ゲストと休会中の方は、最初は表示しません（下のチェックで表示できます）。上のサマリーや機能別の件数には、これらの方も含まれています。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「合計」には、画面を見ただけの「情報参照」は含めていません。
               「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日（アプリを開いた・画面を見た・何かを登録した日）も1日と数えます。記録の仕組みができる前の分は、1to1や人脈の登録などの操作があった日で補っています。
               「1to1」は、メンバー同士の1to1に、外部ゲストとの予約・予約ページ経由の1to1（キャンセルを除く）を加えた件数です。{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mb-3 text-sm" style={{ color: "var(--color-ink-700)" }}>
+              <span className="text-xs" style={{ color: "var(--color-ink-500)" }}>表示する人：</span>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={showGuests} onChange={(e) => setShowGuests(e.target.checked)} />
+                ゲスト（{guestCount}人）
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={showOnLeave} onChange={(e) => setShowOnLeave(e.target.checked)} />
+                休会中（{onLeaveCount}人）
+              </label>
+            </div>
             <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
               <table className="w-full" style={{ minWidth: 940 }}>
                 <thead>
