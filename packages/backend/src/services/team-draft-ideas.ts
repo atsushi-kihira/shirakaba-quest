@@ -31,6 +31,20 @@ export type RegenerateOptions = {
   maxSuggest: number;
 };
 
+/** チームをパワーアップするために加えられるとよい人材（実在の人ではなく、業種・職種とビジネス面での人物像） */
+export type DesiredTalent = {
+  /** 業種・職種（例：ウェブマーケター（中小企業の集客支援）） */
+  title: string;
+  /** ビジネス面での人物像（どんな経験・強み・価値観の人か） */
+  profile: string;
+  /** いまのチームに足りない点を、どう補うか */
+  reason: string;
+  /** 協働事業での役割 */
+  role: string;
+};
+/** 追加できるとよい人材の最大人数 */
+export const MAX_DESIRED_TALENTS = 3;
+
 export type SuggestedMember = { key: string; name: string; kind: "member" | "contact"; reason: string };
 
 export type TeamDraftIdeas = {
@@ -45,6 +59,8 @@ export type TeamDraftIdeas = {
   /** まとめたときのメンバー構成（"m:…"/"c:…" の並べ替え済み）と目的。現在の内容と違えば「まとめ直し」を促す */
   participantKeys: string[];
   goal: string;
+  /** チームをパワーアップするために追加できるとよい人材（最大3名。役割つき） */
+  desiredTalents?: DesiredTalent[];
   /** 幅を広げる観点のとき：ほかの切り口の協働事業アイデア */
   alternativeIdeas?: { title: string; summary: string }[];
   /** メンバー提案の観点のとき：チームに加えるとよさそうな人（メンバー・外部人脈） */
@@ -60,6 +76,20 @@ const OUTPUT_FIELDS = `- teamTitle：チーム案の名前（15〜25文字程度
 - businessTitle：協働事業のタイトル（20〜30文字程度）
 - targetCustomers：どんなお客様・対象に提供する事業かを、1〜2文で具体的に
 - summary：誰の、どんな課題に、どんなサービス・活動を提供する事業かを、2〜4文で具体的に`;
+
+/** 「追加できるとよい人材」の出力の指示（maxTalents が 0 のときは出さない） */
+function talentFields(maxTalents: number): string {
+  if (maxTalents <= 0) return "";
+  return `- desiredTalents：このチームをよりパワーアップするために、メンバーに加えられるとよい人材を最大${maxTalents}名分。
+  いまのメンバーの業種・職種・強みと重ならず、協働事業を実現するために足りない役割を補う人にする。必要性が薄ければ、無理に${maxTalents}名にしなくてよい（0名でもよい）。
+  実在の人物・会社名・個人名は作らず、ビジネス面での人物像だけを書く。各項目は
+    title＝業種・職種（20文字程度。例：「ウェブマーケター（中小企業の集客支援）」）、
+    profile＝ビジネス面での人物像（どんな事業経験・得意分野・価値観を持つ人か。2〜3文）、
+    reason＝いまのチームに足りない点を、どう補うか（1文）、
+    role＝この協働事業での役割（1文）
+`;
+}
+const TALENT_JSON = ',"desiredTalents":[{"title":"...","profile":"...","reason":"...","role":"..."}]';
 
 const RULES = `# ルール
 - 根拠は、メンバー一覧に書かれている情報のみ。実績・数字・会社名・取引先などを作り話で補わない。
@@ -100,7 +130,8 @@ ${previous && !has("reassign_roles") && !has("new_member_roles") ? "- 役割は�
 # 前回のまとめ（これをもとに、上の観点を取り入れて作り直す）
 - 協働事業：${previous.businessTitle}
 - 概要：${previous.summary}
-- 役割：${previous.roles.map((r) => `${nameOf.get(r.key) ?? r.key}（${r.key}）＝${r.role}`).join(" ／ ") || "（なし）"}
+- 役割：${previous.roles.map((r) => `${nameOf.get(r.key) ?? r.key}（${r.key}）＝${r.role}`).join(" ／ ") || "（なし）"}${previous.desiredTalents?.length ? `
+- 前回提案した「追加できるとよい人材」：${previous.desiredTalents.map((t) => `${t.title}（${t.role}）`).join(" ／ ")}` : ""}
 ` : "";
 
   const candidateSection = suggest ? `
@@ -120,7 +151,7 @@ ${listPeople(opt!.candidates)}
 }
 
 /** メンバーが決まっているとき：その全員の力を合わせた協働事業・役割をまとめる */
-function buildPrompt(title: string, goal: string, people: DraftParticipant[], opt?: RegenerateOptions): string {
+function buildPrompt(title: string, goal: string, people: DraftParticipant[], opt?: RegenerateOptions, maxTalents = 0): string {
   const x = buildExtras(people, opt);
   return `あなたはBNIチャプターのメンバー同士の協働事業（共同での事業・サービスづくり）を企画するAIです。
 下の「検討中のチーム案」のメンバー全員の力を合わせると、どんな協働事業ができそうかを提案し、それぞれの役割をまとめてください。
@@ -129,9 +160,9 @@ function buildPrompt(title: string, goal: string, people: DraftParticipant[], op
 ${OUTPUT_FIELDS}
 - roles：メンバー全員分の役割（key と role＝1文）。key は下の一覧の key をそのまま使う。外部人脈の方は、参加の意思が未確認の候補なので「お声がけできれば〜を担当してもらう」という書き方にする
 - firstSteps：このチームが最初に取り組むとよい行動を、3件以内（各1文）
-${x.outputLines ? `${x.outputLines}\n` : ""}
+${talentFields(maxTalents)}${x.outputLines ? `${x.outputLines}\n` : ""}
 ${RULES}
-{"teamTitle":"...","businessTitle":"...","targetCustomers":"...","summary":"...","roles":[{"key":"...","role":"..."}],"firstSteps":["...","..."]${x.jsonExtra}}
+{"teamTitle":"...","businessTitle":"...","targetCustomers":"...","summary":"...","roles":[{"key":"...","role":"..."}],"firstSteps":["...","..."]${maxTalents > 0 ? TALENT_JSON : ""}${x.jsonExtra}}
 
 # チーム案のタイトル
 ${title.trim() || "（未定。上の teamTitle として、あなたが考えてください）"}
@@ -145,7 +176,7 @@ ${x.previousSection}${x.perspectiveSection}${x.candidateSection}`;
 }
 
 /** タイトルと協業の内容だけが決まっているとき：それに合うチームメンバー案（自分を含む）を、候補の中から選んで提案する */
-function buildProposePrompt(title: string, goal: string, me: DraftParticipant, candidates: DraftParticipant[], maxOthers: number): string {
+function buildProposePrompt(title: string, goal: string, me: DraftParticipant, candidates: DraftParticipant[], maxOthers: number, maxTalents: number): string {
   return `あなたはBNIチャプターのメンバー同士の協働事業（共同での事業・サービスづくり）を企画するAIです。
 「チーム案のタイトル」と「考えたい協業の内容」に合うチームのメンバー案を、下の「候補一覧」の中から選び、協業の内容をブラッシュアップして、それぞれの役割までまとめてください。
 
@@ -160,9 +191,9 @@ ${OUTPUT_FIELDS}
 - memberKeys：選んだメンバーの key（本人は含めない。候補一覧の key をそのまま使う）
 - roles：本人と、選んだメンバー全員の役割（key と role＝1文）。本人の key も含める
 - firstSteps：このチームが最初に取り組むとよい行動を、3件以内（各1文）
-
+${talentFields(maxTalents)}
 ${RULES}
-{"teamTitle":"...","businessTitle":"...","targetCustomers":"...","summary":"...","memberKeys":["..."],"roles":[{"key":"...","role":"..."}],"firstSteps":["..."]}
+{"teamTitle":"...","businessTitle":"...","targetCustomers":"...","summary":"...","memberKeys":["..."],"roles":[{"key":"...","role":"..."}],"firstSteps":["..."]${maxTalents > 0 ? TALENT_JSON : ""}}
 
 # チーム案のタイトル
 ${title}
@@ -179,7 +210,7 @@ ${listPeople(candidates)}`;
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
-type ParsedIdeas = Pick<TeamDraftIdeas, "teamTitle" | "businessTitle" | "targetCustomers" | "summary" | "roles" | "firstSteps" | "alternativeIdeas"> & {
+type ParsedIdeas = Pick<TeamDraftIdeas, "teamTitle" | "businessTitle" | "targetCustomers" | "summary" | "roles" | "firstSteps" | "alternativeIdeas" | "desiredTalents"> & {
   memberKeys: string[];
   /** 追加をおすすめする人の key と理由（候補一覧にある key だけ） */
   suggested: { key: string; reason: string }[];
@@ -189,7 +220,7 @@ function parse(content: string, valid: Set<string>, suggestable?: Set<string>): 
   const m = content.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {
-    const p = JSON.parse(m[0]) as { teamTitle?: unknown; businessTitle?: unknown; targetCustomers?: unknown; summary?: unknown; roles?: unknown; firstSteps?: unknown; memberKeys?: unknown; alternativeIdeas?: unknown; suggestedMembers?: unknown };
+    const p = JSON.parse(m[0]) as { teamTitle?: unknown; businessTitle?: unknown; targetCustomers?: unknown; summary?: unknown; roles?: unknown; firstSteps?: unknown; memberKeys?: unknown; alternativeIdeas?: unknown; suggestedMembers?: unknown; desiredTalents?: unknown };
     if (!str(p.businessTitle) || !str(p.summary)) return null;
     const seen = new Set<string>();
     const roles = (Array.isArray(p.roles) ? p.roles : []).flatMap((r: unknown) => {
@@ -204,6 +235,10 @@ function parse(content: string, valid: Set<string>, suggestable?: Set<string>): 
       const x = a as { title?: unknown; summary?: unknown };
       return str(x?.title) && str(x?.summary) ? [{ title: str(x.title), summary: str(x.summary) }] : [];
     }).slice(0, 3);
+    const desiredTalents = (Array.isArray(p.desiredTalents) ? p.desiredTalents : []).flatMap((t: unknown) => {
+      const x = t as { title?: unknown; profile?: unknown; reason?: unknown; role?: unknown };
+      return str(x?.title) && str(x?.profile) ? [{ title: str(x.title), profile: str(x.profile), reason: str(x.reason), role: str(x.role) }] : [];
+    }).slice(0, MAX_DESIRED_TALENTS);
     const seenSuggest = new Set<string>();
     const suggested = (Array.isArray(p.suggestedMembers) ? p.suggestedMembers : []).flatMap((m: unknown) => {
       const x = m as { key?: unknown; reason?: unknown };
@@ -215,6 +250,7 @@ function parse(content: string, valid: Set<string>, suggestable?: Set<string>): 
       teamTitle: str(p.teamTitle) || undefined, businessTitle: str(p.businessTitle), targetCustomers: str(p.targetCustomers) || undefined,
       summary: str(p.summary), roles, firstSteps, memberKeys, suggested,
       ...(alternativeIdeas.length > 0 ? { alternativeIdeas } : {}),
+      ...(desiredTalents.length > 0 ? { desiredTalents } : {}),
     };
   } catch { return null; }
 }
@@ -227,6 +263,10 @@ function mockIdeas(title: string, goal: string, people: DraftParticipant[]): Omi
     summary: `開発環境のため、AIによる提案の代わりに見本を表示しています。${goal ? `考えたいこと：${goal.slice(0, 60)}。` : ""}本番では、メンバーの強みを組み合わせた具体的な協働事業を提案します。`,
     roles: people.map((p) => ({ key: p.key, role: `${p.name}さんの強みを活かして関わります（見本）` })),
     firstSteps: ["メンバーで一度集まって、事業のイメージをすり合わせる（見本）", "役割の分担を確認する（見本）"],
+    desiredTalents: [
+      { title: "ウェブマーケター（集客支援）（見本）", profile: "開発環境のため見本です。本番では、チームに足りない業種・職種と、ビジネス面での人物像を提案します。", reason: "お客様との接点づくりを補えます。", role: "事業を知ってもらうための集客・発信を担当します。" },
+      { title: "営業・販路開拓の経験者（見本）", profile: "法人のお客様への提案や紹介ルートづくりの経験が豊富で、メンバーの強みを商談につなげるのが得意な人です。", reason: "事業を売り込む力を補えます。", role: "お客様への提案と紹介ルートの開拓を担当します。" },
+    ],
   };
 }
 
@@ -236,8 +276,11 @@ function mockIdeas(title: string, goal: string, people: DraftParticipant[]): Omi
  */
 export async function generateTeamDraftIdeas(args: {
   apiKey: string | undefined; isDev: boolean; title: string; goal: string; people: DraftParticipant[]; regenerate?: RegenerateOptions;
+  /** 「追加できるとよい人材」の最大人数（チームの人数の上限までの空きに合わせる。省略時は上限の3名） */
+  maxTalents?: number;
 }): Promise<TeamDraftIdeas | null> {
   const { apiKey, isDev, title, goal, people, regenerate } = args;
+  const maxTalents = Math.max(0, Math.min(MAX_DESIRED_TALENTS, args.maxTalents ?? MAX_DESIRED_TALENTS));
   const base = { participantKeys: people.map((p) => p.key).sort(), goal, generatedAt: Math.floor(Date.now() / 1000) };
   const applied = regenerate && (regenerate.perspectives.length > 0 || regenerate.note.trim())
     ? { appliedPerspectives: regenerate.perspectives, ...(regenerate.note.trim() ? { appliedNote: regenerate.note.trim() } : {}) }
@@ -251,10 +294,11 @@ export async function generateTeamDraftIdeas(args: {
     }).slice(0, regenerate?.maxSuggest ?? 0);
 
   if (isDev || !apiKey || apiKey === "dev-not-set") {
-    const mock = mockIdeas(title, goal, people);
+    const { desiredTalents: mockTalents, ...mock } = mockIdeas(title, goal, people);
     const has = (p: RegeneratePerspective) => !!regenerate?.perspectives.includes(p);
     return {
       ...mock, ...base, ...applied, isMock: true,
+      ...(maxTalents > 0 && mockTalents ? { desiredTalents: mockTalents.slice(0, maxTalents) } : {}),
       ...(has("broaden") ? { alternativeIdeas: [{ title: "別の切り口の協働事業（見本）", summary: "開発環境のため見本です。本番では、対象のお客様や提供の形を変えた案を提案します。" }] } : {}),
       ...(suggestable.size > 0 ? { suggestedMembers: [...suggestable.values()].slice(0, Math.min(2, regenerate!.maxSuggest)).map((c) => ({ key: c.key, name: c.name, kind: c.kind, reason: "見本：強みがチームを補えそうです（開発環境の見本）" })) } : {}),
     };
@@ -262,11 +306,15 @@ export async function generateTeamDraftIdeas(args: {
   const valid = new Set(people.map((p) => p.key));
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const parsed = parse(await callClaude(apiKey, buildPrompt(title, goal, people, regenerate)), valid, new Set(suggestable.keys()));
+      const parsed = parse(await callClaude(apiKey, buildPrompt(title, goal, people, regenerate, maxTalents)), valid, new Set(suggestable.keys()));
       if (parsed) {
-        const { memberKeys: _unused, suggested, ...ideas } = parsed; void _unused;
+        const { memberKeys: _unused, suggested, desiredTalents, ...ideas } = parsed; void _unused;
         const suggestedMembers = toSuggested(suggested);
-        return { ...ideas, ...base, ...applied, ...(suggestedMembers.length > 0 ? { suggestedMembers } : {}) };
+        return {
+          ...ideas, ...base, ...applied,
+          ...(maxTalents > 0 && desiredTalents?.length ? { desiredTalents: desiredTalents.slice(0, maxTalents) } : {}),
+          ...(suggestedMembers.length > 0 ? { suggestedMembers } : {}),
+        };
       }
       console.error(`[team-draft-ideas] 応答の解析に失敗（試行${attempt}/2）`);
     } catch (e) {
@@ -288,9 +336,12 @@ export async function proposeTeamFromIdea(args: {
   const finish = (otherKeys: string[], parsed: Omit<ParsedIdeas, "memberKeys" | "suggested">, isMock?: boolean) => {
     const keys = [me.key, ...otherKeys];
     const roles = parsed.roles.filter((r) => keys.includes(r.key));
+    // 「追加できるとよい人材」は、チームの人数の上限までの空きの分だけ
+    const talentSlots = Math.max(0, Math.min(MAX_DESIRED_TALENTS, maxOthers + 1 - keys.length));
+    const desiredTalents = (parsed.desiredTalents ?? []).slice(0, talentSlots);
     return {
       otherKeys,
-      ideas: { ...parsed, roles, participantKeys: [...keys].sort(), goal, generatedAt: Math.floor(Date.now() / 1000), ...(isMock ? { isMock: true } : {}) } as TeamDraftIdeas,
+      ideas: { ...parsed, roles, desiredTalents: desiredTalents.length > 0 ? desiredTalents : undefined, participantKeys: [...keys].sort(), goal, generatedAt: Math.floor(Date.now() / 1000), ...(isMock ? { isMock: true } : {}) } as TeamDraftIdeas,
     };
   };
   if (candidates.length === 0) return null;
@@ -301,7 +352,7 @@ export async function proposeTeamFromIdea(args: {
   const valid = new Set([me.key, ...candidates.map((c) => c.key)]);
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const parsed = parse(await callClaude(apiKey, buildProposePrompt(title, goal, me, candidates, maxOthers)), valid);
+      const parsed = parse(await callClaude(apiKey, buildProposePrompt(title, goal, me, candidates, maxOthers, Math.min(MAX_DESIRED_TALENTS, Math.max(0, maxOthers - 1)))), valid);
       const otherKeys = (parsed?.memberKeys ?? []).filter((k) => k !== me.key).slice(0, maxOthers);
       if (parsed && otherKeys.length >= 1) { const { memberKeys: _unused, suggested: _s, ...rest } = parsed; void _unused; void _s; return finish(otherKeys, rest); }
       console.error(`[team-draft-ideas] メンバー案の応答の解析に失敗（試行${attempt}/2）`);

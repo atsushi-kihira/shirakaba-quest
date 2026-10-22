@@ -1,6 +1,7 @@
 // =============================================================
 // 協働マップ — 検討中のチーム案の詳細
 //   ・構成メンバー（自分＋メンバー＋自分の外部人脈、合計10名まで）の追加・削除
+//   ・追加できるとよい人材（AIが、チームに足りない業種・職種とビジネス面での人物像を最大3名分提案。役割つき）
 //   ・協働事業と、それぞれの役割のまとめ（AIで作成・まとめ直し。まとめ直すときは、追加の観点を与えられる）
 //   ・十分に検討できたら、緩いチーム／パワーチームとして正式に結成
 // チーム案は、作った本人だけに見える（他のユーザーには見えない）
@@ -16,10 +17,13 @@ import { MemberPickerPanel } from "./_team-draft-picker";
 type DraftMember = { kind: "member" | "contact"; id: string; name: string; emoji: string; bgColor: string; headline: string; isMe: boolean };
 type RegeneratePerspective = "broaden" | "suggest_members" | "new_member_roles" | "reassign_roles";
 type SuggestedMember = { key: string; name: string; kind: "member" | "contact"; reason: string };
+type DesiredTalent = { title: string; profile: string; reason: string; role: string };
 type DraftIdeas = {
   teamTitle?: string; businessTitle: string; targetCustomers?: string; summary: string; roles: { key: string; role: string }[]; firstSteps: string[];
   /** まとめたときのメンバー構成（"m:…"/"c:…"） */
   participantKeys: string[];
+  /** チームをパワーアップするために追加できるとよい人材（最大3名。役割つき） */
+  desiredTalents?: DesiredTalent[];
   alternativeIdeas?: { title: string; summary: string }[];
   suggestedMembers?: SuggestedMember[];
   appliedPerspectives?: RegeneratePerspective[]; appliedNote?: string;
@@ -99,6 +103,7 @@ export function TeamDraftDetailScreen() {
   const byKey = new Map(draft.members.map((m) => [keyOf(m), m]));
   const goalChanged = goalText.trim() !== draft.goal;
   const canGenerate = draft.members.length >= 2;
+  const desiredTalents = draft.ideas?.desiredTalents ?? [];
   // まとめたあとに追加されたメンバー（「追加したメンバーの役割」の観点で使う）
   const summarizedKeys = new Set(draft.ideas?.participantKeys ?? []);
   const newMembers = draft.ideas ? draft.members.filter((m) => !m.isMe && !summarizedKeys.has(keyOf(m))) : [];
@@ -177,6 +182,28 @@ export function TeamDraftDetailScreen() {
         {others.length === 0 && <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>「追加する」から、一緒に組めそうなメンバーや外部人脈の方を選んでください。</p>}
       </section>
 
+      {/* 追加できるとよい人材（AIの提案。実在の人ではなく、業種・職種とビジネス面での人物像） */}
+      {desiredTalents.length > 0 && (
+        <section className={`card-paper rounded-2xl p-4 ${draft.ideasStale ? "opacity-70" : ""}`}>
+          <h2 className="text-sm font-bold mb-0.5" style={{ color: "var(--color-ink-800)" }}>🔍 追加できるとよい人材（{desiredTalents.length}名）</h2>
+          <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+            このチームをもっとパワーアップするために、メンバーに加えられるとよい業種・職種の方です。実在の人ではなく、ビジネス面での人物像の提案です。
+          </p>
+          <ul className="space-y-2">
+            {desiredTalents.map((t, i) => (
+              <li key={i} className="rounded-xl px-3 py-2.5" style={{ background: "var(--color-paper-100)", border: "1px dashed var(--color-paper-300)" }}>
+                <p className="text-sm font-semibold" style={{ color: "var(--color-ink-900)" }}>
+                  <span className="text-[10px] font-bold mr-1.5 px-1.5 py-0.5 rounded-md" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>人材{i + 1}</span>
+                  {t.title}
+                </p>
+                <p className="text-xs leading-relaxed mt-1" style={{ color: "var(--color-ink-700)" }}><b style={{ color: "var(--color-accent)" }}>人物像：</b>{t.profile}</p>
+                {t.reason && <p className="text-xs leading-relaxed mt-0.5" style={{ color: "var(--color-ink-700)" }}><b style={{ color: "var(--color-success)" }}>補えること：</b>{t.reason}</p>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {/* 協働事業と役割のまとめ */}
       <section className="card-paper rounded-2xl p-4" style={{ border: "1.5px solid rgba(90,140,92,0.35)" }}>
         <div className="flex items-center justify-between gap-2 mb-2">
@@ -187,7 +214,7 @@ export function TeamDraftDetailScreen() {
             {draft.ideas ? "まとめ直す" : "まとめる"}
           </button>
         </div>
-        {!canGenerate && <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>自分のほかに1名以上を選ぶと、協働事業をまとめられます。</p>}
+        {!canGenerate && <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>自分のほかに1名以上を選ぶと、協働事業をまとめられます（追加できるとよい人材も提案します）。</p>}
         {generate.isPending && <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>AIがメンバーの情報を読んで、協働事業を考えています…（少し時間がかかります）</p>}
         {draft.ideas && draft.ideasStale && (
           <p className="text-xs mb-2 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
@@ -227,6 +254,14 @@ export function TeamDraftDetailScreen() {
                   </li>
                 );
               })}
+              {desiredTalents.filter((t) => t.role).map((t, i) => (
+                <li key={`talent-${i}`} className="flex items-start gap-2 text-xs" style={{ color: "var(--color-ink-700)" }}>
+                  <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium" style={{ background: "transparent", border: "1px dashed var(--color-ink-300)", color: "var(--color-ink-700)" }}>
+                    <span>🔍</span>追加したい人材：{t.title}
+                  </span>
+                  <span className="pt-0.5">{t.role}</span>
+                </li>
+              ))}
             </ul>
             {draft.ideas.firstSteps.length > 0 && (
               <>

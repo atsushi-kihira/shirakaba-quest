@@ -210,7 +210,7 @@ collabTeamDraftRoutes.post("/create-from-members", async (c) => {
   await replaceMembers(db, id, memberIds, contactIds, now);
   const { people } = await loadParticipants(db, meId, id);
   // タイトル・協業内容・役割はAIに考えてもらう。うまくいかなくてもチーム案は残し、画面から「まとめ直す」ができる
-  const ideas = await generateTeamDraftIdeas({ apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: "", goal, people });
+  const ideas = await generateTeamDraftIdeas({ apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: "", goal, people, maxTalents: MAX_TEAM_DRAFT_MEMBERS - people.length });
   if (ideas) {
     await db.update(schema.teamDrafts).set({
       title: (ideas.teamTitle || ideas.businessTitle || DEFAULT_DRAFT_TITLE).slice(0, TITLE_MAX),
@@ -328,6 +328,8 @@ collabTeamDraftRoutes.post("/:id/generate", async (c) => {
 
   const ideas = await generateTeamDraftIdeas({
     apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: draft.title, goal: draft.goal, people, regenerate,
+    // 「追加できるとよい人材」は、チームの人数の上限（10名）までの空きの分、最大3名
+    maxTalents: MAX_TEAM_DRAFT_MEMBERS - people.length,
   });
   if (!ideas) return c.json(err("ai_failed", "協働事業をまとめられませんでした。少し時間をおいて、もう一度お試しください"), 502);
   const now = Math.floor(Date.now() / 1000);
