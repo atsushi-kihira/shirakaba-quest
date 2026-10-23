@@ -46,7 +46,12 @@ function patternLabel(p: { recurrenceType: string; dayOfWeek: number; weekOfMont
   switch (p.recurrenceType) {
     case "monthly": {
       // 毎月の「第N曜日」を複数指定しているときは、「毎月第1火曜・第3水曜」のように並べる
-      const slots = [{ weekOfMonth: p.weekOfMonth ?? 1, dayOfWeek: p.dayOfWeek }, ...(p.extraSlots ?? [])];
+      // 日ごとに時刻が違うときは、「毎月第1火曜 19:00〜20:00・第3水曜 20:00〜21:00」のように、それぞれの時刻も添える
+      const slots = [{ weekOfMonth: p.weekOfMonth ?? 1, dayOfWeek: p.dayOfWeek, startTimeLocal: p.startTimeLocal, endTimeLocal: p.endTimeLocal },
+        ...(p.extraSlots ?? []).map((s) => ({ ...s, startTimeLocal: s.startTimeLocal ?? p.startTimeLocal, endTimeLocal: s.endTimeLocal ?? p.endTimeLocal }))];
+      if ((p.extraSlots ?? []).some((s) => s.startTimeLocal && (s.startTimeLocal !== p.startTimeLocal || s.endTimeLocal !== p.endTimeLocal))) {
+        return `毎月${slots.map((s) => `${WEEK_LABEL[s.weekOfMonth] ?? ""}${DOW_LABEL[s.dayOfWeek] ?? "?"}曜 ${s.startTimeLocal}〜${s.endTimeLocal}`).join("・")}`;
+      }
       prefix = `毎月${slots.map((s) => `${WEEK_LABEL[s.weekOfMonth] ?? ""}${DOW_LABEL[s.dayOfWeek] ?? "?"}曜`).join("・")}`;
       break;
     }
@@ -73,7 +78,10 @@ function normalizeCandidatePattern(cand: CandidateInput): { recurrenceType: Recu
 /** 毎月の「第N曜日」の追加分（2つ目以降）を、保存する形（JSON文字列）にする。毎月（第N曜日）以外では持たない */
 function extraSlotsJsonFor(cand: CandidateInput): string | null {
   if (cand.recurrenceType !== "monthly" || !cand.extraSlots?.length) return null;
-  return JSON.stringify(cand.extraSlots.map((s) => ({ weekOfMonth: s.weekOfMonth, dayOfWeek: s.dayOfWeek })));
+  return JSON.stringify(cand.extraSlots.map((s) => ({
+    weekOfMonth: s.weekOfMonth, dayOfWeek: s.dayOfWeek,
+    ...(s.startTimeLocal && s.endTimeLocal ? { startTimeLocal: s.startTimeLocal, endTimeLocal: s.endTimeLocal } : {}),
+  })));
 }
 
 const UPCOMING_PREVIEW_COUNT = 8;
@@ -279,7 +287,7 @@ meetingSeriesRoutes.post("/", async (c) => {
           return c.json({ error: { code: "invalid_input", message: "同じ月に複数の日を設定できるのは、毎月の「第◯ ◯曜日」のときだけです" } }, 400);
         }
         if (cand.extraSlots.length > MAX_MONTHLY_SLOTS - 1 || !cand.extraSlots.every((s) => isValidSlot(s))) {
-          return c.json({ error: { code: "invalid_input", message: `同じ月に設定できる日は、最大${MAX_MONTHLY_SLOTS}つまでです（曜日・第◯週の指定を確認してください）` } }, 400);
+          return c.json({ error: { code: "invalid_input", message: `同じ月に設定できる日は、最大${MAX_MONTHLY_SLOTS}つまでです（曜日・第◯週・時刻の指定を確認してください）` } }, 400);
         }
         const keys = [{ weekOfMonth: cand.weekOfMonth ?? 1, dayOfWeek: cand.dayOfWeek }, ...cand.extraSlots].map((s) => `${s.weekOfMonth}:${s.dayOfWeek}`);
         if (new Set(keys).size !== keys.length) {
@@ -421,7 +429,7 @@ meetingSeriesRoutes.post("/", async (c) => {
       id: candidateId, seriesId,
       recurrenceType: singleCandidate.recurrenceType, dayOfWeek: singleCandidate.dayOfWeek, weekOfMonth: singleCandidate.weekOfMonth,
       startTimeLocal: singleCandidate.startTimeLocal, endTimeLocal: singleCandidate.endTimeLocal,
-      extraSlotsJson: singleCandidate.extraSlots.length > 0 ? JSON.stringify(singleCandidate.extraSlots) : null,
+      extraSlotsJson: extraSlotsJsonFor({ ...singleCandidate, extraSlots: singleCandidate.extraSlots }),
       note: singleCandidate.note ?? null, sortOrder: 0, isConfirmed: 1,
     });
     await db.update(schema.meetingSeries).set({ confirmedPatternId: candidateId }).where(eq(schema.meetingSeries.id, seriesId));

@@ -101,20 +101,6 @@ export async function sweepTeamProfileBackfill(db: Db, env: Env, origin: string,
   }
 }
 
-/** 管理画面向け：仮プロフィールの状況 */
-export async function backfillSummary(db: Db): Promise<{ teams: number; withProfile: number; provisional: number; missing: number; generating: number; failed: number }> {
-  const [teams, rows] = await Promise.all([
-    db.select({ n: sql<number>`count(*)` }).from(schema.collabTeams).get(),
-    db.select({ isProvisional: schema.teamProfiles.isProvisional, status: schema.teamProfiles.backfillStatus, title: schema.teamProfiles.businessTitle })
-      .from(schema.teamProfiles).where(eq(schema.teamProfiles.subjectType, "team")).all(),
-  ]);
-  const total = teams?.n ?? 0;
-  return {
-    teams: total, withProfile: rows.filter((r) => r.title.trim() !== "").length, provisional: rows.filter((r) => r.isProvisional === 1).length,
-    missing: Math.max(0, total - rows.length), generating: rows.filter((r) => r.status === "generating").length, failed: rows.filter((r) => r.status === "failed").length,
-  };
-}
-
 /** アプリが開かれたときに呼ぶ。仮のプロフィールを作る対象が残っていれば、バックグラウンドで生成を始める */
 export async function maybeStartTeamBackfill(db: Db, env: Env, origin: string): Promise<void> {
   try {

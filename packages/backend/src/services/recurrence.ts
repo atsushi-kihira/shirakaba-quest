@@ -16,7 +16,13 @@ export type RecurrenceType = "weekly" | "biweekly" | "monthly" | "monthly_day" |
 export const RECURRENCE_TYPES: RecurrenceType[] = ["weekly", "biweekly", "monthly", "monthly_day", "monthly_end", "monthly_end_weekday"];
 
 /** 毎月の「第N曜日」の1つ分（weekOfMonth: 1〜5 または -1=最終週、dayOfWeek: 0=日 .. 6=土） */
-export type MonthlySlot = { weekOfMonth: number; dayOfWeek: number };
+export type MonthlySlot = {
+  weekOfMonth: number;
+  dayOfWeek: number;
+  /** この日の開始・終了時刻（"19:00"）。省略したときは、パターンの時刻（1つ目の日の時刻）と同じ */
+  startTimeLocal?: string;
+  endTimeLocal?: string;
+};
 /** 1つの毎月パターンに設定できる「第N曜日」の最大数（1つ目＋追加分） */
 export const MAX_MONTHLY_SLOTS = 3;
 
@@ -38,12 +44,25 @@ export function parseExtraSlots(raw: string | null | undefined): MonthlySlot[] {
     if (!Array.isArray(v)) return [];
     return v.flatMap((s: unknown) => {
       const o = s as { weekOfMonth?: unknown; dayOfWeek?: unknown };
-      return isValidSlot(o) ? [{ weekOfMonth: o.weekOfMonth as number, dayOfWeek: o.dayOfWeek as number }] : [];
+      const t = s as { startTimeLocal?: unknown; endTimeLocal?: unknown };
+      if (!isValidSlot(o)) return [];
+      const slot: MonthlySlot = { weekOfMonth: o.weekOfMonth as number, dayOfWeek: o.dayOfWeek as number };
+      if (typeof t.startTimeLocal === "string" && TIME_RE.test(t.startTimeLocal) && typeof t.endTimeLocal === "string" && TIME_RE.test(t.endTimeLocal)) {
+        slot.startTimeLocal = t.startTimeLocal;
+        slot.endTimeLocal = t.endTimeLocal;
+      }
+      return [slot];
     }).slice(0, MAX_MONTHLY_SLOTS - 1);
   } catch { return []; }
 }
 
-export function isValidSlot(s: { weekOfMonth?: unknown; dayOfWeek?: unknown }): boolean {
+const TIME_RE = /^\d{2}:\d{2}$/;
+
+/** 「第N曜日」1つ分の指定が正しいか（週・曜日。時刻を指定している場合は、時刻の形式と、終了が開始より後であること） */
+export function isValidSlot(s: { weekOfMonth?: unknown; dayOfWeek?: unknown; startTimeLocal?: unknown; endTimeLocal?: unknown }): boolean {
+  if (s.startTimeLocal !== undefined || s.endTimeLocal !== undefined) {
+    if (typeof s.startTimeLocal !== "string" || typeof s.endTimeLocal !== "string" || !TIME_RE.test(s.startTimeLocal) || !TIME_RE.test(s.endTimeLocal) || s.startTimeLocal >= s.endTimeLocal) return false;
+  }
   return Number.isInteger(s.weekOfMonth) && ((s.weekOfMonth as number) === -1 || ((s.weekOfMonth as number) >= 1 && (s.weekOfMonth as number) <= 5))
     && Number.isInteger(s.dayOfWeek) && (s.dayOfWeek as number) >= 0 && (s.dayOfWeek as number) <= 6;
 }
@@ -126,23 +145,28 @@ export function computeOccurrences(
     let guardMonths = 0;
     while (results.length < maxCount && guardMonths < MAX_OCCURRENCES * 2) {
       guardMonths++;
-      // その月の開催日。毎月の「第N曜日」を複数指定しているときは、すべての日を日付順に並べる（同じ日になったものは1つにまとめる）
-      const days = new Set<number>();
+      // その月の開催日（日付と、その日の時刻）。毎月の「第N曜日」を複数指定しているときは、すべての日を日付順に並べる
+      // （日ごとに時刻を変えられる。同じ日の同じ開始時刻になったものは1つにまとめる）
+      const slots: { day: number; start: string; end: string }[] = [];
       const first = dayOfMonthFor(pattern, year, month);
-      if (first !== null) days.add(first);
+      if (first !== null) slots.push({ day: first, start: pattern.startTimeLocal, end: pattern.endTimeLocal });
       if (pattern.recurrenceType === "monthly") {
         for (const slot of (pattern.extraSlots ?? []).slice(0, MAX_MONTHLY_SLOTS - 1)) {
           const d = nthWeekdayOfMonth(year, month, slot.dayOfWeek, slot.weekOfMonth);
-          if (d !== null) days.add(d);
+          if (d === null) continue;
+          const start = slot.startTimeLocal ?? pattern.startTimeLocal;
+          if (slots.some((x) => x.day === d && x.start === start)) continue;
+          slots.push({ day: d, start, end: slot.endTimeLocal ?? pattern.endTimeLocal });
         }
       }
+      slots.sort((a, b) => a.day - b.day || a.start.localeCompare(b.start));
       let reachedEnd = false;
-      for (const day of [...days].sort((a, b) => a - b)) {
+      for (const slot of slots) {
         if (results.length >= maxCount) break;
-        const startsAt = jstDateTimeToUnix(year, month, day, pattern.startTimeLocal);
+        const startsAt = jstDateTimeToUnix(year, month, slot.day, slot.start);
         if (startsAt < fromTs) continue;
         if (endDate !== null && startsAt > endDate) { reachedEnd = true; break; }
-        results.push({ startsAt, endsAt: jstDateTimeToUnix(year, month, day, pattern.endTimeLocal) });
+        results.push({ startsAt, endsAt: jstDateTimeToUnix(year, month, slot.day, slot.end) });
       }
       if (reachedEnd) break;
       month++;

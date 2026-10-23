@@ -28,7 +28,8 @@ const MONTHLY_MODE_OPTIONS: { value: RecurrenceType; label: string }[] = [
   { value: "monthly_end", label: "月末（土日祝を含む）" },
   { value: "monthly_end_weekday", label: "月末（土日祝の場合は直前の平日）" },
 ];
-type MonthlySlot = { weekOfMonth: number; dayOfWeek: number };
+/** 毎月の「第◯ ◯曜日」の2つ目以降。日ごとに開始時刻を決められる（終了は、開始＋共通の所要時間） */
+type MonthlySlot = { weekOfMonth: number; dayOfWeek: number; startTimeLocal: string };
 type PatternCandidate = {
   recurrenceType: RecurrenceType;
   dayOfWeek: number;
@@ -155,7 +156,7 @@ export function MeetingSeriesNewScreen() {
       // 追加する日の初期値は、いま選んでいる日と重ならないもの（第1→第2、第2→第3 …の同じ曜日）
       const last = c.extraSlots[c.extraSlots.length - 1] ?? { weekOfMonth: c.weekOfMonth, dayOfWeek: c.dayOfWeek };
       const nextWeek = last.weekOfMonth >= 1 && last.weekOfMonth < 4 ? last.weekOfMonth + 1 : 1;
-      return { ...c, extraSlots: [...c.extraSlots, { weekOfMonth: nextWeek, dayOfWeek: last.dayOfWeek }] };
+      return { ...c, extraSlots: [...c.extraSlots, { weekOfMonth: nextWeek, dayOfWeek: last.dayOfWeek, startTimeLocal: c.startTimeLocal }] };
     }));
   }
   function updateExtraSlot(i: number, k: number, patch: Partial<MonthlySlot>) {
@@ -250,7 +251,9 @@ export function MeetingSeriesNewScreen() {
         recurrenceType: c.recurrenceType,
         dayOfWeek: c.dayOfWeek,
         weekOfMonth: c.recurrenceType === "monthly" ? c.weekOfMonth : undefined,
-        extraSlots: c.recurrenceType === "monthly" && c.extraSlots.length > 0 ? c.extraSlots : undefined,
+        extraSlots: c.recurrenceType === "monthly" && c.extraSlots.length > 0
+          ? c.extraSlots.map((x) => ({ weekOfMonth: x.weekOfMonth, dayOfWeek: x.dayOfWeek, startTimeLocal: x.startTimeLocal, endTimeLocal: addMinutesToTime(x.startTimeLocal, duration) }))
+          : undefined,
         dayOfMonth: c.recurrenceType === "monthly_day" ? c.dayOfMonth : undefined,
         startTimeLocal: c.startTimeLocal,
         endTimeLocal: addMinutesToTime(c.startTimeLocal, duration),
@@ -579,6 +582,9 @@ export function MeetingSeriesNewScreen() {
                               className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }}>
                               {DOW_OPTIONS.map((d, idx) => <option key={idx} value={idx}>{d}曜</option>)}
                             </select>
+                            <input type="time" value={sl.startTimeLocal} onChange={(e) => updateExtraSlot(i, k, { startTimeLocal: e.target.value })}
+                              className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }} />
+                            <span className="text-xs" style={{ color: "var(--color-ink-500)" }}>〜{sl.startTimeLocal ? addMinutesToTime(sl.startTimeLocal, duration) : "--:--"}</span>
                             <button type="button" onClick={() => removeExtraSlot(i, k)} aria-label="この日を外す" className="p-1 rounded-xl hover:opacity-70" style={{ color: "var(--color-ink-400)" }}>
                               <Trash2 size={14} />
                             </button>
@@ -592,8 +598,8 @@ export function MeetingSeriesNewScreen() {
                         )}
                         {cand.extraSlots.length > 0 && (
                           <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
-                            毎月、{[{ weekOfMonth: cand.weekOfMonth, dayOfWeek: cand.dayOfWeek }, ...cand.extraSlots]
-                              .map((x) => `${WEEK_OPTIONS.find((w) => w.value === x.weekOfMonth)?.label ?? ""}${DOW_OPTIONS[x.dayOfWeek]}曜日`).join("・")}に開催します（同じ日になる月は1回です）。
+                            毎月、{[{ weekOfMonth: cand.weekOfMonth, dayOfWeek: cand.dayOfWeek, startTimeLocal: cand.startTimeLocal }, ...cand.extraSlots]
+                              .map((x) => `${WEEK_OPTIONS.find((w) => w.value === x.weekOfMonth)?.label ?? ""}${DOW_OPTIONS[x.dayOfWeek]}曜日 ${x.startTimeLocal}〜${x.startTimeLocal ? addMinutesToTime(x.startTimeLocal, duration) : "--:--"}`).join("・")}に開催します。
                           </p>
                         )}
                       </div>

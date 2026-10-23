@@ -15,8 +15,8 @@ import { Hono } from "hono";
 import { and, desc, eq, gte, inArray, isNull, ne, or, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
-import { addMilestone, deleteTeamWorkspaceData, onTeamCreated } from "../../services/team-workspace.ts";
-import { backfillSummary, sweepTeamProfileBackfill } from "../../services/team-backfill.ts";
+import { addMilestone, deleteTeamWorkspaceData, hasProfileContent, isProfileComplete, onTeamCreated, parseRoles, parseSteps } from "../../services/team-workspace.ts";
+import { sweepTeamProfileBackfill } from "../../services/team-backfill.ts";
 import { deriveStage, computeStalled } from "../../services/collab-stage.ts";
 import { generateCompanySummary } from "../../services/company-summary.ts";
 import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../../services/map-positions.ts";
@@ -637,10 +637,59 @@ adminCollabRoutes.post("/contacts/backfill-business-summary", async (c) => {
 });
 
 // ---- 既存チームの「仮のプロフィール・役割」 ----
-// GET  /api/admin/collab/team-profiles/summary   → 作成状況（チーム数・仮の内容・未作成・生成中・失敗）
+// GET  /api/admin/collab/team-profiles           → チームごとのプロフィールの状況と内容（リーダーが見るのと同じ内容。確認待ちの仮の内容も含む）と、状況ごとの件数
 // POST /api/admin/collab/team-profiles/backfill  → いますぐ生成を始める（失敗したものも再試行）。公開後、誰かがアプリを開いたときにも自動で始まる
-adminCollabRoutes.get("/team-profiles/summary", async (c) => {
-  return c.json({ data: await backfillSummary(createDb(c.env.DB)) });
+type ProfileStatus = "confirmed" | "provisional" | "missing" | "generating" | "failed" | "incomplete";
+
+adminCollabRoutes.get("/team-profiles", async (c) => {
+  const db = createDb(c.env.DB);
+  const teams = await db.select().from(schema.collabTeams).orderBy(schema.collabTeams.createdAt).all();
+  if (teams.length === 0) return c.json({ data: { teams: [], counts: { confirmed: 0, provisional: 0, missing: 0, generating: 0, failed: 0, incomplete: 0 } } });
+  const teamIds = teams.map((t) => t.id);
+  const inChunks = async <T,>(run: (ids: string[]) => Promise<T[]>): Promise<T[]> => {
+    const out: T[] = [];
+    for (let i = 0; i < teamIds.length; i += 80) out.push(...(await run(teamIds.slice(i, i + 80))));
+    return out;
+  };
+  const [profiles, memberRows, prospectRows] = await Promise.all([
+    inChunks((ids) => db.select().from(schema.teamProfiles).where(and(eq(schema.teamProfiles.subjectType, "team"), inArray(schema.teamProfiles.subjectId, ids))).all()),
+    inChunks((ids) => db.select().from(schema.collabTeamMembers).where(and(inArray(schema.collabTeamMembers.teamId, ids), ne(schema.collabTeamMembers.status, "declined"))).all()),
+    inChunks((ids) => db.select().from(schema.teamProspects).where(and(eq(schema.teamProspects.subjectType, "team"), inArray(schema.teamProspects.subjectId, ids))).all()),
+  ]);
+  const people = new Map(
+    (await db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, status: schema.members.status })
+      .from(schema.members).where(inArray(schema.members.id, [...new Set([...memberRows.map((m) => m.memberId), ...teams.map((t) => t.createdBy)])])).all()).map((m) => [m.id, m]),
+  );
+  const profileByTeam = new Map(profiles.map((p) => [p.subjectId, p]));
+
+  const counts: Record<ProfileStatus, number> = { confirmed: 0, provisional: 0, missing: 0, generating: 0, failed: 0, incomplete: 0 };
+  const data = teams.map((t) => {
+    const p = profileByTeam.get(t.id) ?? null;
+    const status: ProfileStatus = !p ? "missing"
+      : p.backfillStatus === "generating" ? "generating"
+      : p.backfillStatus === "failed" ? "failed"
+      : p.isProvisional === 1 ? "provisional"
+      : isProfileComplete(p) ? "confirmed" : "incomplete";
+    counts[status]++;
+    const roles = parseRoles(p?.rolesJson);
+    const leader = people.get(t.createdBy);
+    return {
+      id: t.id, name: t.name, type: t.type as "loose" | "power", archived: t.archived === 1, status,
+      leader: { id: t.createdBy, name: leader?.name ?? "（退会済み）", gone: !leader || leader.status === "deleted" },
+      profile: p && (hasProfileContent(p) || p.businessTitle || p.summary || p.targetCustomers) ? {
+        businessTitle: p.businessTitle, summary: p.summary, targetCustomers: p.targetCustomers, goal: p.goal,
+        firstSteps: parseSteps(p.firstStepsJson), updatedAt: p.updatedAt, confirmedAt: p.confirmedAt,
+      } : null,
+      generatedAt: p?.backfillAt ?? null,
+      members: memberRows.filter((m) => m.teamId === t.id).map((m) => {
+        const info = people.get(m.memberId);
+        return { id: m.memberId, name: info?.name ?? "（退会済み）", emoji: info?.emoji ?? "", status: m.status as "active" | "pending", isLeader: m.memberId === t.createdBy, role: roles[`m:${m.memberId}`] ?? null };
+      }),
+      candidateCount: prospectRows.filter((x) => x.subjectId === t.id && x.kind !== "talent").length,
+      talents: prospectRows.filter((x) => x.subjectId === t.id && x.kind === "talent").map((x) => ({ title: x.talentTitle ?? "", published: x.published === 1, filled: !!x.filledByMemberId, role: roles[`t:${x.id}`] ?? null })),
+    };
+  });
+  return c.json({ data: { teams: data, counts } });
 });
 
 adminCollabRoutes.post("/team-profiles/backfill", async (c) => {
