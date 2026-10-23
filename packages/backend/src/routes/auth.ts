@@ -19,6 +19,7 @@ import { MailService } from "../services/mailer.ts";
 import { hasMemberRole } from "../services/member-roles.ts";
 import { sendFirstLoginWelcome } from "../services/first-login-welcome.ts";
 import { recordAccess } from "../services/access-log.ts";
+import { maybeStartTeamBackfill } from "../services/team-backfill.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { eq } from "drizzle-orm";
 import type { Env, Variables } from "../types.ts";
@@ -192,6 +193,9 @@ authRoutes.get("/me", authMiddleware, async (c) => {
   const userId = c.get("userId");
   const userType = c.get("userType");
   const db = createDb(c.env.DB);
+
+  // この機能ができる前からあるチームの「仮のプロフィール・役割」を、公開後に最初に誰かがアプリを開いたときに、バックグラウンドで作り始める
+  c.executionCtx.waitUntil(maybeStartTeamBackfill(db, c.env, new URL(c.req.url).origin));
 
   if (userType === "member") {
     const member = await db

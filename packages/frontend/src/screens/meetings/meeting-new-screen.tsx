@@ -2,7 +2,7 @@
 // ミーティング新規作成画面
 // =============================================================
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, Loader2, ChevronLeft, CalendarDays, Pencil, Sparkles, X, GripVertical } from "lucide-react";
 import { api } from "@/lib/api";
@@ -60,11 +60,14 @@ export function MeetingNewScreen() {
   const qc = useQueryClient();
   const { termExternalGuest } = useSettings();
 
-  const [title, setTitle] = useState("");
+  // チーム育成の画面から開いたときは、チーム対象・タイトルを設定した状態で始める
+  const [searchParams] = useSearchParams();
+  const prefillTeamId = searchParams.get("collabTeamId") ?? "";
+  const [title, setTitle] = useState(searchParams.get("title") ?? "");
   const [description, setDescription] = useState("");
-  const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected">("all");
+  const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected">(prefillTeamId ? "collab_team" : "all");
   const [teamId, setTeamId] = useState("");
-  const [collabTeamId, setCollabTeamId] = useState("");
+  const [collabTeamId, setCollabTeamId] = useState(prefillTeamId);
   const [inviteeIds, setInviteeIds] = useState<string[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([emptyCandidate()]);
   // 所要時間はすべての候補日時で共通。候補日時は開始日時だけを指定する（終了は開始＋所要時間）

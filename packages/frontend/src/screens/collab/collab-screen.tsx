@@ -5,7 +5,7 @@
 // 「自分だけに見える私的レイヤー」（自分から見た可能性/リファーラルのチェック、
 // 自分との関係の強さによるレイアウト）の2層構造になっている。
 // =============================================================
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useIsFetching, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Handshake, Plus, Home as HomeIcon, RefreshCw, X } from "lucide-react";
@@ -21,6 +21,7 @@ import {
 import { useDraggableMapLayout } from "@/hooks/use-draggable-map-layout";
 import { CreateCollabTeamModal } from "./_create-team-modal";
 import { TeamDraftCards } from "./_team-draft-cards";
+import { TalentBoard } from "./_talent-board";
 import { ActivityAndRecords } from "./_activity-and-records";
 
 type GraphNode = { id: string; name: string; emoji: string; bgColor: string; isMe: boolean; hasActivity: boolean };
@@ -248,6 +249,7 @@ function CollabMap() {
             <CollabTeamsList teams={graph.teams} meId={graph.center}
               expandedId={expandedTeamId} onExpandedChange={setExpandedTeamId} scrollNonce={teamScrollNonce}
               candidateMembers={[...graph.nodes.filter((n) => !n.isMe), ...graph.noActivityMembers]} />
+            <TalentBoard />
           </div>
 
           <div className="mt-8 pt-6" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
@@ -1494,7 +1496,7 @@ type TeamActionItem = {
 
 const ACTION_VISIBILITY_SHORT_LABEL: Record<TeamActionItem["visibility"], string> = { chapter: "📢公開", team: "🏠チーム内", private: "🔒非公開" };
 
-function TeamActionItemsChecklist({ teamId, members, canEdit }: { teamId: string; members: TeamMember[]; canEdit: boolean }) {
+export function TeamActionItemsChecklist({ teamId, members, canEdit }: { teamId: string; members: TeamMember[]; canEdit: boolean }) {
   const qc = useQueryClient();
   const queryKey = ["collab", "team-action-items", teamId];
   const { data } = useQuery<{ data: TeamActionItem[] }>({
@@ -1716,6 +1718,9 @@ function CollabTeamsList({ teams, meId, candidateMembers, expandedId, onExpanded
                 ) : (
                   <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>他のメンバーのチーム</span>
                 )}
+                <Link to={`/collab/teams/${t.id}`} className="text-xs px-2 py-1 rounded-full font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-brand)" }}>
+                  詳細
+                </Link>
                 {/* メンバー確認は誰でも可能。除名・脱退・解散などの操作のみ、下記で権限に応じて絞る */}
                 <button onClick={() => setExpandedId(isExpanded ? null : t.id)}
                   className="text-xs px-2 py-1 rounded-full" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>

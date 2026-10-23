@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Handshake, Plus, Home as HomeIcon, Search, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useDraggableMapLayout } from "@/hooks/use-draggable-map-layout";
+import { TeamProfileBackfillPanel } from "./_team-profile-backfill";
 
 type GraphNode = { id: string; name: string; emoji: string; bgColor: string; hasActivity: boolean };
 type Stage = "one" | "seed" | "loose";
@@ -76,6 +77,8 @@ export function AdminCollabScreen() {
           {selectedNode && (
             <AdminNodeDetailPanel node={selectedNode} graph={graph} onClose={() => setSelectedId(null)} />
           )}
+
+          <TeamProfileBackfillPanel />
 
           <div className="mt-6">
             <div className="flex items-center justify-between mb-2">

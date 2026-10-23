@@ -6,12 +6,17 @@
 import { callClaude } from "./member-collab.ts";
 
 export type DraftParticipant = {
-  /** "m:<メンバーID>" または "c:<外部人脈ID>" */
+  /** "m:<メンバーID>" / "c:<外部人脈ID>" / "t:<募集人材ID>" */
   key: string;
-  kind: "member" | "contact";
+  kind: "member" | "contact" | "talent";
+  /** AIに渡す名前。外部人脈は、本名を渡さず「外部人脈の候補A」のような呼び名にする */
   name: string;
   /** AIに渡す、その人の情報（職種・事業内容・USP など） */
   profile: string;
+  /** 立場：参加中（正式メンバー）／候補／募集中の人材像。省略時は「メンバー案」として扱う */
+  status?: "active" | "candidate" | "recruiting";
+  /** 確定（まとめ直しで外さない）。参加中の人は常に確定 */
+  locked?: boolean;
 };
 
 /** 「まとめ直す」で、システムの指示に加えて AI に与える観点 */
@@ -45,7 +50,7 @@ export type DesiredTalent = {
 /** 追加できるとよい人材の最大人数 */
 export const MAX_DESIRED_TALENTS = 3;
 
-export type SuggestedMember = { key: string; name: string; kind: "member" | "contact"; reason: string };
+export type SuggestedMember = { key: string; name: string; kind: "member" | "contact" | "talent"; reason: string };
 
 export type TeamDraftIdeas = {
   /** AIが考えた、チーム案の名前（タイトルをAIに任せた場合に使う） */
@@ -65,6 +70,8 @@ export type TeamDraftIdeas = {
   alternativeIdeas?: { title: string; summary: string }[];
   /** メンバー提案の観点のとき：チームに加えるとよさそうな人（メンバー・外部人脈） */
   suggestedMembers?: SuggestedMember[];
+  /** 確定していない候補・募集人材について、AIが「見送り」をすすめるもの（提案のみ。実際には外れない） */
+  memberAdvice?: { key: string; advice: "drop"; reason: string }[];
   /** 今回のまとめ直しで与えた観点（表示用） */
   appliedPerspectives?: RegeneratePerspective[];
   appliedNote?: string;
@@ -96,8 +103,15 @@ const RULES = `# ルール
 - 実現を約束する表現ではなく、「〜できそうです」「〜が考えられます」という提案のトーンで書く。
 - 存在しない key を使わない。出力は指定のJSON形式のみ。1文字目から必ず「{」で始める（前置き・コードブロックは不要）。`;
 
+function standingLabel(p: DraftParticipant): string {
+  if (p.status === "active") return "【参加中・確定】";
+  if (p.status === "recruiting") return p.locked ? "【募集中の人材像・確定】" : "【募集中の人材像】";
+  if (p.status === "candidate") return p.locked ? "【候補・確定】" : "【候補】";
+  return p.locked ? "【確定】" : "";
+}
+
 function listPeople(people: DraftParticipant[]): string {
-  return people.map((p) => `- key: ${p.key} / 名前: ${p.name}${p.kind === "contact" ? "（外部人脈・まだお声がけ前の候補）" : ""} / ${p.profile}`).join("\n");
+  return people.map((p) => `- key: ${p.key} / ${standingLabel(p)}名前: ${p.name}${p.kind === "contact" ? "（外部人脈・まだお声がけ前の候補）" : p.kind === "talent" ? "（まだいない人の人物像）" : ""} / ${p.profile}`).join("\n");
 }
 
 /** 「まとめ直す」の追加の観点を、プロンプトに足す文章にする */
@@ -150,9 +164,26 @@ ${listPeople(opt!.candidates)}
   return { perspectiveSection, previousSection, candidateSection, outputLines, jsonExtra, suggest };
 }
 
+/** 確定・候補の扱い。確定していない候補・募集人材があるときだけ、「見送りのおすすめ」を出力させる */
+function buildLockRules(people: DraftParticipant[]): { rules: string; outputLines: string; json: string } {
+  const unlocked = people.filter((p) => (p.status === "candidate" || p.status === "recruiting") && !p.locked);
+  const hasStatus = people.some((p) => p.status);
+  if (!hasStatus) return { rules: "", outputLines: "", json: "" };
+  const rules = `
+- 【参加中・確定】【候補・確定】【募集中の人材像・確定】の人は、必ずチームに含め、役割を考える。外す・見送るおすすめは出さない。
+- 【候補】【募集中の人材像】で確定していない人は、事業に不要・重複すると判断した場合に限り、見送りをおすすめしてよい（提案のみ）。
+- 【候補】【募集中の人材像】の人にも、チームに加わった場合の役割を考える（roles に含める）。`;
+  return {
+    rules,
+    outputLines: unlocked.length > 0 ? "- memberAdvice：確定していない候補・募集人材のうち、見送りをおすすめする人（key と reason＝1文）。おすすめがなければ空の配列\n" : "",
+    json: unlocked.length > 0 ? ',"memberAdvice":[{"key":"...","reason":"..."}]' : "",
+  };
+}
+
 /** メンバーが決まっているとき：その全員の力を合わせた協働事業・役割をまとめる */
 function buildPrompt(title: string, goal: string, people: DraftParticipant[], opt?: RegenerateOptions, maxTalents = 0): string {
   const x = buildExtras(people, opt);
+  const lockRules = buildLockRules(people);
   return `あなたはBNIチャプターのメンバー同士の協働事業（共同での事業・サービスづくり）を企画するAIです。
 下の「検討中のチーム案」のメンバー全員の力を合わせると、どんな協働事業ができそうかを提案し、それぞれの役割をまとめてください。
 
@@ -160,9 +191,9 @@ function buildPrompt(title: string, goal: string, people: DraftParticipant[], op
 ${OUTPUT_FIELDS}
 - roles：メンバー全員分の役割（key と role＝1文）。key は下の一覧の key をそのまま使う。外部人脈の方は、参加の意思が未確認の候補なので「お声がけできれば〜を担当してもらう」という書き方にする
 - firstSteps：このチームが最初に取り組むとよい行動を、3件以内（各1文）
-${talentFields(maxTalents)}${x.outputLines ? `${x.outputLines}\n` : ""}
-${RULES}
-{"teamTitle":"...","businessTitle":"...","targetCustomers":"...","summary":"...","roles":[{"key":"...","role":"..."}],"firstSteps":["...","..."]${maxTalents > 0 ? TALENT_JSON : ""}${x.jsonExtra}}
+${talentFields(maxTalents)}${lockRules.outputLines}${x.outputLines ? `${x.outputLines}\n` : ""}
+${RULES}${lockRules.rules}
+{"teamTitle":"...","businessTitle":"...","targetCustomers":"...","summary":"...","roles":[{"key":"...","role":"..."}],"firstSteps":["...","..."]${maxTalents > 0 ? TALENT_JSON : ""}${lockRules.json}${x.jsonExtra}}
 
 # チーム案のタイトル
 ${title.trim() || "（未定。上の teamTitle として、あなたが考えてください）"}
@@ -210,7 +241,7 @@ ${listPeople(candidates)}`;
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
-type ParsedIdeas = Pick<TeamDraftIdeas, "teamTitle" | "businessTitle" | "targetCustomers" | "summary" | "roles" | "firstSteps" | "alternativeIdeas" | "desiredTalents"> & {
+type ParsedIdeas = Pick<TeamDraftIdeas, "teamTitle" | "businessTitle" | "targetCustomers" | "summary" | "roles" | "firstSteps" | "alternativeIdeas" | "desiredTalents" | "memberAdvice"> & {
   memberKeys: string[];
   /** 追加をおすすめする人の key と理由（候補一覧にある key だけ） */
   suggested: { key: string; reason: string }[];
@@ -220,7 +251,7 @@ function parse(content: string, valid: Set<string>, suggestable?: Set<string>): 
   const m = content.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try {
-    const p = JSON.parse(m[0]) as { teamTitle?: unknown; businessTitle?: unknown; targetCustomers?: unknown; summary?: unknown; roles?: unknown; firstSteps?: unknown; memberKeys?: unknown; alternativeIdeas?: unknown; suggestedMembers?: unknown; desiredTalents?: unknown };
+    const p = JSON.parse(m[0]) as { teamTitle?: unknown; businessTitle?: unknown; targetCustomers?: unknown; summary?: unknown; roles?: unknown; firstSteps?: unknown; memberKeys?: unknown; alternativeIdeas?: unknown; suggestedMembers?: unknown; desiredTalents?: unknown; memberAdvice?: unknown };
     if (!str(p.businessTitle) || !str(p.summary)) return null;
     const seen = new Set<string>();
     const roles = (Array.isArray(p.roles) ? p.roles : []).flatMap((r: unknown) => {
@@ -239,6 +270,10 @@ function parse(content: string, valid: Set<string>, suggestable?: Set<string>): 
       const x = t as { title?: unknown; profile?: unknown; reason?: unknown; role?: unknown };
       return str(x?.title) && str(x?.profile) ? [{ title: str(x.title), profile: str(x.profile), reason: str(x.reason), role: str(x.role) }] : [];
     }).slice(0, MAX_DESIRED_TALENTS);
+    const memberAdvice = (Array.isArray(p.memberAdvice) ? p.memberAdvice : []).flatMap((m: unknown) => {
+      const x = m as { key?: unknown; reason?: unknown };
+      return typeof x?.key === "string" && valid.has(x.key) ? [{ key: x.key, advice: "drop" as const, reason: str(x.reason) }] : [];
+    });
     const seenSuggest = new Set<string>();
     const suggested = (Array.isArray(p.suggestedMembers) ? p.suggestedMembers : []).flatMap((m: unknown) => {
       const x = m as { key?: unknown; reason?: unknown };
@@ -251,6 +286,7 @@ function parse(content: string, valid: Set<string>, suggestable?: Set<string>): 
       summary: str(p.summary), roles, firstSteps, memberKeys, suggested,
       ...(alternativeIdeas.length > 0 ? { alternativeIdeas } : {}),
       ...(desiredTalents.length > 0 ? { desiredTalents } : {}),
+      ...(memberAdvice.length > 0 ? { memberAdvice } : {}),
     };
   } catch { return null; }
 }

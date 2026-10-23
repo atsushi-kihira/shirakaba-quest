@@ -470,6 +470,15 @@ export function HomeScreen() {
     });
   }
 
+  // チームのお知らせ（プロフィールの入力・確認、AI再検討の結果の確認、役割の承認、参加希望、期限など）。対応が済むまで出続ける
+  const { data: teamTodosData } = useQuery({
+    queryKey: ["collab", "workspace-todos"],
+    queryFn: () => api.get<{ data: { key: string; icon: string; title: string; detail?: string; to: string; urgent?: boolean }[] }>("/collab/workspace/todos"),
+    enabled: approved,
+    staleTime: 30_000,
+  });
+  const teamTodos = teamTodosData?.data ?? [];
+
   const needsEnishiPrompt = !!(goldenEggsData && goldenGeeseData && goldenEggsData.data.length === 0 && goldenGeeseData.data.length === 0);
 
   return (
@@ -487,6 +496,23 @@ export function HomeScreen() {
               ? `現在はゲストユーザーとして、1to1の日程調整など一部の機能のみご利用いただけます。${appTitle}のメンバーとしての機能が必要な場合は、管理者にお問い合わせください。`
               : `${appTitle}のメンバーとなるには管理者による承認が必要です。承認されれば、すべての機能が利用できるようになります。今しばらくお待ちください。`}
           </p>
+        </div>
+      )}
+
+      {/* チームのお知らせ（リーダーへのプロフィール入力の促しなど） */}
+      {teamTodos.length > 0 && (
+        <div className="space-y-2">
+          {teamTodos.map((t) => (
+            <Link key={t.key} to={t.to} className="flex items-center gap-3 px-4 py-3 rounded-2xl transition active:opacity-80"
+              style={{ background: t.urgent ? "rgba(181,56,75,0.07)" : "rgba(212,160,59,0.12)", border: `1px solid ${t.urgent ? "rgba(181,56,75,0.3)" : "rgba(212,160,59,0.35)"}` }}>
+              <span className="text-xl shrink-0">{t.icon}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{t.title}</p>
+                {t.detail && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-600)" }}>{t.detail}</p>}
+              </div>
+              <ChevronRight size={16} style={{ color: "var(--color-brand)" }} />
+            </Link>
+          ))}
         </div>
       )}
 

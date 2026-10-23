@@ -15,6 +15,8 @@ import { Hono } from "hono";
 import { and, desc, eq, gte, inArray, isNull, ne, or, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
+import { addMilestone, deleteTeamWorkspaceData, onTeamCreated } from "../../services/team-workspace.ts";
+import { backfillSummary, sweepTeamProfileBackfill } from "../../services/team-backfill.ts";
 import { deriveStage, computeStalled } from "../../services/collab-stage.ts";
 import { generateCompanySummary } from "../../services/company-summary.ts";
 import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../../services/map-positions.ts";
@@ -209,6 +211,7 @@ adminCollabRoutes.post("/teams", async (c) => {
       invitedBy: memberId === leaderId ? null : leaderId, respondedAt: now, createdAt: now,
     }))
   );
+  await onTeamCreated(db, teamId);
 
   return c.json({ data: { id: teamId } }, 201);
 });
@@ -244,6 +247,7 @@ adminCollabRoutes.post("/teams/declare", async (c) => {
       id: newId(), teamId, memberId, status: "active" as const, invitedBy: leaderId, respondedAt: now, createdAt: now,
     })),
   ]);
+  await onTeamCreated(db, teamId);
 
   return c.json({ data: { id: teamId } }, 201);
 });
@@ -257,6 +261,7 @@ adminCollabRoutes.delete("/teams/:id", async (c) => {
 
   await db.delete(schema.collabTeamMembers).where(eq(schema.collabTeamMembers.teamId, teamId));
   await db.delete(schema.collabTeams).where(eq(schema.collabTeams.id, teamId));
+  await deleteTeamWorkspaceData(db, "team", teamId);
 
   return c.json({ ok: true });
 });
@@ -329,6 +334,7 @@ adminCollabRoutes.post("/teams/:id/promote", async (c) => {
   if (team.type !== "loose") return c.json({ error: { code: "invalid_input", message: "緩いチームのみパワーチームに昇格できます" } }, 400);
 
   await db.update(schema.collabTeams).set({ type: "power" }).where(eq(schema.collabTeams.id, teamId));
+  await addMilestone(db, teamId, "promoted");
   return c.json({ ok: true });
 });
 
@@ -628,4 +634,17 @@ adminCollabRoutes.post("/contacts/backfill-business-summary", async (c) => {
     .all();
 
   return c.json({ data: { processed, remaining: remainingRows.length } });
+});
+
+// ---- 既存チームの「仮のプロフィール・役割」 ----
+// GET  /api/admin/collab/team-profiles/summary   → 作成状況（チーム数・仮の内容・未作成・生成中・失敗）
+// POST /api/admin/collab/team-profiles/backfill  → いますぐ生成を始める（失敗したものも再試行）。公開後、誰かがアプリを開いたときにも自動で始まる
+adminCollabRoutes.get("/team-profiles/summary", async (c) => {
+  return c.json({ data: await backfillSummary(createDb(c.env.DB)) });
+});
+
+adminCollabRoutes.post("/team-profiles/backfill", async (c) => {
+  const db = createDb(c.env.DB);
+  c.executionCtx.waitUntil(sweepTeamProfileBackfill(db, c.env, new URL(c.req.url).origin, 0, true));
+  return c.json({ ok: true });
 });

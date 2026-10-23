@@ -24,6 +24,8 @@ import { registerRoutes } from "./routes/register.ts";
 import { emailChangeRoutes } from "./routes/email-change.ts";
 import { accessRoutes } from "./routes/access.ts";
 import { collabTeamDraftRoutes } from "./routes/collab-team-drafts.ts";
+import { collabWorkspaceRoutes } from "./routes/collab-workspace.ts";
+import { sweepTeamProfileBackfill } from "./services/team-backfill.ts";
 import { adminRoutes } from "./routes/admin/index.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { meetingSeriesRoutes } from "./routes/meeting-series.ts";
@@ -82,6 +84,7 @@ app.route("/api/season", seasonRoutes);
 app.route("/api/events", eventRoutes);
 app.route("/api/teams", teamRoutes);
 app.route("/api/collab/team-drafts", collabTeamDraftRoutes); // 検討中のチーム案（本人だけに見える）。/api/collab より先に登録する
+app.route("/api/collab/workspace", collabWorkspaceRoutes); // チーム育成（チーム案・緩い／パワーチーム共通）。/api/collab より先に登録する
 app.route("/api/collab", collabRoutes);
 app.route("/api/share-stories", shareStoryRoutes);
 app.route("/api/enishi", enishiRoutes);
@@ -103,6 +106,20 @@ app.post("/api/internal/sweep-pending-summaries", async (c) => {
   const { hop } = await c.req.json<{ hop?: number }>().catch(() => ({ hop: 0 }));
   const origin = new URL(c.req.url).origin;
   c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, origin, hop ?? 0));
+  return c.json({ ok: true });
+});
+
+// ---- 内部専用: 既存チームの仮プロフィール生成の自己連鎖呼び出し（共有シークレットで保護） ----
+app.post("/api/internal/team-profile-backfill", async (c) => {
+  const secret = c.req.header("x-internal-task-secret");
+  if (!secret || secret !== c.env.INTERNAL_TASK_SECRET) {
+    return c.json({ error: { code: "forbidden", message: "許可されていないリクエストです" } }, 403);
+  }
+  const { createDb } = await import("./db/index.ts");
+  const db = createDb(c.env.DB);
+  const { hop, retryFailed } = await c.req.json<{ hop?: number; retryFailed?: boolean }>().catch(() => ({ hop: 0, retryFailed: false }));
+  const origin = new URL(c.req.url).origin;
+  c.executionCtx.waitUntil(sweepTeamProfileBackfill(db, c.env, origin, hop ?? 0, !!retryFailed));
   return c.json({ ok: true });
 });
 

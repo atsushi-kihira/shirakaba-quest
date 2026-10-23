@@ -16,6 +16,7 @@ import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { deriveStage, computeStalled } from "../services/collab-stage.ts";
 import { MailService } from "../services/mailer.ts";
+import { addMilestone, canUseActionItems, deleteTeamWorkspaceData, onJoinApproved, onTeamCreated } from "../services/team-workspace.ts";
 import { awardVisitorOneOnOnePoints } from "../services/oneonone-event.ts";
 import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../services/map-positions.ts";
 import { generateCompanySummary } from "../services/company-summary.ts";
@@ -695,6 +696,7 @@ collabRoutes.post("/teams", async (c) => {
       invitedBy: memberId === meId ? null : meId, respondedAt: now, createdAt: now,
     }))
   );
+  await onTeamCreated(db, teamId);
 
   return c.json({ data: { id: teamId } }, 201);
 });
@@ -724,6 +726,7 @@ collabRoutes.post("/teams/declare", async (c) => {
       id: newId(), teamId, memberId, status: "pending" as const, invitedBy: meId, respondedAt: null, createdAt: now,
     })),
   ]);
+  await onTeamCreated(db, teamId);
 
   return c.json({ data: { id: teamId } }, 201);
 });
@@ -771,6 +774,7 @@ collabRoutes.delete("/teams/:id", async (c) => {
 
   await db.delete(schema.collabTeamMembers).where(eq(schema.collabTeamMembers.teamId, teamId));
   await db.delete(schema.collabTeams).where(eq(schema.collabTeams.id, teamId));
+  await deleteTeamWorkspaceData(db, "team", teamId);
 
   return c.json({ ok: true });
 });
@@ -796,6 +800,7 @@ collabRoutes.post("/teams/:id/leave", async (c) => {
   if (remaining.length === 0) {
     await db.delete(schema.collabTeamMembers).where(eq(schema.collabTeamMembers.teamId, teamId));
     await db.delete(schema.collabTeams).where(eq(schema.collabTeams.id, teamId));
+    await deleteTeamWorkspaceData(db, "team", teamId);
   } else {
     // 作成者が抜けて管理者不在にならないよう、最も古参のアクティブメンバーへ自動的にリーダーを引き継ぐ
     const team = await db.select().from(schema.collabTeams).where(eq(schema.collabTeams.id, teamId)).get();
@@ -923,6 +928,7 @@ collabRoutes.post("/teams/:id/members/:memberId/approve", async (c) => {
   await db.update(schema.collabTeamMembers)
     .set({ status: "active", respondedAt: now })
     .where(eq(schema.collabTeamMembers.id, membership.id));
+  await onJoinApproved(db, teamId, targetId); // 募集人材への「興味あり」だった場合は、募集人材を「充足」にして役割を引き継ぐ
 
   return c.json({ ok: true });
 });
@@ -968,6 +974,7 @@ collabRoutes.post("/teams/:id/promote", async (c) => {
   if (team.type !== "loose") return c.json({ error: { code: "invalid_input", message: "緩いチームのみパワーチームに昇格できます" } }, 400);
 
   await db.update(schema.collabTeams).set({ type: "power" }).where(eq(schema.collabTeams.id, teamId));
+  await addMilestone(db, teamId, "promoted");
   return c.json({ ok: true });
 });
 
@@ -1055,10 +1062,7 @@ collabRoutes.get("/teams/:id/action-items", async (c) => {
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
 
   const teamId = c.req.param("id");
-  const membership = await db.select().from(schema.collabTeamMembers)
-    .where(and(eq(schema.collabTeamMembers.teamId, teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
-    .get();
-  const isTeamMember = !!membership;
+  const isTeamMember = await canUseActionItems(db, teamId, meId);
 
   const items = await db.select().from(schema.collabTeamActionItems)
     .where(eq(schema.collabTeamActionItems.teamId, teamId))
@@ -1118,10 +1122,7 @@ collabRoutes.post("/team-action-items", async (c) => {
   const task = body.task?.trim();
   if (!task) return c.json({ error: { code: "invalid_input", message: "やることを入力してください" } }, 400);
 
-  const membership = await db.select().from(schema.collabTeamMembers)
-    .where(and(eq(schema.collabTeamMembers.teamId, body.teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
-    .get();
-  if (!membership) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
+  if (!(await canUseActionItems(db, body.teamId, meId))) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
 
   const now = Math.floor(Date.now() / 1000);
   const id = newId();
@@ -1152,10 +1153,7 @@ collabRoutes.patch("/team-action-items/:id", async (c) => {
   const item = await db.select().from(schema.collabTeamActionItems).where(eq(schema.collabTeamActionItems.id, id)).get();
   if (!item) return c.json({ error: { code: "not_found", message: "アクションが見つかりません" } }, 404);
 
-  const membership = await db.select().from(schema.collabTeamMembers)
-    .where(and(eq(schema.collabTeamMembers.teamId, item.teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
-    .get();
-  if (!membership) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
+  if (!(await canUseActionItems(db, item.teamId, meId))) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
 
   const body = await c.req.json<{ completed?: boolean; task?: string; assigneeMemberId?: string | null; dueDate?: string | null; visibility?: "team" | "chapter" | "private" }>();
   const now = Math.floor(Date.now() / 1000);
@@ -1170,6 +1168,7 @@ collabRoutes.patch("/team-action-items/:id", async (c) => {
   if (body.visibility !== undefined) patch.visibility = body.visibility;
 
   await db.update(schema.collabTeamActionItems).set(patch).where(eq(schema.collabTeamActionItems.id, id));
+  if (patch.completed === 1) await addMilestone(db, item.teamId, "first_action_done");
   return c.json({ ok: true });
 });
 
@@ -1183,10 +1182,7 @@ collabRoutes.delete("/team-action-items/:id", async (c) => {
   const item = await db.select().from(schema.collabTeamActionItems).where(eq(schema.collabTeamActionItems.id, id)).get();
   if (!item) return c.json({ error: { code: "not_found", message: "アクションが見つかりません" } }, 404);
 
-  const membership = await db.select().from(schema.collabTeamMembers)
-    .where(and(eq(schema.collabTeamMembers.teamId, item.teamId), eq(schema.collabTeamMembers.memberId, meId), eq(schema.collabTeamMembers.status, "active")))
-    .get();
-  if (!membership) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
+  if (!(await canUseActionItems(db, item.teamId, meId))) return c.json({ error: { code: "forbidden", message: "このチームのメンバーではありません" } }, 403);
 
   await db.delete(schema.collabTeamActionItems).where(eq(schema.collabTeamActionItems.id, id));
   return c.json({ ok: true });

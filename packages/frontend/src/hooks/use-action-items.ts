@@ -57,6 +57,12 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
     enabled: isMember,
     staleTime: 30_000,
   });
+  const { data: teamTodoData } = useQuery({
+    queryKey: ["collab", "workspace-todos"],
+    queryFn: () => api.get<{ data: { key: string; icon: string; title: string; detail?: string; to: string; urgent?: boolean }[] }>("/collab/workspace/todos"),
+    enabled: isMember,
+    staleTime: 30_000,
+  });
   const { data: conferenceData } = useQuery({
     queryKey: ["oneonone", "conference-reminders"],
     queryFn: () => api.get<{ data: ConferenceReminder[] }>("/oneonone/conference-reminders"),
@@ -181,6 +187,11 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
       detail: r.message ?? undefined,
       to: "/members?tab=contacts",
     });
+  }
+
+  // チームのお知らせ（プロフィールの入力・確認、AI再検討の結果の確認、役割の承認、参加希望、アクションの期限）
+  for (const t of teamTodoData?.data ?? []) {
+    items.push({ key: t.key, group: "collab", icon: t.icon, title: t.title, detail: t.detail, to: t.to, urgent: t.urgent, weight: 1 });
   }
 
   return { items, count: items.reduce((sum, it) => sum + it.weight, 0) };

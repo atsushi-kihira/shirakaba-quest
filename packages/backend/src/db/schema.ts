@@ -110,6 +110,7 @@ export const collabTeamMembers = sqliteTable(
     invitedBy:    text("invited_by"),
     respondedAt:  integer("responded_at"),
     createdAt:    integer("created_at").notNull(),
+    prospectId:   text("prospect_id"), // 募集人材への「興味あり」の場合、その募集人材のID
   },
   (t) => [uniqueIndex("uniq_collab_team_member").on(t.teamId, t.memberId)]
 );
@@ -416,6 +417,90 @@ export const teamDraftMembers = sqliteTable(
   },
   (t) => [uniqueIndex("uniq_team_draft_member").on(t.draftId, t.kind, t.refId)]
 );
+
+// チームプロフィール（チーム案・緩いチーム・パワーチーム共通）。subjectType: 'draft' | 'team'
+export const teamProfiles = sqliteTable(
+  "team_profiles",
+  {
+    id:              text("id").primaryKey(),
+    subjectType:     text("subject_type").notNull(),
+    subjectId:       text("subject_id").notNull(),
+    businessTitle:   text("business_title").notNull().default(""),
+    summary:         text("summary").notNull().default(""),
+    targetCustomers: text("target_customers").notNull().default(""),
+    goal:            text("goal").notNull().default(""),
+    firstStepsJson:  text("first_steps_json").notNull().default("[]"),
+    rolesJson:       text("roles_json").notNull().default("{}"), // { "m:<id>" | "c:<id>" | "t:<id>": 役割 }
+    isProvisional:   integer("is_provisional").notNull().default(0), // 1 = AIが仮に作った内容（リーダーの確認待ち）
+    backfillStatus:  text("backfill_status"),                       // 'generating' | 'done' | 'failed'
+    backfillAt:      integer("backfill_at"),
+    confirmedAt:     integer("confirmed_at"),
+    updatedBy:       text("updated_by"),
+    createdAt:       integer("created_at").notNull(),
+    updatedAt:       integer("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_team_profile_subject").on(t.subjectType, t.subjectId)]
+);
+
+// AIによる再検討の提案の履歴
+export const teamProfileProposals = sqliteTable("team_profile_proposals", {
+  id:               text("id").primaryKey(),
+  subjectType:      text("subject_type").notNull(),
+  subjectId:        text("subject_id").notNull(),
+  createdBy:        text("created_by").notNull(),
+  perspectivesJson: text("perspectives_json").notNull().default("[]"),
+  note:             text("note").notNull().default(""),
+  proposalJson:     text("proposal_json").notNull(),
+  appliedJson:      text("applied_json").notNull().default("{}"),
+  status:           text("status").notNull().default("open"), // 'open' | 'closed'
+  baseUpdatedAt:    integer("base_updated_at").notNull(),
+  createdAt:        integer("created_at").notNull(),
+});
+
+// 候補（メンバー・外部人脈）と募集人材
+export const teamProspects = sqliteTable(
+  "team_prospects",
+  {
+    id:               text("id").primaryKey(),
+    subjectType:      text("subject_type").notNull(),
+    subjectId:        text("subject_id").notNull(),
+    kind:             text("kind").notNull(), // 'member' | 'contact' | 'talent'
+    refId:            text("ref_id"),
+    ownerMemberId:    text("owner_member_id"),
+    locked:           integer("locked").notNull().default(0),
+    talentTitle:      text("talent_title"),
+    talentProfile:    text("talent_profile"),
+    talentReason:     text("talent_reason"),
+    published:        integer("published").notNull().default(0),
+    filledByMemberId: text("filled_by_member_id"),
+    filledAt:         integer("filled_at"),
+    addedBy:          text("added_by"),
+    createdAt:        integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_team_prospect_ref").on(t.subjectType, t.subjectId, t.kind, t.refId)]
+);
+
+// 他のメンバーの役割を書き換える提案（リーダーの承認待ち）
+export const teamRoleRequests = sqliteTable("team_role_requests", {
+  id:           text("id").primaryKey(),
+  teamId:       text("team_id").notNull(),
+  targetKey:    text("target_key").notNull(),
+  requestedBy:  text("requested_by").notNull(),
+  proposedRole: text("proposed_role").notNull(),
+  status:       text("status").notNull().default("pending"), // 'pending' | 'approved' | 'rejected'
+  decidedBy:    text("decided_by"),
+  decidedAt:    integer("decided_at"),
+  createdAt:    integer("created_at").notNull(),
+});
+
+// チームの歩み
+export const teamMilestones = sqliteTable("team_milestones", {
+  id:        text("id").primaryKey(),
+  teamId:    text("team_id").notNull(),
+  type:      text("type").notNull(),
+  refId:     text("ref_id"),
+  createdAt: integer("created_at").notNull(),
+});
 
 export const authSessions = sqliteTable("auth_sessions", {
   id:        text("id").primaryKey(),
