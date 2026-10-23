@@ -140,6 +140,8 @@ function EnishiFirstLoginDialog({ userId, enabled }: { userId: string | undefine
 export function HomeScreen() {
   const user = useAuthStore((s) => s.user);
   const approved = isApprovedMember(user);
+  // ゲストユーザー（シーズン・ポイントやQRカードの受け渡しなど、メンバー向けの機能は使えない）
+  const isGuest = user?.status === "guest";
   const { termQuest, termUsp, appTitle, termExternalGuest, termEnishi, termBusinessCommunity } = useSettings();
   const tz = useTimezone();
   const navigate = useNavigate();
@@ -493,7 +495,7 @@ export function HomeScreen() {
           </p>
           <p className="text-xs" style={{ color: "var(--color-ink-600)" }}>
             {user?.status === "guest"
-              ? `現在はゲストユーザーとして、1to1の日程調整など一部の機能のみご利用いただけます。${appTitle}のメンバーとしての機能が必要な場合は、管理者にお問い合わせください。`
+              ? `現在はゲストユーザーとして、1to1の日程調整など一部の機能のみご利用いただけます。白樺チャプターのメンバーの方はシステム管理者の承認によりすべての機能が利用可能となります。`
               : `${appTitle}のメンバーとなるには管理者による承認が必要です。承認されれば、すべての機能が利用できるようになります。今しばらくお待ちください。`}
           </p>
         </div>
@@ -581,7 +583,7 @@ export function HomeScreen() {
       </div>
 
       {/* アクティブシーズン */}
-      {activeSeason && (
+      {activeSeason && !isGuest && (
         <button
           onClick={() => activeSeason.theme && setSeasonExpanded((v) => !v)}
           className="w-full text-left px-4 py-3 rounded-2xl transition active:opacity-80"
@@ -1220,8 +1222,8 @@ export function HomeScreen() {
         </section>
       )}
 
-      {/* ポイント */}
-      {!approved ? (
+      {/* ポイント（ゲストユーザーには、シーズンに関する表示を出さない） */}
+      {isGuest ? null : !approved ? (
         <div className="card-paper rounded-3xl p-5 opacity-50">
           <div className="flex items-center gap-2">
             <span className="text-xl">⭐️</span>
@@ -1351,7 +1353,7 @@ export function HomeScreen() {
           <QuickLink to="/meetings" icon={<Calendar size={18} />}   label="ミーティングの日程調整"    sub=""       color="#6B7DB3"
             description="1to1やミーティングの申し込み・日程調整はこちらから" />
           <QuickLink to="/me"       icon={<QrCode size={18} />}     label="自分のQRを表示してカードを渡す" sub="🃏"  color="var(--color-ink-500)"
-            description="マイページでQRコードを表示し、リアルカードを受け渡せます" />
+            description="マイページでQRコードを表示し、リアルカードを受け渡せます" disabled={isGuest} />
         </div>
       </section>
 

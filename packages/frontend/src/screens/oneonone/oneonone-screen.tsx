@@ -4,7 +4,7 @@
 // =============================================================
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X, Clock, CheckCircle, Loader2, Users, Camera, Calendar, Link2, Pencil } from "lucide-react";
+import { Check, X, Clock, CheckCircle, Loader2, Lock, Users, Camera, Calendar, Link2, Pencil } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
@@ -133,13 +133,15 @@ export function OneOnOneScreen() {
         <h1 className="text-2xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
           🤝 1to1
         </h1>
-        {/* カード画像から登録ボタン */}
+        {/* カード画像から登録ボタン（ゲストユーザーは利用できない） */}
         <button
           onClick={() => setShowImport(true)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium transition hover:opacity-80 active:opacity-70"
+          disabled={user?.status === "guest"}
+          title={user?.status === "guest" ? "メンバーの承認後に利用できます" : undefined}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-medium transition hover:opacity-80 active:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)", border: "1.5px solid var(--color-paper-300)" }}
         >
-          <Camera size={14} />
+          {user?.status === "guest" ? <Lock size={14} /> : <Camera size={14} />}
           カード画像から登録
         </button>
       </div>
