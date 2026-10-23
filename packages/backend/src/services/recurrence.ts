@@ -15,13 +15,38 @@ const JST_OFFSET_SECONDS = 9 * 60 * 60;
 export type RecurrenceType = "weekly" | "biweekly" | "monthly" | "monthly_day" | "monthly_end" | "monthly_end_weekday";
 export const RECURRENCE_TYPES: RecurrenceType[] = ["weekly", "biweekly", "monthly", "monthly_day", "monthly_end", "monthly_end_weekday"];
 
+/** 毎月の「第N曜日」の1つ分（weekOfMonth: 1〜5 または -1=最終週、dayOfWeek: 0=日 .. 6=土） */
+export type MonthlySlot = { weekOfMonth: number; dayOfWeek: number };
+/** 1つの毎月パターンに設定できる「第N曜日」の最大数（1つ目＋追加分） */
+export const MAX_MONTHLY_SLOTS = 3;
+
 export type RecurrencePattern = {
   recurrenceType: RecurrenceType;
   dayOfWeek: number; // 0=日 .. 6=土（monthly / weekly / biweekly のみ使用）
   weekOfMonth: number | null; // monthly: 1〜5 または -1(最終週) ／ monthly_day: 日付(1〜31)
   startTimeLocal: string; // "19:00"
   endTimeLocal: string;   // "20:00"
+  /** monthly のみ：同じ月の2つ目以降の「第N曜日」（例：毎月 第1火曜日と第3水曜日 の、第3水曜日）。最大2件 */
+  extraSlots?: MonthlySlot[];
 };
+
+/** DBに持っている追加分（JSON文字列）を、正しい形のものだけ取り出す */
+export function parseExtraSlots(raw: string | null | undefined): MonthlySlot[] {
+  if (!raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!Array.isArray(v)) return [];
+    return v.flatMap((s: unknown) => {
+      const o = s as { weekOfMonth?: unknown; dayOfWeek?: unknown };
+      return isValidSlot(o) ? [{ weekOfMonth: o.weekOfMonth as number, dayOfWeek: o.dayOfWeek as number }] : [];
+    }).slice(0, MAX_MONTHLY_SLOTS - 1);
+  } catch { return []; }
+}
+
+export function isValidSlot(s: { weekOfMonth?: unknown; dayOfWeek?: unknown }): boolean {
+  return Number.isInteger(s.weekOfMonth) && ((s.weekOfMonth as number) === -1 || ((s.weekOfMonth as number) >= 1 && (s.weekOfMonth as number) <= 5))
+    && Number.isInteger(s.dayOfWeek) && (s.dayOfWeek as number) >= 0 && (s.dayOfWeek as number) <= 6;
+}
 
 type JstParts = { year: number; month: number; day: number; dayOfWeek: number };
 
@@ -101,15 +126,25 @@ export function computeOccurrences(
     let guardMonths = 0;
     while (results.length < maxCount && guardMonths < MAX_OCCURRENCES * 2) {
       guardMonths++;
-      const day = dayOfMonthFor(pattern, year, month);
-      if (day !== null) {
-        const startsAt = jstDateTimeToUnix(year, month, day, pattern.startTimeLocal);
-        if (startsAt >= fromTs) {
-          const endsAt = jstDateTimeToUnix(year, month, day, pattern.endTimeLocal);
-          if (endDate !== null && startsAt > endDate) break;
-          results.push({ startsAt, endsAt });
+      // その月の開催日。毎月の「第N曜日」を複数指定しているときは、すべての日を日付順に並べる（同じ日になったものは1つにまとめる）
+      const days = new Set<number>();
+      const first = dayOfMonthFor(pattern, year, month);
+      if (first !== null) days.add(first);
+      if (pattern.recurrenceType === "monthly") {
+        for (const slot of (pattern.extraSlots ?? []).slice(0, MAX_MONTHLY_SLOTS - 1)) {
+          const d = nthWeekdayOfMonth(year, month, slot.dayOfWeek, slot.weekOfMonth);
+          if (d !== null) days.add(d);
         }
       }
+      let reachedEnd = false;
+      for (const day of [...days].sort((a, b) => a - b)) {
+        if (results.length >= maxCount) break;
+        const startsAt = jstDateTimeToUnix(year, month, day, pattern.startTimeLocal);
+        if (startsAt < fromTs) continue;
+        if (endDate !== null && startsAt > endDate) { reachedEnd = true; break; }
+        results.push({ startsAt, endsAt: jstDateTimeToUnix(year, month, day, pattern.endTimeLocal) });
+      }
+      if (reachedEnd) break;
       month++;
       if (month > 12) { month = 1; year++; }
     }

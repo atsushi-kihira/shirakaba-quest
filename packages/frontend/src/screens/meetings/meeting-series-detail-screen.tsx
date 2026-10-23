@@ -19,7 +19,7 @@ import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-e
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
 type Candidate = {
-  id: string; recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null;
+  id: string; recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; extraSlots?: { weekOfMonth: number; dayOfWeek: number }[];
   startTimeLocal: string; endTimeLocal: string; note: string | null;
   label: string; isConfirmed: boolean; respondents: Respondent[];
   upcomingDates?: { startsAt: number; endsAt: number }[];

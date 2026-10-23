@@ -946,6 +946,8 @@ export const meetingSeriesPatternCandidates = sqliteTable("meeting_series_patter
   recurrenceType:  text("recurrence_type").notNull(), // 'weekly' | 'biweekly' | 'monthly'
   dayOfWeek:       integer("day_of_week").notNull(),  // 0=日 .. 6=土
   weekOfMonth:     integer("week_of_month"),           // 1〜5 or -1(最終週)。monthlyのみ使用
+  // 毎月の「第N曜日」の2つ目以降（最大2件）。[{"weekOfMonth":3,"dayOfWeek":3}]。1つ目は dayOfWeek / weekOfMonth。monthlyのみ使用
+  extraSlotsJson:  text("extra_slots_json"),
   startTimeLocal:  text("start_time_local").notNull(), // "19:00"（Asia/Tokyo固定）
   endTimeLocal:    text("end_time_local").notNull(),   // "20:00"
   note:            text("note"),

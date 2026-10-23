@@ -28,10 +28,13 @@ const MONTHLY_MODE_OPTIONS: { value: RecurrenceType; label: string }[] = [
   { value: "monthly_end", label: "月末（土日祝を含む）" },
   { value: "monthly_end_weekday", label: "月末（土日祝の場合は直前の平日）" },
 ];
+type MonthlySlot = { weekOfMonth: number; dayOfWeek: number };
 type PatternCandidate = {
   recurrenceType: RecurrenceType;
   dayOfWeek: number;
   weekOfMonth: number; // monthlyのみ使用
+  /** 毎月の「第◯ ◯曜日」の2つ目以降（最大2つ。1つ目と合わせて3つまで）。monthlyのみ使用 */
+  extraSlots: MonthlySlot[];
   dayOfMonth: number;  // monthly_dayのみ使用（1〜31）
   startTimeLocal: string;
   endTimeLocal: string;
@@ -46,10 +49,12 @@ const WEEK_OPTIONS: { value: number; label: string }[] = [
   { value: 4, label: "第4" }, { value: 5, label: "第5" }, { value: -1, label: "最終" },
 ];
 const MAX_CANDIDATES = 20;
+/** 同じ月に設定できる「第◯ ◯曜日」の最大数（1つ目を含む） */
+const MAX_MONTHLY_SLOTS = 3;
 const MAX_FIXED_DATES = 50;
 
 function emptyCandidate(durationMinutes = 60): PatternCandidate {
-  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, dayOfMonth: 1, startTimeLocal: DEFAULT_START_TIME, endTimeLocal: addMinutesToTime(DEFAULT_START_TIME, durationMinutes), note: "" };
+  return { recurrenceType: "weekly", dayOfWeek: 2, weekOfMonth: 1, extraSlots: [], dayOfMonth: 1, startTimeLocal: DEFAULT_START_TIME, endTimeLocal: addMinutesToTime(DEFAULT_START_TIME, durationMinutes), note: "" };
 }
 
 function emptyFixedDateRow(durationMinutes = 60): FixedDateRow {
@@ -137,8 +142,27 @@ export function MeetingSeriesNewScreen() {
       if (field === "startTimeLocal") {
         return { ...c, startTimeLocal: value as string, endTimeLocal: addMinutesToTime(value as string, duration) };
       }
+      // 毎月の「第◯ ◯曜日」以外に切り替えたら、同じ月の追加の日は持たない
+      if (field === "recurrenceType" && value !== "monthly") {
+        return { ...c, recurrenceType: value as RecurrenceType, extraSlots: [] };
+      }
       return { ...c, [field]: value };
     }));
+  }
+  function addExtraSlot(i: number) {
+    setCandidates(candidates.map((c, idx) => {
+      if (idx !== i || c.extraSlots.length >= MAX_MONTHLY_SLOTS - 1) return c;
+      // 追加する日の初期値は、いま選んでいる日と重ならないもの（第1→第2、第2→第3 …の同じ曜日）
+      const last = c.extraSlots[c.extraSlots.length - 1] ?? { weekOfMonth: c.weekOfMonth, dayOfWeek: c.dayOfWeek };
+      const nextWeek = last.weekOfMonth >= 1 && last.weekOfMonth < 4 ? last.weekOfMonth + 1 : 1;
+      return { ...c, extraSlots: [...c.extraSlots, { weekOfMonth: nextWeek, dayOfWeek: last.dayOfWeek }] };
+    }));
+  }
+  function updateExtraSlot(i: number, k: number, patch: Partial<MonthlySlot>) {
+    setCandidates(candidates.map((c, idx) => (idx !== i ? c : { ...c, extraSlots: c.extraSlots.map((sl, j) => (j === k ? { ...sl, ...patch } : sl)) })));
+  }
+  function removeExtraSlot(i: number, k: number) {
+    setCandidates(candidates.map((c, idx) => (idx !== i ? c : { ...c, extraSlots: c.extraSlots.filter((_, j) => j !== k) })));
   }
   function toggleInvitee(id: string) {
     setInviteeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -207,6 +231,10 @@ export function MeetingSeriesNewScreen() {
       const activeCandidates = seriesMode === "confirmed" ? candidates.slice(0, 1) : candidates;
       for (const c of activeCandidates) {
         if (c.startTimeLocal >= c.endTimeLocal) { setError("終了時刻は開始時刻より後にしてください"); return; }
+        if (c.recurrenceType === "monthly" && c.extraSlots.length > 0) {
+          const keys = [{ weekOfMonth: c.weekOfMonth, dayOfWeek: c.dayOfWeek }, ...c.extraSlots].map((x) => `${x.weekOfMonth}:${x.dayOfWeek}`);
+          if (new Set(keys).size !== keys.length) { setError("同じ月に、同じ日（第◯ ◯曜日）が重複しています"); return; }
+        }
       }
       if (endCondition === "count") {
         const n = Number(occurrenceCount);
@@ -222,6 +250,7 @@ export function MeetingSeriesNewScreen() {
         recurrenceType: c.recurrenceType,
         dayOfWeek: c.dayOfWeek,
         weekOfMonth: c.recurrenceType === "monthly" ? c.weekOfMonth : undefined,
+        extraSlots: c.recurrenceType === "monthly" && c.extraSlots.length > 0 ? c.extraSlots : undefined,
         dayOfMonth: c.recurrenceType === "monthly_day" ? c.dayOfMonth : undefined,
         startTimeLocal: c.startTimeLocal,
         endTimeLocal: addMinutesToTime(c.startTimeLocal, duration),
@@ -536,6 +565,39 @@ export function MeetingSeriesNewScreen() {
                         〜{cand.startTimeLocal ? addMinutesToTime(cand.startTimeLocal, duration) : "--:--"}
                       </span>
                     </div>
+
+                    {cand.recurrenceType === "monthly" && (
+                      <div className="mb-2">
+                        {cand.extraSlots.map((sl, k) => (
+                          <div key={k} className="flex flex-wrap items-center gap-2 mb-2">
+                            <span className="text-xs w-8 shrink-0" style={{ color: "var(--color-ink-500)" }}>と</span>
+                            <select value={sl.weekOfMonth} onChange={(e) => updateExtraSlot(i, k, { weekOfMonth: Number(e.target.value) })}
+                              className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }}>
+                              {WEEK_OPTIONS.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
+                            </select>
+                            <select value={sl.dayOfWeek} onChange={(e) => updateExtraSlot(i, k, { dayOfWeek: Number(e.target.value) })}
+                              className="px-2.5 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)" }}>
+                              {DOW_OPTIONS.map((d, idx) => <option key={idx} value={idx}>{d}曜</option>)}
+                            </select>
+                            <button type="button" onClick={() => removeExtraSlot(i, k)} aria-label="この日を外す" className="p-1 rounded-xl hover:opacity-70" style={{ color: "var(--color-ink-400)" }}>
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                        {cand.extraSlots.length < MAX_MONTHLY_SLOTS - 1 && (
+                          <button type="button" onClick={() => addExtraSlot(i)}
+                            className="text-xs px-3 py-1.5 rounded-full font-medium flex items-center gap-1" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                            <Plus size={12} />同じ月のもう1日を追加（{cand.extraSlots.length + 1}/{MAX_MONTHLY_SLOTS}）
+                          </button>
+                        )}
+                        {cand.extraSlots.length > 0 && (
+                          <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
+                            毎月、{[{ weekOfMonth: cand.weekOfMonth, dayOfWeek: cand.dayOfWeek }, ...cand.extraSlots]
+                              .map((x) => `${WEEK_OPTIONS.find((w) => w.value === x.weekOfMonth)?.label ?? ""}${DOW_OPTIONS[x.dayOfWeek]}曜日`).join("・")}に開催します（同じ日になる月は1回です）。
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {cand.recurrenceType === "monthly_day" && cand.dayOfMonth > 28 && (
                       <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>※ その日がない月は、その月の末日になります。</p>

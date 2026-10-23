@@ -20,7 +20,7 @@ import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
-import { computeOccurrences, RECURRENCE_TYPES, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
+import { computeOccurrences, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -40,11 +40,16 @@ const RECURRENCE_LABEL: Record<"weekly" | "biweekly", string> = { weekly: "毎�
 const DOW_LABEL = ["日", "月", "火", "水", "木", "金", "土"];
 const WEEK_LABEL: Record<number, string> = { 1: "第1", 2: "第2", 3: "第3", 4: "第4", 5: "第5", [-1]: "最終" };
 
-function patternLabel(p: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string }): string {
+function patternLabel(p: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string; extraSlots?: MonthlySlot[] }): string {
   const dow = DOW_LABEL[p.dayOfWeek] ?? "?";
   let prefix: string;
   switch (p.recurrenceType) {
-    case "monthly": prefix = `毎月${WEEK_LABEL[p.weekOfMonth ?? 1] ?? ""}${dow}曜`; break;
+    case "monthly": {
+      // 毎月の「第N曜日」を複数指定しているときは、「毎月第1火曜・第3水曜」のように並べる
+      const slots = [{ weekOfMonth: p.weekOfMonth ?? 1, dayOfWeek: p.dayOfWeek }, ...(p.extraSlots ?? [])];
+      prefix = `毎月${slots.map((s) => `${WEEK_LABEL[s.weekOfMonth] ?? ""}${DOW_LABEL[s.dayOfWeek] ?? "?"}曜`).join("・")}`;
+      break;
+    }
     case "monthly_day": prefix = `毎月${p.weekOfMonth ?? 1}日`; break;
     case "monthly_end": prefix = "毎月末（土日祝を含む）"; break;
     case "monthly_end_weekday": prefix = "毎月末（土日祝の場合は直前の平日）"; break;
@@ -55,7 +60,7 @@ function patternLabel(p: { recurrenceType: string; dayOfWeek: number; weekOfMont
 
 // 候補パターンの入力を、保存する形（曜日・第N週・日付の使い分け）にそろえる。
 // 月ごとの「固定日」は日付を weekOfMonth 列に、曜日を使わない指定は dayOfWeek を 0 にして保存する。
-type CandidateInput = { recurrenceType: RecurrenceType; dayOfWeek: number; weekOfMonth?: number | null; dayOfMonth?: number | null };
+type CandidateInput = { recurrenceType: RecurrenceType; dayOfWeek: number; weekOfMonth?: number | null; dayOfMonth?: number | null; extraSlots?: MonthlySlot[] };
 function normalizeCandidatePattern(cand: CandidateInput): { recurrenceType: RecurrenceType; dayOfWeek: number; weekOfMonth: number | null } {
   switch (cand.recurrenceType) {
     case "monthly": return { recurrenceType: "monthly", dayOfWeek: cand.dayOfWeek, weekOfMonth: cand.weekOfMonth ?? 1 };
@@ -65,15 +70,21 @@ function normalizeCandidatePattern(cand: CandidateInput): { recurrenceType: Recu
     default: return { recurrenceType: cand.recurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: null };
   }
 }
+/** 毎月の「第N曜日」の追加分（2つ目以降）を、保存する形（JSON文字列）にする。毎月（第N曜日）以外では持たない */
+function extraSlotsJsonFor(cand: CandidateInput): string | null {
+  if (cand.recurrenceType !== "monthly" || !cand.extraSlots?.length) return null;
+  return JSON.stringify(cand.extraSlots.map((s) => ({ weekOfMonth: s.weekOfMonth, dayOfWeek: s.dayOfWeek })));
+}
+
 const UPCOMING_PREVIEW_COUNT = 8;
 function upcomingDatesFor(
-  cand: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string },
+  cand: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string; extraSlotsJson?: string | null },
   series: { endCondition: string | null; endDate: number | null },
   now: number
 ): Array<{ startsAt: number; endsAt: number }> {
   const pattern: RecurrencePattern = {
     recurrenceType: cand.recurrenceType as RecurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: cand.weekOfMonth,
-    startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal,
+    startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal, extraSlots: parseExtraSlots(cand.extraSlotsJson),
   };
   const end = series.endCondition === "date" && series.endDate
     ? { type: "date" as const, endDate: series.endDate }
@@ -160,6 +171,8 @@ meetingSeriesRoutes.post("/", async (c) => {
       dayOfWeek: number;
       weekOfMonth?: number;
       dayOfMonth?: number; // recurrenceType === "monthly_day" のとき（1〜31）
+      /** recurrenceType === "monthly" のとき：同じ月の2つ目以降の「第N曜日」（最大2件。1つ目と合わせて3つまで） */
+      extraSlots?: MonthlySlot[];
       startTimeLocal: string;
       endTimeLocal: string;
       note?: string;
@@ -219,7 +232,7 @@ meetingSeriesRoutes.post("/", async (c) => {
   let scheduleLabel = "";
   let singleCandidate: {
     recurrenceType: RecurrenceType; dayOfWeek: number; weekOfMonth: number | null;
-    startTimeLocal: string; endTimeLocal: string; note?: string;
+    startTimeLocal: string; endTimeLocal: string; note?: string; extraSlots: MonthlySlot[];
   } | null = null;
   let sortedFixedDates: Array<{ startsAt: number; endsAt: number }> = [];
 
@@ -261,6 +274,18 @@ meetingSeriesRoutes.post("/", async (c) => {
       if (usesDayOfWeek(cand.recurrenceType) && (!Number.isInteger(cand.dayOfWeek) || cand.dayOfWeek < 0 || cand.dayOfWeek > 6)) {
         return c.json({ error: { code: "invalid_input", message: "曜日の指定が正しくありません" } }, 400);
       }
+      if (cand.extraSlots?.length) {
+        if (cand.recurrenceType !== "monthly") {
+          return c.json({ error: { code: "invalid_input", message: "同じ月に複数の日を設定できるのは、毎月の「第◯ ◯曜日」のときだけです" } }, 400);
+        }
+        if (cand.extraSlots.length > MAX_MONTHLY_SLOTS - 1 || !cand.extraSlots.every((s) => isValidSlot(s))) {
+          return c.json({ error: { code: "invalid_input", message: `同じ月に設定できる日は、最大${MAX_MONTHLY_SLOTS}つまでです（曜日・第◯週の指定を確認してください）` } }, 400);
+        }
+        const keys = [{ weekOfMonth: cand.weekOfMonth ?? 1, dayOfWeek: cand.dayOfWeek }, ...cand.extraSlots].map((s) => `${s.weekOfMonth}:${s.dayOfWeek}`);
+        if (new Set(keys).size !== keys.length) {
+          return c.json({ error: { code: "invalid_input", message: "同じ月に同じ日（第◯ ◯曜日）が重複しています" } }, 400);
+        }
+      }
       if (cand.recurrenceType === "monthly_day") {
         const dom = cand.dayOfMonth ?? cand.weekOfMonth;
         if (!Number.isInteger(dom) || dom! < 1 || dom! > 31) {
@@ -291,10 +316,12 @@ meetingSeriesRoutes.post("/", async (c) => {
       singleCandidate = {
         ...normalizeCandidatePattern(cand),
         startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal, note: cand.note?.trim() || undefined,
+        extraSlots: cand.recurrenceType === "monthly" ? cand.extraSlots ?? [] : [],
       };
       const pattern: RecurrencePattern = {
         recurrenceType: singleCandidate.recurrenceType, dayOfWeek: singleCandidate.dayOfWeek,
         weekOfMonth: singleCandidate.weekOfMonth, startTimeLocal: singleCandidate.startTimeLocal, endTimeLocal: singleCandidate.endTimeLocal,
+        extraSlots: singleCandidate.extraSlots,
       };
       occurrences = computeOccurrences(
         pattern, now,
@@ -343,6 +370,7 @@ meetingSeriesRoutes.post("/", async (c) => {
         id: newId(),
         seriesId,
         ...normalizeCandidatePattern(cand),
+        extraSlotsJson: extraSlotsJsonFor(cand),
         startTimeLocal: cand.startTimeLocal,
         endTimeLocal: cand.endTimeLocal,
         note: cand.note?.trim() || null,
@@ -393,6 +421,7 @@ meetingSeriesRoutes.post("/", async (c) => {
       id: candidateId, seriesId,
       recurrenceType: singleCandidate.recurrenceType, dayOfWeek: singleCandidate.dayOfWeek, weekOfMonth: singleCandidate.weekOfMonth,
       startTimeLocal: singleCandidate.startTimeLocal, endTimeLocal: singleCandidate.endTimeLocal,
+      extraSlotsJson: singleCandidate.extraSlots.length > 0 ? JSON.stringify(singleCandidate.extraSlots) : null,
       note: singleCandidate.note ?? null, sortOrder: 0, isConfirmed: 1,
     });
     await db.update(schema.meetingSeries).set({ confirmedPatternId: candidateId }).where(eq(schema.meetingSeries.id, seriesId));
@@ -649,8 +678,9 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       conferenceUrl: series.conferenceUrl,
       candidates: candidates.map((cand) => ({
         id: cand.id, recurrenceType: cand.recurrenceType, dayOfWeek: cand.dayOfWeek, weekOfMonth: cand.weekOfMonth,
+        extraSlots: parseExtraSlots(cand.extraSlotsJson),
         startTimeLocal: cand.startTimeLocal, endTimeLocal: cand.endTimeLocal, note: cand.note,
-        label: patternLabel(cand), isConfirmed: cand.isConfirmed === 1,
+        label: patternLabel({ ...cand, extraSlots: parseExtraSlots(cand.extraSlotsJson) }), isConfirmed: cand.isConfirmed === 1,
         // 投票中は、この候補パターンで開催されたときの直近の開催日（自分のカレンダーと重ねて確認するため）
         upcomingDates: series.status === "voting" ? upcomingDatesFor(cand, series, Math.floor(Date.now() / 1000)) : [],
         respondents: respondentsByCandidate[cand.id] ?? [],
@@ -879,6 +909,7 @@ meetingSeriesRoutes.patch("/:id/confirm", async (c) => {
     weekOfMonth: candidate.weekOfMonth,
     startTimeLocal: candidate.startTimeLocal,
     endTimeLocal: candidate.endTimeLocal,
+    extraSlots: parseExtraSlots(candidate.extraSlotsJson),
   };
   const occurrences = computeOccurrences(
     pattern, now,
@@ -897,7 +928,7 @@ meetingSeriesRoutes.patch("/:id/confirm", async (c) => {
 
   const result = await generateSeriesOccurrences(
     db, c.env, (p) => c.executionCtx.waitUntil(p),
-    series, occurrences, patternLabel(candidate),
+    series, occurrences, patternLabel({ ...candidate, extraSlots: parseExtraSlots(candidate.extraSlotsJson) }),
     series.conferenceType === "manual" ? (series.conferenceUrl ?? undefined) : undefined,
   );
 
