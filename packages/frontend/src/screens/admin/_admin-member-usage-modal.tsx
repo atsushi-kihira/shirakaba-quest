@@ -169,7 +169,7 @@ export function AdminMemberUsageModal({ memberId, initialUnit, initialDate, onCl
                 })}
               </div>
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
-                合計 <b style={{ color: "var(--color-brand)" }}>{row.total}</b> 件（画面を見ただけの「情報参照」は含めていません）。
+                合計 <b style={{ color: "var(--color-brand)" }}>{row.total}</b> 件（画面を見ただけの「情報参照」「協働画面」は含めていません）。
                 「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日も数えています。
               </p>
             </>

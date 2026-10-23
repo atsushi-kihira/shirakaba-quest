@@ -26,6 +26,7 @@ export type MemberUsage = {
   cardOrder: number;
   enishi: number;
   view: number;
+  collabView: number;
   total: number;
 };
 
@@ -46,11 +47,12 @@ export const STATUS_LABEL: Record<string, string> = {
   rejected: "利用却下",
 };
 
-export type FeatureKey = "login" | "view" | "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
+export type FeatureKey = "login" | "view" | "collabView" | "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
 
 export const FEATURES: { key: FeatureKey; label: string }[] = [
   { key: "login", label: "ログイン日数" },
   { key: "view", label: "情報参照" },
+  { key: "collabView", label: "協働画面" },
   { key: "oneonone", label: "1to1" },
   { key: "contact", label: "人脈登録" },
   { key: "egg", label: "金の卵" },

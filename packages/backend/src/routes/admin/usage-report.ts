@@ -61,6 +61,9 @@ async function lastTimesByMember(db: ReturnType<typeof createDb>): Promise<Map<s
 }
 
 // ---- GET /api/admin/usage-report ----
+/** 協働画面（/collab 以下）の閲覧。「情報参照」とは分けて数える */
+const COLLAB_SCREEN = "collab";
+
 type TimedRow = { memberId: string | null; at: number };
 
 /** 全メンバーの利用件数の集計（期間は unit・date・tz で指定。累計は unit="all"） */
@@ -208,12 +211,14 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
   const questMap = countByMember(questAttempts);
   const cardOrderMap = countByMember(cardOrders);
   const enishiMap = countByMember(enishiSearches);
-  const viewMap = countByMember(screenViewRows);
+  // 画面の閲覧は、協働画面（協働マップ・チーム詳細など）と、それ以外（情報参照）に分けて数える
+  const viewMap = countByMember(screenViewRows.filter((r) => r.screen !== COLLAB_SCREEN));
+  const collabViewMap = countByMember(screenViewRows.filter((r) => r.screen === COLLAB_SCREEN));
   // 画面ごとの閲覧回数の内訳（対象メンバーのみ。管理画面の「情報参照」の説明に使う）
   const memberIdSet = new Set(members.map((m) => m.id));
   const viewBreakdown: Record<string, number> = {};
   for (const r of screenViewRows) {
-    if (!r.memberId || !memberIdSet.has(r.memberId)) continue;
+    if (!r.memberId || !memberIdSet.has(r.memberId) || r.screen === COLLAB_SCREEN) continue;
     if (range) {
       const { ymd } = localParts(r.at, tz);
       if (ymd < range.rangeStart || ymd > range.rangeEnd) continue;
@@ -233,13 +238,14 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
     const cardOrder = cardOrderMap.get(m.id) ?? 0;
     const enishi = enishiMap.get(m.id) ?? 0;
     const view = viewMap.get(m.id) ?? 0;
+    const collabView = collabViewMap.get(m.id) ?? 0;
     return {
       id: m.id,
       name: m.name,
       status: m.status,
       registeredAt: m.createdAt,
       lastLoginAt: lastLoginMap.get(m.id) ?? null,
-      login, oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi, view,
+      login, oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi, view, collabView,
       // 合計は、データを作る・更新する操作の件数（画面を見ただけの「情報参照」は含めない）
       total: login + oneonone + contact + egg + goose + meeting + quest + cardOrder + enishi,
     };

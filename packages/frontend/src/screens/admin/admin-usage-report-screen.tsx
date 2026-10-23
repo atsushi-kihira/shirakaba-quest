@@ -139,7 +139,7 @@ export function AdminUsageReportScreen() {
               ))}
             </div>
             <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
-              「情報参照」は、ホーム・ミーティング・通知などの画面を開いて見た回数です（ログインしたままの継続利用も含みます。同じ画面の5分以内の連続閲覧は1回）。
+              「情報参照」は、ホーム・ミーティング・通知などの画面を開いて見た回数です（ログインしたままの継続利用も含みます。同じ画面の5分以内の連続閲覧は1回）。協働マップ・チーム詳細などの「協働画面」は、情報参照とは別に数えています。
               {data?.viewBreakdown && data.viewBreakdown.length > 0
                 ? ` 内訳：${data.viewBreakdown.map((v) => `${v.label} ${v.count}`).join("、")}`
                 : " まだ記録がありません。これから画面が開かれると、ここに内訳が表示されます。"}
@@ -157,7 +157,7 @@ export function AdminUsageReportScreen() {
               メンバー別 利用件数内訳（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます。ゲストと休会中の方は、最初は表示しません（下のチェックで表示できます）。上のサマリーや機能別の件数には、これらの方も含まれています。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「合計」には、画面を見ただけの「情報参照」は含めていません。
+              列見出しをタップ・クリックすると並び替えできます。ゲストと休会中の方は、最初は表示しません（下のチェックで表示できます）。上のサマリーや機能別の件数には、これらの方も含まれています。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「合計」には、画面を見ただけの「情報参照」「協働画面」は含めていません。
               「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日（アプリを開いた・画面を見た・何かを登録した日）も1日と数えます。記録の仕組みができる前の分は、1to1や人脈の登録などの操作があった日で補っています。
               「1to1」は、メンバー同士の1to1に、外部ゲストとの予約・予約ページ経由の1to1（キャンセルを除く）を加えた件数です。{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
@@ -173,7 +173,7 @@ export function AdminUsageReportScreen() {
               </label>
             </div>
             <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
-              <table className="w-full" style={{ minWidth: 940 }}>
+              <table className="w-full" style={{ minWidth: 1010 }}>
                 <thead>
                   <tr>
                     <th onClick={() => handleSort("name")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 left-0 z-10"
@@ -212,6 +212,7 @@ export function AdminUsageReportScreen() {
                       </td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.login === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.login}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.view === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.view}</td>
+                      <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.collabView === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.collabView}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.oneonone === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.oneonone}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums whitespace-nowrap" style={{ color: r.contact === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>
                         {r.contact}{r.contactEight > 0 && <span className="text-xs ml-1" style={{ color: "var(--color-ink-400)" }}>(内Eight{r.contactEight})</span>}
