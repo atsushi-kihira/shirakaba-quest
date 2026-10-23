@@ -13,7 +13,7 @@ import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, or } from "
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
-import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
+import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { deriveStage, computeStalled } from "../services/collab-stage.ts";
 import { MailService } from "../services/mailer.ts";
 import { addMilestone, canUseActionItems, deleteTeamWorkspaceData, onJoinApproved, onTeamCreated } from "../services/team-workspace.ts";
@@ -1490,6 +1490,8 @@ collabRoutes.get("/activity/unread-count", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  // 協働の新着は、承認されたメンバー向け（ゲストユーザーには通知しない）
+  if (!(await isMemberApproved(db, meId))) return c.json({ data: { timeline: 0, stories: 0, total: 0 } });
 
   const readRow = await db.select().from(schema.collabActivityReads).where(eq(schema.collabActivityReads.memberId, meId)).get();
   const lastReadAt = readRow?.lastReadAt ?? 0;

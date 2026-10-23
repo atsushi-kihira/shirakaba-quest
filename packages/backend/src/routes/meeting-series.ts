@@ -479,6 +479,8 @@ meetingSeriesRoutes.get("/", async (c) => {
   if (!memberId) return c.json({ data: [] });
 
   const all = await db.select().from(schema.meetingSeries).all();
+  // 「全員」対象の定例会は、承認されたメンバーのためのもの（ゲストユーザーには出さない）
+  const approved = await isMemberApproved(db, memberId);
   const myTeamIds = new Set(
     (await db.select({ teamId: schema.teamMembers.teamId }).from(schema.teamMembers)
       .where(eq(schema.teamMembers.memberId, memberId)).all())
@@ -497,7 +499,7 @@ meetingSeriesRoutes.get("/", async (c) => {
 
   const mine = all.filter((s) =>
     s.hostMemberId === memberId ||
-    s.scope === "all" ||
+    (s.scope === "all" && approved) ||
     (s.scope === "team" && s.teamId && myTeamIds.has(s.teamId)) ||
     (s.scope === "collab_team" && s.collabTeamId && myCollabTeamIds.has(s.collabTeamId)) ||
     (s.scope === "selected" && myInviteSeriesIds.has(s.id))

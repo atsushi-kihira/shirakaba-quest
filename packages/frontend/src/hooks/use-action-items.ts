@@ -5,7 +5,7 @@
 // （各メニューのバッジと同じ判定関数・同じデータを使うので、件数と内容がずれない）
 // =============================================================
 import { useQuery } from "@tanstack/react-query";
-import { useAuthStore } from "@/stores/auth-store";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { api } from "@/lib/api";
 import { useOneOnOneSessions, filterInFlightOneOnOneForBadge } from "@/hooks/use-oneonone-status";
 import { useMeetingAlerts } from "@/hooks/use-meeting-alerts";
@@ -194,5 +194,7 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
     items.push({ key: t.key, group: "collab", icon: t.icon, title: t.title, detail: t.detail, to: t.to, urgent: t.urgent, weight: 1 });
   }
 
-  return { items, count: items.reduce((sum, it) => sum + it.weight, 0) };
+  // ゲストユーザー（承認されていないメンバー）には、1to1の自分に向けたもの以外は出さない（ミーティング・協働などは、メンバー向け）
+  const visible = isApprovedMember(user) ? items : items.filter((it) => it.group === "oneonone");
+  return { items: visible, count: visible.reduce((sum, it) => sum + it.weight, 0) };
 }

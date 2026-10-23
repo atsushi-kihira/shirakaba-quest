@@ -83,12 +83,13 @@ export function AppLayout() {
   const { unreadCount: broadcastUnreadCount } = useBroadcastNotifications();
   // 「通知」メニューのバッジ = 運営からの未読のお知らせ + 各メニューのバッジの元になっている「対応が必要なこと」すべて
   const { count: actionItemCount } = useActionItems();
-  const notificationBadgeCount = broadcastUnreadCount + actionItemCount;
+  // ゲストユーザーには、運営からのお知らせ・ミーティング・協働の件数は数えない（actionItemCount も、ゲストのときは1to1だけになる）
+  const notificationBadgeCount = (approved ? broadcastUnreadCount : 0) + actionItemCount;
 
   const BADGE_COUNTS: Record<string, number> = {
     "/home": pendingCount,
-    "/meetings": meetingPendingCount,
-    "/collab": collabAlerts.total,
+    "/meetings": approved ? meetingPendingCount : 0,
+    "/collab": approved ? collabAlerts.total : 0,
     "/notifications": notificationBadgeCount,
   };
 

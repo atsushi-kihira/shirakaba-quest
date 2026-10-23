@@ -12,6 +12,7 @@ import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
 import { LinkifiedText } from "@/components/linkified-text";
 import { meetingNotifIcon as notifIcon, meetingNotifDefaultMessage as notifDefaultMessage } from "@/lib/meeting-notification-text";
 import { useActionItems, type ActionItem } from "@/hooks/use-action-items";
+import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 
 type PastNotification = {
   id: string;
@@ -35,6 +36,8 @@ export function NotificationsScreen() {
   const notifications = data?.data ?? [];
   const { all: broadcasts, unreadCount, markRead, markAllRead } = useBroadcastNotifications();
   const [openId, setOpenId] = useState<string | null>(null);
+  // ゲストユーザーには、運営からのお知らせ・ミーティングのお知らせは出さない（1to1の自分に向けた通知だけ）
+  const approved = isApprovedMember(useAuthStore((s) => s.user));
 
   function toggleBroadcast(id: string, isUnread: boolean) {
     setOpenId((cur) => (cur === id ? null : id));
@@ -60,6 +63,7 @@ export function NotificationsScreen() {
       {/* 対応が必要なこと（各メニューのバッジの元になっている出来事を、すべてここにもまとめる） */}
       <ActionItemsSection />
 
+      {approved && (<>
       {/* 運営からのお知らせ */}
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
@@ -153,6 +157,7 @@ export function NotificationsScreen() {
           ))}
         </div>
       )}
+      </>)}
     </div>
   );
 }

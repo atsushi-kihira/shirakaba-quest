@@ -181,7 +181,7 @@ export function MypageScreen() {
             className="lg:hidden relative flex items-center gap-1 text-sm px-2.5 py-1.5 rounded-xl font-medium whitespace-nowrap"
             style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
             🔔 通知
-            {unreadNotificationCount > 0 && (
+            {approved && unreadNotificationCount > 0 && (
               <span className="min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
                 style={{ background: "var(--color-brand)" }}>
                 {unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}

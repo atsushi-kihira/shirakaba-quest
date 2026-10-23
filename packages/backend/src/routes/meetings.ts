@@ -503,6 +503,8 @@ meetingRoutes.get("/upcoming", async (c) => {
   const db = createDb(c.env.DB);
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!memberId) return c.json({ data: [] });
+  // ゲストユーザー（承認されていないメンバー）には、メンバー向けのミーティングは見せない
+  if (!(await isMemberApproved(db, memberId))) return c.json({ data: [] });
   const now = Math.floor(Date.now() / 1000);
   const weekLater = now + 7 * 86400;
 
@@ -722,12 +724,15 @@ meetingRoutes.get("/", async (c) => {
     .where(eq(schema.meetings.hostMemberId, memberId))
     .all();
 
-  // scope=all の全員対象ミーティング（主催除く）
-  const allScope = await db
-    .select()
-    .from(schema.meetings)
-    .where(and(eq(schema.meetings.scope, "all"), sql`${schema.meetings.hostMemberId} != ${memberId}`))
-    .all();
+  // scope=all の全員対象ミーティング（主催除く）。「全員」は承認されたメンバーのことなので、ゲストユーザーには出さない
+  const approved = await isMemberApproved(db, memberId);
+  const allScope = approved
+    ? await db
+        .select()
+        .from(schema.meetings)
+        .where(and(eq(schema.meetings.scope, "all"), sql`${schema.meetings.hostMemberId} != ${memberId}`))
+        .all()
+    : [];
 
   // 自分が招待されている selected ミーティング
   const inviteRows = await db
@@ -981,6 +986,8 @@ meetingRoutes.get("/pending-attendance", async (c) => {
   const db = createDb(c.env.DB);
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!memberId) return c.json({ data: [] });
+  // 出席の記録は、承認されたメンバーだけが対象（ゲストユーザーには出さない）
+  if (!(await isMemberApproved(db, memberId))) return c.json({ data: [] });
   const now = Math.floor(Date.now() / 1000);
 
   // 確定済みで時間が過ぎたミーティングを取得
