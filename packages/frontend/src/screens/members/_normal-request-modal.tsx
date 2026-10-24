@@ -110,7 +110,7 @@ export function NormalRequestModal({
             {responderName}さんに、申込を届けました{notifyByEmail ? "（メールでも案内しています）" : ""}。
             メールを確認してもらえない場合や、メールで案内しなかった場合は、下のメッセージをDM等でお送りください。
           </p>
-          <OneOnOneDmMessage partnerName={responderName} url={sent.url} defaultOpen />
+          <OneOnOneDmMessage partnerName={responderName} url={sent.url} note={note} defaultOpen />
           <button onClick={onSuccess} className="w-full py-2.5 rounded-2xl text-sm font-medium text-white" style={{ background: "var(--color-brand)" }}>閉じる</button>
         </div>
       </div>

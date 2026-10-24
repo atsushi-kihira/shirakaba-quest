@@ -27,7 +27,7 @@ import type { PublicMember, Skill, MemberBadge } from "@shared/types";
 type MemberResponse  = { data: PublicMember };
 type OnoResponse     = { data: { id: string; status: string; partner?: unknown; myRole?: string; bothCompleted?: boolean } };
 type OnoCandidateSlot = { id: string; startAt: number; endAt: number };
-type OnoSession = { id: string; status: "pending" | "accepted" | "completed" | "rejected" | "cancelled"; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null; requesterSchedulerUrl?: string | null; scheduledFor?: number | null; autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null; arrangementMethod?: "public_url" | "candidates"; selectedCandidateSlotId?: string | null; responseUrl?: string | null; candidates?: OnoCandidateSlot[] };
+type OnoSession = { id: string; status: "pending" | "accepted" | "completed" | "rejected" | "cancelled"; requesterId: string; responderId: string; myRole: string; requesterCompletedAt: number | null; responderCompletedAt: number | null; completedAt: number | null; requesterSchedulerUrl?: string | null; customNote?: string | null; scheduledFor?: number | null; autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null; arrangementMethod?: "public_url" | "candidates"; selectedCandidateSlotId?: string | null; responseUrl?: string | null; candidates?: OnoCandidateSlot[] };
 type OnoListResponse = { data: OnoSession[] };
 type CardImageResponse = { data: { imageDataUrl: string } };
 type BadgesResponse = { data: MemberBadge[] };
@@ -506,7 +506,7 @@ export function MemberDetailScreen() {
                   </p>
                   {activeSession.requesterSchedulerUrl && (
                     <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(90,140,92,0.2)" }}>
-                      <OneOnOneDmMessage partnerName={member.name} url={activeSession.requesterSchedulerUrl} />
+                      <OneOnOneDmMessage partnerName={member.name} url={activeSession.requesterSchedulerUrl} note={activeSession.customNote} />
                     </div>
                   )}
                 </div>
@@ -525,7 +525,7 @@ export function MemberDetailScreen() {
                       </p>
                     ))}
                   </div>
-                  {activeSession.responseUrl && <ResponseUrlCopyRow url={activeSession.responseUrl} partnerName={member.name} />}
+                  {activeSession.responseUrl && <ResponseUrlCopyRow url={activeSession.responseUrl} partnerName={member.name} note={activeSession.customNote} />}
                 </div>
               )}
 

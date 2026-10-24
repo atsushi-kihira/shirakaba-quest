@@ -37,6 +37,7 @@ type Session = {
   } | null;
   requesterSchedulerUrl?: string | null;
   responseUrl?: string | null;
+  customNote?: string | null;
   scheduledFor?: number | null;
   scheduledForEndUtc?: number | null;
   conferenceType?: string | null;
@@ -246,7 +247,7 @@ export function OneOnOneScreen() {
                               </p>
                             ))}
                           </div>
-                          {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} partnerName={s.partner?.name} />}
+                          {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} partnerName={s.partner?.name} note={s.customNote} />}
                         </div>
                       ) : (
                         <div className="mt-3 p-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
@@ -256,7 +257,7 @@ export function OneOnOneScreen() {
                           <AutoSchedulerShareLinkPanel />
                           {s.requesterSchedulerUrl && (
                             <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(90,140,92,0.2)" }}>
-                              <OneOnOneDmMessage partnerName={s.partner?.name} url={s.requesterSchedulerUrl} />
+                              <OneOnOneDmMessage partnerName={s.partner?.name} url={s.requesterSchedulerUrl} note={s.customNote} />
                             </div>
                           )}
                         </div>

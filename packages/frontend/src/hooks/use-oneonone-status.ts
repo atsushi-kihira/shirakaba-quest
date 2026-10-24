@@ -19,6 +19,8 @@ export type OneOnOneSession = {
   requesterSchedulerUrl?: string | null;
   // 候補日提示方式で自分が申込者(requester)の場合のみ、未ログインで相手が候補を選べる回答用URL
   responseUrl?: string | null;
+  /** 申込みのときに入力した、任意のメッセージ */
+  customNote?: string | null;
   conferenceType?: string | null;
   conferenceUrl?: string | null;
   autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null;

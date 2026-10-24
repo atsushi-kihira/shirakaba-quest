@@ -227,6 +227,7 @@ oneOnOneGuestInviteRoutes.get("/", async (c) => {
       arrangementMethod: invite.arrangementMethod,
       status: effectiveStatus,
       customTitle: invite.customTitle,
+      customNote: invite.customNote,
       createdAt: invite.createdAt,
       expiresAt: invite.expiresAt,
       inviteUrl,

@@ -176,7 +176,7 @@ export function InProgressOneOnOneSection() {
                   <AutoSchedulerShareLinkPanel />
                   {s.requesterSchedulerUrl && (
                     <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(90,140,92,0.2)" }}>
-                      <OneOnOneDmMessage partnerName={s.partner?.name} url={s.requesterSchedulerUrl} />
+                      <OneOnOneDmMessage partnerName={s.partner?.name} url={s.requesterSchedulerUrl} note={s.customNote} />
                     </div>
                   )}
                 </div>
@@ -195,7 +195,7 @@ export function InProgressOneOnOneSection() {
                       </p>
                     ))}
                   </div>
-                  {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} partnerName={s.partner?.name} />}
+                  {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} partnerName={s.partner?.name} note={s.customNote} />}
                 </div>
               )}
 
@@ -277,7 +277,7 @@ export function InProgressOneOnOneSection() {
 // 候補日提示方式の回答用URL（ログイン不要）をコピーする行。
 // 相手がメールをあまり確認しない場合に、申込者自身がDM等で直接送れるようにするため。
 // ----------------------------------------------------------------
-export function ResponseUrlCopyRow({ url, partnerName }: { url: string; partnerName?: string | null }) {
+export function ResponseUrlCopyRow({ url, partnerName, note }: { url: string; partnerName?: string | null; note?: string | null }) {
   const [copied, setCopied] = useState(false);
   function handleCopy() {
     navigator.clipboard.writeText(url).then(() => {
@@ -298,7 +298,7 @@ export function ResponseUrlCopyRow({ url, partnerName }: { url: string; partnerN
         {copied ? <Check size={12} /> : <Copy size={12} />}
         {copied ? "コピーしました" : "回答用URLをコピー"}
       </button>
-      <OneOnOneDmMessage partnerName={partnerName} url={url} />
+      <OneOnOneDmMessage partnerName={partnerName} url={url} note={note} />
     </div>
   );
 }

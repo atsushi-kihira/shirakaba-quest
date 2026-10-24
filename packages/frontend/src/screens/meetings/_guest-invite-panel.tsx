@@ -39,6 +39,8 @@ export type GuestInviteListItem = {
   createdAt: number;
   expiresAt: number;
   inviteUrl: string | null;
+  /** 招待を作るときに入力した、任意のメッセージ */
+  customNote?: string | null;
 };
 
 export function GuestInvitePanel() {
@@ -179,7 +181,7 @@ export function GuestInvitePanel() {
                 開く
               </a>
             </div>
-            <OneOnOneDmMessage partnerName={submitResult.guestName} url={submitResult.inviteUrl} defaultOpen={!submitResult.emailSent} />
+            <OneOnOneDmMessage partnerName={submitResult.guestName} url={submitResult.inviteUrl} note={note} defaultOpen={!submitResult.emailSent} />
           </div>
           <button onClick={resetToForm} className="text-xs font-medium" style={{ color: "var(--color-ink-400)" }}>
             別の招待を作成する →
@@ -411,7 +413,7 @@ function PendingGuestInviteRow({ invite }: { invite: GuestInviteListItem }) {
           </a>
         )}
       </div>
-      {invite.inviteUrl && <OneOnOneDmMessage partnerName={invite.guestName} url={invite.inviteUrl} />}
+      {invite.inviteUrl && <OneOnOneDmMessage partnerName={invite.guestName} url={invite.inviteUrl} note={invite.customNote} />}
     </div>
   );
 }
