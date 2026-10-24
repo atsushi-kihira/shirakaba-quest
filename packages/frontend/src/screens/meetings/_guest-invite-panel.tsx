@@ -15,6 +15,7 @@ import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateTime } from "@/lib/date";
 import { SchedulingMethodSelector, type SchedulingMethod } from "./_scheduling-method-selector";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
+import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 import { DurationSelect } from "@/components/duration-select";
 import { CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload, emptyCandidateRow, type CandidateRow } from "./_candidate-date-entry";
 
@@ -178,6 +179,7 @@ export function GuestInvitePanel() {
                 開く
               </a>
             </div>
+            <OneOnOneDmMessage partnerName={submitResult.guestName} url={submitResult.inviteUrl} defaultOpen={!submitResult.emailSent} />
           </div>
           <button onClick={resetToForm} className="text-xs font-medium" style={{ color: "var(--color-ink-400)" }}>
             別の招待を作成する →
@@ -409,6 +411,7 @@ function PendingGuestInviteRow({ invite }: { invite: GuestInviteListItem }) {
           </a>
         )}
       </div>
+      {invite.inviteUrl && <OneOnOneDmMessage partnerName={invite.guestName} url={invite.inviteUrl} />}
     </div>
   );
 }

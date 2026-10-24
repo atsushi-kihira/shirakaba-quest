@@ -808,7 +808,18 @@ oneOnOneRoutes.post("/", async (c) => {
   }
 
   const responseUrl = responseToken ? `${getFrontendUrl(c.env)}/oneonone/respond/${responseToken}` : null;
-  return c.json({ data: { id, status: "pending", arrangementMethod: body.arrangementMethod, responseUrl } }, 201);
+  // 公開予約URL方式のとき、相手に送るURL（申込者の公開予約ページに、この1to1申込のIDを持たせたもの）。
+  // メールを使わずDMで送る場合に、画面で案内メッセージとあわせて表示するため、申込のときに返す
+  let schedulerUrl: string | null = null;
+  if (body.arrangementMethod !== "candidates") {
+    try {
+      const link = await ensureActiveShareLink(db, c.env, requesterId);
+      schedulerUrl = link ? `${link.publicUrl}?oneOnOneId=${id}` : null;
+    } catch (err) {
+      console.error("[oneonone] 公開予約URLの取得失敗", err);
+    }
+  }
+  return c.json({ data: { id, status: "pending", arrangementMethod: body.arrangementMethod, responseUrl, schedulerUrl } }, 201);
 });
 
 // ---- POST /api/oneonone/prearranged ----

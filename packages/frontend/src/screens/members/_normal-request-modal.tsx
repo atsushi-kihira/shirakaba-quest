@@ -12,6 +12,7 @@ import { useAutoSchedulerShareLink } from "@/components/scheduler-share-link-pan
 import { SchedulingMethodSelector, type SchedulingMethod } from "../meetings/_scheduling-method-selector";
 import { DurationSelect } from "@/components/duration-select";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
+import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 import {
   CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload,
   emptyCandidateRow, type CandidateRow,
@@ -54,8 +55,10 @@ export function NormalRequestModal({
   const [eventCampaignId, setEventCampaignId] = useState("");
   const [error, setError] = useState("");
 
+  // 申込み後に、相手に送るURLとDM用のメッセージを見せる（メールを使わない・メールが届かない相手に、DMで送れるように）
+  const [sent, setSent] = useState<{ url: string | null } | null>(null);
   const submitMutation = useMutation({
-    mutationFn: () => api.post("/oneonone", {
+    mutationFn: () => api.post<{ data: { responseUrl: string | null; schedulerUrl: string | null } }>("/oneonone", {
       responderId,
       title: title.trim() || undefined,
       durationMinutes: duration,
@@ -65,9 +68,11 @@ export function NormalRequestModal({
       candidateSlots: schedulingMethod === "candidates" ? candidateRowsToPayload(candidateRows, duration) : undefined,
       eventCampaignId: eventCampaignId || undefined,
     }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["oneonone"] });
-      onSuccess();
+      const url = res.data.responseUrl ?? res.data.schedulerUrl ?? null;
+      if (url) setSent({ url });
+      else onSuccess();
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : "エラーが発生しました"),
   });
@@ -91,6 +96,25 @@ export function NormalRequestModal({
         if (res.data.publicUrl) window.open(res.data.publicUrl, "_blank", "noopener,noreferrer");
       },
     });
+  }
+
+  if (sent?.url) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(0,0,0,0.4)" }}>
+        <div className="card-paper rounded-t-3xl sm:rounded-3xl w-full sm:max-w-md max-h-[90vh] overflow-y-auto p-5 space-y-3">
+          <h2 className="text-lg font-bold flex items-center gap-2" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+            <Handshake size={20} />
+            1to1を申し込みました
+          </h2>
+          <p className="text-xs leading-relaxed" style={{ color: "var(--color-ink-600)" }}>
+            {responderName}さんに、申込を届けました{notifyByEmail ? "（メールでも案内しています）" : ""}。
+            メールを確認してもらえない場合や、メールで案内しなかった場合は、下のメッセージをDM等でお送りください。
+          </p>
+          <OneOnOneDmMessage partnerName={responderName} url={sent.url} defaultOpen />
+          <button onClick={onSuccess} className="w-full py-2.5 rounded-2xl text-sm font-medium text-white" style={{ background: "var(--color-brand)" }}>閉じる</button>
+        </div>
+      </div>
+    );
   }
 
   return (

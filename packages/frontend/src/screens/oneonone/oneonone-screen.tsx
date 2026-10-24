@@ -16,6 +16,7 @@ import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-m
 import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candidate-selection-panel";
 import { ResponseUrlCopyRow } from "../meetings/_oneonone-sections";
 import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
+import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 
 type Session = {
   id: string;
@@ -245,7 +246,7 @@ export function OneOnOneScreen() {
                               </p>
                             ))}
                           </div>
-                          {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} />}
+                          {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} partnerName={s.partner?.name} />}
                         </div>
                       ) : (
                         <div className="mt-3 p-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
@@ -253,6 +254,11 @@ export function OneOnOneScreen() {
                             📅 あなたの予約URL（{s.partner?.name ?? "相手"}さんに直接共有できます）
                           </p>
                           <AutoSchedulerShareLinkPanel />
+                          {s.requesterSchedulerUrl && (
+                            <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(90,140,92,0.2)" }}>
+                              <OneOnOneDmMessage partnerName={s.partner?.name} url={s.requesterSchedulerUrl} />
+                            </div>
+                          )}
                         </div>
                       )}
                       <div className="mt-2 flex items-center gap-1 text-xs" style={{ color: "var(--color-ink-400)" }}>

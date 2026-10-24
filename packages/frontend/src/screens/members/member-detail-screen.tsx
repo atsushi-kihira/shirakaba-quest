@@ -13,6 +13,7 @@ import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { GoogleNotConnectedWarning } from "@/components/google-not-connected-warning";
 import { AutoSchedulerShareLinkPanel, useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { ResponseUrlCopyRow } from "@/screens/meetings/_oneonone-sections";
+import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 import { api, ApiError } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { PointsSummary } from "@/components/points-summary";
@@ -503,6 +504,11 @@ export function MemberDetailScreen() {
                   <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
                     メールが届きにくい場合は、このURLをLINEなどで直接送ってください
                   </p>
+                  {activeSession.requesterSchedulerUrl && (
+                    <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(90,140,92,0.2)" }}>
+                      <OneOnOneDmMessage partnerName={member.name} url={activeSession.requesterSchedulerUrl} />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -519,7 +525,7 @@ export function MemberDetailScreen() {
                       </p>
                     ))}
                   </div>
-                  {activeSession.responseUrl && <ResponseUrlCopyRow url={activeSession.responseUrl} />}
+                  {activeSession.responseUrl && <ResponseUrlCopyRow url={activeSession.responseUrl} partnerName={member.name} />}
                 </div>
               )}
 

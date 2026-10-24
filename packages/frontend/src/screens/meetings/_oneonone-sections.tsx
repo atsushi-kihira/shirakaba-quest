@@ -17,6 +17,7 @@ import { CompleteOneOnOneModal } from "./_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "./_edit-oneonone-schedule-modal";
 import { CandidateSelectionPanel } from "./_candidate-selection-panel";
 import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
+import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 
 type Period = "1m" | "6m" | "1y" | "all";
 const PERIOD_LABELS: Record<Period, string> = { "1m": "直近1ヶ月", "6m": "直近6ヶ月", "1y": "直近1年", all: "すべて" };
@@ -173,6 +174,11 @@ export function InProgressOneOnOneSection() {
                     📅 あなたの予約URL（{s.partner?.name ?? "相手"}さんに直接共有できます）
                   </p>
                   <AutoSchedulerShareLinkPanel />
+                  {s.requesterSchedulerUrl && (
+                    <div className="mt-2 pt-2" style={{ borderTop: "1px solid rgba(90,140,92,0.2)" }}>
+                      <OneOnOneDmMessage partnerName={s.partner?.name} url={s.requesterSchedulerUrl} />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -189,7 +195,7 @@ export function InProgressOneOnOneSection() {
                       </p>
                     ))}
                   </div>
-                  {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} />}
+                  {s.responseUrl && <ResponseUrlCopyRow url={s.responseUrl} partnerName={s.partner?.name} />}
                 </div>
               )}
 
@@ -271,7 +277,7 @@ export function InProgressOneOnOneSection() {
 // 候補日提示方式の回答用URL（ログイン不要）をコピーする行。
 // 相手がメールをあまり確認しない場合に、申込者自身がDM等で直接送れるようにするため。
 // ----------------------------------------------------------------
-export function ResponseUrlCopyRow({ url }: { url: string }) {
+export function ResponseUrlCopyRow({ url, partnerName }: { url: string; partnerName?: string | null }) {
   const [copied, setCopied] = useState(false);
   function handleCopy() {
     navigator.clipboard.writeText(url).then(() => {
@@ -292,6 +298,7 @@ export function ResponseUrlCopyRow({ url }: { url: string }) {
         {copied ? <Check size={12} /> : <Copy size={12} />}
         {copied ? "コピーしました" : "回答用URLをコピー"}
       </button>
+      <OneOnOneDmMessage partnerName={partnerName} url={url} />
     </div>
   );
 }
