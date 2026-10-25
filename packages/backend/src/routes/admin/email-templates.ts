@@ -88,6 +88,7 @@ adminEmailTemplateRoutes.get("/", async (c) => {
       label: def.label,
       category: def.category,
       categoryLabel: CATEGORY_LABELS[def.category],
+      kind: def.kind ?? "email",
       triggerDescription: def.triggerDescription,
       availableVars: def.availableVars,
       enabled: override ? !!override.enabled : def.enabled,
@@ -122,6 +123,7 @@ adminEmailTemplateRoutes.get("/:key", async (c) => {
       label: def.label,
       category: def.category,
       categoryLabel: CATEGORY_LABELS[def.category],
+      kind: def.kind ?? "email",
       triggerDescription: def.triggerDescription,
       availableVars: def.availableVars,
       enabled: override ? !!override.enabled : def.enabled,
@@ -152,6 +154,11 @@ adminEmailTemplateRoutes.patch("/:key", async (c) => {
     disableCommonHeader?: boolean;
     disableCommonFooter?: boolean;
   }>();
+
+  // DM用のメッセージは、日程を選ぶURLが入っていないと使えない
+  if (def.kind === "message" && body.bodyText !== undefined && !body.bodyText.includes("{{url}}")) {
+    return c.json({ error: { code: "invalid", message: "文面に {{url}}（日程を選ぶURL）を入れてください。入っていないと、相手が日程を選べません" } }, 400);
+  }
 
   const db = createDb(c.env.DB);
   const existing = await db.select().from(schema.emailTemplates)

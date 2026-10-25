@@ -5,7 +5,8 @@
 //   ・メッセージの先頭の挨拶（お疲れ様です／お世話になっております 等）・自己紹介・宛名は、定型にあるので省く
 //   ・メッセージの最後の「よろしくお願いします」は、定型の結びと重なるので省く
 //   ・メッセージにURLが入っていたら、定型のURLと重なるので省く（「こちらからどうぞ」のようにURLを指すだけの言葉も省く）
-//   ・メッセージ自体が1to1のお願い・日程の依頼をしているときは、定型の同じ趣旨の文を省く／言い換える
+//   ・メッセージ自体が1to1のお願い・日程の依頼をしているときは、定型の同じ趣旨の文を省く／言い換える（定型が既定の文面のときだけ）
+//   定型の文面は、管理画面（メール配信管理）で編集できる。書き換えたものは、AIで整えることもできる（oneonone-dm-message.tsx）
 //   ・メッセージの文末に句点がなければ補う
 // =============================================================
 
@@ -15,7 +16,20 @@ const BUSY = /お忙しい|ご多忙|お忙しく/;
 // メッセージ自体が、1to1・お時間・ご予定のお願いをしている
 const ASKS = /(?:お時間|ご予定|ご都合|日程).{0,12}(?:いただ|頂|伺|お聞|教え|お願い|調整)|1to1.{0,18}(?:させていただ|お願い|実施|ご一緒|お話|してい|いかが)/;
 
-export type DmTextInput = { partnerName?: string | null; senderName: string; url: string; note?: string | null };
+export type DmTextInput = { partnerName?: string | null; senderName: string; url: string; note?: string | null; template?: string | null };
+
+/** 定型の既定の文面（管理画面で編集していないときの文面。バックエンドの DM_DEFAULT_BODY と同じ） */
+export const DM_DEFAULT_TEMPLATE = `{{partnerHeading}}お疲れ様です。{{senderName}}です。
+{{noteBlock}}大変お忙しいかと思いますが、ぜひ{{partner}}と1to1を実施させていただきたいと思います。お時間をいただけますでしょうか？
+よろしければ、以下から{{partner}}のご予定を伺わせてください。
+
+{{url}}
+
+よろしくお願いします。`;
+
+const BUSY_PREFIX = "大変お忙しいかと思いますが、";
+const REQUEST_SENTENCE = /(?:大変お忙しいかと思いますが、)?ぜひ\{\{partner\}\}と1to1を実施させていただきたいと思います。お時間をいただけますでしょうか？\n?/;
+const GUIDE_SENTENCE = "よろしければ、以下から{{partner}}のご予定を伺わせてください。";
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -32,11 +46,13 @@ export function cleanNote(raw: string | null | undefined, partnerName: string | 
   // 宛名（「◯◯さん、」「◯◯様」）
   const partner = partnerName?.trim();
   if (partner) t = t.replace(new RegExp(`^${esc(partner)}(?:さん|様|氏)?[、,\\s]*`), "");
-  // 先頭の挨拶と自己紹介（組み合わせ・順番が違っても省く）
+  // 先頭の挨拶と自己紹介（組み合わせ・順番が違っても省く）。名前は、フルネームのほか、姓だけ・スペースなしでも省く
+  const full = senderName.trim();
+  const names = [...new Set([full, full.replace(/\s+/g, ""), full.split(/\s+/)[0]].filter(Boolean))].sort((a, b) => b.length - a.length);
   for (let i = 0; i < 4; i++) {
     const before = t;
     t = t.replace(GREETING, "");
-    if (senderName.trim()) t = t.replace(new RegExp(`^(?:私は?|わたくしは?)?${esc(senderName.trim())}(?:です|と申します|でございます)[。、！!\\s]*`), "");
+    if (names.length > 0) t = t.replace(new RegExp(`^(?:私は?|わたくしは?)?(?:${names.map(esc).join("|")})(?:です|と申します|でございます)[。、！!\\s]*`), "");
     if (t === before) break;
   }
   // 最後の「よろしくお願いします」
@@ -48,25 +64,19 @@ export function cleanNote(raw: string | null | undefined, partnerName: string | 
 }
 
 /** DMで送るメッセージの文面 */
-export function buildOneOnOneDmText({ partnerName, senderName, url, note }: DmTextInput): string {
+export function buildOneOnOneDmText({ partnerName, senderName, url, note, template }: DmTextInput): string {
   const hasName = !!partnerName?.trim();
   const partner = hasName ? `${partnerName!.trim()}さん` : "ご担当の方";
-  const heading = hasName ? `${partner}\n` : "";
   const cleaned = cleanNote(note, partnerName, senderName, url);
-  const noteBlock = cleaned ? `${cleaned}\n` : "";
 
   // メッセージが、すでにお願いをしているときは、定型の同じ趣旨の文を省く。お忙しい旨を書いているときは、定型の前置きを省く
-  const asks = !!cleaned && ASKS.test(cleaned);
-  const busy = !!cleaned && BUSY.test(cleaned);
-  const request = asks
-    ? ""
-    : `${busy ? "" : "大変お忙しいかと思いますが、"}ぜひ${partner}と1to1を実施させていただきたいと思います。お時間をいただけますでしょうか？\n`;
-  const guide = asks ? "以下のURLからご確認ください。" : `よろしければ、以下から${partner}のご予定を伺わせてください。`;
+  // （定型の文面を書き換えていて、該当の文がないときは、何もしない。そのときは「AIで整える」を使う）
+  let body = template?.trim() ? template : DM_DEFAULT_TEMPLATE;
+  if (cleaned && ASKS.test(cleaned)) body = body.replace(REQUEST_SENTENCE, "").replace(GUIDE_SENTENCE, "以下のURLからご確認ください。");
+  else if (cleaned && BUSY.test(cleaned)) body = body.replace(BUSY_PREFIX, "");
 
-  return `${heading}お疲れ様です。${senderName}です。
-${noteBlock}${request}${guide}
-
-${url}
-
-よろしくお願いします。`;
+  const vars: Record<string, string> = {
+    partnerHeading: hasName ? `${partner}\n` : "", partner, senderName, url, noteBlock: cleaned ? `${cleaned}\n` : "",
+  };
+  return body.replace(/\{\{(\w+)\}\}/g, (_m, key: string) => vars[key] ?? "");
 }

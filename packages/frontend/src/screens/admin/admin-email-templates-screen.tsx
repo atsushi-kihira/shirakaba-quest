@@ -14,6 +14,7 @@ type EmailTemplate = {
   label: string;
   category: string;
   categoryLabel: string;
+  kind: "email" | "message";
   triggerDescription: string;
   availableVars: EmailVar[];
   enabled: boolean;
@@ -325,15 +326,22 @@ export function AdminEmailTemplatesScreen() {
                       }}
                     >
                       <span className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="shrink-0 text-xs px-1.5 py-0.5 rounded-full font-medium"
-                          style={{
-                            background: t.enabled ? "rgba(90,140,92,0.15)" : "rgba(181,56,75,0.12)",
-                            color: t.enabled ? "#5A8C5C" : "#B5384B",
-                          }}
-                        >
-                          {t.enabled ? "ON" : "OFF"}
-                        </span>
+                        {t.kind === "message" ? (
+                          <span className="shrink-0 text-xs px-1.5 py-0.5 rounded-full font-medium"
+                            style={{ background: selectedKey === t.emailKey ? "rgba(255,255,255,0.22)" : "rgba(59,110,165,0.14)", color: selectedKey === t.emailKey ? "white" : "#3b6ea5" }}>
+                            文面
+                          </span>
+                        ) : (
+                          <span
+                            className="shrink-0 text-xs px-1.5 py-0.5 rounded-full font-medium"
+                            style={{
+                              background: t.enabled ? "rgba(90,140,92,0.15)" : "rgba(181,56,75,0.12)",
+                              color: t.enabled ? "#5A8C5C" : "#B5384B",
+                            }}
+                          >
+                            {t.enabled ? "ON" : "OFF"}
+                          </span>
+                        )}
                         <span className="truncate">{t.label}</span>
                       </span>
                       {t.isCustomized && (
@@ -394,6 +402,8 @@ export function AdminEmailTemplatesScreen() {
                 </div>
               </div>
 
+              {selected.kind === "email" && (
+              <>
               {/* 送信ON/OFF */}
               <div>
                 <label className="block text-sm font-medium mb-2" style={{ color: "var(--color-ink-700)" }}>
@@ -489,12 +499,23 @@ export function AdminEmailTemplatesScreen() {
                   </button>
                 </div>
               </div>
+              </>
+              )}
+
+              {selected.kind === "message" && (
+                <div className="p-3 rounded-xl text-xs leading-relaxed space-y-1" style={{ background: "rgba(59,110,165,0.08)", color: "var(--color-ink-700)" }}>
+                  <p className="font-semibold">このメッセージについて</p>
+                  <p>メールでは送られません。1to1を申し込んだメンバーの画面に、DM等で送るための文面として表示されます（メンバーは直してからコピーして使えます）。</p>
+                  <p>申込者が入力したメッセージは <code className="font-mono">{"{{noteBlock}}"}</code> の位置に入ります。メッセージの挨拶・自己紹介・結びの言葉・URLなど、文面と重なるものは自動で省きます。
+                    既定の文面のときは、お願いの文も自動で調整します。文面を書き換えた場合は、メンバーが「AIで、全体を自然に整える」を押すと、書き換えた文面に合わせてAIが整えます。</p>
+                </div>
+              )}
 
               {/* 利用可能な変数 */}
               {selected.availableVars.length > 0 && (
                 <div className="p-3 rounded-xl text-xs" style={{ background: "var(--color-paper-200)" }}>
                   <p className="font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>
-                    利用可能な変数（件名・本文・共通ヘッダー/フッターに挿入できます）
+                    {selected.kind === "message" ? "利用可能な変数（本文に挿入できます）" : "利用可能な変数（件名・本文・共通ヘッダー/フッターに挿入できます）"}
                   </p>
                   <div className="grid grid-cols-2 gap-1.5">
                     {selected.availableVars.map((v) => (
@@ -515,7 +536,7 @@ export function AdminEmailTemplatesScreen() {
               {/* 本文（プレーンテキスト） */}
               <div>
                 <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
-                  本文（テキスト）
+                  {selected.kind === "message" ? "メッセージの文面" : "本文（テキスト）"}
                 </label>
                 <textarea
                   value={editBodyText}
@@ -537,7 +558,7 @@ export function AdminEmailTemplatesScreen() {
               )}
               {saveMutation.isError && (
                 <p className="text-sm text-center" style={{ color: "var(--color-brand)" }}>
-                  保存に失敗しました
+                  {saveMutation.error instanceof Error && saveMutation.error.message ? saveMutation.error.message : "保存に失敗しました"}
                 </p>
               )}
             </div>

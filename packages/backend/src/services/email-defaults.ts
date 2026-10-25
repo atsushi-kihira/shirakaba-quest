@@ -18,7 +18,18 @@ export type EmailDefault = {
   subject: string;
   bodyText: string;
   availableVars: EmailVar[];
+  /** "message" = メールとしては送らず、アプリ内で文面を作るときに使うひな形（件名・送信元などは使わない） */
+  kind?: "message";
 };
+
+/** 1to1のお誘いメッセージ（DM用）の既定文面。申込者のメッセージと重なる部分の調整は、この文面のとおりのときに自動で行う */
+export const DM_DEFAULT_BODY = `{{partnerHeading}}お疲れ様です。{{senderName}}です。
+{{noteBlock}}大変お忙しいかと思いますが、ぜひ{{partner}}と1to1を実施させていただきたいと思います。お時間をいただけますでしょうか？
+よろしければ、以下から{{partner}}のご予定を伺わせてください。
+
+{{url}}
+
+よろしくお願いします。`;
 
 // ── テンプレート定義 ─────────────────────────────────────────
 export const EMAIL_DEFAULTS: EmailDefault[] = [
@@ -842,6 +853,24 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
       { key: "titleBlock", label: "ミーティングのタイトル（設定済みの場合のみ表示）", example: "📌 タイトル：営業のご相談\n\n" },
       { key: "noteBlock", label: "申込者からのメッセージ（ある場合のみ表示）", example: "💬 メッセージ：よろしくお願いします\n\n" },
       { key: "schedulerBlock", label: "スケジューラーURL（設定済みの場合のみ表示）", example: "📅 日程を予約する: https://...\n\n" },
+    ],
+  },
+
+  {
+    emailKey: "oneonone_dm_message",
+    kind: "message",
+    label: "1to1のお誘いメッセージ（DM用）",
+    category: "oneonone",
+    triggerDescription: "1to1の申込後などに、メールではなくDM等でお誘いするときの文面として、申込者の画面に表示されます（メールでは送られません）",
+    enabled: true,
+    subject: "",
+    bodyText: DM_DEFAULT_BODY,
+    availableVars: [
+      { key: "partnerHeading", label: "相手への呼びかけの行（名前が分かるときだけ表示）", example: "山田さん\n" },
+      { key: "partner", label: "相手の呼び方（名前が分からないときは「ご担当の方」）", example: "山田さん" },
+      { key: "senderName", label: "申込者（送る人）の名前", example: "紀平 篤志" },
+      { key: "noteBlock", label: "申込者が入力したメッセージ（入力があるときだけ表示。重なる挨拶などは自動で省きます）", example: "先日はありがとうございました。\n" },
+      { key: "url", label: "日程を選ぶURL", example: "https://..." },
     ],
   },
 
