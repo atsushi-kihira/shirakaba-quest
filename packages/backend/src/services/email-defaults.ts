@@ -857,6 +857,40 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
   },
 
   {
+    emailKey: "event_reminder",
+    label: "予定のリマインド（1to1・ミーティング・定例会）",
+    category: "meeting",
+    triggerDescription: "確定している予定の「N日前」（受け取る本人がマイページや予定ごとに設定。初期設定は1日前）の朝8時ごろ、参加する本人に送信",
+    enabled: true,
+    subject: "【{{appTitle}}】{{whenWord}}は「{{title}}」です",
+    bodyText: `{{memberName}} さん
+
+{{whenWord}}、{{kindLabel}}の予定があります。
+
+▼ {{title}}
+{{dateText}}
+{{detailBlock}}予定の詳細はこちら
+{{pageUrl}}
+
+※ このリマインドは、マイページの「リマインド通知」で、受け取る日数・方法を変えられます（予定ごとの変更は、各予定のページでできます）。
+{{settingsUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "受取人名", example: "山田 太郎" },
+      { key: "whenWord", label: "いつか（今日／明日／N日後）", example: "明日" },
+      { key: "kindLabel", label: "予定の種類（1to1／ミーティング／定例会）", example: "ミーティング" },
+      { key: "title", label: "予定のタイトル", example: "営業勉強会" },
+      { key: "dateText", label: "日時", example: "2026年10月26日(月) 19:00〜20:00" },
+      { key: "detailBlock", label: "主催者・会議URL（ある場合のみ表示）", example: "👤 主催：紀平 篤志\n📹 会議URL\nhttps://...\n\n" },
+      { key: "pageUrl", label: "予定の詳細ページのURL", example: "https://.../meetings/xxxx" },
+      { key: "settingsUrl", label: "リマインド設定（マイページ）のURL", example: "https://.../me" },
+    ],
+  },
+
+  {
     emailKey: "oneonone_dm_message",
     kind: "message",
     label: "1to1のお誘いメッセージ（DM用）",

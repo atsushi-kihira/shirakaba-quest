@@ -13,6 +13,7 @@ import { NewPostModal, type GraphTeamLite } from "@/screens/collab/_activity-and
 import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { ConfirmDatesModal, type ConfirmBulkPayload } from "./_confirm-dates-modal";
 import { ScheduleTextModal } from "@/components/schedule-text-modal";
+import { EventReminderSetting } from "@/components/reminder-settings";
 import { DEFAULT_START_TIME, defaultEndTime, addMinutesToTime } from "@/lib/meeting-time";
 
 type Availability = "yes" | "maybe" | "no";
@@ -751,6 +752,11 @@ export function MeetingDetailScreen() {
             );
           })}
         </div>
+      )}
+
+      {/* リマインド（これから開かれる確定日があるとき。受け取る本人が、自分への通知を設定する） */}
+      {meeting.status === "confirmed" && confirmedCandidates.some((c) => c.startsAt > nowSec) && (
+        <EventReminderSetting kind="meeting" id={meeting.id} className="mb-4" />
       )}
 
       {/* 募集締め切り表示 */}

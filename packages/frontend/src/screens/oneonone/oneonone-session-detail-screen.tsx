@@ -13,6 +13,7 @@ import { fmtDateISO } from "@/lib/date";
 import { CompleteOneOnOneModal } from "../meetings/_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-modal";
 import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candidate-selection-panel";
+import { EventReminderSetting } from "@/components/reminder-settings";
 
 type Session = {
   id: string;
@@ -208,6 +209,11 @@ export function OneOnOneSessionDetailScreen() {
               相手の承諾を待っています
             </div>
           )
+        )}
+
+        {/* リマインド（日時が決まっているとき。自分への通知を、自分で設定する） */}
+        {session.status === "accepted" && !!session.scheduledFor && session.scheduledFor * 1000 > Date.now() && (
+          <EventReminderSetting kind="oneonone" id={session.id} className="mt-3" />
         )}
 
         {/* 完了ボタン・お互いの完了状況（相手がまだ承諾していなくても、実際に1to1をしてしまうことはあるため表示する） */}

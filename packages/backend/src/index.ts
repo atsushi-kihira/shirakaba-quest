@@ -9,6 +9,7 @@ import { memberRoutes } from "./routes/members.ts";
 import { rankingRoutes } from "./routes/ranking.ts";
 import { oneOnOneRoutes } from "./routes/oneonone.ts";
 import { oneOnOnePublicRoutes } from "./routes/oneonone-public.ts";
+import { reminderRoutes } from "./routes/reminders.ts";
 import { oneOnOneDmRoutes } from "./routes/oneonone-dm.ts";
 import { oneOnOneGuestInviteRoutes } from "./routes/oneonone-guest-invites.ts";
 import { oneOnOneGuestInvitePublicRoutes } from "./routes/oneonone-guest-invites-public.ts";
@@ -95,6 +96,7 @@ app.route("/api/meeting-series", meetingSeriesRoutes);
 app.route("/api/schedule", scheduleRoutes);
 app.route("/api/push", pushRoutes);
 app.route("/api/notifications", notificationRoutes);
+app.route("/api/reminders", reminderRoutes);
 app.route("/api/scheduler", schedulerRoutes);
 
 // ---- 内部専用: 会社概要のバックグラウンド生成の自己連鎖呼び出し（一般ユーザーの認証は使わず、共有シークレットで保護） ----
@@ -123,6 +125,18 @@ app.post("/api/internal/team-profile-backfill", async (c) => {
   const origin = new URL(c.req.url).origin;
   c.executionCtx.waitUntil(sweepTeamProfileBackfill(db, c.env, origin, hop ?? 0, !!retryFailed));
   return c.json({ ok: true });
+});
+
+// ---- 内部専用: 予定のリマインド通知の送信（毎時の定期実行 .github/workflows/reminders.yml から呼ぶ。共有シークレットで保護） ----
+app.post("/api/internal/send-reminders", async (c) => {
+  const secret = c.req.header("x-internal-task-secret");
+  if (!secret || secret !== c.env.INTERNAL_TASK_SECRET) {
+    return c.json({ error: { code: "forbidden", message: "許可されていないリクエストです" } }, 403);
+  }
+  const { createDb } = await import("./db/index.ts");
+  const { runEventReminders } = await import("./services/event-reminders.ts");
+  const result = await runEventReminders(createDb(c.env.DB), c.env);
+  return c.json({ ok: true, ...result });
 });
 
 // ---- 公開アプリ設定（認証不要・全ユーザー対象） ----

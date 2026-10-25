@@ -1,0 +1,34 @@
+name: Send event reminders
+
+# 確定済みの予定（1to1・ミーティング・定例会）のリマインド通知を、毎時、送信する。
+# Cloudflare Pages には定期実行の機能がないため、GitHub Actions から、バックエンドの内部用APIを呼び出す。
+# 必要な設定（GitHub の Settings > Secrets and variables > Actions）:
+#   Secrets: INTERNAL_TASK_SECRET … Cloudflare 側の同名のシークレットと同じ値
+#   Variables（任意）: API_BASE_URL … 既定は https://bizquest-api.bizolve.jp
+on:
+  schedule:
+    - cron: "7 * * * *"   # 毎時7分（UTC）。GitHub側の混雑で数十分遅れることがある
+  workflow_dispatch:      # 手動実行ボタン
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call send-reminders
+        env:
+          INTERNAL_TASK_SECRET: ${{ secrets.INTERNAL_TASK_SECRET }}
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          if [ -z "$INTERNAL_TASK_SECRET" ]; then
+            echo "::error::GitHub のシークレット INTERNAL_TASK_SECRET が設定されていません"
+            exit 1
+          fi
+          base="${API_BASE_URL:-https://bizquest-api.bizolve.jp}"
+          code=$(curl -sS -o response.json -w "%{http_code}" -X POST "$base/api/internal/send-reminders" \
+            -H "x-internal-task-secret: $INTERNAL_TASK_SECRET")
+          cat response.json; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::リマインド送信の呼び出しに失敗しました（HTTP $code）"
+            exit 1
+          fi

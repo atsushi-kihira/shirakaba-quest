@@ -1286,3 +1286,44 @@ export const memberCalendarEvents = sqliteTable("member_calendar_events", {
 }, (t) => ({
   uniq: uniqueIndex("uniq_member_calendar_event").on(t.memberId, t.kind, t.refId, t.slotId),
 }));
+
+// ---- 確定済みの予定（1to1・ミーティング・定例会）のリマインド通知 ----
+// メンバーごとの初期設定（行がなければ「1日前・ホーム画面とメールの両方」）。days_json は「何日前か」の配列（最大2つ。空配列はリマインドなし）
+export const memberReminderSettings = sqliteTable("member_reminder_settings", {
+  memberId:  text("member_id").primaryKey(),
+  daysJson:  text("days_json").notNull().default("[1]"),
+  channel:   text("channel").notNull().default("both"), // 'home' | 'email' | 'both'
+  updatedAt: integer("updated_at").notNull(),
+});
+
+// 予定ごとの設定（その予定だけ初期設定と違うとき）。target_kind: 'oneonone'(1to1のID) | 'meeting'(ミーティングの回) | 'series'(定例会。全回に効く) | 'booking'(外部ゲストとの1to1の予約)
+export const reminderOverrides = sqliteTable("reminder_overrides", {
+  memberId:   text("member_id").notNull(),
+  targetKind: text("target_kind").notNull(),
+  targetId:   text("target_id").notNull(),
+  daysJson:   text("days_json").notNull(),
+  channel:    text("channel").notNull(),
+  updatedAt:  integer("updated_at").notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.memberId, t.targetKind, t.targetId] }),
+}));
+
+// 届けたリマインド。ホーム画面の表示と、同じリマインドを二重に送らないための記録を兼ねる。
+// status: 'sent'(届けた) | 'skipped'(時期を過ぎていて、届けなかった)
+export const reminderNotices = sqliteTable("reminder_notices", {
+  id:         text("id").primaryKey(),
+  memberId:   text("member_id").notNull(),
+  kind:       text("kind").notNull(), // 'oneonone' | 'meeting' | 'booking'
+  refId:      text("ref_id").notNull(),
+  startsAt:   integer("starts_at").notNull(),
+  daysBefore: integer("days_before").notNull(),
+  status:     text("status").notNull().default("sent"),
+  channel:    text("channel").notNull(),
+  title:      text("title").notNull(),
+  body:       text("body").notNull(),
+  linkPath:   text("link_path"),
+  readAt:     integer("read_at"),
+  createdAt:  integer("created_at").notNull(),
+}, (t) => ({
+  uniq: uniqueIndex("uniq_reminder_notice").on(t.memberId, t.kind, t.refId, t.startsAt, t.daysBefore),
+}));

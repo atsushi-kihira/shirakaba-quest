@@ -19,6 +19,7 @@ import { buildSkillDescription } from "@shared/types";
 import type { PublicMember, Skill } from "@shared/types";
 import { CARD_CHARACTERS } from "@/screens/card-order/card-order-screen";
 import { ChangeEmailModal } from "./change-email-modal";
+import { ReminderDefaultsCard } from "@/components/reminder-settings";
 
 import type { MemberBadge } from "@shared/types";
 
@@ -450,6 +451,9 @@ export function MypageScreen() {
               </div>
             </div>
           )}
+
+          {/* リマインド通知の初期設定（承認済みメンバーのみ） */}
+          {!isAdminOnly && approved && <ReminderDefaultsCard />}
 
           {/* 1to1リンク */}
           {!isAdminOnly && (

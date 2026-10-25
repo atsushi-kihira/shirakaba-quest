@@ -15,6 +15,7 @@ import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { ScheduleTextModal } from "@/components/schedule-text-modal";
 import { SeriesConferenceUrlsModal, type SeriesUrlPayload } from "./_series-conference-urls-modal";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
+import { EventReminderSetting } from "@/components/reminder-settings";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -408,6 +409,9 @@ export function MeetingSeriesDetailScreen() {
 
       {(series.status === "confirmed" || series.status === "ended" || series.status === "cancelled") && (
         <>
+          {upcoming.length > 0 && series.status === "confirmed" && (
+            <EventReminderSetting kind="series" id={series.id} ownLabel="この定例会の全回に共通の設定" className="mb-4" />
+          )}
           {upcoming.length > 0 && series.status === "confirmed" && (
             <div className="grid gap-2 mb-4">
               <button onClick={() => setShowScheduleText(true)} className="py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5"
