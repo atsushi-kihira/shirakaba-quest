@@ -4,10 +4,10 @@
 // 届ける相手が自分で決める設定（主催者が相手に一方的に送るものではない）
 //   ・初期設定: マイページで決める（行がなければ「1日前・ホーム画面とメールの両方」）
 //   ・予定ごとの設定: その予定だけ違う設定にしたいとき（定例会は、全回まとめて設定できる）
-//   ・何日前か: 1〜14日前から最大2つ（例: 3日前と1日前）／届け方: ホーム画面・メール・両方
+//   ・何日前の何時か: 1〜14日前から最大2つ、それぞれに時刻（0〜23時。分は指定しない）（例: 3日前の9時と、1日前の9時）／届け方: ホーム画面・メール・両方
 //
 // 届く時刻と届ける相手
-//   ・「N日前」は、予定の日のN日前の朝8時（その人のタイムゾーン）。毎時の定期実行で、その時刻を過ぎたものを届ける
+//   ・「N日前のH時」は、予定の日のN日前のH時（その人のタイムゾーン。初期値は8時）。毎時の定期実行で、その時刻を過ぎたものを届ける
 //   ・時刻を24時間以上過ぎてから設定が追いついたもの（設定の変更直後など）は、届けない
 //   ・同じ予定で、2つの設定がどちらも時刻を過ぎているときは、近いほう（日数が少ないほう）だけ届ける
 //   ・文面は「明日」「3日後」など、届けた時点の本当の残り日数で書く
@@ -23,33 +23,44 @@ import { formatRange } from "./schedule-text.ts";
 import type { Env } from "../types.ts";
 
 export type ReminderChannel = "home" | "email" | "both";
-export type ReminderSetting = { days: number[]; channel: ReminderChannel };
+export type ReminderItem = { days: number; hour: number };
+export type ReminderSetting = { items: ReminderItem[]; channel: ReminderChannel };
 export type ReminderTargetKind = "oneonone" | "meeting" | "series" | "booking";
 
-export const DEFAULT_REMINDER: ReminderSetting = { days: [1], channel: "both" };
+export const DEFAULT_HOUR = 8;
+export const DEFAULT_REMINDER: ReminderSetting = { items: [{ days: 1, hour: DEFAULT_HOUR }], channel: "both" };
 export const MAX_REMIND_DAYS = 14;
-const SEND_HOUR = 8;
 const GRACE_SECONDS = 24 * 3600;
 const HORIZON_DAYS = MAX_REMIND_DAYS + 2;
 const MAIL_CONCURRENCY = 5;
 
 export const TARGET_KINDS: ReminderTargetKind[] = ["oneonone", "meeting", "series", "booking"];
 
-/** 入力された設定を検証して整える（不正なら null） */
-export function normalizeSetting(raw: { days?: unknown; channel?: unknown }): ReminderSetting | null {
-  if (!Array.isArray(raw.days)) return null;
-  const days = [...new Set(raw.days.map(Number))].filter((n) => Number.isInteger(n) && n >= 1 && n <= MAX_REMIND_DAYS);
-  if (days.length !== new Set(raw.days.map(Number)).size || days.length > 2) return null;
+/** 入力された設定を検証して整える（不正なら null）。items は {days: 何日前か, hour: 何時か}。何日前かは重ならない最大2つ */
+export function normalizeSetting(raw: { items?: unknown; channel?: unknown }): ReminderSetting | null {
+  if (!Array.isArray(raw.items) || raw.items.length > 2) return null;
+  const items: ReminderItem[] = [];
+  for (const x of raw.items as Array<{ days?: unknown; hour?: unknown }>) {
+    const days = Number(x?.days);
+    const hour = Number(x?.hour);
+    if (!Number.isInteger(days) || days < 1 || days > MAX_REMIND_DAYS) return null;
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+    if (items.some((i) => i.days === days)) return null;
+    items.push({ days, hour });
+  }
   if (raw.channel !== "home" && raw.channel !== "email" && raw.channel !== "both") return null;
-  return { days: days.sort((a, b) => b - a), channel: raw.channel };
+  return { items: items.sort((a, b) => b.days - a.days), channel: raw.channel };
 }
 
-export function parseSetting(daysJson: string | null | undefined, channel: string | null | undefined): ReminderSetting {
+/** DBの値から設定を作る。以前の形式（何日前かの数字だけの配列）は、朝8時として読む */
+export function parseSetting(itemsJson: string | null | undefined, channel: string | null | undefined): ReminderSetting {
   try {
-    const parsed = normalizeSetting({ days: JSON.parse(daysJson ?? "[1]"), channel });
+    const raw = JSON.parse(itemsJson ?? "[1]") as unknown;
+    const items = Array.isArray(raw) ? raw.map((x) => (typeof x === "number" ? { days: x, hour: DEFAULT_HOUR } : x)) : null;
+    const parsed = normalizeSetting({ items, channel });
     if (parsed) return parsed;
   } catch { /* 既定に戻す */ }
-  return { ...DEFAULT_REMINDER };
+  return { ...DEFAULT_REMINDER, items: DEFAULT_REMINDER.items.map((i) => ({ ...i })) };
 }
 
 // ---- タイムゾーン計算 ----
@@ -73,11 +84,11 @@ function zonedEpoch(y: number, m: number, d: number, h: number, mi: number, tz: 
 }
 const dayNumber = (p: { y: number; m: number; d: number }): number => Date.UTC(p.y, p.m - 1, p.d) / 86400000;
 
-/** N日前の朝8時（その人のタイムゾーン）の瞬間 */
-export function reminderTime(startsAt: number, daysBefore: number, tz: string): number {
+/** N日前のH時（その人のタイムゾーン）の瞬間 */
+export function reminderTime(startsAt: number, daysBefore: number, hour: number, tz: string): number {
   const s = tzParts(startsAt, tz);
   const day = new Date(Date.UTC(s.y, s.m - 1, s.d - daysBefore));
-  return zonedEpoch(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), SEND_HOUR, 0, tz);
+  return zonedEpoch(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), hour, 0, tz);
 }
 function whenWord(startsAt: number, now: number, tz: string): string {
   const diff = dayNumber(tzParts(startsAt, tz)) - dayNumber(tzParts(now, tz));
@@ -269,20 +280,19 @@ export async function runEventReminders(db: Db, env: Env, now: number = Math.flo
         overrides.get(`${memberId}|${occ.kind}|${occ.refId}`)
         ?? (occ.seriesId ? overrides.get(`${memberId}|series|${occ.seriesId}`) : undefined)
         ?? defaults.get(memberId) ?? DEFAULT_REMINDER;
-      if (setting.days.length === 0) continue;
+      if (setting.items.length === 0) continue;
 
       const tz = member.timezone ?? systemTz;
       // 時刻を過ぎていて、まだ記録のないものを、日数の少ない順に並べる
-      const due = [...setting.days].sort((a, b) => a - b)
-        .filter((d) => reminderTime(occ.startsAt, d, tz) <= now && !done.has(`${memberId}|${occ.kind}|${occ.refId}|${occ.startsAt}|${d}`));
+      const due = [...setting.items].sort((a, b) => a.days - b.days)
+        .filter((it) => reminderTime(occ.startsAt, it.days, it.hour, tz) <= now && !done.has(`${memberId}|${occ.kind}|${occ.refId}|${occ.startsAt}|${it.days}`));
       if (due.length === 0) continue;
 
       const [nearest, ...older] = due;
-      const fresh = now - reminderTime(occ.startsAt, nearest, tz) <= GRACE_SECONDS;
-      const skipRows = (fresh ? older : due).map((d) => ({ d }));
-      for (const { d } of skipRows) {
+      const fresh = now - reminderTime(occ.startsAt, nearest.days, nearest.hour, tz) <= GRACE_SECONDS;
+      for (const it of fresh ? older : due) {
         await db.insert(schema.reminderNotices).values({
-          id: newId(), memberId, kind: occ.kind, refId: occ.refId, startsAt: occ.startsAt, daysBefore: d, status: "skipped",
+          id: newId(), memberId, kind: occ.kind, refId: occ.refId, startsAt: occ.startsAt, daysBefore: it.days, status: "skipped",
           channel: setting.channel, title: occ.title, body: "", linkPath: occ.path, readAt: now, createdAt: now,
         }).onConflictDoNothing();
         skipped++;
@@ -294,7 +304,7 @@ export async function runEventReminders(db: Db, env: Env, now: number = Math.flo
       const title = `⏰ ${word}は「${occ.title}」です`;
       const body = `${dateText}${occ.conferenceUrl ? `\n📹 ${occ.conferenceUrl}` : ""}`;
       await db.insert(schema.reminderNotices).values({
-        id: newId(), memberId, kind: occ.kind, refId: occ.refId, startsAt: occ.startsAt, daysBefore: nearest, status: "sent",
+        id: newId(), memberId, kind: occ.kind, refId: occ.refId, startsAt: occ.startsAt, daysBefore: nearest.days, status: "sent",
         channel: setting.channel, title, body, linkPath: occ.path, readAt: null, createdAt: now,
       }).onConflictDoNothing();
       sent++;

@@ -1,9 +1,9 @@
 // =============================================================
 // 予定のリマインド通知の設定（1to1・ミーティング・定例会）
-//   ・ReminderDefaultsCard … マイページの「初期設定」（何日前に、どの方法で）
+//   ・ReminderDefaultsRow … マイページの「初期設定」（プッシュ通知の次の行）（何日前に、どの方法で）
 //   ・EventReminderSetting … 各予定のページで、その予定だけの設定（なければ初期設定が使われる）
 // リマインドは、受け取る本人が決める。主催者や相手が、他の人の設定を変えることはできない。
-// 初期設定は「1日前・ホーム画面とメールの両方」。何日前かは最大2つまで（例：3日前と1日前）。
+// 初期設定は「1日前の8時・ホーム画面とメールの両方」。何日前の何時かは最大2つまで（例：3日前の9時と、1日前の9時。分は指定しない）。
 // =============================================================
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,7 +11,8 @@ import { Bell, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 
 export type ReminderChannel = "home" | "email" | "both";
-export type ReminderValue = { days: number[]; channel: ReminderChannel };
+export type ReminderItem = { days: number; hour: number };
+export type ReminderValue = { items: ReminderItem[]; channel: ReminderChannel };
 export type ReminderTargetKind = "oneonone" | "meeting" | "series" | "booking";
 
 const MAX_DAYS = 14;
@@ -21,42 +22,60 @@ const CHANNELS: { value: ReminderChannel; label: string }[] = [
   { value: "both", label: "両方" },
 ];
 
+const DEFAULT_HOUR = 8;
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
 export function describeReminder(v: ReminderValue): string {
-  if (v.days.length === 0) return "リマインドを受け取らない";
-  const days = [...v.days].sort((a, b) => b - a).map((d) => `${d}日前`).join("・");
-  return `${days}の朝8時ごろ ／ ${CHANNELS.find((c) => c.value === v.channel)?.label ?? ""}で通知`;
+  if (v.items.length === 0) return "リマインドを受け取らない";
+  const when = [...v.items].sort((a, b) => b.days - a.days).map((i) => `${i.days}日前の${i.hour}時`).join("・");
+  return `${when} ／ ${CHANNELS.find((c) => c.value === v.channel)?.label ?? ""}で通知`;
 }
 
 const selectStyle = { background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" } as const;
 
-/** 何日前か（最大2つ）と、届け方を選ぶ部分 */
+/** 何日前の何時か（最大2つ）と、届け方を選ぶ部分 */
 function ReminderFields({ value, onChange }: { value: ReminderValue; onChange: (v: ReminderValue) => void }) {
-  const enabled = value.days.length > 0;
-  const sorted = [...value.days].sort((a, b) => b - a);
-  const first = sorted[0] ?? 1;
-  const second = sorted[1] ?? 0; // 0 = 追加しない
-  const setDays = (a: number, b: number) => onChange({ ...value, days: [a, b].filter((d) => d > 0) });
-  const options = (exclude: number) => Array.from({ length: MAX_DAYS }, (_, i) => i + 1).filter((d) => d !== exclude);
+  const enabled = value.items.length > 0;
+  const sorted = [...value.items].sort((a, b) => b.days - a.days);
+  const first = sorted[0] ?? { days: 1, hour: DEFAULT_HOUR };
+  const second = sorted[1] ?? null;
+  const set = (a: ReminderItem, b: ReminderItem | null) => onChange({ ...value, items: b ? [a, b] : [a] });
+  const dayOptions = (exclude: number | null) => Array.from({ length: MAX_DAYS }, (_, i) => i + 1).filter((d) => d !== exclude);
+  const hourSelect = (hour: number, onHour: (h: number) => void, label: string) => (
+    <select value={hour} onChange={(e) => onHour(Number(e.target.value))}
+      className="px-3 py-2 rounded-xl border text-sm" style={selectStyle} aria-label={label}>
+      {HOURS.map((h) => <option key={h} value={h}>{h}時</option>)}
+    </select>
+  );
 
   return (
     <div className="space-y-3">
       <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--color-ink-800)" }}>
-        <input type="checkbox" checked={enabled} onChange={(e) => onChange({ ...value, days: e.target.checked ? [1] : [] })} className="w-4 h-4" />
+        <input type="checkbox" checked={enabled} onChange={(e) => onChange({ ...value, items: e.target.checked ? [{ days: 1, hour: DEFAULT_HOUR }] : [] })} className="w-4 h-4" />
         リマインドを受け取る
       </label>
       {enabled && (
         <>
-          <div className="flex flex-wrap items-center gap-2 text-sm" style={{ color: "var(--color-ink-700)" }}>
-            <select value={first} onChange={(e) => setDays(Number(e.target.value), second === Number(e.target.value) ? 0 : second)}
-              className="px-3 py-2 rounded-xl border text-sm" style={selectStyle} aria-label="1つ目のリマインド">
-              {options(second).map((d) => <option key={d} value={d}>{d}日前</option>)}
-            </select>
-            <span>と</span>
-            <select value={second} onChange={(e) => setDays(first, Number(e.target.value))}
-              className="px-3 py-2 rounded-xl border text-sm" style={selectStyle} aria-label="2つ目のリマインド">
-              <option value={0}>（追加しない）</option>
-              {options(first).map((d) => <option key={d} value={d}>{d}日前</option>)}
-            </select>
+          <div className="space-y-2 text-sm" style={{ color: "var(--color-ink-700)" }}>
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={first.days}
+                onChange={(e) => { const d = Number(e.target.value); set({ ...first, days: d }, second && second.days === d ? null : second); }}
+                className="px-3 py-2 rounded-xl border text-sm" style={selectStyle} aria-label="1つ目のリマインド（何日前）">
+                {dayOptions(second?.days ?? null).map((d) => <option key={d} value={d}>{d}日前</option>)}
+              </select>
+              {hourSelect(first.hour, (h) => set({ ...first, hour: h }, second), "1つ目のリマインド（何時）")}
+              <span className="text-xs" style={{ color: "var(--color-ink-500)" }}>に通知</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={second?.days ?? 0}
+                onChange={(e) => { const d = Number(e.target.value); set(first, d === 0 ? null : { days: d, hour: second?.hour ?? first.hour }); }}
+                className="px-3 py-2 rounded-xl border text-sm" style={selectStyle} aria-label="2つ目のリマインド（何日前）">
+                <option value={0}>（追加しない）</option>
+                {dayOptions(first.days).map((d) => <option key={d} value={d}>{d}日前</option>)}
+              </select>
+              {second && hourSelect(second.hour, (h) => set(first, { ...second, hour: h }), "2つ目のリマインド（何時）")}
+              {second && <span className="text-xs" style={{ color: "var(--color-ink-500)" }}>に通知</span>}
+            </div>
           </div>
           <div>
             <p className="text-xs mb-1.5" style={{ color: "var(--color-ink-500)" }}>通知の方法</p>
@@ -84,20 +103,22 @@ const errText = (e: unknown) => (e instanceof ApiError ? e.message : "保存で�
 // ---- マイページ：初期設定 ----
 type SettingsResponse = { data: ReminderValue & { isDefault: boolean } };
 
-export function ReminderDefaultsCard() {
+export function ReminderDefaultsRow() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["reminders", "settings"], queryFn: () => api.get<SettingsResponse>("/reminders/settings") });
   const [draft, setDraft] = useState<ReminderValue | null>(null);
-  const current: ReminderValue | null = draft ?? (data ? { days: data.data.days, channel: data.data.channel } : null);
+  const current: ReminderValue | null = draft ?? (data ? { items: data.data.items, channel: data.data.channel } : null);
   const save = useMutation({
     mutationFn: (v: ReminderValue) => api.put<SettingsResponse>("/reminders/settings", v),
     onSuccess: () => { setDraft(null); qc.invalidateQueries({ queryKey: ["reminders"] }); },
   });
 
   return (
-    <div className="card-paper rounded-3xl p-5">
-      <h2 className="text-base font-semibold mb-1" style={{ fontFamily: "var(--font-klee)" }}>⏰ リマインド通知</h2>
-      <p className="text-xs mb-3 leading-relaxed" style={{ color: "var(--color-ink-500)" }}>
+    <div className="mt-2 flex items-start gap-3 px-3 py-2.5 rounded-2xl" style={{ background: "var(--color-paper-100)" }}>
+      <span className="text-lg">⏰</span>
+      <div className="flex-1 min-w-0">
+      <div className="font-semibold text-sm" style={{ color: "var(--color-ink-800)" }}>リマインド通知</div>
+      <p className="text-xs mt-0.5 mb-3 leading-relaxed" style={{ color: "var(--color-ink-500)" }}>
         日時が決まっている1to1・ミーティング・定例会について、事前にお知らせします（あなたが参加するものだけです）。
         ここで決めた内容が、すべての予定の初期設定になります。予定ごとに変えたいときは、各予定のページで設定できます。
       </p>
@@ -124,6 +145,7 @@ export function ReminderDefaultsCard() {
           </p>
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -141,7 +163,7 @@ export function EventReminderSetting({ kind, id, className, ownLabel }: EventPro
     queryFn: () => api.get<TargetResponse>(`/reminders/target?kind=${kind}&id=${encodeURIComponent(id)}`),
   });
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<ReminderValue>({ days: [1], channel: "both" });
+  const [draft, setDraft] = useState<ReminderValue>({ items: [{ days: 1, hour: DEFAULT_HOUR }], channel: "both" });
   const done = () => { setEditing(false); qc.invalidateQueries({ queryKey: key }); };
   const save = useMutation({ mutationFn: (v: ReminderValue) => api.put("/reminders/target", { kind, id, ...v }), onSuccess: done });
   const reset = useMutation({ mutationFn: () => api.delete(`/reminders/target?kind=${kind}&id=${encodeURIComponent(id)}`), onSuccess: done });
@@ -160,7 +182,7 @@ export function EventReminderSetting({ kind, id, className, ownLabel }: EventPro
           <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>{sourceNote}</p>
         </div>
         {!editing && (
-          <button type="button" onClick={() => { setDraft({ days: v.days, channel: v.channel }); setEditing(true); }}
+          <button type="button" onClick={() => { setDraft({ items: v.items, channel: v.channel }); setEditing(true); }}
             className="text-xs underline shrink-0" style={{ color: "var(--color-brand)" }}>変更</button>
         )}
       </div>

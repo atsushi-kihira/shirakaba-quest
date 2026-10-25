@@ -25,7 +25,7 @@ export const reminderRoutes = new Hono<{ Bindings: Env; Variables: Variables }>(
 reminderRoutes.use("*", authMiddleware);
 
 const invalid = (message: string) => ({ error: { code: "invalid", message } });
-const INVALID_SETTING = "リマインドの設定が正しくありません。何日前か（1〜14日前、最大2つ）と、届け方を選び直してください";
+const INVALID_SETTING = "リマインドの設定が正しくありません。何日前の何時か（1〜14日前、最大2つ）と、届け方を選び直してください";
 
 async function myId(c: { get: (k: "userId" | "userType") => never | string }, db: ReturnType<typeof createDb>): Promise<string | null> {
   return resolveEffectiveMemberId(db, c.get("userId") as string, c.get("userType") as "member" | "admin");
@@ -48,14 +48,14 @@ reminderRoutes.put("/settings", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await myId(c, db);
   if (!meId) return c.json(invalid("ログインし直してください"), 401);
-  const setting = normalizeSetting(await c.req.json<{ days?: unknown; channel?: unknown }>().catch(() => ({})));
+  const setting = normalizeSetting(await c.req.json<{ items?: unknown; channel?: unknown }>().catch(() => ({})));
   if (!setting) return c.json(invalid(INVALID_SETTING), 400);
   const now = Math.floor(Date.now() / 1000);
   await db.insert(schema.memberReminderSettings)
-    .values({ memberId: meId, daysJson: JSON.stringify(setting.days), channel: setting.channel, updatedAt: now })
+    .values({ memberId: meId, daysJson: JSON.stringify(setting.items), channel: setting.channel, updatedAt: now })
     .onConflictDoUpdate({
       target: schema.memberReminderSettings.memberId,
-      set: { daysJson: JSON.stringify(setting.days), channel: setting.channel, updatedAt: now },
+      set: { daysJson: JSON.stringify(setting.items), channel: setting.channel, updatedAt: now },
     });
   return c.json({ data: { ...setting, isDefault: false } });
 });
@@ -93,17 +93,17 @@ reminderRoutes.put("/target", async (c) => {
   const db = createDb(c.env.DB);
   const meId = await myId(c, db);
   if (!meId) return c.json(invalid("ログインし直してください"), 401);
-  const body = await c.req.json<{ kind?: string; id?: string; days?: unknown; channel?: unknown }>().catch(() => ({} as { kind?: string; id?: string; days?: unknown; channel?: unknown }));
+  const body = await c.req.json<{ kind?: string; id?: string; items?: unknown; channel?: unknown }>().catch(() => ({} as { kind?: string; id?: string; items?: unknown; channel?: unknown }));
   const t = parseTarget(body.kind, body.id);
   if (!t) return c.json(invalid("予定の指定が正しくありません"), 400);
   const setting = normalizeSetting(body);
   if (!setting) return c.json(invalid(INVALID_SETTING), 400);
   const now = Math.floor(Date.now() / 1000);
   await db.insert(schema.reminderOverrides)
-    .values({ memberId: meId, targetKind: t.kind, targetId: t.id, daysJson: JSON.stringify(setting.days), channel: setting.channel, updatedAt: now })
+    .values({ memberId: meId, targetKind: t.kind, targetId: t.id, daysJson: JSON.stringify(setting.items), channel: setting.channel, updatedAt: now })
     .onConflictDoUpdate({
       target: [schema.reminderOverrides.memberId, schema.reminderOverrides.targetKind, schema.reminderOverrides.targetId],
-      set: { daysJson: JSON.stringify(setting.days), channel: setting.channel, updatedAt: now },
+      set: { daysJson: JSON.stringify(setting.items), channel: setting.channel, updatedAt: now },
     });
   return c.json({ data: { ...setting, source: "own" } });
 });
