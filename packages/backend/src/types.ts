@@ -31,6 +31,8 @@ export type Env = {
   VAPID_SUBJECT: string;         // "mailto:xxx@example.com" 形式
   // 会社概要バックグラウンド生成の自己連鎖呼び出し（/api/internal/*）を保護する共有シークレット
   INTERNAL_TASK_SECRET: string;
+  // 予定のリマインド通知の定期実行 Worker（packages/reminder-worker）が /api/internal/send-reminders を呼ぶための共有シークレット
+  REMINDER_CRON_SECRET: string;
 };
 
 // Hono のコンテキスト変数

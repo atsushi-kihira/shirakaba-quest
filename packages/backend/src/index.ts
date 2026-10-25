@@ -127,10 +127,10 @@ app.post("/api/internal/team-profile-backfill", async (c) => {
   return c.json({ ok: true });
 });
 
-// ---- 内部専用: 予定のリマインド通知の送信（毎時の定期実行 .github/workflows/reminders.yml から呼ぶ。共有シークレットで保護） ----
+// ---- 内部専用: 予定のリマインド通知の送信（毎時の定期実行 Worker（packages/reminder-worker）から呼ぶ。共有シークレットで保護） ----
 app.post("/api/internal/send-reminders", async (c) => {
   const secret = c.req.header("x-internal-task-secret");
-  if (!secret || secret !== c.env.INTERNAL_TASK_SECRET) {
+  if (!secret || !c.env.REMINDER_CRON_SECRET || secret !== c.env.REMINDER_CRON_SECRET) {
     return c.json({ error: { code: "forbidden", message: "許可されていないリクエストです" } }, 403);
   }
   const { createDb } = await import("./db/index.ts");

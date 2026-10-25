@@ -1,0 +1,18 @@
+# 予定のリマインド通知を、毎時、送信するための定期実行専用 Worker。
+# バックエンドは Cloudflare Pages で、Pages には定期実行（Cron Trigger）がないため、この Worker がバックエンドの内部用APIを呼び出す。
+# デプロイ（変更したときだけ）: cd packages/reminder-worker && pnpm deploy
+# シークレット（初回のみ）: pnpm wrangler secret put REMINDER_CRON_SECRET
+#   ※ バックエンド（Pages: shirakaba-quest-api）の同名のシークレットと同じ値にする
+name = "shirakaba-quest-reminder"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+workers_dev = false
+
+[triggers]
+crons = ["5 * * * *"] # 毎時5分（UTC）
+
+[vars]
+API_BASE_URL = "https://bizquest-api.bizolve.jp"
+
+[observability]
+enabled = true
