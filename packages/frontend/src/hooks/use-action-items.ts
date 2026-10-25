@@ -4,7 +4,7 @@
 // 通知画面の一覧・「通知」メニューのバッジ・ミーティング画面の「対応が必要なこと」で共通利用する。
 // （各メニューのバッジと同じ判定関数・同じデータを使うので、件数と内容がずれない）
 // =============================================================
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { api } from "@/lib/api";
 import { useOneOnOneSessions, filterInFlightOneOnOneForBadge } from "@/hooks/use-oneonone-status";
@@ -12,8 +12,9 @@ import { useMeetingAlerts } from "@/hooks/use-meeting-alerts";
 import { useCollabAlerts } from "@/hooks/use-collab-alerts";
 import { useGuestFollowups, usePendingExternalOneOnOneCount } from "@/hooks/use-guest-followups";
 import { meetingNotifDefaultMessage, meetingNotifIcon } from "@/lib/meeting-notification-text";
+import { useReminderNotices } from "@/hooks/use-reminder-notices";
 
-export type ActionItemGroup = "oneonone" | "meeting" | "collab";
+export type ActionItemGroup = "reminder" | "oneonone" | "meeting" | "collab";
 
 export type ActionItem = {
   key: string;
@@ -23,6 +24,8 @@ export type ActionItem = {
   detail?: string;
   /** タップしたときの移動先 */
   to: string;
+  /** タップしたときに、移動の前に行う処理（リマインドを既読にする、など） */
+  onOpen?: () => void;
   /** 目立たせる（承諾待ちなど、相手が待っているもの） */
   urgent?: boolean;
   /** 「通知」メニューのバッジに数える件数（協働の新着のように、複数件をまとめた項目は1より大きい） */
@@ -32,11 +35,15 @@ export type ActionItem = {
 type ReactionNotification = { id: string; reactionType: string; message: string; reactor: { name: string } };
 type IntroRequest = { id: string; status: "pending" | "handled"; message: string | null; contactName: string; requester: { name: string } | null };
 type ConferenceReminder = { id: string; kind: "one_on_one" | "booking"; partnerName: string };
+type SummaryIssue = { id: string; name: string };
+type PendingReview = { partnerId: string; name: string; emoji: string };
+type HostingSummary = { id: string; title: string; candidateCount: number; targetCount: number; respondedCount: number };
 
 const REACTION_LABEL: Record<string, string> = { shokai: "紹介できそう", join: "私も参加したい" };
 
 export function useActionItems(): { items: ActionItem[]; count: number } {
   const user = useAuthStore((s) => s.user);
+  const qc = useQueryClient();
   const isMember = !!user && user.userType === "member";
 
   const { data: oneOnOneData } = useOneOnOneSessions();
@@ -70,7 +77,44 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
     staleTime: 30_000,
   });
 
+  const { data: summaryIssueData } = useQuery({
+    queryKey: ["collab", "contacts", "summary-issues"],
+    queryFn: () => api.get<{ data: SummaryIssue[] }>("/collab/contacts/summary-issues"),
+    enabled: isMember,
+    staleTime: 30_000,
+  });
+  const { data: pendingReviewData } = useQuery({
+    queryKey: ["collab", "pending-confirmations"],
+    queryFn: () => api.get<{ data: PendingReview[] }>("/collab/pending-confirmations"),
+    enabled: isMember,
+    staleTime: 30_000,
+  });
+  const { data: hostingOpenData } = useQuery({
+    queryKey: ["meetings", "hosting-open-summary"],
+    queryFn: () => api.get<{ data: HostingSummary[] }>("/meetings/hosting-open-summary"),
+    enabled: !!user,
+    staleTime: 30_000,
+  });
+  const { data: hostingSeriesData } = useQuery({
+    queryKey: ["meeting-series", "hosting-voting-summary"],
+    queryFn: () => api.get<{ data: HostingSummary[] }>("/meeting-series/hosting-voting-summary"),
+    enabled: !!user,
+    staleTime: 30_000,
+  });
+  const { notices: reminders, markRead: markReminderRead } = useReminderNotices();
+
   const items: ActionItem[] = [];
+
+  // ---- 予定のリマインド（ホーム画面にも出るもの。どちらで確認しても既読になる） ----
+  for (const r of reminders) {
+    items.push({
+      key: `reminder-${r.id}`, group: "reminder", icon: "⏰", weight: 1,
+      title: r.title.replace(/^⏰\s*/, ""),
+      detail: r.body,
+      to: r.linkPath ?? "/home",
+      onOpen: () => markReminderRead(r.id),
+    });
+  }
 
   // ---- 1to1 ----
   for (const s of filterInFlightOneOnOneForBadge(oneOnOneData?.data ?? [])) {
@@ -127,6 +171,16 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
     });
   }
 
+  // 1to1のあとの振り返り（協業の可能性・リファーラル・コメント）が未記録の相手
+  for (const p of pendingReviewData?.data ?? []) {
+    items.push({
+      key: `review-${p.partnerId}`, group: "oneonone", icon: "🔔", weight: 1,
+      title: `${p.emoji} ${p.name}さんとの1to1の振り返りをお願いします`,
+      detail: "協業の可能性・リファーラルの可能性を、ホーム画面で記録できます",
+      to: "/home",
+    });
+  }
+
   // ---- ミーティング・定例会 ----
   for (const m of meetingAlerts.pendingAttendances) {
     items.push({
@@ -151,11 +205,33 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
       to: `/meetings/series/${s.id}`,
     });
   }
+  for (const m of hostingOpenData?.data ?? []) {
+    items.push({
+      key: `hosting-${m.id}`, group: "meeting", icon: "📅", weight: 1,
+      title: `主催中の「${m.title}」の日程が、まだ確定していません`,
+      detail: `回答 ${m.respondedCount}/${m.targetCount}件 ・ 候補日${m.candidateCount}件`,
+      to: `/meetings/${m.id}`,
+    });
+  }
+  for (const s of hostingSeriesData?.data ?? []) {
+    items.push({
+      key: `hosting-series-${s.id}`, group: "meeting", icon: "🔁", weight: 1,
+      title: `主催中の定例会「${s.title}」の日程が、まだ確定していません`,
+      detail: `回答 ${s.respondedCount}/${s.targetCount}件 ・ 候補パターン${s.candidateCount}件`,
+      to: `/meetings/series/${s.id}`,
+    });
+  }
   for (const n of meetingAlerts.notifications) {
     items.push({
       key: `meeting-notif-${n.id}`, group: "meeting", icon: meetingNotifIcon(n.type), weight: 1,
       title: n.message ?? meetingNotifDefaultMessage(n.type),
       to: `/meetings/${n.meetingId}`,
+      // 通知画面から開いたときも、ホーム画面と同じように既読にする
+      onOpen: () => {
+        api.post(`/meetings/${n.meetingId}/read-notifications`, {})
+          .then(() => qc.invalidateQueries({ queryKey: ["meetings"] }))
+          .catch(() => undefined);
+      },
     });
   }
 
@@ -178,6 +254,20 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
       title: `${n.reactor.name}さんから「${REACTION_LABEL[n.reactionType] ?? "リアクション"}」`,
       detail: n.message,
       to: "/home",
+      onOpen: () => {
+        api.post(`/collab/reaction-notifications/${n.id}/read`)
+          .then(() => qc.invalidateQueries({ queryKey: ["collab", "reaction-notifications"] }))
+          .catch(() => undefined);
+      },
+    });
+  }
+  const issues = summaryIssueData?.data ?? [];
+  if (issues.length > 0) {
+    items.push({
+      key: "summary-issues", group: "collab", icon: "🏢", weight: 1,
+      title: `${issues.length}件の人脈で会社概要を生成できませんでした`,
+      detail: `${issues.slice(0, 3).map((x) => x.name).join("、")}${issues.length > 3 ? " など" : ""}。会社名などを修正してください`,
+      to: "/members?tab=contacts&summaryIssues=1",
     });
   }
   for (const r of (introData?.data ?? []).filter((x) => x.status === "pending")) {

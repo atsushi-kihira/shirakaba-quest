@@ -12,6 +12,7 @@ import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
 import { LinkifiedText } from "@/components/linkified-text";
 import { meetingNotifIcon as notifIcon, meetingNotifDefaultMessage as notifDefaultMessage } from "@/lib/meeting-notification-text";
 import { useActionItems, type ActionItem } from "@/hooks/use-action-items";
+import { useReminderHistory } from "@/hooks/use-reminder-notices";
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 
 type PastNotification = {
@@ -157,13 +158,44 @@ export function NotificationsScreen() {
           ))}
         </div>
       )}
+      <ReminderHistorySection />
       </>)}
     </div>
   );
 }
 
+// ---- 予定のリマインドの履歴（確認済み・予定が始まったもの。未確認のものは、上の「対応が必要なこと」に出る） ----
+function ReminderHistorySection() {
+  const tz = useTimezone();
+  const { history } = useReminderHistory();
+  if (history.length === 0) return null;
+  return (
+    <section className="mt-8">
+      <h2 className="text-sm font-semibold mb-2" style={{ fontFamily: "var(--font-klee)", color: "var(--color-accent)" }}>
+        ⏰ 予定のリマインドの過去のお知らせ
+      </h2>
+      <div className="space-y-2">
+        {history.map((n) => (
+          <Link key={n.id} to={n.linkPath ?? "/home"}
+            className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+            style={{ borderLeft: "3px solid rgba(212,160,59,0.4)" }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(212,160,59,0.1)" }}>⏰</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium" style={{ color: "var(--color-ink-700)" }}>{n.title.replace(/^⏰\s*/, "")}</p>
+              <p className="text-xs mt-0.5 whitespace-pre-line break-all" style={{ color: "var(--color-ink-500)" }}>{n.body}</p>
+              <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{fmtDateShort(n.createdAt, tz)} {fmtTime(n.createdAt, tz)}</p>
+            </div>
+            <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // ---- 対応が必要なこと（1to1の申込・日程回答の依頼・協働の新着など。各メニューのバッジと同じ内容） ----
 const GROUP_LABEL: Record<ActionItem["group"], string> = {
+  reminder: "⏰ 予定のリマインド",
   oneonone: "🤝 1to1",
   meeting: "📅 ミーティング・定例会",
   collab: "💬 協働・人脈",
@@ -190,7 +222,7 @@ function ActionItemsSection() {
         </div>
       ) : (
         <div className="space-y-4">
-          {(["oneonone", "meeting", "collab"] as const).map((group) => {
+          {(["reminder", "oneonone", "meeting", "collab"] as const).map((group) => {
             const groupItems = items.filter((it) => it.group === group);
             if (groupItems.length === 0) return null;
             return (
@@ -201,13 +233,14 @@ function ActionItemsSection() {
                     <Link
                       key={it.key}
                       to={it.to}
+                      onClick={it.onOpen}
                       className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
                       style={{ borderLeft: `3px solid ${it.urgent ? "var(--color-brand)" : "rgba(107,125,179,0.5)"}` }}
                     >
                       <span className="text-2xl shrink-0">{it.icon}</span>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>{it.title}</p>
-                        {it.detail && <p className="text-xs mt-0.5 line-clamp-2" style={{ color: "var(--color-ink-500)" }}>{it.detail}</p>}
+                        {it.detail && <p className="text-xs mt-0.5 line-clamp-2 whitespace-pre-line" style={{ color: "var(--color-ink-500)" }}>{it.detail}</p>}
                       </div>
                       <ChevronRight size={16} className="shrink-0" style={{ color: "var(--color-ink-400)" }} />
                     </Link>

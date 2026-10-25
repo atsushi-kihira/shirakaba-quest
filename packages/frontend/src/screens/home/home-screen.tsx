@@ -7,6 +7,7 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, Calendar, X, Handshake, Sparkles, MessageSquarePlus, Lock, LinkIcon, Clock } from "lucide-react";
 import { api } from "@/lib/api";
 import { useBroadcastNotifications, type BroadcastNotification } from "@/hooks/use-broadcast-notifications";
+import { useReminderNotices } from "@/hooks/use-reminder-notices";
 import { LinkifiedText } from "@/components/linkified-text";
 import { MemberAvatar } from "@/components/member-avatar";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
@@ -38,7 +39,6 @@ type UpcomingMeeting  = { id: string; title: string; host: { name: string; emoji
 type UpcomingMeetingsResponse = { data: UpcomingMeeting[] };
 type MeetingListItem  = { id: string; title: string; host: { id: string; name: string; emoji: string } | null; isHost: boolean; status: string; hasResponded: boolean; registrationDeadline?: number | null };
 type MeetingsResponse = { data: MeetingListItem[] };
-type ReminderNotice = { id: string; kind: string; title: string; body: string; linkPath: string | null; startsAt: number; createdAt: number };
 type MeetingNotification = { id: string; meetingId: string; type: string; message: string | null; createdAt: number };
 type MeetingNotificationsResponse = { data: MeetingNotification[] };
 type MeetingSeriesListItem = {
@@ -214,19 +214,8 @@ export function HomeScreen() {
     navigate(`/meetings/${meetingId}`);
   }
 
-  // 予定のリマインド（1to1・ミーティング・定例会。マイページ／各予定のページでの設定に従って届く）
-  const { data: reminderNoticesData } = useQuery({
-    queryKey: ["reminders", "notices"],
-    queryFn: () => api.get<{ data: ReminderNotice[] }>("/reminders/notices"),
-    enabled: approved,
-    staleTime: 60_000,
-    refetchOnWindowFocus: true,
-  });
-  const reminderNotices = reminderNoticesData?.data ?? [];
-  const readReminder = useMutation({
-    mutationFn: (id: string) => api.post(`/reminders/notices/${id}/read`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["reminders", "notices"] }),
-  });
+  // 予定のリマインド（1to1・ミーティング・定例会。マイページ／各予定のページでの設定に従って届く。通知画面と共通の既読）
+  const { notices: reminderNotices, markRead: markReminderRead } = useReminderNotices();
 
   // 運営（管理画面）からのお知らせ
   const { unread: broadcastUnread, markRead: markBroadcastRead } = useBroadcastNotifications();
@@ -606,14 +595,14 @@ export function HomeScreen() {
           {reminderNotices.map((n) => (
             <div key={n.id} className="card-paper rounded-2xl pl-4 pr-2 py-3 flex items-center gap-2" style={{ borderLeft: "3px solid var(--color-accent)" }}>
               <button
-                onClick={() => { readReminder.mutate(n.id); if (n.linkPath) navigate(n.linkPath); }}
+                onClick={() => { markReminderRead(n.id); if (n.linkPath) navigate(n.linkPath); }}
                 className="flex-1 min-w-0 text-left active:opacity-80"
               >
                 <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{n.title.replace(/^⏰\s*/, "")}</p>
                 <p className="text-xs mt-0.5 whitespace-pre-line break-all" style={{ color: "var(--color-ink-500)" }}>{n.body}</p>
               </button>
               <button
-                onClick={() => readReminder.mutate(n.id)}
+                onClick={() => markReminderRead(n.id)}
                 aria-label="確認した（この通知を閉じる）"
                 className="p-2 rounded-full shrink-0 active:opacity-70"
                 style={{ color: "var(--color-ink-400)" }}

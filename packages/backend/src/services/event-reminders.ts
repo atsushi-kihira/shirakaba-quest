@@ -13,7 +13,7 @@
 //   ・文面は「明日」「3日後」など、届けた時点の本当の残り日数で書く
 //   ・相手は、承認済みメンバーで、その予定に参加するはずの人（主催者・招待されたメンバーから、不参加の人を除く）
 // =============================================================
-import { and, eq, gte, inArray, lte, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, or } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 import { newId } from "./auth.ts";
@@ -371,4 +371,18 @@ export async function listHomeNotices(db: Db, memberId: string, now: number = Ma
       : bookingStart.get(r.refId) === r.startsAt)
     .sort((a, b) => a.startsAt - b.startsAt)
     .map((r) => ({ id: r.id, kind: r.kind, title: r.title, body: r.body, linkPath: r.linkPath, startsAt: r.startsAt, createdAt: r.createdAt }));
+}
+
+export type ReminderHistoryView = ReminderNoticeView & { readAt: number | null };
+const HISTORY_LIMIT = 30;
+
+/** 「通知」画面の履歴: 確認済みのもの、または予定が始まって、もう確認できなくなったもの（新しい順） */
+export async function listNoticeHistory(db: Db, memberId: string, now: number = Math.floor(Date.now() / 1000)): Promise<ReminderHistoryView[]> {
+  const rows = await db.select().from(schema.reminderNotices)
+    .where(and(eq(schema.reminderNotices.memberId, memberId), eq(schema.reminderNotices.status, "sent")))
+    .orderBy(desc(schema.reminderNotices.createdAt)).all();
+  return rows
+    .filter((r) => (r.channel === "home" || r.channel === "both") && (r.readAt !== null || r.startsAt < now))
+    .slice(0, HISTORY_LIMIT)
+    .map((r) => ({ id: r.id, kind: r.kind, title: r.title, body: r.body, linkPath: r.linkPath, startsAt: r.startsAt, createdAt: r.createdAt, readAt: r.readAt }));
 }

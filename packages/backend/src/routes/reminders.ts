@@ -5,7 +5,8 @@
 // GET    /api/reminders/target          → ある予定の設定（?kind=&id=）。予定ごとの設定がなければ、初期設定
 // PUT    /api/reminders/target          → ある予定だけの設定を保存
 // DELETE /api/reminders/target          → ある予定だけの設定をやめて、初期設定に戻す（?kind=&id=）
-// GET    /api/reminders/notices         → ホーム画面に出すリマインド
+// GET    /api/reminders/notices         → ホーム画面・通知画面に出すリマインド（未確認のもの）
+// GET    /api/reminders/notices/history → 通知画面の履歴（確認済み・予定が始まったもの）
 // POST   /api/reminders/notices/:id/read → リマインドを確認済みにする
 // リマインドは、届ける相手本人が決める。主催者や相手が、他のメンバーの設定を変えたり、一方的に送ったりすることはできない
 // =============================================================
@@ -15,7 +16,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import {
-  DEFAULT_REMINDER, TARGET_KINDS, listHomeNotices, normalizeSetting, parseSetting,
+  DEFAULT_REMINDER, TARGET_KINDS, listHomeNotices, listNoticeHistory, normalizeSetting, parseSetting,
   type ReminderTargetKind,
 } from "../services/event-reminders.ts";
 import type { Env, Variables } from "../types.ts";
@@ -123,6 +124,13 @@ reminderRoutes.get("/notices", async (c) => {
   const meId = await myId(c, db);
   if (!meId) return c.json({ data: [] });
   return c.json({ data: await listHomeNotices(db, meId) });
+});
+
+reminderRoutes.get("/notices/history", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await myId(c, db);
+  if (!meId) return c.json({ data: [] });
+  return c.json({ data: await listNoticeHistory(db, meId) });
 });
 
 reminderRoutes.post("/notices/:id/read", async (c) => {
