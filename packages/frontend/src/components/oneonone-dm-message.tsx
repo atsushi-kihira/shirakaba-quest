@@ -6,36 +6,17 @@
 import { useState } from "react";
 import { Check, Copy, MessageSquareText } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
-
-/**
- * DMで送るメッセージの文面。
- * @param partnerName 1to1を申し込んだ相手の名前（分からないときは「ご担当の方」）
- * @param senderName 1to1の主催者（申込者）の名前
- * @param url 公開予約URL、または候補日から選ぶ画面のURL
- * @param note 申込みのときに入力した任意のメッセージ。「お疲れ様です。◯◯です。」のあとに入れる
- */
-function buildOneOnOneDmMessage(partnerName: string | null | undefined, senderName: string, url: string, note?: string | null): string {
-  const partner = partnerName?.trim() ? `${partnerName.trim()}さん` : "ご担当の方";
-  const heading = partnerName?.trim() ? `${partner}\n` : "";
-  const noteBlock = note?.trim() ? `${note.trim()}\n` : "";
-  return `${heading}お疲れ様です。${senderName}です。
-${noteBlock}大変お忙しいかと思いますが、ぜひ${partner}と1to1を実施させていただきたいと思います。お時間をいただけますでしょうか？
-よろしければ、以下から${partner}のご予定を伺わせてください。
-
-${url}
-
-よろしくお願いします。`;
-}
+import { buildOneOnOneDmText } from "@/lib/oneonone-dm-text";
 
 export function OneOnOneDmMessage({ partnerName, url, note, defaultOpen = false }: { partnerName: string | null | undefined; url: string; note?: string | null; defaultOpen?: boolean }) {
   const senderName = useAuthStore((s) => s.user?.name) ?? "";
   const [open, setOpen] = useState(defaultOpen);
-  const [text, setText] = useState(() => (defaultOpen ? buildOneOnOneDmMessage(partnerName, senderName, url, note) : ""));
+  const [text, setText] = useState(() => (defaultOpen ? buildOneOnOneDmText({ partnerName, senderName, url, note }) : ""));
   const [copied, setCopied] = useState(false);
 
   function show() {
     // 開くたびに、最新の名前・URLで文面を作り直す（編集した内容は、開き直すと元に戻る）
-    setText(buildOneOnOneDmMessage(partnerName, senderName, url, note));
+    setText(buildOneOnOneDmText({ partnerName, senderName, url, note }));
     setOpen(true);
   }
   function copy() {
