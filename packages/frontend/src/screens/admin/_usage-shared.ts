@@ -27,6 +27,9 @@ export type MemberUsage = {
   enishi: number;
   view: number;
   collabView: number;
+  /** アクセス数の合計（アプリを開いた回数） */
+  access: number;
+  /** 利用操作の合計（ログイン日数・1to1・人脈登録など、何かを作った・実行した件数。情報参照・協働画面は含めない） */
   total: number;
 };
 

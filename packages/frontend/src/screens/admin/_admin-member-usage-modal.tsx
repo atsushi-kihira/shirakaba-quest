@@ -169,7 +169,8 @@ export function AdminMemberUsageModal({ memberId, initialUnit, initialDate, onCl
                 })}
               </div>
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
-                合計 <b style={{ color: "var(--color-brand)" }}>{row.total}</b> 件（画面を見ただけの「情報参照」「協働画面」は含めていません）。
+                アクセス数合計 <b style={{ color: "var(--color-ink-800)" }}>{row.access}</b> 回（アプリを開いた回数。5分以内の続けての利用は1回と数えます）。
+                利用操作の合計 <b style={{ color: "var(--color-brand)" }}>{row.total}</b> 件（上の項目のうち、画面を見ただけの「情報参照」「協働画面」を除いた合計です）。
                 「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日も数えています。
               </p>
             </>

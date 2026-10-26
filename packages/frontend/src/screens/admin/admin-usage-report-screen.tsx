@@ -9,7 +9,7 @@ import { AdminMemberUsageModal } from "./_admin-member-usage-modal";
 import { FEATURES, STATUS_LABEL, fmtDate, useUsagePeriod, useUsageReport, type MemberUsage, type FeatureKey } from "./_usage-shared";
 import { UsageSummaryCards } from "./_usage-summary-cards";
 
-type SortKey = "name" | "status" | "lastLoginAt" | FeatureKey | "total";
+type SortKey = "name" | "status" | "lastLoginAt" | FeatureKey | "access" | "total";
 
 export function AdminUsageReportScreen() {
   // 集計期間（日・週・月・累計）。アクセス数・サマリー・機能別・メンバー別のすべてに共通で反映される
@@ -63,11 +63,12 @@ export function AdminUsageReportScreen() {
   }));
   const maxFeatureTotal = Math.max(1, ...featureTotals.map((f) => f.total));
 
-  function ThSort({ label, sortKeyValue }: { label: string; sortKeyValue: SortKey }) {
+  function ThSort({ label, sortKeyValue, hint }: { label: string; sortKeyValue: SortKey; hint?: string }) {
     const active = sortKey === sortKeyValue;
     return (
       <th
         onClick={() => handleSort(sortKeyValue)}
+        title={hint}
         className="px-2.5 py-2.5 text-right text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0"
         style={{ color: active ? "var(--color-ink-700)" : "var(--color-ink-500)", background: "var(--color-paper-50)" }}
       >
@@ -157,7 +158,7 @@ export function AdminUsageReportScreen() {
               メンバー別 利用件数内訳（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます。ゲストと休会中の方は、最初は表示しません（下のチェックで表示できます）。上のサマリーや機能別の件数には、これらの方も含まれています。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「合計」には、画面を見ただけの「情報参照」「協働画面」は含めていません。
+              列見出しをタップ・クリックすると並び替えできます。ゲストと休会中の方は、最初は表示しません（下のチェックで表示できます）。上のサマリーや機能別の件数には、これらの方も含まれています。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「アクセス数合計」は、アプリを開いた回数です（5分以内の続けての利用は1回と数えます）。「利用操作の合計」は、ログイン日数・1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数を足したもので、画面を見ただけの「情報参照」「協働画面」は含めていません。
               「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日（アプリを開いた・画面を見た・何かを登録した日）も1日と数えます。記録の仕組みができる前の分は、1to1や人脈の登録などの操作があった日で補っています。
               「1to1」は、メンバー同士の1to1に、外部ゲストとの予約・予約ページ経由の1to1（キャンセルを除く）を加えた件数です。{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
@@ -173,7 +174,7 @@ export function AdminUsageReportScreen() {
               </label>
             </div>
             <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
-              <table className="w-full" style={{ minWidth: 1010 }}>
+              <table className="w-full" style={{ minWidth: 1120 }}>
                 <thead>
                   <tr>
                     <th onClick={() => handleSort("name")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 left-0 z-10"
@@ -188,7 +189,8 @@ export function AdminUsageReportScreen() {
                     </th>
                     <ThSort label="最終ログイン・利用" sortKeyValue="lastLoginAt" />
                     {FEATURES.map((f) => <ThSort key={f.key} label={f.label} sortKeyValue={f.key} />)}
-                    <ThSort label="合計" sortKeyValue="total" />
+                    <ThSort label="アクセス数合計" sortKeyValue="access" hint="アプリを開いた回数の合計です（5分以内の続けての利用は1回と数えます）" />
+                    <ThSort label="利用操作の合計" sortKeyValue="total" hint="ログイン日数・1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数の合計です（情報参照・協働画面は含みません）" />
                   </tr>
                 </thead>
                 <tbody>
@@ -223,6 +225,7 @@ export function AdminUsageReportScreen() {
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.quest === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.quest}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.cardOrder === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.cardOrder}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.enishi === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.enishi}</td>
+                      <td className="px-2.5 py-2 text-right text-sm font-bold tabular-nums" style={{ color: r.access === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.access}</td>
                       <td className="px-2.5 py-2 text-right text-sm font-bold tabular-nums" style={{ color: "var(--color-brand)" }}>{r.total}</td>
                     </tr>
                   ))}

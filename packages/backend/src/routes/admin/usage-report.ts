@@ -212,6 +212,8 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
   const questMap = countByMember(questAttempts);
   const cardOrderMap = countByMember(cardOrders);
   const enishiMap = countByMember(enishiSearches);
+  // アクセス数＝アプリを開いた回数（記録の仕組みができた日以降。5分以内の続けての利用は1回と数える）。「利用操作の合計」とは別に出す
+  const accessMap = countByMember(accessRows);
   // 画面の閲覧は、協働画面（協働マップ・チーム詳細など）と、それ以外（情報参照）に分けて数える
   const viewMap = countByMember(screenViewRows.filter((r) => r.screen !== COLLAB_SCREEN));
   const collabViewMap = countByMember(screenViewRows.filter((r) => r.screen === COLLAB_SCREEN));
@@ -247,7 +249,8 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
       registeredAt: m.createdAt,
       lastLoginAt: lastLoginMap.get(m.id) ?? null,
       login, oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi, view, collabView,
-      // 合計は、データを作る・更新する操作の件数（画面を見ただけの「情報参照」は含めない）
+      access: accessMap.get(m.id) ?? 0,
+      // 利用操作の合計は、データを作る・更新する操作の件数（画面を見ただけの「情報参照」は含めない）
       total: login + oneonone + contact + egg + goose + meeting + quest + cardOrder + enishi,
     };
   });
