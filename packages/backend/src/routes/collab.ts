@@ -13,6 +13,7 @@ import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, or } from "
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
+import { isEmail } from "../services/meeting-guests.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { deriveStage, computeStalled } from "../services/collab-stage.ts";
 import { MailService } from "../services/mailer.ts";
@@ -2054,10 +2055,13 @@ collabRoutes.post("/contacts", async (c) => {
 
   const body = await c.req.json<{
     name: string; specialty?: string; company?: string; relationships?: string[]; note?: string; visibility?: string;
+    email?: string; // 任意。招待メールの送り先にだけ使う（他のメンバーには見せない）
     businessSummary?: string; businessSummaryDetail?: string;
     sourceBookingId?: string; // 外部ゲストとの予約から人脈登録した場合、その予約IDを紐づける
   }>();
   if (!body.name?.trim()) return c.json({ error: { code: "invalid_input", message: "名前を入力してください" } }, 400);
+  const email = body.email?.trim() || null;
+  if (email && !isEmail(email)) return c.json({ error: { code: "invalid_input", message: "メールアドレスの形式が正しくありません" } }, 400);
 
   const visibility = ["private", "existence", "full"].includes(body.visibility ?? "") ? body.visibility! : "existence";
 
@@ -2083,6 +2087,7 @@ collabRoutes.post("/contacts", async (c) => {
     specialty: body.specialty?.trim() || null,
     company,
     note: body.note?.trim() || null,
+    email,
     visibility,
     source: "manual",
     createdAt: now, updatedAt: now,
@@ -2127,7 +2132,7 @@ collabRoutes.post("/contacts/import", async (c) => {
   const body = await c.req.json<{
     source?: string;
     defaultVisibility?: string;
-    contacts: { name: string; specialty?: string; company?: string; note?: string }[];
+    contacts: { name: string; specialty?: string; company?: string; note?: string; email?: string }[];
   }>();
 
   const visibility = ["private", "existence", "full"].includes(body.defaultVisibility ?? "") ? body.defaultVisibility! : "existence";
@@ -2158,6 +2163,8 @@ collabRoutes.post("/contacts/import", async (c) => {
       specialty: r.specialty?.trim() || null,
       company,
       note: r.note?.trim() || null,
+      // メールアドレスは任意。空欄・形式が正しくないものは、登録しない（取り込みは止めない）
+      email: r.email && isEmail(r.email.trim()) ? r.email.trim() : null,
       visibility, source,
       createdAt: now, updatedAt: now,
       // 未生成（pending）のまま保存し、登録直後にバックグラウンドで生成を開始する（下記waitUntil）
@@ -2167,7 +2174,7 @@ collabRoutes.post("/contacts/import", async (c) => {
 
   // D1は1クエリあたりのバインド変数数に上限があり、まとめて数十件以上を
   // 一度にinsertすると "too many SQL variables" エラーになる（実測で確認済み）。
-  // 1行10パラメータなので、余裕を持って5行（50パラメータ）ずつに分割する。
+  // 1行11パラメータ前後なので、余裕を持って5行ずつに分割する。
   const CHUNK_SIZE = 5;
   for (let i = 0; i < values.length; i += CHUNK_SIZE) {
     await db.insert(schema.externalContacts).values(values.slice(i, i + CHUNK_SIZE));
@@ -2318,9 +2325,12 @@ collabRoutes.patch("/contacts/:id", async (c) => {
 
   const body = await c.req.json<{
     name?: string; specialty?: string; company?: string; relationships?: string[]; note?: string; visibility?: string;
+    email?: string | null; // 空欄・null でメールアドレスを消す
     businessSummary?: string; businessSummaryDetail?: string;
   }>();
   const now = Math.floor(Date.now() / 1000);
+  const patchEmail = body.email === undefined ? undefined : (body.email?.trim() || null);
+  if (patchEmail && !isEmail(patchEmail)) return c.json({ error: { code: "invalid_input", message: "メールアドレスの形式が正しくありません" } }, 400);
 
   const finalCompany = body.company !== undefined ? (body.company?.trim() || null) : contact.company;
 
@@ -2349,6 +2359,7 @@ collabRoutes.patch("/contacts/:id", async (c) => {
     ...(body.specialty !== undefined && { specialty: body.specialty?.trim() || null }),
     ...(body.company !== undefined && { company: finalCompany }),
     ...(body.note !== undefined && { note: body.note?.trim() || null }),
+    ...(patchEmail !== undefined && { email: patchEmail }),
     ...(body.visibility !== undefined && ["private", "existence", "full"].includes(body.visibility) && { visibility: body.visibility }),
     ...summaryPatch,
     updatedAt: now,

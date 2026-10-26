@@ -5,7 +5,7 @@
 // =============================================================
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
-import { Loader2, Check, AlertCircle, Link } from "lucide-react";
+import { Loader2, Check, AlertCircle, Clock, Link } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
@@ -59,6 +59,7 @@ export function ScheduleInviteScreen() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [preparing, setPreparing] = useState(false);
   const [apiData, setApiData] = useState<ApiResponse["data"] | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -74,7 +75,7 @@ export function ScheduleInviteScreen() {
     fetch(`${API_BASE_URL}/schedule/invite/${inviteToken}`)
       .then((r) => r.json())
       .then((json) => {
-        if (json.error) { setError(json.error.message); return; }
+        if (json.error) { setError(json.error.message); setPreparing(json.error.code === "preparing"); return; }
         setApiData(json.data);
       })
       .catch(() => setError("読み込みに失敗しました"))
@@ -134,9 +135,9 @@ export function ScheduleInviteScreen() {
   if (error) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center px-6 text-center" style={{ background: "var(--color-paper-100)" }}>
-        <AlertCircle size={40} className="mb-3" style={{ color: "var(--color-brand)" }} />
+        {preparing ? <Clock size={40} className="mb-3" style={{ color: "var(--color-accent)" }} /> : <AlertCircle size={40} className="mb-3" style={{ color: "var(--color-brand)" }} />}
         <p className="font-medium" style={{ color: "var(--color-ink-700)" }}>{error}</p>
-        <p className="text-sm mt-2" style={{ color: "var(--color-ink-400)" }}>URLが無効か、既に締め切られています</p>
+        {!preparing && <p className="text-sm mt-2" style={{ color: "var(--color-ink-400)" }}>URLが無効か、既に締め切られています</p>}
       </div>
     );
   }

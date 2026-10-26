@@ -26,6 +26,7 @@ import { MeetingSeriesNewScreen } from "@/screens/meetings/meeting-series-new-sc
 import { MeetingSeriesDetailScreen } from "@/screens/meetings/meeting-series-detail-screen";
 import { ScheduleScreen } from "@/screens/schedule/schedule-screen";
 import { ScheduleInviteScreen } from "@/screens/schedule/schedule-invite-screen";
+import { ScheduleSeriesScreen, ScheduleSeriesInviteScreen } from "@/screens/schedule/schedule-series-screen";
 import { OneOnOneRespondScreen } from "@/screens/oneonone/oneonone-respond-screen";
 import { AdminLayout } from "@/screens/admin/admin-layout";
 import { AdminDashboardScreen } from "@/screens/admin/admin-dashboard-screen";
@@ -107,6 +108,8 @@ export default function App() {
 
             {/* 外部ゲスト向け日程回答（認証不要） */}
             <Route path="/schedule/invite/:inviteToken" element={<ScheduleInviteScreen />} />
+            <Route path="/schedule/series-invite/:inviteToken" element={<ScheduleSeriesInviteScreen />} />
+            <Route path="/schedule/series/:token" element={<ScheduleSeriesScreen />} />
 
             {/* 1to1（日程指定申込）のメール経由 承諾/辞退（認証不要） */}
             <Route path="/oneonone/respond/:token" element={<OneOnOneRespondScreen />} />

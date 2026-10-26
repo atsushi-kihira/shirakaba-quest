@@ -14,6 +14,7 @@ import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-
 import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
+import { MeetingGuestSection, guestsToPayload, type GuestDraft } from "@/components/meeting-guest-section";
 
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
 type Team = { id: string; name: string; emblemEmoji: string };
@@ -83,6 +84,9 @@ export function MeetingSeriesNewScreen() {
   const [teamId, setTeamId] = useState("");
   const [collabTeamId, setCollabTeamId] = useState("");
   const [inviteeIds, setInviteeIds] = useState<string[]>([]);
+  // 外部ゲスト（作成と同時に招待）と、作成前に発行したゲスト用の共有URLの予約
+  const [guests, setGuests] = useState<GuestDraft[]>([]);
+  const [reservationToken, setReservationToken] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<PatternCandidate[]>([emptyCandidate()]);
   const [deadline, setDeadline] = useState("");
   const [endCondition, setEndCondition] = useState<"count" | "date">("count");
@@ -126,6 +130,7 @@ export function MeetingSeriesNewScreen() {
     mutationFn: (body: object) => api.post<{ data: { id: string } }>("/meeting-series", body),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["meeting-series"] });
+      qc.invalidateQueries({ queryKey: ["invite-reservation"] });
       navigate(`/meetings/series/${res.data.id}`);
     },
     onError: (e: Error) => setError(e.message),
@@ -208,7 +213,7 @@ export function MeetingSeriesNewScreen() {
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
     if (scope === "collab_team" && !collabTeamId) { setError("対象チームを選択してください"); return; }
-    if (scope === "selected" && inviteeIds.length === 0) { setError("招待するメンバーを1人以上選んでください"); return; }
+    if (scope === "selected" && inviteeIds.length === 0 && guests.length === 0) { setError("招待するメンバー、または外部ゲストを1人以上選んでください"); return; }
     if (conferenceMode === "manual" && !conferenceUrl.trim()) { setError("会議URLを入力してください"); return; }
 
     const body: Record<string, unknown> = {
@@ -219,6 +224,8 @@ export function MeetingSeriesNewScreen() {
       teamId: scope === "team" ? teamId : undefined,
       collabTeamId: scope === "collab_team" ? collabTeamId : undefined,
       inviteeIds: scope === "selected" ? inviteeIds : undefined,
+      inviteReservationToken: reservationToken ?? undefined,
+      guests: guests.length > 0 ? guestsToPayload(guests) : undefined,
       deadline: seriesMode === "vote" && deadline ? Math.floor(new Date(deadline).getTime() / 1000) : undefined,
       mode: seriesMode,
       conferenceType: conferenceMode !== "none" ? conferenceMode : undefined,
@@ -416,6 +423,9 @@ export function MeetingSeriesNewScreen() {
             </div>
           )}
         </div>
+
+        {/* 外部ゲスト（ビジター）の招待 */}
+        <MeetingGuestSection kind="series" guests={guests} onGuestsChange={setGuests} onReservationChange={setReservationToken} />
 
         {dateMode === "fixed" && seriesMode === "confirmed" ? (
           <div>

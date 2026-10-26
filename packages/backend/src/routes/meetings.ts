@@ -49,6 +49,8 @@ import {
 import { formatScheduleBlock } from "../services/schedule-text.ts";
 import { insertCalendarEvent } from "../services/googleClient.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
+import { consumeReservation } from "../services/invite-reservations.ts";
+import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { searchCommonFreeSlots } from "../services/meetingSlotSearch.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -134,6 +136,10 @@ meetingRoutes.post("/", async (c) => {
     confirmNow?: boolean;
     conferenceType?: "manual" | "zoom" | "google_meet" | "none";
     conferenceUrl?: string;
+    /** 作成前に発行した、外部ゲスト用の共有URLの予約トークン（作成後も、同じURLがそのまま使える） */
+    inviteReservationToken?: string;
+    /** 外部ゲスト（人脈から選んだ人、名前・メールアドレスを入力した人）。メールアドレスのある人には、作成と同時に招待メールを送る */
+    guests?: GuestInput[];
   }>();
 
   if (!body.title?.trim()) {
@@ -189,10 +195,22 @@ meetingRoutes.post("/", async (c) => {
     eventLink.eventTypeDefId = (await listPlainMeetingTypes(db))[0]?.id ?? null;
   }
 
+  // 外部ゲストと、ゲスト用の共有URLの予約。ここまでに問題があれば、何も作らずに戻す
+  const guestResult = await resolveGuests(db, memberId, body.guests);
+  if (!guestResult.ok) return c.json({ error: { code: "invalid_input", message: guestResult.message } }, 400);
+  let reservedInviteToken: string | null = null;
+  if (body.inviteReservationToken) {
+    reservedInviteToken = await consumeReservation(db, body.inviteReservationToken, memberId, "meeting", now);
+    if (!reservedInviteToken) {
+      return c.json({ error: { code: "reservation_invalid", message: "ゲスト用のURLの有効期限が切れています。もう一度、URLを発行してください" } }, 400);
+    }
+  }
+
   const meetingId = newId();
 
   await db.insert(schema.meetings).values({
     id: meetingId,
+    inviteToken: reservedInviteToken,
     title: body.title.trim(),
     description: body.description?.trim() || null,
     hostMemberId: memberId,
@@ -239,6 +257,17 @@ meetingRoutes.post("/", async (c) => {
         memberId: mid,
       });
     }
+  }
+
+  // 外部ゲスト（個別URL）を作成する。メールアドレスのある人には、下で招待メールを送る
+  const createdGuests: Array<{ id: string; name: string; email: string | null; token: string; invited: boolean }> = [];
+  for (const g of guestResult.guests) {
+    const guestId = newId();
+    const guestToken = generateRawToken();
+    await db.insert(schema.meetingExternalInvitees).values({
+      id: guestId, meetingId, name: g.name, email: g.email, token: guestToken, contactId: g.contactId, createdAt: now,
+    });
+    createdGuests.push({ id: guestId, name: g.name, email: g.email, token: guestToken, invited: false });
   }
 
   const appUrl = getFrontendUrl(c.env);
@@ -392,12 +421,48 @@ meetingRoutes.post("/", async (c) => {
     }
   }
 
+  // 外部ゲストへの招待メール（メールアドレスが分かっている人のみ）。日程調整の招待、または確定済みの案内
+  const guestMailTargets = createdGuests.filter((g) => !!g.email);
+  if (guestMailTargets.length > 0) {
+    const guestTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
+    const guestCandidates = await db.select().from(schema.meetingDateCandidates)
+      .where(eq(schema.meetingDateCandidates.meetingId, meetingId)).orderBy(schema.meetingDateCandidates.startsAt).all();
+    const confirmedConfUrl = guestCandidates.find((cd) => cd.conferenceUrl)?.conferenceUrl ?? null;
+    for (const g of guestMailTargets) {
+      const scheduleUrl = `${appUrl}/schedule/${g.token}`;
+      const send = confirmNow
+        ? mailer.send("meeting_confirmed_guest", g.email as string, {
+            appTitle, guestName: g.name, hostName, meetingTitle: body.title.trim(),
+            confirmedDate: guestCandidates.length > 0 ? formatCandidateDateText(guestCandidates[0].startsAt, guestCandidates[0].endsAt, guestTz) : "",
+            urlPendingNote: confirmedConfUrl ? `📹 会議URL\n${confirmedConfUrl}` : "📹 会議URLは別途お知らせします",
+            scheduleUrl,
+          })
+        : mailer.send("meeting_invitation_guest", g.email as string, {
+            appTitle, guestName: g.name, hostName, meetingTitle: body.title.trim(),
+            meetingDescription: body.description?.trim() ?? "",
+            deadlineStr: body.deadline
+              ? `（回答期限: ${new Intl.DateTimeFormat("ja-JP", { timeZone: guestTz, year: "numeric", month: "numeric", day: "numeric" }).format(new Date(body.deadline * 1000))}）`
+              : "",
+            scheduleUrl,
+          });
+      mailPromises.push(send.catch(console.error));
+      g.invited = true;
+    }
+    await db.update(schema.meetingExternalInvitees).set({ invitedAt: now })
+      .where(inArray(schema.meetingExternalInvitees.id, guestMailTargets.map((g) => g.id)));
+  }
+
   // waitUntil でレスポンス後もメール送信を完走させる
   c.executionCtx.waitUntil(Promise.all(mailPromises));
 
   // 日程を確定して作成した場合は、招待された人（連携済み）のGoogleカレンダーにも予定を登録する
   if (confirmNow) queueMeetingCalendarSync(c.executionCtx, db, c.env, meetingId);
-  return c.json({ data: { id: meetingId } }, 201);
+  return c.json({
+    data: {
+      id: meetingId,
+      guests: createdGuests.map((g) => ({ id: g.id, name: g.name, email: g.email, url: `${appUrl}/schedule/${g.token}`, invited: g.invited })),
+    },
+  }, 201);
 });
 
 // ----------------------------------------------------------------
@@ -1318,8 +1383,10 @@ meetingRoutes.get("/:id", async (c) => {
           : null,
       })),
       respondents: [...memberRespondents, ...externalRespondents],
+      // 外部ゲストのメールアドレス・専用URLは、主催者だけに返す（他のメンバーには名前のみ）
       externalInvitees: externalInvitees.map((e) => ({
-        id: e.id, name: e.name, email: e.email, token: e.token, createdAt: e.createdAt,
+        id: e.id, name: e.name, email: isHost ? e.email : null, token: isHost ? e.token : "", createdAt: e.createdAt,
+        invitedAt: isHost ? e.invitedAt ?? null : null,
       })),
       myAnswers,
       isHost,

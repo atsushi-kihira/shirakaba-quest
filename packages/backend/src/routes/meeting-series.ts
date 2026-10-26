@@ -20,6 +20,9 @@ import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
+import { consumeReservation } from "../services/invite-reservations.ts";
+import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
+import { generateRawToken } from "../services/auth.ts";
 import { computeOccurrences, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
@@ -40,7 +43,7 @@ const RECURRENCE_LABEL: Record<"weekly" | "biweekly", string> = { weekly: "毎�
 const DOW_LABEL = ["日", "月", "火", "水", "木", "金", "土"];
 const WEEK_LABEL: Record<number, string> = { 1: "第1", 2: "第2", 3: "第3", 4: "第4", 5: "第5", [-1]: "最終" };
 
-function patternLabel(p: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string; extraSlots?: MonthlySlot[] }): string {
+export function patternLabel(p: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string; extraSlots?: MonthlySlot[] }): string {
   const time = `${p.startTimeLocal}〜${p.endTimeLocal}`;
   if (p.recurrenceType === "monthly_day") return `毎月${p.weekOfMonth ?? 1}日 ${time}`;
   if (p.recurrenceType === "monthly_end") return `毎月末（土日祝を含む） ${time}`;
@@ -82,7 +85,7 @@ function extraSlotsJsonFor(cand: CandidateInput): string | null {
 }
 
 const UPCOMING_PREVIEW_COUNT = 8;
-function upcomingDatesFor(
+export function upcomingDatesFor(
   cand: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string; extraSlotsJson?: string | null },
   series: { endCondition: string | null; endDate: number | null },
   now: number
@@ -183,6 +186,10 @@ meetingSeriesRoutes.post("/", async (c) => {
       note?: string;
     }>;
     fixedDates?: Array<{ startsAt: number; endsAt: number }>;
+    /** 作成前に発行した、外部ゲスト用の共有URLの予約トークン */
+    inviteReservationToken?: string;
+    /** 外部ゲスト。メールアドレスのある人には、作成と同時に招待メールを送る */
+    guests?: GuestInput[];
   }>();
 
   const mode: "vote" | "confirmed" = body.mode === "confirmed" ? "confirmed" : "vote";
@@ -195,8 +202,8 @@ meetingSeriesRoutes.post("/", async (c) => {
   if (body.scope === "collab_team" && !body.collabTeamId) {
     return c.json({ error: { code: "invalid_input", message: "対象チームを指定してください" } }, 400);
   }
-  if (body.scope === "selected" && (!body.inviteeIds || body.inviteeIds.length === 0)) {
-    return c.json({ error: { code: "invalid_input", message: "招待するメンバーを1人以上選んでください" } }, 400);
+  if (body.scope === "selected" && (!body.inviteeIds || body.inviteeIds.length === 0) && !(body.guests?.length)) {
+    return c.json({ error: { code: "invalid_input", message: "招待するメンバー、または外部ゲストを1人以上選んでください" } }, 400);
   }
 
   // 紐づけるイベント（インスタンス）。選ばれていれば、定例会の各回の参加ごとにそのイベントのポイントが付く。
@@ -343,9 +350,21 @@ meetingSeriesRoutes.post("/", async (c) => {
     }
   }
 
+  // 外部ゲストと、ゲスト用の共有URLの予約（ここまでに問題があれば、何も作らずに戻す）
+  const guestResult = await resolveGuests(db, memberId, body.guests);
+  if (!guestResult.ok) return c.json({ error: { code: "invalid_input", message: guestResult.message } }, 400);
+  let reservedInviteToken: string | null = null;
+  if (body.inviteReservationToken) {
+    reservedInviteToken = await consumeReservation(db, body.inviteReservationToken, memberId, "series", now);
+    if (!reservedInviteToken) {
+      return c.json({ error: { code: "reservation_invalid", message: "ゲスト用のURLの有効期限が切れています。もう一度、URLを発行してください" } }, 400);
+    }
+  }
+
   const seriesId = newId();
   await db.insert(schema.meetingSeries).values({
     id: seriesId,
+    inviteToken: reservedInviteToken,
     title: body.title.trim(),
     description: body.description?.trim() || null,
     hostMemberId: memberId,
@@ -371,6 +390,20 @@ meetingSeriesRoutes.post("/", async (c) => {
       await db.insert(schema.meetingSeriesInvitees).values({ id: newId(), seriesId, memberId: mid });
     }
   }
+
+  // 外部ゲスト（個別URL）。メールアドレスのある人には、投票の招待（確定して作成した場合は、確定の案内）を送る
+  const createdGuests: Array<{ id: string; name: string; email: string | null; token: string; invited: boolean }> = [];
+  for (const g of guestResult.guests) {
+    const guestId = newId();
+    const guestToken = generateRawToken();
+    await db.insert(schema.meetingSeriesExternalInvitees).values({
+      id: guestId, seriesId, name: g.name, email: g.email, token: guestToken, contactId: g.contactId, createdAt: now,
+    });
+    createdGuests.push({ id: guestId, name: g.name, email: g.email, token: guestToken, invited: false });
+  }
+  const guestResponseData = () => ({
+    guests: createdGuests.map((g) => ({ id: g.id, name: g.name, email: g.email, url: `${getFrontendUrl(c.env)}/schedule/series/${g.token}`, invited: g.invited })),
+  });
 
   if (mode === "vote") {
     for (let i = 0; i < body.candidates!.length; i++) {
@@ -412,9 +445,27 @@ meetingSeriesRoutes.post("/", async (c) => {
         }).catch(console.error)
       );
     }
+    for (const g of createdGuests.filter((x) => !!x.email)) {
+      mailPromises.push(
+        mailer.send("meeting_invitation_guest", g.email as string, {
+          appTitle: design?.appTitle ?? "白樺クエスト",
+          guestName: g.name,
+          hostName: host?.name ?? "主催者",
+          meetingTitle: `【定例会】${body.title.trim()}`,
+          meetingDescription: body.description?.trim() ?? "",
+          deadlineStr: "",
+          scheduleUrl: `${appUrl}/schedule/series/${g.token}`,
+        }).catch(console.error)
+      );
+      g.invited = true;
+    }
+    const invitedGuestIds = createdGuests.filter((g) => g.invited).map((g) => g.id);
+    if (invitedGuestIds.length > 0) {
+      await db.update(schema.meetingSeriesExternalInvitees).set({ invitedAt: now }).where(inArray(schema.meetingSeriesExternalInvitees.id, invitedGuestIds));
+    }
     c.executionCtx.waitUntil(Promise.all(mailPromises));
 
-    return c.json({ data: { id: seriesId } }, 201);
+    return c.json({ data: { id: seriesId, ...guestResponseData() } }, 201);
   }
 
   // mode === "confirmed": 投票を経ずに、作成と同時に開催回を一括生成する
@@ -444,7 +495,9 @@ meetingSeriesRoutes.post("/", async (c) => {
 
   // 日程を確定して作成した場合は、招待された人（連携済み）のGoogleカレンダーにも予定を登録する（直近の開催回から順に）
   if (mode === "confirmed") queueSeriesCalendarSync(c.executionCtx, db, c.env, seriesId);
-  return c.json({ data: { id: seriesId, occurrenceCount: result.occurrenceCount } }, 201);
+  // 確定して作成した場合のゲストへの案内メールは、generateSeriesOccurrences の中で送られる（invited は、メールアドレスのある人）
+  for (const g of createdGuests) g.invited = !!g.email;
+  return c.json({ data: { id: seriesId, occurrenceCount: result.occurrenceCount, ...guestResponseData() } }, 201);
 });
 
 // ----------------------------------------------------------------
@@ -635,6 +688,23 @@ meetingSeriesRoutes.get("/:id", async (c) => {
     (respondentsByCandidate[r.candidateId] ??= []).push({ memberId: r.memberId, name: m.name, emoji: m.emoji, availability: r.availability as Availability });
   }
 
+  // 外部ゲストも、投票の一覧（回答表）に並べる。メールアドレス・専用URLは、主催者にだけ返す
+  const isHost = series.hostMemberId === memberId;
+  const externalRows = await db.select().from(schema.meetingSeriesExternalInvitees)
+    .where(eq(schema.meetingSeriesExternalInvitees.seriesId, id)).orderBy(schema.meetingSeriesExternalInvitees.createdAt).all();
+  const externalResponseRows = await db.select().from(schema.meetingSeriesExternalResponses)
+    .where(eq(schema.meetingSeriesExternalResponses.seriesId, id)).all();
+  const externalTargets = externalRows.map((e) => ({
+    id: `ext:${e.id}`, name: e.name || "ゲスト", emoji: "🌐", bgColor: "", isExternal: true as const,
+  }));
+  const externalById = new Map(externalRows.map((e) => [e.id, e]));
+  for (const r of externalResponseRows) {
+    const e = externalById.get(r.externalInviteeId);
+    if (!e) continue;
+    (respondentsByCandidate[r.candidateId] ??= []).push({ memberId: `ext:${e.id}`, name: e.name || "ゲスト", emoji: "🌐", availability: r.availability as Availability });
+  }
+  const respondedExternalIds = new Set(externalResponseRows.map((r) => r.externalInviteeId));
+
   const myResponses: Record<string, Availability> = {};
   for (const r of responses) if (r.memberId === memberId) myResponses[r.candidateId] = r.availability as Availability;
 
@@ -695,10 +765,51 @@ meetingSeriesRoutes.get("/:id", async (c) => {
         respondents: respondentsByCandidate[cand.id] ?? [],
       })),
       myResponses,
-      targetMembers: targets,
+      targetMembers: [...targets, ...externalTargets],
+      externalInvitees: externalRows.map((e) => ({
+        id: e.id, name: e.name || "ゲスト",
+        email: isHost ? e.email : null, url: isHost ? `${getFrontendUrl(c.env)}/schedule/series/${e.token}` : null,
+        invitedAt: isHost ? e.invitedAt ?? null : null, responded: respondedExternalIds.has(e.id),
+      })),
+      inviteToken: isHost ? series.inviteToken ?? null : null,
       occurrences,
     },
   });
+});
+
+// ----------------------------------------------------------------
+// POST /api/meeting-series/:id/invite — 外部ゲスト用の共有URLを発行（主催者のみ。すでにあれば同じものを返す）
+// ----------------------------------------------------------------
+meetingSeriesRoutes.post("/:id/invite", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, c.req.param("id"))).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ発行できます" } }, 403);
+  if (series.status !== "voting") return c.json({ error: { code: "invalid_status", message: "投票中の定例会だけ、共有URLを発行できます" } }, 400);
+  if (series.inviteToken) return c.json({ data: { inviteToken: series.inviteToken } });
+  const inviteToken = generateRawToken();
+  await db.update(schema.meetingSeries).set({ inviteToken, updatedAt: Math.floor(Date.now() / 1000) }).where(eq(schema.meetingSeries.id, series.id));
+  return c.json({ data: { inviteToken } }, 201);
+});
+
+// ----------------------------------------------------------------
+// DELETE /api/meeting-series/:id/external/:externalId — 外部ゲストを外す（主催者のみ。そのゲストの投票も削除）
+// ----------------------------------------------------------------
+meetingSeriesRoutes.delete("/:id/external/:externalId", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id, externalId } = c.req.param();
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ削除できます" } }, 403);
+  await db.delete(schema.meetingSeriesExternalResponses).where(and(
+    eq(schema.meetingSeriesExternalResponses.seriesId, id), eq(schema.meetingSeriesExternalResponses.externalInviteeId, externalId)));
+  await db.delete(schema.meetingSeriesExternalInvitees).where(and(
+    eq(schema.meetingSeriesExternalInvitees.seriesId, id), eq(schema.meetingSeriesExternalInvitees.id, externalId)));
+  return c.json({ ok: true });
 });
 
 // ----------------------------------------------------------------
@@ -872,6 +983,23 @@ async function generateSeriesOccurrences(
         urlPendingNote: urlNote, meetingUrl: `${appUrl}/meetings/series/${series.id}`,
       }).catch(console.error)
     );
+  }
+  // 外部ゲストへの確定の案内（メールアドレスがある人のみ）。ゲストは、専用ページで開催日の一覧を確認できる
+  const guestRows = await db.select().from(schema.meetingSeriesExternalInvitees)
+    .where(eq(schema.meetingSeriesExternalInvitees.seriesId, series.id)).all();
+  const guestMailRows = guestRows.filter((g) => !!g.email);
+  for (const g of guestMailRows) {
+    mailPromises.push(
+      mailer.send("meeting_confirmed_guest", g.email as string, {
+        appTitle: design?.appTitle ?? "白樺クエスト", guestName: g.name || "ゲスト", meetingTitle: `【定例会】${series.title}`,
+        hostName: host?.name ?? "主催者", confirmedDate: confirmedDateText, urlPendingNote: urlNote,
+        scheduleUrl: `${appUrl}/schedule/series/${g.token}`,
+      }).catch(console.error)
+    );
+  }
+  if (guestMailRows.length > 0) {
+    await db.update(schema.meetingSeriesExternalInvitees).set({ invitedAt: now })
+      .where(inArray(schema.meetingSeriesExternalInvitees.id, guestMailRows.map((g) => g.id)));
   }
   waitUntil(Promise.all(mailPromises));
 

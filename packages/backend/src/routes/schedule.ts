@@ -9,6 +9,7 @@ import { createDb, schema } from "../db/index.ts";
 import { newId } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
+import { PREPARING_MESSAGE, isReserved } from "../services/invite-reservations.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -255,6 +256,7 @@ scheduleRoutes.post("/:token/respond", async (c) => {
 scheduleRoutes.get("/invite/:inviteToken", async (c) => {
   const db = createDb(c.env.DB);
   const { inviteToken } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
 
   const meeting = await db
     .select()
@@ -262,7 +264,11 @@ scheduleRoutes.get("/invite/:inviteToken", async (c) => {
     .where(eq(schema.meetings.inviteToken, inviteToken))
     .get();
 
-  if (!meeting) return c.json({ error: { code: "not_found", message: "このURLは無効です" } }, 404);
+  if (!meeting) {
+    // ミーティングを作る前（ゲスト用URLだけ先に発行した状態）は「準備中」と案内する
+    if (await isReserved(db, inviteToken, "meeting", now)) return c.json({ error: { code: "preparing", message: PREPARING_MESSAGE } }, 409);
+    return c.json({ error: { code: "not_found", message: "このURLは無効です" } }, 404);
+  }
   // open 以外は基本的に締め切りだが、confirmed の場合のみ「確定した日時」への回答目的で引き続き閲覧できる
   if (meeting.status !== "open" && !(meeting.status === "confirmed" && meeting.confirmedCandidateId)) {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
@@ -312,7 +318,10 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     .where(eq(schema.meetings.inviteToken, inviteToken))
     .get();
 
-  if (!meeting) return c.json({ error: { code: "not_found", message: "このURLは無効です" } }, 404);
+  if (!meeting) {
+    if (await isReserved(db, inviteToken, "meeting", now)) return c.json({ error: { code: "preparing", message: PREPARING_MESSAGE } }, 409);
+    return c.json({ error: { code: "not_found", message: "このURLは無効です" } }, 404);
+  }
   // open 以外は基本的に締め切りだが、confirmed の場合のみ「確定した日時」に限って回答を受け付ける
   if (meeting.status !== "open" && !(meeting.status === "confirmed" && meeting.confirmedCandidateId)) {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
@@ -354,7 +363,7 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
       token: personalToken,
       createdAt: now,
     });
-    invitee = { id: inviteeId, meetingId: meeting.id, name: body.name?.trim() ?? "", email: emailInput, token: personalToken, createdAt: now };
+    invitee = { id: inviteeId, meetingId: meeting.id, name: body.name?.trim() ?? "", email: emailInput, token: personalToken, createdAt: now, invitedAt: null, contactId: null };
   } else if (body.name?.trim() && body.name.trim() !== invitee.name) {
     await db.update(schema.meetingExternalInvitees)
       .set({ name: body.name.trim() })

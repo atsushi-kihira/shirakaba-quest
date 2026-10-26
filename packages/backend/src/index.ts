@@ -9,6 +9,8 @@ import { memberRoutes } from "./routes/members.ts";
 import { rankingRoutes } from "./routes/ranking.ts";
 import { oneOnOneRoutes } from "./routes/oneonone.ts";
 import { oneOnOnePublicRoutes } from "./routes/oneonone-public.ts";
+import { scheduleSeriesRoutes } from "./routes/schedule-series.ts";
+import { inviteReservationRoutes } from "./routes/invite-reservations.ts";
 import { reminderRoutes } from "./routes/reminders.ts";
 import { oneOnOneDmRoutes } from "./routes/oneonone-dm.ts";
 import { oneOnOneGuestInviteRoutes } from "./routes/oneonone-guest-invites.ts";
@@ -93,10 +95,12 @@ app.route("/api/share-stories", shareStoryRoutes);
 app.route("/api/enishi", enishiRoutes);
 app.route("/api/meetings", meetingRoutes);
 app.route("/api/meeting-series", meetingSeriesRoutes);
+app.route("/api/schedule", scheduleSeriesRoutes);
 app.route("/api/schedule", scheduleRoutes);
 app.route("/api/push", pushRoutes);
 app.route("/api/notifications", notificationRoutes);
 app.route("/api/reminders", reminderRoutes);
+app.route("/api/invite-reservations", inviteReservationRoutes);
 app.route("/api/scheduler", schedulerRoutes);
 
 // ---- 内部専用: 会社概要のバックグラウンド生成の自己連鎖呼び出し（一般ユーザーの認証は使わず、共有シークレットで保護） ----
@@ -135,8 +139,12 @@ app.post("/api/internal/send-reminders", async (c) => {
   }
   const { createDb } = await import("./db/index.ts");
   const { runEventReminders } = await import("./services/event-reminders.ts");
-  const result = await runEventReminders(createDb(c.env.DB), c.env);
-  return c.json({ ok: true, ...result });
+  const db = createDb(c.env.DB);
+  const result = await runEventReminders(db, c.env);
+  // 毎時の定期実行のついでに、使われなかったゲスト用URLの予約（期限切れ）を削除する
+  const { purgeExpiredReservations } = await import("./services/invite-reservations.ts");
+  const purgedReservations = await purgeExpiredReservations(db, Math.floor(Date.now() / 1000));
+  return c.json({ ok: true, ...result, purgedReservations });
 });
 
 // ---- 公開アプリ設定（認証不要・全ユーザー対象） ----

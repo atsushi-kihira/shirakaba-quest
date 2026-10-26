@@ -15,6 +15,7 @@ import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
 import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 import { DurationSelect } from "@/components/duration-select";
+import { MeetingGuestSection, guestsToPayload, type GuestDraft } from "@/components/meeting-guest-section";
 
 type Team = { id: string; name: string; emblemEmoji: string };
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
@@ -83,6 +84,9 @@ export function MeetingNewScreen() {
   const [conferenceMode, setConferenceMode] = useState<ConferenceMode>("none");
   const [conferenceUrl, setConferenceUrl] = useState("");
   const [error, setError] = useState("");
+  // 外部ゲスト（作成と同時に招待）と、作成前に発行したゲスト用の共有URLの予約
+  const [guests, setGuests] = useState<GuestDraft[]>([]);
+  const [reservationToken, setReservationToken] = useState<string | null>(null);
 
   const { data: zoomStatus } = useQuery({
     queryKey: ["scheduler", "zoom-status"],
@@ -120,6 +124,7 @@ export function MeetingNewScreen() {
     mutationFn: (body: object) => api.post<{ data: { id: string } }>("/meetings", body),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["meetings"] });
+      qc.invalidateQueries({ queryKey: ["invite-reservation"] });
       navigate(`/meetings/${res.data.id}`);
     },
     onError: (e: Error) => setError(e.message),
@@ -245,6 +250,8 @@ export function MeetingNewScreen() {
       confirmNow: meetingMode === "confirmed" || undefined,
       conferenceType: meetingMode === "confirmed" ? conferenceMode : undefined,
       conferenceUrl: meetingMode === "confirmed" && conferenceMode === "manual" ? conferenceUrl.trim() : undefined,
+      inviteReservationToken: reservationToken ?? undefined,
+      guests: guests.length > 0 ? guestsToPayload(guests) : undefined,
     });
   }
 
@@ -357,7 +364,7 @@ export function MeetingNewScreen() {
             ))}
           </div>
           <p className="text-xs mt-1.5 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-600)" }}>
-            💡 ここではメンバーの中から対象者を選びます。チャプター外の{termExternalGuest}を招待したい場合は、ここでは指定できません。ミーティング作成後の詳細画面で発行できる「招待URL」を、{termExternalGuest}の方に直接お伝えください。
+            💡 ここではメンバーの中から対象者を選びます。チャプター外の{termExternalGuest}は、下の「{termExternalGuest}を招待」で指定できます。
           </p>
 
           {scope === "team" && (
@@ -428,6 +435,9 @@ export function MeetingNewScreen() {
             </div>
           )}
         </div>
+
+        {/* 外部ゲスト（ビジター）の招待 */}
+        <MeetingGuestSection kind="meeting" guests={guests} onGuestsChange={setGuests} onReservationChange={setReservationToken} />
 
         {/* 所要時間（すべての候補日時で共通） */}
         <DurationSelect value={duration} onChange={setDuration}

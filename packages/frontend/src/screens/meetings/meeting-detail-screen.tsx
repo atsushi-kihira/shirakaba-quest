@@ -28,7 +28,7 @@ type Respondent = {
   answers: Record<string, Availability>;
   hasResponded: boolean;
 };
-type ExternalInvitee = { id: string; name: string; email: string | null; token: string; createdAt: number };
+type ExternalInvitee = { id: string; name: string; email: string | null; token: string; createdAt: number; invitedAt?: number | null };
 type Meeting = {
   id: string; title: string; description: string | null;
   host: { id: string; name: string; emoji: string } | null;
@@ -1845,6 +1845,7 @@ export function MeetingDetailScreen() {
                   <span className="text-xs flex-1 truncate" style={{ color: "var(--color-ink-600)" }}>
                     {ext.name || "（名前未入力）"}
                     {ext.email && <span style={{ color: "var(--color-ink-400)" }}> · {ext.email}</span>}
+                    {ext.invitedAt && <span style={{ color: "var(--color-success)" }}> · ✉ 招待メール送信済み</span>}
                   </span>
                   <button
                     onClick={() => copyExternalUrl(ext.token)}

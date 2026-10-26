@@ -254,6 +254,8 @@ export const externalContacts = sqliteTable("external_contacts", {
   company:       text("company"),                              // 会社名/屋号
   note:          text("note"),                                 // 備考（自由記述）
   visibility:    text("visibility").notNull().default("existence"), // 'private' | 'existence' | 'full'
+  // メールアドレス（任意）。招待メールの送り先にだけ使う。登録した本人以外には、どの画面・AIにも渡さない
+  email:         text("email"),
   source:        text("source").notNull().default("manual"),   // 'manual' | 'generic' | 'eight'
   createdAt:     integer("created_at").notNull(),
   updatedAt:     integer("updated_at").notNull(),
@@ -874,6 +876,8 @@ export const meetingExternalInvitees = sqliteTable("meeting_external_invitees", 
   email:     text("email"),
   token:     text("token").notNull(),
   createdAt: integer("created_at").notNull(),
+  invitedAt: integer("invited_at"),   // 招待メールを送った時刻
+  contactId: text("contact_id"),      // 外部人脈から追加した場合の人脈ID
 });
 
 export const meetingResponses = sqliteTable("meeting_responses", {
@@ -934,6 +938,7 @@ export const meetingSeries = sqliteTable("meeting_series", {
   conferenceMetaJson:  text("conference_meta_json"),
   conferenceCalendarEventId: text("conference_calendar_event_id"),
   dateMode:            text("date_mode").notNull().default("recurring"), // 'recurring'（繰り返しパターン） | 'fixed'（個別の固定日リスト）
+  inviteToken:         text("invite_token"), // 外部ゲスト用の共有URLのトークン
   eventTypeDefId:      text("event_type_def_id"),
   eventCampaignId:     text("event_campaign_id"), // 紐づけたイベント（インスタンス）。ポイントはここに設定する
   createdAt:           integer("created_at").notNull(),
@@ -1327,3 +1332,35 @@ export const reminderNotices = sqliteTable("reminder_notices", {
 }, (t) => ({
   uniq: uniqueIndex("uniq_reminder_notice").on(t.memberId, t.kind, t.refId, t.startsAt, t.daysBefore),
 }));
+
+// ---- ミーティング・定例会の作成前に発行する、外部ゲスト用の共有URLの予約 ----
+// 作成するとトークンがミーティング（meetings.invite_token）・定例会（meeting_series.invite_token）に引き継がれ、この行は消える。
+// 作成されなかったものは、期限（既定7日）を過ぎたら自動で削除する。作成前にURLを開いたゲストには「準備中」と表示する
+export const inviteReservations = sqliteTable("invite_reservations", {
+  token:        text("token").primaryKey(),
+  kind:         text("kind").notNull(), // 'meeting' | 'series'
+  hostMemberId: text("host_member_id").notNull(),
+  expiresAt:    integer("expires_at").notNull(),
+  createdAt:    integer("created_at").notNull(),
+});
+
+// ---- 定例会の外部ゲスト（個別URL）と、候補パターンへの投票 ----
+export const meetingSeriesExternalInvitees = sqliteTable("meeting_series_external_invitees", {
+  id:        text("id").primaryKey(),
+  seriesId:  text("series_id").notNull(),
+  name:      text("name").notNull().default(""),
+  email:     text("email"),
+  token:     text("token").notNull(),
+  contactId: text("contact_id"),
+  invitedAt: integer("invited_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const meetingSeriesExternalResponses = sqliteTable("meeting_series_external_responses", {
+  id:                text("id").primaryKey(),
+  seriesId:          text("series_id").notNull(),
+  candidateId:       text("candidate_id").notNull(),
+  externalInviteeId: text("external_invitee_id").notNull(),
+  availability:      text("availability").notNull().default("yes"), // 'yes' | 'maybe' | 'no'
+  respondedAt:       integer("responded_at").notNull(),
+});

@@ -262,6 +262,36 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     ],
   },
   {
+    emailKey: "meeting_invitation_guest",
+    label: "ミーティング招待（外部ゲスト向け）",
+    category: "meeting",
+    triggerDescription: "ミーティング・定例会の作成時に、主催者が外部ゲストとして招待した人（メールアドレスが分かっている人）へ送信",
+    enabled: true,
+    subject: "【{{appTitle}}】📅 「{{meetingTitle}}」の日程調整に招待されました",
+    bodyText: `{{guestName}} さん
+
+{{hostName}}さんから「{{meetingTitle}}」の日程調整にご招待しました。{{deadlineStr}}
+
+{{meetingDescription}}
+
+下記のURLから、ご都合のよい日程を回答してください（ログインは不要です）。
+{{scheduleUrl}}
+
+※ このURLはあなた専用です。回答の変更も、同じURLからできます。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "ゲスト名", example: "鈴木 一郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "meetingDescription", label: "ミーティング説明（空白可）", example: "議題：先月の振り返り" },
+      { key: "deadlineStr", label: "回答期限テキスト（空白可）", example: "（回答期限: 2024/7/10）" },
+      { key: "scheduleUrl", label: "ゲスト専用ページURL", example: "https://app.example.com/schedule/xxx" },
+    ],
+  },
+  {
     emailKey: "meeting_response_member",
     label: "日程回答受付（メンバー向け）",
     category: "meeting",

@@ -16,6 +16,7 @@ import { ScheduleTextModal } from "@/components/schedule-text-modal";
 import { SeriesConferenceUrlsModal, type SeriesUrlPayload } from "./_series-conference-urls-modal";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { EventReminderSetting } from "@/components/reminder-settings";
+import { SeriesGuestPanel, type SeriesExternalInvitee } from "./_series-guest-panel";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -25,7 +26,7 @@ type Candidate = {
   label: string; isConfirmed: boolean; respondents: Respondent[];
   upcomingDates?: { startsAt: number; endsAt: number }[];
 };
-type TargetMember = { id: string; name: string; emoji: string; bgColor: string };
+type TargetMember = { id: string; name: string; emoji: string; bgColor: string; isExternal?: boolean };
 type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null; conferenceUrl: string | null };
 type SeriesDetail = {
   id: string; title: string; description: string | null;
@@ -41,6 +42,8 @@ type SeriesDetail = {
   candidates: Candidate[];
   myResponses: Record<string, Availability>;
   targetMembers: TargetMember[];
+  externalInvitees?: SeriesExternalInvitee[];
+  inviteToken?: string | null;
   occurrences: Occurrence[];
 };
 
@@ -265,6 +268,11 @@ export function MeetingSeriesDetailScreen() {
           対象: {series.targetMembers.map((m) => `${m.emoji} ${m.name}`).join("、") || "（対象者なし）"}
         </p>
       </div>
+
+      {/* 外部ゲスト（主催者のみ。共有URL・ゲストの一覧） */}
+      {series.isHost && series.status !== "cancelled" && (
+        <SeriesGuestPanel seriesId={series.id} voting={series.status === "voting"} inviteToken={series.inviteToken ?? null} guests={series.externalInvitees ?? []} />
+      )}
 
       {series.status === "voting" && (
         <>

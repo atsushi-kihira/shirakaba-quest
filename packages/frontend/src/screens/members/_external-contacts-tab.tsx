@@ -20,6 +20,8 @@ type Contact = {
   company: string | null;
   relationships: string[];
   note: string | null;
+  /** メールアドレス（任意。自分の人脈にだけ付く。他のメンバーには見えない） */
+  email?: string | null;
   visibility: Visibility;
   source: string;
   createdAt: number;
@@ -86,12 +88,13 @@ const VISIBILITY_LABEL: Record<Visibility, string> = {
   full: "📖 詳細まで公開（連絡先は非公開）",
 };
 
-type MappedField = "name" | "specialty" | "company" | "note";
+type MappedField = "name" | "specialty" | "company" | "note" | "email";
 const GENERIC_HINTS: Record<MappedField, string[]> = {
   name: ["名前", "氏名", "お名前"],
   specialty: ["専門分野", "専門", "業種"],
   company: ["会社名", "屋号", "会社", "組織"],
   note: ["備考", "関係性", "メモ"],
+  email: ["メールアドレス", "メール", "E-mail", "Email", "e-mail", "email", "mail"],
 };
 
 const SPECIALTY_DATALIST_ID = "external-contacts-specialty-options";
@@ -182,6 +185,8 @@ function guessMapping(headers: string[], format: "generic" | "eight"): Record<Ma
       specialty: null,
       company: find(["会社名", "会社"]),
       note: find(["部署名", "部署"]),
+      // Eightの出力にメール列があれば使う（なくてもよい）
+      email: find(GENERIC_HINTS.email),
     };
   }
   return {
@@ -189,6 +194,7 @@ function guessMapping(headers: string[], format: "generic" | "eight"): Record<Ma
     specialty: find(GENERIC_HINTS.specialty),
     company: find(GENERIC_HINTS.company),
     note: find(GENERIC_HINTS.note),
+    email: find(GENERIC_HINTS.email),
   };
 }
 
@@ -488,6 +494,7 @@ function ManualAddSection() {
   const [company, setCompany] = useState("");
   const [relationships, setRelationships] = useState<string[]>([]);
   const [note, setNote] = useState("");
+  const [email, setEmail] = useState("");
   const [visibility, setVisibility] = useState<Visibility>("existence");
   const [businessSummary, setBusinessSummary] = useState("");
   const [businessSummaryDetail, setBusinessSummaryDetail] = useState("");
@@ -504,13 +511,13 @@ function ManualAddSection() {
   const create = useMutation({
     mutationFn: () => api.post("/collab/contacts", {
       name: name.trim(), specialty: specialty.trim() || undefined, company: company.trim() || undefined,
-      relationships, note: note.trim() || undefined, visibility,
+      relationships, note: note.trim() || undefined, email: email.trim() || undefined, visibility,
       businessSummary: businessSummary.trim() || undefined, businessSummaryDetail: businessSummaryDetail.trim() || undefined,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
       qc.invalidateQueries({ queryKey: ["collab", "graph"] });
-      setName(""); setSpecialty(""); setCompany(""); setRelationships([]); setNote(""); setVisibility("existence");
+      setName(""); setSpecialty(""); setCompany(""); setRelationships([]); setNote(""); setEmail(""); setVisibility("existence");
       setBusinessSummary(""); setBusinessSummaryDetail("");
       setOpen(false);
     },
@@ -565,6 +572,13 @@ function ManualAddSection() {
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例: 展示会で名刺交換"
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
 
+          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス（任意）</label>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="例: takahashi@example.com"
+            className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
+          <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
+            🔒 あなただけに見えます（他のメンバーには表示されません）。ミーティングや定例会に招待するときの、メールの送り先にだけ使います
+          </p>
+
           <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>公開範囲</label>
           <select value={visibility} onChange={(e) => setVisibility(e.target.value as Visibility)}
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
@@ -589,7 +603,7 @@ function ImportSection() {
   const [defaultVisibility, setDefaultVisibility] = useState<Visibility>("existence");
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<string[][]>([]);
-  const [mapping, setMapping] = useState<Record<MappedField, string | null>>({ name: null, specialty: null, company: null, note: null });
+  const [mapping, setMapping] = useState<Record<MappedField, string | null>>({ name: null, specialty: null, company: null, note: null, email: null });
   const [error, setError] = useState("");
   const [fileName, setFileName] = useState("");
   const [specialtyDrafts, setSpecialtyDrafts] = useState<{ value: string; apply: boolean; needsReview: boolean }[]>([]);
@@ -624,14 +638,15 @@ function ImportSection() {
   }
 
   const mappedRows = useMemo(() => {
-    const ni = colIndex(mapping.name), si = colIndex(mapping.specialty), ci = colIndex(mapping.company), noi = colIndex(mapping.note);
-    const mappedIdx = new Set([ni, si, ci, noi].filter((i) => i >= 0));
+    const ni = colIndex(mapping.name), si = colIndex(mapping.specialty), ci = colIndex(mapping.company), noi = colIndex(mapping.note), ei = colIndex(mapping.email);
+    const mappedIdx = new Set([ni, si, ci, noi, ei].filter((i) => i >= 0));
     return rows
       .map((r) => ({
         name: ni >= 0 ? (r[ni] ?? "").trim() : "",
         specialty: si >= 0 ? (r[si] ?? "").trim() : "",
         company: ci >= 0 ? (r[ci] ?? "").trim() : "",
         note: noi >= 0 ? (r[noi] ?? "").trim() : "",
+        email: ei >= 0 ? (r[ei] ?? "").trim() : "",
         // マッピングに使っていない列で値が入っているもの（Eightの独自タグ列など）を専門分野推定のヒントにする
         tagHints: headers.filter((_, i) => !mappedIdx.has(i) && (r[i] ?? "").trim()),
       }))
@@ -658,6 +673,7 @@ function ImportSection() {
       name: r.name,
       company: r.company,
       note: r.note,
+      email: r.email,
       specialty: specialtyDrafts[i]?.apply ? (specialtyDrafts[i]?.value ?? "") : r.specialty,
     })),
     [mappedRows, specialtyDrafts]
@@ -705,13 +721,14 @@ function ImportSection() {
         <div className="text-xs mb-3 p-3 rounded-xl" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
           <p className="font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>📋 汎用フォーマットについて</p>
           <p className="mb-1.5">
-            1行目に見出し（列名）が入ったCSVファイルに対応しています。次の4項目の列を用意してください（順番は自由、見出し名が多少違っても自動で認識します）。
+            1行目に見出し（列名）が入ったCSVファイルに対応しています。次の5項目の列を用意してください（順番は自由、見出し名が多少違っても自動で認識します）。
           </p>
           <ul className="list-disc pl-4 mb-1.5 space-y-0.5">
             <li><span className="font-medium">名前</span>（必須）：例）名前 / 氏名 / お名前</li>
             <li>専門分野（任意）：例）専門分野 / 専門 / 業種</li>
             <li>会社名・屋号（任意）：例）会社名 / 屋号 / 会社 / 組織</li>
             <li>備考（任意）：例）備考 / 関係性 / メモ</li>
+            <li>メールアドレス（任意）：例）メールアドレス / Email。ミーティングに招待するときの送り先にだけ使います（他のメンバーには見えません）。空欄でも取り込めます</li>
           </ul>
           <p>
             文字コードはUTF-8・Shift_JISのどちらでも自動判定します。区切り文字はカンマ（,）またはタブに対応しています。Excelで作成した表を「CSV UTF-8」または「CSV」形式で保存したものをそのままアップロードできます。列名が完全に一致しない場合も、アップロード後に下の「列の対応づけ」欄で手動で選び直せます。
@@ -740,10 +757,10 @@ function ImportSection() {
         <>
           <p className="text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>列の対応づけ</p>
           <div className="grid grid-cols-2 gap-2 mb-3">
-            {(["name", "specialty", "company", "note"] as MappedField[]).map((f) => (
+            {(["name", "specialty", "company", "note", "email"] as MappedField[]).map((f) => (
               <div key={f}>
                 <label className="block text-[11px] mb-0.5" style={{ color: "var(--color-ink-400)" }}>
-                  {f === "name" ? "名前 *" : f === "specialty" ? "専門分野" : f === "company" ? "会社名/屋号" : "備考"}
+                  {f === "name" ? "名前 *" : f === "specialty" ? "専門分野" : f === "company" ? "会社名/屋号" : f === "email" ? "メールアドレス（任意）" : "備考"}
                 </label>
                 <select value={mapping[f] ?? ""} onChange={(e) => setMapping((m) => ({ ...m, [f]: e.target.value || null }))}
                   className="w-full px-2 py-1.5 rounded-lg border text-xs" style={{ borderColor: "var(--color-paper-300)" }}>
@@ -763,6 +780,7 @@ function ImportSection() {
                   <th className="text-left px-2 py-1">専門分野</th>
                   <th className="text-left px-2 py-1">会社名/屋号</th>
                   <th className="text-left px-2 py-1">備考</th>
+                  <th className="text-left px-2 py-1">メール</th>
                 </tr>
               </thead>
               <tbody>
@@ -772,6 +790,7 @@ function ImportSection() {
                     <td className="px-2 py-1">{r.specialty}</td>
                     <td className="px-2 py-1">{r.company}</td>
                     <td className="px-2 py-1">{r.note}</td>
+                    <td className="px-2 py-1">{r.email}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1374,6 +1393,9 @@ function MyContactsSection() {
                           style={{ background: summaryBadge.bg, color: summaryBadge.color }}>
                           {summaryBadge.label}
                         </span>
+                        {ct.email && (
+                          <span className="text-[10px] shrink-0" title="メールアドレス登録済み（あなただけに見えます）" style={{ color: "var(--color-ink-400)" }}>✉</span>
+                        )}
                       </div>
                       <p className="text-xs truncate" style={{ color: "var(--color-ink-500)" }}>
                         {[ct.specialty, ct.company, ...ct.relationships].filter(Boolean).join(" ・ ") || "（詳細未入力）"}
@@ -1420,6 +1442,7 @@ function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () 
   const [company, setCompany] = useState(contact.company ?? "");
   const [relationships, setRelationships] = useState<string[]>(contact.relationships);
   const [note, setNote] = useState(contact.note ?? "");
+  const [email, setEmail] = useState(contact.email ?? "");
   const [businessSummary, setBusinessSummary] = useState(contact.businessSummary ?? "");
   const [businessSummaryDetail, setBusinessSummaryDetail] = useState(contact.businessSummaryDetail ?? "");
   const [error, setError] = useState("");
@@ -1427,7 +1450,7 @@ function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () 
   const update = useMutation({
     mutationFn: () => api.patch(`/collab/contacts/${contact.id}`, {
       name: name.trim(), specialty: specialty.trim(), company: company.trim(),
-      relationships, note: note.trim(),
+      relationships, note: note.trim(), email: email.trim(),
       businessSummary: businessSummary.trim(), businessSummaryDetail: businessSummaryDetail.trim(),
     }),
     onSuccess: () => {
@@ -1475,6 +1498,13 @@ function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () 
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>備考</label>
         <input value={note} onChange={(e) => setNote(e.target.value)}
           className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス（任意）</label>
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="例: takahashi@example.com"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
+        <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
+          🔒 あなただけに見えます（他のメンバーには表示されません）。空欄にすると、メールアドレスを消せます
+        </p>
 
         {error && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
