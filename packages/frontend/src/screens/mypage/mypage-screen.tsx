@@ -116,6 +116,13 @@ export function MypageScreen() {
     enabled: !isAdminOnly,
   });
 
+  // 外部人脈の登録件数（人脈の管理ページと同じデータ）
+  const { data: externalContactsData } = useQuery({
+    queryKey: ["collab", "contacts"],
+    queryFn: () => api.get<{ data: unknown[] }>("/collab/contacts"),
+    enabled: !isAdminOnly && approved,
+  });
+
   // 管理者の場合はadminMemberData、それ以外はmemberData
   const adminMember = adminMemberData?.data ?? null;
   const hasMemberProfile = isAdminOnly ? adminMember !== null : !!memberData?.data;
@@ -607,6 +614,38 @@ export function MypageScreen() {
                 className="text-sm font-medium py-2 rounded-2xl inline-flex items-center justify-center gap-1 w-full hover:opacity-80 transition"
                 style={{ background: "var(--color-brand)", color: "white" }}>
                 ✎ 登録・編集する
+              </Link>
+            </div>
+          )}
+
+          {/* 外部人脈（管理ページへのリンク） */}
+          {!isAdminOnly && !approved && (
+            <div className="card-paper rounded-3xl p-5 opacity-50">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>📇 外部人脈</h2>
+                <Lock size={14} style={{ color: "var(--color-ink-400)" }} />
+              </div>
+              <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>承認されると利用できます</p>
+            </div>
+          )}
+          {!isAdminOnly && approved && (
+            <div className="card-paper rounded-3xl p-5">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)" }}>📇 外部人脈</h2>
+                {externalContactsData && (
+                  <span className="text-xs font-bold shrink-0 ml-2" style={{ color: "var(--color-accent)" }}>
+                    {externalContactsData.data.length}件 登録済み
+                  </span>
+                )}
+              </div>
+              <p className="text-xs mb-3 leading-relaxed" style={{ color: "var(--color-ink-500)" }}>
+                チャプターの外のお知り合いを登録します。1件ずつの登録や、CSVからの取り込みができます。
+                メールアドレス（任意）を登録しておくと、ミーティングへの招待が簡単になります（他のメンバーには見えません）。
+              </p>
+              <Link to="/members?tab=contacts"
+                className="text-sm font-medium py-2 rounded-2xl inline-flex items-center justify-center gap-1 w-full hover:opacity-80 transition"
+                style={{ background: "var(--color-brand)", color: "white" }}>
+                ✎ 外部人脈を登録する
               </Link>
             </div>
           )}
