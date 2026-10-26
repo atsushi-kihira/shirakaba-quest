@@ -8,6 +8,7 @@ import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, 
 import { api } from "@/lib/api";
 import { useBroadcastNotifications, type BroadcastNotification } from "@/hooks/use-broadcast-notifications";
 import { useReminderNotices } from "@/hooks/use-reminder-notices";
+import { useGuestContactProposals } from "@/hooks/use-guest-contact-proposals";
 import { LinkifiedText } from "@/components/linkified-text";
 import { MemberAvatar } from "@/components/member-avatar";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
@@ -216,6 +217,7 @@ export function HomeScreen() {
 
   // 予定のリマインド（1to1・ミーティング・定例会。マイページ／各予定のページでの設定に従って届く。通知画面と共通の既読）
   const { notices: reminderNotices, markRead: markReminderRead } = useReminderNotices();
+  const { proposals: guestProposals, limit: contactLimit } = useGuestContactProposals();
 
   // 運営（管理画面）からのお知らせ
   const { unread: broadcastUnread, markRead: markBroadcastRead } = useBroadcastNotifications();
@@ -891,6 +893,25 @@ export function HomeScreen() {
               </Link>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* 外部ゲストの連絡先を、人脈の登録上限のため登録できていない（どうするか、選んでもらう） */}
+      {guestProposals.length > 0 && (
+        <section>
+          <Link to="/members?tab=contacts" className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+            style={{ borderLeft: "3px solid var(--color-brand)" }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(181,56,75,0.1)" }}>📇</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>
+                {guestProposals.length}人のゲストを、外部人脈に登録できていません
+              </p>
+              <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+                {guestProposals.slice(0, 3).map((p) => p.name).join("、")}{guestProposals.length > 3 ? " など" : ""}。登録件数が上限（{contactLimit}件）です。どうするか、選んでください
+              </p>
+            </div>
+            <ChevronRight size={16} style={{ color: "var(--color-brand)" }} />
+          </Link>
         </section>
       )}
 

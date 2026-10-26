@@ -328,6 +328,8 @@ function useRelationshipOptions(): string[] {
   }, [data]);
 }
 
+import { GuestProposalsCard } from "./_guest-proposals-card";
+
 export function ExternalContactsTab() {
   const specialtyOptions = useSpecialtyOptions();
   const relationshipOptions = useRelationshipOptions();
@@ -348,6 +350,9 @@ export function ExternalContactsTab() {
       </p>
 
       <ManualAddSection />
+      {/* 外部ゲストの回答からの自動登録が、登録件数の上限で保留になったものの確認 */}
+      <GuestProposalsCard />
+
       <ImportSection />
       <IntroRequestsSection />
       <MyContactsSection />

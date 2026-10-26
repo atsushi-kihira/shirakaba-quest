@@ -10,6 +10,7 @@ import { rankingRoutes } from "./routes/ranking.ts";
 import { oneOnOneRoutes } from "./routes/oneonone.ts";
 import { oneOnOnePublicRoutes } from "./routes/oneonone-public.ts";
 import { scheduleSeriesRoutes } from "./routes/schedule-series.ts";
+import { guestContactProposalRoutes } from "./routes/guest-contact-proposals.ts";
 import { inviteReservationRoutes } from "./routes/invite-reservations.ts";
 import { reminderRoutes } from "./routes/reminders.ts";
 import { oneOnOneDmRoutes } from "./routes/oneonone-dm.ts";
@@ -101,6 +102,7 @@ app.route("/api/push", pushRoutes);
 app.route("/api/notifications", notificationRoutes);
 app.route("/api/reminders", reminderRoutes);
 app.route("/api/invite-reservations", inviteReservationRoutes);
+app.route("/api/guest-contact-proposals", guestContactProposalRoutes);
 app.route("/api/scheduler", schedulerRoutes);
 
 // ---- 内部専用: 会社概要のバックグラウンド生成の自己連鎖呼び出し（一般ユーザーの認証は使わず、共有シークレットで保護） ----

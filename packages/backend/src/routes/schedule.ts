@@ -225,7 +225,7 @@ scheduleRoutes.post("/:token/respond", async (c) => {
   }
 
   // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）
-  await registerGuestAsContact(db, meeting.hostMemberId, { name: finalName, email: emailInput, company: companyInput, contactId: extInvitee.contactId })
+  await registerGuestAsContact(db, meeting.hostMemberId, { name: finalName, email: emailInput, company: companyInput, contactId: extInvitee.contactId, context: `ミーティング「${meeting.title}」への回答` })
     .catch((e) => console.error("[guest contact] failed", e));
 
   // 初回回答時にブックマークURL付きメールを送信
@@ -401,7 +401,7 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
   }
 
   // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）
-  await registerGuestAsContact(db, meeting.hostMemberId, { name: nameInput, email: emailInput, company: companyInput, contactId: invitee.contactId })
+  await registerGuestAsContact(db, meeting.hostMemberId, { name: nameInput, email: emailInput, company: companyInput, contactId: invitee.contactId, context: `ミーティング「${meeting.title}」への回答` })
     .catch((e) => console.error("[guest contact] failed", e));
 
   const appUrl = getFrontendUrl(c.env);

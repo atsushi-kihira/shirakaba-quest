@@ -150,7 +150,7 @@ scheduleSeriesRoutes.post("/series/:token/respond", async (c) => {
 
   await db.update(schema.meetingSeriesExternalInvitees).set({ name, email, company }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
   await saveAnswers(db, series, invitee.id, body.answers ?? {}, now);
-  await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId }).catch((e) => console.error("[guest contact] failed", e));
+  await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId, context: `定例会「${series.title}」への回答` }).catch((e) => console.error("[guest contact] failed", e));
   // メールアドレスがなかった旧方式のゲストには、初回の回答時に専用URLをメールでお知らせする
   if (!hadEmail) await sendBookmarkMail(c, db, series, { name, token: invitee.token }, email);
   return c.json({ ok: true, scheduleUrl: `${getFrontendUrl(c.env)}/schedule/series/${invitee.token}` });
@@ -199,7 +199,7 @@ scheduleSeriesRoutes.post("/series-invite/:inviteToken/respond", async (c) => {
   } else if (name !== invitee.name || company !== (invitee.company ?? "")) {
     await db.update(schema.meetingSeriesExternalInvitees).set({ name, company }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
   }
-  await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId }).catch((e) => console.error("[guest contact] failed", e));
+  await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId, context: `定例会「${series.title}」への回答` }).catch((e) => console.error("[guest contact] failed", e));
   await saveAnswers(db, series, invitee.id, body.answers ?? {}, now);
   if (isNew) await sendBookmarkMail(c, db, series, { name, token: invitee.token }, email);
   return c.json({ ok: true, scheduleUrl: `${getFrontendUrl(c.env)}/schedule/series/${invitee.token}` });

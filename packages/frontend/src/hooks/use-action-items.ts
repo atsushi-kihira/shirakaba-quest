@@ -13,6 +13,7 @@ import { useCollabAlerts } from "@/hooks/use-collab-alerts";
 import { useGuestFollowups, usePendingExternalOneOnOneCount } from "@/hooks/use-guest-followups";
 import { meetingNotifDefaultMessage, meetingNotifIcon } from "@/lib/meeting-notification-text";
 import { useReminderNotices } from "@/hooks/use-reminder-notices";
+import { useGuestContactProposals } from "@/hooks/use-guest-contact-proposals";
 
 export type ActionItemGroup = "reminder" | "oneonone" | "meeting" | "collab";
 
@@ -102,6 +103,7 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
     staleTime: 30_000,
   });
   const { notices: reminders, markRead: markReminderRead } = useReminderNotices();
+  const { proposals: guestProposals, limit: contactLimit } = useGuestContactProposals();
 
   const items: ActionItem[] = [];
 
@@ -259,6 +261,15 @@ export function useActionItems(): { items: ActionItem[]; count: number } {
           .then(() => qc.invalidateQueries({ queryKey: ["collab", "reaction-notifications"] }))
           .catch(() => undefined);
       },
+    });
+  }
+  // 外部ゲストの連絡先を、人脈の登録上限のため、登録できていない（どうするか、選んでもらう）
+  for (const p of guestProposals) {
+    items.push({
+      key: `guest-proposal-${p.id}`, group: "collab", icon: "📇", urgent: true, weight: 1,
+      title: `${p.name}さん（${p.company}）を、外部人脈に登録できていません`,
+      detail: `登録件数が上限（${contactLimit}件）に達しています。非公開として登録するか、既存の人脈を非公開に変えるかを、選んでください`,
+      to: "/members?tab=contacts",
     });
   }
   const issues = summaryIssueData?.data ?? [];

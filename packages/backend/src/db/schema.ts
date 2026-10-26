@@ -1366,3 +1366,17 @@ export const meetingSeriesExternalResponses = sqliteTable("meeting_series_extern
   availability:      text("availability").notNull().default("yes"), // 'yes' | 'maybe' | 'no'
   respondedAt:       integer("responded_at").notNull(),
 });
+
+// ---- 外部ゲストの回答からの人脈の自動登録で、登録件数の上限に達していたときの、主催者への確認待ち ----
+// status: 'pending'（確認待ち） | 'registered'（登録した） | 'dismissed'（登録しないことにした）
+export const guestContactProposals = sqliteTable("guest_contact_proposals", {
+  id:            text("id").primaryKey(),
+  ownerMemberId: text("owner_member_id").notNull(),
+  name:          text("name").notNull(),
+  email:         text("email").notNull(),
+  company:       text("company").notNull(),
+  context:       text("context"), // どの招待への回答か（表示用）
+  status:        text("status").notNull().default("pending"),
+  createdAt:     integer("created_at").notNull(),
+  resolvedAt:    integer("resolved_at"),
+});

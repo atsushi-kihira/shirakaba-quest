@@ -179,7 +179,7 @@ oneOnOneGuestInvitePublicRoutes.post("/:token/select", async (c) => {
 
   // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）。
   // 1to1を実施したあとの「人脈に追加しますか？」の確認は、これまでどおり出る（ここで登録した人脈は、その確認の保存先として再利用される）
-  await registerGuestAsContact(db, hostMember.id, { name: finalGuestName, email: finalGuestEmail, company: finalGuestCompany })
+  await registerGuestAsContact(db, hostMember.id, { name: finalGuestName, email: finalGuestEmail, company: finalGuestCompany, context: "1to1のお誘いへの回答" })
     .catch((e) => console.error("[guest contact] failed", e));
 
   return c.json({

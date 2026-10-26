@@ -172,6 +172,7 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
   await db.delete(m.memberReminderSettings).where(eq(m.memberReminderSettings.memberId, memberId));
   await db.delete(m.reminderOverrides).where(eq(m.reminderOverrides.memberId, memberId));
   await db.delete(m.reminderNotices).where(eq(m.reminderNotices.memberId, memberId));
+  await db.delete(m.guestContactProposals).where(eq(m.guestContactProposals.ownerMemberId, memberId));
   await db.delete(m.schedulerShareLinks).where(eq(m.schedulerShareLinks.memberId, memberId));
   await db.delete(m.availabilityRules).where(eq(m.availabilityRules.memberId, memberId));
   await db.delete(m.availabilityOverrides).where(eq(m.availabilityOverrides.memberId, memberId));
