@@ -146,6 +146,9 @@ app.post("/api/internal/send-reminders", async (c) => {
   // 毎時の定期実行のついでに、使われなかったゲスト用URLの予約（期限切れ）を削除する
   const { purgeExpiredReservations } = await import("./services/invite-reservations.ts");
   const purgedReservations = await purgeExpiredReservations(db, Math.floor(Date.now() / 1000));
+  // 1回だけの整理: 複数日確定のミーティングで、参加しない日まで登録されていたGoogleカレンダーの予定を、メンバー全員分、順に直す（完了したら何もしない）
+  const { runCalendarCleanupBatch } = await import("./services/memberCalendarSync.ts");
+  c.executionCtx.waitUntil(runCalendarCleanupBatch(db, c.env).catch((e) => console.error("[calendar cleanup] failed", e)));
   return c.json({ ok: true, ...result, purgedReservations });
 });
 

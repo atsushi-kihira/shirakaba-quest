@@ -55,7 +55,7 @@ function describe(base: string | null | undefined, conferenceUrl: string | null 
 }
 
 /** このメンバーのカレンダーに、いま登録されているべき予定の一覧 */
-async function buildDesired(db: Db, env: Env, memberId: string, googleEmail: string | null): Promise<Desired[]> {
+export async function buildDesired(db: Db, env: Env, memberId: string, googleEmail: string | null): Promise<Desired[]> {
   const now = Math.floor(Date.now() / 1000);
   const from = now - GRACE_SECONDS;
   const to = now + HORIZON_DAYS * 86400;
@@ -95,6 +95,27 @@ async function buildDesired(db: Db, env: Env, memberId: string, googleEmail: str
     const absent = new Set(absentRows.map((r) => `${r.meetingId}|${r.candidateId ?? ""}`));
     const absentAll = new Set(absentRows.filter((r) => !r.candidateId).map((r) => r.meetingId));
 
+    // 確定した日が複数あるミーティングでは、自分が参加する日（○・△をつけた日、または出席予定で「参加」にした日）だけを登録する。
+    // 無回答・×の日は登録しない（自分の予定でない日が、カレンダーの枠をふさがないようにするため）。確定した日が1日だけなら、従来どおり（×の人を除く）
+    const meetingIds = [...new Set(rows.map((r) => r.m.id))];
+    const [confirmedCounts, myResponses, myAttended] = await Promise.all([
+      db.select({ meetingId: schema.meetingDateCandidates.meetingId, id: schema.meetingDateCandidates.id })
+        .from(schema.meetingDateCandidates)
+        .innerJoin(schema.meetings, eq(schema.meetings.id, schema.meetingDateCandidates.meetingId))
+        .where(and(inArray(schema.meetingDateCandidates.meetingId, meetingIds),
+          or(eq(schema.meetingDateCandidates.isConfirmed, 1), eq(schema.meetings.confirmedCandidateId, schema.meetingDateCandidates.id)))).all(),
+      db.select({ meetingId: schema.meetingResponses.meetingId, candidateId: schema.meetingResponses.candidateId, availability: schema.meetingResponses.availability })
+        .from(schema.meetingResponses)
+        .where(and(inArray(schema.meetingResponses.meetingId, meetingIds), eq(schema.meetingResponses.memberId, memberId))).all(),
+      db.select({ meetingId: schema.meetingAttendances.meetingId, candidateId: schema.meetingAttendances.candidateId })
+        .from(schema.meetingAttendances)
+        .where(and(inArray(schema.meetingAttendances.meetingId, meetingIds), eq(schema.meetingAttendances.memberId, memberId), eq(schema.meetingAttendances.status, "attended"))).all(),
+    ]);
+    const confirmedCountByMeeting = new Map<string, number>();
+    for (const r of confirmedCounts) confirmedCountByMeeting.set(r.meetingId, (confirmedCountByMeeting.get(r.meetingId) ?? 0) + 1);
+    const answerOf = new Map(myResponses.map((r) => [`${r.meetingId}|${r.candidateId}`, r.availability]));
+    const attendedKeys = new Set(myAttended.filter((r) => r.candidateId).map((r) => `${r.meetingId}|${r.candidateId}`));
+
     for (const { m, cand } of rows) {
       if (m.hostMemberId === memberId) continue; // 主催者の予定は、主催者側の処理で登録される
       const isTarget =
@@ -103,6 +124,12 @@ async function buildDesired(db: Db, env: Env, memberId: string, googleEmail: str
         (m.scope === "collab_team" && !!m.collabTeamId && collabIds.has(m.collabTeamId)) ||
         (m.scope === "selected" && invited.has(m.id));
       if (!isTarget || declined.has(m.id) || absentAll.has(m.id) || absent.has(`${m.id}|${cand.id}`)) continue;
+      const answer = answerOf.get(`${m.id}|${cand.id}`);
+      if (answer === "no" && !attendedKeys.has(`${m.id}|${cand.id}`)) continue;
+      if ((confirmedCountByMeeting.get(m.id) ?? 1) > 1) {
+        const joining = answer === "yes" || answer === "maybe" || attendedKeys.has(`${m.id}|${cand.id}`);
+        if (!joining) continue;
+      }
       desired.push({
         kind: "meeting", refId: m.id, slotId: cand.id,
         title: m.title,
@@ -335,4 +362,34 @@ export function queueSelfCalendarSync(ctx: Ctx, db: Db, env: Env, memberId: stri
     await env.KV.put(key, "1", { expirationTtl: 300 });
     await reconcileMemberCalendar(db, env, memberId);
   });
+}
+
+
+// ---- 1回だけの整理（複数日確定のミーティングで、参加しない日まで登録されていた予定を、まとめて直す） ----
+// 毎時の定期実行から呼ぶ。Googleカレンダーを連携しているメンバーを順に、カレンダーをあるべき状態にそろえる（不要な予定は削除される）。
+// 進み具合は KV に記録し、全員が済んだら、以後は何もしない
+const CLEANUP_KEY = "maint:calendar-cleanup:multi-date-v1";
+const CLEANUP_TIME_BUDGET_MS = 15_000;
+const CLEANUP_GROUP = 4;
+
+export async function runCalendarCleanupBatch(db: Db, env: Env): Promise<{ done: boolean; processed: number }> {
+  const raw = await env.KV.get(CLEANUP_KEY);
+  const state: { offset: number; done: boolean } = raw ? JSON.parse(raw) : { offset: 0, done: false };
+  if (state.done) return { done: true, processed: 0 };
+
+  const ids = (await db.select({ id: schema.googleCalendarAccounts.memberId }).from(schema.googleCalendarAccounts)
+    .where(eq(schema.googleCalendarAccounts.isDefault, 1)).all()).map((r) => r.id).sort();
+  const started = Date.now();
+  let offset = state.offset;
+  let processed = 0;
+  while (offset < ids.length && Date.now() - started < CLEANUP_TIME_BUDGET_MS) {
+    const group = ids.slice(offset, offset + CLEANUP_GROUP);
+    await reconcileMembersCalendar(db, env, group);
+    offset += group.length;
+    processed += group.length;
+    await env.KV.put(CLEANUP_KEY, JSON.stringify({ offset, done: false }));
+  }
+  const done = offset >= ids.length;
+  await env.KV.put(CLEANUP_KEY, JSON.stringify({ offset, done }));
+  return { done, processed };
 }
