@@ -82,7 +82,6 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
     if (!view) return;
     if (!name.trim()) { setSubmitError("お名前を入力してください"); return; }
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
-    if (!company.trim()) { setSubmitError("会社名・屋号を入力してください（個人の方は「個人」）"); return; }
     if (view.candidates.some((c) => !answers[c.id])) { setSubmitError("すべての候補に回答してください"); return; }
     setSubmitError(""); setSubmitting(true);
     try {

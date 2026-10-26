@@ -189,8 +189,7 @@ scheduleRoutes.post("/:token/respond", async (c) => {
       .where(and(eq(schema.meetingExternalInvitees.meetingId, meeting.id), sql`lower(${schema.meetingExternalInvitees.email}) = ${emailInput}`)).get();
     if (taken) return c.json({ error: { code: "invalid_input", message: "このメールアドレスは、すでにこのミーティングに登録されています。招待メールのURL、または共有URLからご回答ください" } }, 400);
   }
-  const companyInput = body.company?.trim() || extInvitee.company?.trim() || "";
-  if (!companyInput) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
+  const companyInput = body.company?.trim() ?? extInvitee.company?.trim() ?? "";
 
   // 名前・会社名（初回はメールアドレスも）を更新
   const updateFields: { name?: string; email?: string; company?: string } = {};
@@ -344,7 +343,6 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
   const nameInput = body.name?.trim() ?? "";
   if (!nameInput) return c.json({ error: { code: "invalid_input", message: "お名前を入力してください" } }, 400);
   const companyInput = body.company?.trim() ?? "";
-  if (!companyInput) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
   if (meeting.status === "confirmed" && meeting.confirmedCandidateId) {
     body.answers = Object.fromEntries(
       Object.entries(body.answers).filter(([candidateId]) => candidateId === meeting.confirmedCandidateId)

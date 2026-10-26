@@ -109,11 +109,8 @@ oneOnOneGuestInvitePublicRoutes.post("/:token/select", async (c) => {
   if (!emailRe.test(finalGuestEmail)) {
     return c.json({ error: { code: "bad_request", message: "メールアドレスの形式が正しくありません" } }, 400);
   }
-  // 会社名（屋号）は必須。回答すると、招待した人（主催者）の外部人脈にも登録される
+  // 会社名（屋号）は任意。入力があれば、招待した人（主催者）の外部人脈にも登録される（入力がなければ、登録しない）
   const finalGuestCompany = body.guestCompany?.trim() ?? "";
-  if (!finalGuestCompany) {
-    return c.json({ error: { code: "bad_request", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
-  }
 
   const slot = await db
     .select()

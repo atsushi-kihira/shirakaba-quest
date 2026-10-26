@@ -146,8 +146,7 @@ scheduleSeriesRoutes.post("/series/:token/respond", async (c) => {
   }
   const name = body.name?.trim() || invitee.name;
   if (!name.trim()) return c.json({ error: { code: "invalid_input", message: "お名前を入力してください" } }, 400);
-  const company = body.company?.trim() || invitee.company?.trim() || "";
-  if (!company) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
+  const company = body.company?.trim() ?? invitee.company?.trim() ?? "";
 
   await db.update(schema.meetingSeriesExternalInvitees).set({ name, email, company }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
   await saveAnswers(db, series, invitee.id, body.answers ?? {}, now);
@@ -187,7 +186,6 @@ scheduleSeriesRoutes.post("/series-invite/:inviteToken/respond", async (c) => {
   const name = body.name?.trim() ?? "";
   if (!name) return c.json({ error: { code: "invalid_input", message: "お名前を入力してください" } }, 400);
   const company = body.company?.trim() ?? "";
-  if (!company) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
 
   // 同じメールアドレス（大文字・小文字は区別しない）のゲストが、すでにいれば、その人の回答を更新する
   // （主催者があらかじめ登録したゲストが、共有URLから回答した場合も、同じ人として扱う）

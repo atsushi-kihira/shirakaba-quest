@@ -254,7 +254,6 @@ export function OneOnOneGuestInvitePage() {
               setError("");
               if (!guestName.trim()) { setError("お名前を入力してください"); return; }
               if (!guestEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail.trim())) { setError("メールアドレスを正しく入力してください"); return; }
-              if (!guestCompany.trim()) { setError("会社名・屋号を入力してください（個人の方は「個人」）"); return; }
               submitMutation.mutate();
             }}
             disabled={!selectedId || submitMutation.isPending}

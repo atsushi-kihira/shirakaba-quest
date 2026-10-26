@@ -105,7 +105,6 @@ export function ScheduleScreen() {
   async function handleSubmit() {
     if (!name.trim()) { setSubmitError("お名前を入力してください"); return; }
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
-    if (!company.trim()) { setSubmitError("会社名・屋号を入力してください（個人の方は「個人」）"); return; }
     const unanswered = displayCandidates.filter((c) => !answers[c.id]);
     if (unanswered.length > 0) { setSubmitError("すべての候補日に回答してください"); return; }
     setSubmitError("");
