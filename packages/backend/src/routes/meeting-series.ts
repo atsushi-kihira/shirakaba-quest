@@ -769,7 +769,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       externalInvitees: externalRows.map((e) => ({
         id: e.id, name: e.name || "ゲスト",
         email: isHost ? e.email : null, url: isHost ? `${getFrontendUrl(c.env)}/schedule/series/${e.token}` : null,
-        invitedAt: isHost ? e.invitedAt ?? null : null, responded: respondedExternalIds.has(e.id),
+        invitedAt: isHost ? e.invitedAt ?? null : null, company: isHost ? e.company ?? null : null, responded: respondedExternalIds.has(e.id),
       })),
       inviteToken: isHost ? series.inviteToken ?? null : null,
       occurrences,

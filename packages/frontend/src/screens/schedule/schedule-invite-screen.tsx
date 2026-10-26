@@ -9,6 +9,7 @@ import { Loader2, Check, AlertCircle, Clock, Link } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
+import { GuestCompanyField } from "@/components/guest-company-field";
 
 type Availability = "yes" | "maybe" | "no";
 type CandidateRespondent = { name: string; availability: Availability };
@@ -63,6 +64,7 @@ export function ScheduleInviteScreen() {
   const [apiData, setApiData] = useState<ApiResponse["data"] | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [company, setCompany] = useState("");
   const [answers, setAnswers] = useState<Record<string, Availability>>({});
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -96,6 +98,7 @@ export function ScheduleInviteScreen() {
   async function handleSubmit() {
     if (!name.trim()) { setSubmitError("お名前を入力してください"); return; }
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
+    if (!company.trim()) { setSubmitError("会社名・屋号を入力してください（個人の方は「個人」）"); return; }
     const unanswered = displayCandidates.filter((c) => !answers[c.id]);
     if (unanswered.length > 0) { setSubmitError("すべての候補日に回答してください"); return; }
     setSubmitError("");
@@ -104,7 +107,7 @@ export function ScheduleInviteScreen() {
       const r = await fetch(`${API_BASE_URL}/schedule/invite/${inviteToken}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), answers }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), company: company.trim(), answers }),
       });
       const json = await r.json();
       if (!r.ok) { setSubmitError(json.error?.message ?? "送信に失敗しました"); return; }
@@ -258,6 +261,8 @@ export function ScheduleInviteScreen() {
               日程確定時にお知らせします。ページURLも送付します。
             </p>
           </div>
+
+          <GuestCompanyField value={company} onChange={setCompany} hostName={meeting.host?.name} />
 
           {/* 候補日回答 */}
           <div>

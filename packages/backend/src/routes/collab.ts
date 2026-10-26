@@ -9,7 +9,7 @@
 // POST /api/collab/teams/:id/respond → パワーチーム/緩いチームの招待に応答
 // =============================================================
 import { Hono } from "hono";
-import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -2075,6 +2075,36 @@ collabRoutes.post("/contacts", async (c) => {
   }
 
   const now = Math.floor(Date.now() / 1000);
+
+  // 外部ゲストが回答したときに、自動で登録された人脈（非公開）がある場合は、新しく作らず、その人脈を、いま入力された内容で更新する
+  if (body.sourceBookingId) {
+    const bk = await db.select({ guestEmail: schema.bookings.guestEmail }).from(schema.bookings)
+      .where(and(eq(schema.bookings.id, body.sourceBookingId), eq(schema.bookings.hostMemberId, meId))).get();
+    const auto = bk?.guestEmail
+      ? await db.select().from(schema.externalContacts).where(and(
+          eq(schema.externalContacts.ownerMemberId, meId), eq(schema.externalContacts.source, "guest"),
+          sql`lower(${schema.externalContacts.email}) = ${bk.guestEmail.trim().toLowerCase()}`)).get()
+      : undefined;
+    if (auto) {
+      const newCompany = body.company?.trim() || null;
+      const newSummary = body.businessSummary?.trim() || null;
+      await db.update(schema.externalContacts).set({
+        name: body.name.trim(), specialty: body.specialty?.trim() || null, company: newCompany, note: body.note?.trim() || null,
+        email: email ?? auto.email, visibility, source: "manual", updatedAt: now,
+        businessSummary: newSummary, businessSummaryDetail: body.businessSummaryDetail?.trim() || null,
+        businessSummaryStatus: newSummary ? "done" : (newCompany && visibility !== "private" ? "pending" : "skipped"),
+        businessSummaryGeneratedAt: newSummary ? now : null,
+      }).where(eq(schema.externalContacts.id, auto.id));
+      await replaceContactRelationships(db, auto.id, normalizeRelationships(body.relationships));
+      await db.update(schema.bookings).set({ externalContactId: auto.id }).where(eq(schema.bookings.id, body.sourceBookingId));
+      await awardVisitorOneOnOnePoints(db, body.sourceBookingId, meId);
+      if (!newSummary && newCompany && visibility !== "private") {
+        c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, new URL(c.req.url).origin, 0));
+      }
+      return c.json({ data: { id: auto.id } }, 201);
+    }
+  }
+
   const id = newId();
   const company = body.company?.trim() || null;
   const businessSummary = body.businessSummary?.trim() || null;

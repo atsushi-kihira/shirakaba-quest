@@ -878,6 +878,7 @@ export const meetingExternalInvitees = sqliteTable("meeting_external_invitees", 
   createdAt: integer("created_at").notNull(),
   invitedAt: integer("invited_at"),   // 招待メールを送った時刻
   contactId: text("contact_id"),      // 外部人脈から追加した場合の人脈ID
+  company:   text("company"),         // 回答時に入力された会社名・屋号
 });
 
 export const meetingResponses = sqliteTable("meeting_responses", {
@@ -1354,6 +1355,7 @@ export const meetingSeriesExternalInvitees = sqliteTable("meeting_series_externa
   contactId: text("contact_id"),
   invitedAt: integer("invited_at"),
   createdAt: integer("created_at").notNull(),
+  company:   text("company"),
 });
 
 export const meetingSeriesExternalResponses = sqliteTable("meeting_series_external_responses", {

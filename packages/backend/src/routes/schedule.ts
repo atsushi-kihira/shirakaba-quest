@@ -4,12 +4,13 @@
 // POST /api/schedule/:token/respond  — 外部ゲスト回答（メールアドレス必須、初回はブックマークURLをメール送信）
 // =============================================================
 import { Hono } from "hono";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { newId } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { PREPARING_MESSAGE, isReserved } from "../services/invite-reservations.ts";
+import { isEmailLike, normalizeEmail, registerGuestAsContact } from "../services/guest-contacts.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -118,6 +119,7 @@ scheduleRoutes.get("/:token", async (c) => {
       inviteeId: extInvitee.id,
       inviteeName: extInvitee.name,
       inviteeEmail: extInvitee.email,
+      inviteeCompany: extInvitee.company ?? "",
       meeting: {
         id: meeting.id,
         title: meeting.title,
@@ -165,7 +167,7 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
-  const body = await c.req.json<{ name?: string; email?: string; answers: Record<string, Availability> }>();
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers: Record<string, Availability> }>();
   if (meeting.status === "confirmed" && meeting.confirmedCandidateId) {
     body.answers = Object.fromEntries(
       Object.entries(body.answers).filter(([candidateId]) => candidateId === meeting.confirmedCandidateId)
@@ -175,28 +177,31 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     }
   }
 
-  // メールアドレスは必須
-  const emailInput = body.email?.trim();
-  if (!emailInput) {
-    return c.json({ error: { code: "invalid_input", message: "メールアドレスを入力してください" } }, 400);
-  }
-
+  // ゲストは、メールアドレスで特定する。招待時にメールアドレスが分かっているゲストは、メールアドレスを変えられない
+  // （招待メールのURLから開いた人の回答として、そのメールアドレスのゲストに結びつける）。メールアドレスのない記録（旧方式）だけ、ここで入力してもらう
   const isFirstResponse = !extInvitee.email;
+  const emailInput = extInvitee.email ?? normalizeEmail(body.email ?? "");
+  if (!emailInput || !isEmailLike(emailInput)) {
+    return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
+  }
+  if (isFirstResponse) {
+    const taken = await db.select({ id: schema.meetingExternalInvitees.id }).from(schema.meetingExternalInvitees)
+      .where(and(eq(schema.meetingExternalInvitees.meetingId, meeting.id), sql`lower(${schema.meetingExternalInvitees.email}) = ${emailInput}`)).get();
+    if (taken) return c.json({ error: { code: "invalid_input", message: "このメールアドレスは、すでにこのミーティングに登録されています。招待メールのURL、または共有URLからご回答ください" } }, 400);
+  }
+  const companyInput = body.company?.trim() || extInvitee.company?.trim() || "";
+  if (!companyInput) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
 
-  // 名前・メールを更新
-  const updateFields: { name?: string; email?: string } = {};
-  if (body.name?.trim() && body.name.trim() !== extInvitee.name) {
-    updateFields.name = body.name.trim();
-  }
-  if (emailInput !== extInvitee.email) {
-    updateFields.email = emailInput;
-  }
+  // 名前・会社名（初回はメールアドレスも）を更新
+  const updateFields: { name?: string; email?: string; company?: string } = {};
+  if (body.name?.trim() && body.name.trim() !== extInvitee.name) updateFields.name = body.name.trim();
+  if (companyInput !== (extInvitee.company ?? "")) updateFields.company = companyInput;
+  if (isFirstResponse) updateFields.email = emailInput;
   if (Object.keys(updateFields).length > 0) {
-    await db
-      .update(schema.meetingExternalInvitees)
-      .set(updateFields)
-      .where(eq(schema.meetingExternalInvitees.id, extInvitee.id));
+    await db.update(schema.meetingExternalInvitees).set(updateFields).where(eq(schema.meetingExternalInvitees.id, extInvitee.id));
   }
+  const finalName = updateFields.name ?? extInvitee.name;
+  if (!finalName.trim()) return c.json({ error: { code: "invalid_input", message: "お名前を入力してください" } }, 400);
 
   // 回答を upsert
   for (const [candidateId, availability] of Object.entries(body.answers)) {
@@ -220,11 +225,15 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     });
   }
 
+  // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）
+  await registerGuestAsContact(db, meeting.hostMemberId, { name: finalName, email: emailInput, company: companyInput, contactId: extInvitee.contactId })
+    .catch((e) => console.error("[guest contact] failed", e));
+
   // 初回回答時にブックマークURL付きメールを送信
   if (isFirstResponse) {
     const appUrl = getFrontendUrl(c.env);
     const scheduleUrl = `${appUrl}/schedule/${token}`;
-    const guestName = updateFields.name ?? extInvitee.name ?? "ゲスト";
+    const guestName = finalName || "ゲスト";
 
     const hostMember = await db.select({ name: schema.members.name }).from(schema.members)
       .where(eq(schema.members.id, meeting.hostMemberId)).get();
@@ -327,11 +336,15 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
-  const body = await c.req.json<{ name?: string; email?: string; answers: Record<string, "yes" | "maybe" | "no"> }>();
-  const emailInput = body.email?.trim();
-  if (!emailInput) {
-    return c.json({ error: { code: "invalid_input", message: "メールアドレスを入力してください" } }, 400);
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers: Record<string, "yes" | "maybe" | "no"> }>();
+  const emailInput = normalizeEmail(body.email ?? "");
+  if (!emailInput || !isEmailLike(emailInput)) {
+    return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
   }
+  const nameInput = body.name?.trim() ?? "";
+  if (!nameInput) return c.json({ error: { code: "invalid_input", message: "お名前を入力してください" } }, 400);
+  const companyInput = body.company?.trim() ?? "";
+  if (!companyInput) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
   if (meeting.status === "confirmed" && meeting.confirmedCandidateId) {
     body.answers = Object.fromEntries(
       Object.entries(body.answers).filter(([candidateId]) => candidateId === meeting.confirmedCandidateId)
@@ -341,11 +354,12 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     }
   }
 
-  // 同じメールで既に回答済みなら既存レコードを返す（二重送信防止）
+  // 同じメールアドレス（大文字・小文字は区別しない）のゲストが、すでにいれば、その人の回答を更新する
+  // （主催者があらかじめ登録したゲストが、共有URLから回答した場合も、同じ人として扱う）
   const existing = await db
     .select()
     .from(schema.meetingExternalInvitees)
-    .where(and(eq(schema.meetingExternalInvitees.meetingId, meeting.id), eq(schema.meetingExternalInvitees.email, emailInput)))
+    .where(and(eq(schema.meetingExternalInvitees.meetingId, meeting.id), sql`lower(${schema.meetingExternalInvitees.email}) = ${emailInput}`))
     .get();
 
   const { newId, generateRawToken } = await import("../services/auth.ts");
@@ -358,15 +372,16 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     await db.insert(schema.meetingExternalInvitees).values({
       id: inviteeId,
       meetingId: meeting.id,
-      name: body.name?.trim() ?? "",
+      name: nameInput,
       email: emailInput,
       token: personalToken,
+      company: companyInput,
       createdAt: now,
     });
-    invitee = { id: inviteeId, meetingId: meeting.id, name: body.name?.trim() ?? "", email: emailInput, token: personalToken, createdAt: now, invitedAt: null, contactId: null };
-  } else if (body.name?.trim() && body.name.trim() !== invitee.name) {
+    invitee = { id: inviteeId, meetingId: meeting.id, name: nameInput, email: emailInput, token: personalToken, createdAt: now, invitedAt: null, contactId: null, company: companyInput };
+  } else if (nameInput !== invitee.name || companyInput !== (invitee.company ?? "")) {
     await db.update(schema.meetingExternalInvitees)
-      .set({ name: body.name.trim() })
+      .set({ name: nameInput, company: companyInput })
       .where(eq(schema.meetingExternalInvitees.id, invitee.id));
   }
 
@@ -386,6 +401,10 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
       respondedAt: now,
     });
   }
+
+  // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）
+  await registerGuestAsContact(db, meeting.hostMemberId, { name: nameInput, email: emailInput, company: companyInput, contactId: invitee.contactId })
+    .catch((e) => console.error("[guest contact] failed", e));
 
   const appUrl = getFrontendUrl(c.env);
   const personalScheduleUrl = `${appUrl}/schedule/${invitee.token}`;

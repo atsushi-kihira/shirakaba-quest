@@ -1386,7 +1386,7 @@ meetingRoutes.get("/:id", async (c) => {
       // 外部ゲストのメールアドレス・専用URLは、主催者だけに返す（他のメンバーには名前のみ）
       externalInvitees: externalInvitees.map((e) => ({
         id: e.id, name: e.name, email: isHost ? e.email : null, token: isHost ? e.token : "", createdAt: e.createdAt,
-        invitedAt: isHost ? e.invitedAt ?? null : null,
+        invitedAt: isHost ? e.invitedAt ?? null : null, company: isHost ? e.company ?? null : null,
       })),
       myAnswers,
       isHost,

@@ -3,9 +3,9 @@
 //   ・ゲスト用の共有URL: 作成する前に、URLだけ先に発行できる（有効期間は発行時に選べる。初期は7日）。
 //     作成すると、同じURLがそのままミーティング・定例会のゲスト用URLになる。作成せずにやめたものは、期限が来たら自動で削除される。
 //     作成前にURLを開いた人には、「準備中」と表示される。
-//   ・ゲストを個別に指定: 自分の外部人脈から選ぶ／名前（とメールアドレス）を入力する。
-//     メールアドレスのあるゲストには、作成と同時に招待メールを送る。メールアドレスがなければ、作成後の画面のURLをお伝えする。
-//   ・メールアドレスは任意。人脈にメールアドレスがない場合は、ここで入力して人脈に保存することもできる。
+//   ・ゲストを個別に指定: 自分の外部人脈から選ぶ／名前とメールアドレスを入力する（どちらも必須。回答を、メールアドレスで対応づけるため）。
+//     作成と同時に、全員に招待メールを送る。人脈にメールアドレスがない場合は、ここで入力して人脈に保存することもできる。
+//   ・メールアドレスのわからない方には、共有URLを何らかの方法でお伝えする（回答時に、名前・メールアドレス・会社名を入力してもらう）。
 // =============================================================
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -25,6 +25,14 @@ export type GuestDraft = {
   /** 入力したメールアドレスを、人脈にも保存するか（人脈にメールアドレスがない場合のみ） */
   saveToContact: boolean;
 };
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** メールアドレスが未入力・形式が正しくないゲストの名前（なければ null）。作成の前に確認する */
+export function guestMissingEmail(guests: GuestDraft[]): string | null {
+  const bad = guests.find((g) => !g.contactHadEmail && !EMAIL_RE.test(g.email.trim()));
+  return bad ? bad.name : null;
+}
 
 export function guestsToPayload(guests: GuestDraft[]) {
   return guests.map((g) => ({
@@ -103,7 +111,9 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
     const name = manualName.trim();
     const email = manualEmail.trim();
     if (!name) { setManualError("名前を入力してください"); return; }
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setManualError("メールアドレスの形式が正しくありません"); return; }
+    if (!email) { setManualError("メールアドレスを入力してください（わからない方には、共有URLをお伝えください）"); return; }
+    if (!EMAIL_RE.test(email)) { setManualError("メールアドレスの形式が正しくありません"); return; }
+    if (guests.some((g) => g.email.trim().toLowerCase() === email.toLowerCase())) { setManualError("同じメールアドレスの方が、すでに追加されています"); return; }
     onGuestsChange([...guests, { key: crypto.randomUUID(), name, email, contactHadEmail: false, saveToContact: false }]);
     setManualName(""); setManualEmail(""); setManualError("");
   }
@@ -122,13 +132,13 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
       <div>
         <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>🌐 {termExternalGuest}を招待（任意）</p>
         <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-          チャプター外の方を、作成と同時に招待できます。URLを先に発行して送ることも、人脈から選んで招待メールを送ることもできます。
+          チャプター外の方を、作成と同時に招待できます。メールアドレスがわかる方は下で指定すると、招待メールが届きます。わからない方には、共有URLをお伝えください（回答のときに、名前・メールアドレス・会社名を入力してもらいます）。
         </p>
       </div>
 
       {/* ゲスト用の共有URL（作成前に発行） */}
       <div className="space-y-2">
-        <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>🔗 ゲスト用の共有URL（先に発行して、送っておけます）</p>
+        <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>🔗 ゲスト用の共有URL（メールアドレスのわからない方に。先に発行して、送っておけます）</p>
         {reservation ? (
           <>
             <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "var(--color-paper-200)" }}>
@@ -175,7 +185,7 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
 
       {/* ゲストを個別に指定 */}
       <div className="space-y-2">
-        <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>👤 ゲストを個別に指定</p>
+        <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>👤 ゲストを個別に指定（メールアドレスが必要です）</p>
 
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--color-ink-400)" }} />
@@ -196,7 +206,7 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
                 </span>
                 {ct.email
                   ? <span className="shrink-0 text-xs flex items-center gap-0.5" style={{ color: "var(--color-success)" }}><Mail size={11} />メールあり</span>
-                  : <span className="shrink-0 text-xs" style={{ color: "var(--color-ink-400)" }}>メール未登録</span>}
+                  : <span className="shrink-0 text-xs" style={{ color: "var(--color-ink-400)" }}>メール未登録（追加時に入力）</span>}
               </button>
             ))}
           </div>
@@ -205,7 +215,7 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
         <div className="flex flex-wrap gap-2">
           <input value={manualName} onChange={(e) => setManualName(e.target.value)} placeholder="名前"
             className="flex-1 min-w-[8rem] px-3 py-2 rounded-xl text-sm outline-none border" style={inputStyle} />
-          <input value={manualEmail} onChange={(e) => setManualEmail(e.target.value)} placeholder="メールアドレス（任意）" type="email"
+          <input value={manualEmail} onChange={(e) => setManualEmail(e.target.value)} placeholder="メールアドレス（必須）" type="email"
             className="flex-[2] min-w-[10rem] px-3 py-2 rounded-xl text-sm outline-none border" style={inputStyle} />
           <button type="button" onClick={addManual} className="px-3 py-2 rounded-xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
             追加
@@ -230,7 +240,7 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
                 {!g.contactHadEmail && (
                   <div className="space-y-1">
                     <input value={g.email} onChange={(e) => update(g.key, { email: e.target.value })} type="email"
-                      placeholder="メールアドレス（任意。入れると招待メールを送ります）"
+                      placeholder="メールアドレス（必須。招待メールを送ります）"
                       className="w-full px-3 py-1.5 rounded-lg text-xs outline-none border" style={inputStyle} />
                     {g.contactId && g.email.trim() && (
                       <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
@@ -243,8 +253,7 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
               </div>
             ))}
             <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
-              {mailCount > 0 ? `${mailCount}人には、作成と同時に招待メールを送ります。` : ""}
-              {guests.length - mailCount > 0 ? `${guests.length - mailCount}人はメールアドレスがないので、作成後の画面に出るURLをお伝えください。` : ""}
+              {mailCount}人には、作成と同時に招待メールを送ります。{guests.length - mailCount > 0 ? `（メールアドレスが未入力の方が${guests.length - mailCount}人います）` : ""}
             </p>
           </div>
         )}

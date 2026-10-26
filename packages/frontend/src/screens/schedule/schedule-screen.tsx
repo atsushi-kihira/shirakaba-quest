@@ -8,6 +8,7 @@ import { Loader2, Check, AlertCircle, Link } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
+import { GuestCompanyField } from "@/components/guest-company-field";
 
 type Availability = "yes" | "maybe" | "no";
 type CandidateRespondent = { name: string; availability: Availability };
@@ -17,6 +18,7 @@ type ApiResponse = {
     inviteeId: string;
     inviteeName: string;
     inviteeEmail: string | null;
+    inviteeCompany?: string;
     meeting: {
       id: string; title: string; description: string | null; status: string;
       confirmedCandidateId: string | null;
@@ -65,6 +67,7 @@ export function ScheduleScreen() {
   const [apiData, setApiData] = useState<ApiResponse["data"] | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [company, setCompany] = useState("");
   const [answers, setAnswers] = useState<Record<string, Availability>>({});
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -81,6 +84,7 @@ export function ScheduleScreen() {
         setApiData(json.data);
         setName(json.data.inviteeName || "");
         setEmail(json.data.inviteeEmail || "");
+        setCompany(json.data.inviteeCompany || "");
         setAnswers(json.data.myAnswers || {});
       })
       .catch(() => setError("読み込みに失敗しました"))
@@ -101,6 +105,7 @@ export function ScheduleScreen() {
   async function handleSubmit() {
     if (!name.trim()) { setSubmitError("お名前を入力してください"); return; }
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
+    if (!company.trim()) { setSubmitError("会社名・屋号を入力してください（個人の方は「個人」）"); return; }
     const unanswered = displayCandidates.filter((c) => !answers[c.id]);
     if (unanswered.length > 0) { setSubmitError("すべての候補日に回答してください"); return; }
     setSubmitError("");
@@ -109,7 +114,7 @@ export function ScheduleScreen() {
       const r = await fetch(`${API_BASE_URL}/schedule/${token}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), answers }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), company: company.trim(), answers }),
       });
       const json = await r.json();
       if (!r.ok) { setSubmitError(json.error?.message ?? "送信に失敗しました"); return; }
@@ -262,6 +267,8 @@ export function ScheduleScreen() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="yamada@example.com"
+              // 招待時にメールアドレスが分かっている方は、メールアドレスで本人を特定するため、変更できない
+              readOnly={!!apiData?.inviteeEmail}
               disabled={!respondable}
               className="w-full px-4 py-3 rounded-2xl text-sm outline-none border"
               style={{
@@ -271,9 +278,11 @@ export function ScheduleScreen() {
               }}
             />
             <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
-              日程確定時にお知らせします。ページURLも送付します。
+              {apiData?.inviteeEmail ? "招待メールをお送りしたメールアドレスです（変更できません）。日程確定時にお知らせします。" : "日程確定時にお知らせします。ページURLも送付します。"}
             </p>
           </div>
+
+          <GuestCompanyField value={company} onChange={setCompany} hostName={apiData?.meeting.host?.name} disabled={!respondable} />
 
           {/* 候補日回答 */}
           <div>

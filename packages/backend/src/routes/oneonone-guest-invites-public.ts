@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { createBookingForConfirmedSlot } from "../services/bookingCreation.ts";
+import { registerGuestAsContact } from "../services/guest-contacts.ts";
 import { getAvailableConferenceTypes } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -108,6 +109,11 @@ oneOnOneGuestInvitePublicRoutes.post("/:token/select", async (c) => {
   if (!emailRe.test(finalGuestEmail)) {
     return c.json({ error: { code: "bad_request", message: "メールアドレスの形式が正しくありません" } }, 400);
   }
+  // 会社名（屋号）は必須。回答すると、招待した人（主催者）の外部人脈にも登録される
+  const finalGuestCompany = body.guestCompany?.trim() ?? "";
+  if (!finalGuestCompany) {
+    return c.json({ error: { code: "bad_request", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
+  }
 
   const slot = await db
     .select()
@@ -151,7 +157,7 @@ oneOnOneGuestInvitePublicRoutes.post("/:token/select", async (c) => {
     guestName: finalGuestName,
     guestEmail: finalGuestEmail,
     guestMessage: body.guestMessage,
-    guestCompany: body.guestCompany,
+    guestCompany: finalGuestCompany,
     startAtUtc,
     endAtUtc,
     timezone: "Asia/Tokyo",
@@ -173,6 +179,11 @@ oneOnOneGuestInvitePublicRoutes.post("/:token/select", async (c) => {
       guestEmail: finalGuestEmail,
     })
     .where(eq(schema.oneOnOneGuestInvites.id, invite.id));
+
+  // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）。
+  // 1to1を実施したあとの「人脈に追加しますか？」の確認は、これまでどおり出る（ここで登録した人脈は、その確認の保存先として再利用される）
+  await registerGuestAsContact(db, hostMember.id, { name: finalGuestName, email: finalGuestEmail, company: finalGuestCompany })
+    .catch((e) => console.error("[guest contact] failed", e));
 
   return c.json({
     data: {

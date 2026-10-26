@@ -15,7 +15,7 @@ import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
 import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 import { DurationSelect } from "@/components/duration-select";
-import { MeetingGuestSection, guestsToPayload, type GuestDraft } from "@/components/meeting-guest-section";
+import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
 
 type Team = { id: string; name: string; emblemEmoji: string };
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
@@ -218,6 +218,8 @@ export function MeetingNewScreen() {
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
     const validCandidates = candidates.filter((c) => c.date);
     if (validCandidates.length === 0) { setError(meetingMode === "confirmed" ? "確定日を1つ以上設定してください" : "候補日を1つ以上設定してください"); return; }
+    const noEmailGuest = guestMissingEmail(guests);
+    if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（わからない方は、一覧から外して、共有URLをお伝えください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
     if (scope === "collab_team" && !collabTeamId) { setError("対象チームを選択してください"); return; }
     if (meetingMode === "confirmed" && conferenceMode === "manual" && !conferenceUrl.trim()) {

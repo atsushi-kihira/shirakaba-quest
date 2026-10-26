@@ -45,7 +45,7 @@ async function lastTimesByMember(db: ReturnType<typeof createDb>): Promise<Map<s
     q(db.select({ memberId: schema.authSessions.userId, last: sql<number>`max(${schema.authSessions.createdAt})` }).from(schema.authSessions).where(eq(schema.authSessions.userType, "member")).groupBy(schema.authSessions.userId).all()),
     q(db.select({ memberId: schema.accessLogs.memberId, last: sql<number>`max(${schema.accessLogs.createdAt})` }).from(schema.accessLogs).groupBy(schema.accessLogs.memberId).all()),
     q(db.select({ memberId: schema.screenViews.memberId, last: sql<number>`max(${schema.screenViews.createdAt})` }).from(schema.screenViews).groupBy(schema.screenViews.memberId).all()),
-    q(db.select({ memberId: schema.externalContacts.ownerMemberId, last: sql<number>`max(${schema.externalContacts.createdAt})` }).from(schema.externalContacts).groupBy(schema.externalContacts.ownerMemberId).all()),
+    q(db.select({ memberId: schema.externalContacts.ownerMemberId, last: sql<number>`max(${schema.externalContacts.createdAt})` }).from(schema.externalContacts).where(sql`${schema.externalContacts.source} <> 'guest'`).groupBy(schema.externalContacts.ownerMemberId).all()),
     q(db.select({ memberId: schema.goldenEggs.memberId, last: sql<number>`max(${schema.goldenEggs.createdAt})` }).from(schema.goldenEggs).groupBy(schema.goldenEggs.memberId).all()),
     q(db.select({ memberId: schema.goldenGeese.memberId, last: sql<number>`max(${schema.goldenGeese.createdAt})` }).from(schema.goldenGeese).groupBy(schema.goldenGeese.memberId).all()),
     q(db.select({ memberId: schema.meetings.hostMemberId, last: sql<number>`max(${schema.meetings.createdAt})` }).from(schema.meetings).groupBy(schema.meetings.hostMemberId).all()),
@@ -90,7 +90,8 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
       .where(sql`${schema.authSessions.userType} = 'member' AND ${schema.authSessions.createdAt} >= ${fromSec} AND ${schema.authSessions.createdAt} < ${toSec}`).all(),
     db.select({ memberId: schema.externalContacts.ownerMemberId, at: schema.externalContacts.createdAt, source: schema.externalContacts.source })
       .from(schema.externalContacts)
-      .where(sql`${schema.externalContacts.createdAt} >= ${fromSec} AND ${schema.externalContacts.createdAt} < ${toSec}`).all(),
+      // ゲストの回答で自動登録された人脈は、本人が登録した利用としては数えない
+      .where(sql`${schema.externalContacts.createdAt} >= ${fromSec} AND ${schema.externalContacts.createdAt} < ${toSec} AND ${schema.externalContacts.source} <> 'guest'`).all(),
     db.select({ memberId: schema.goldenEggs.memberId, at: schema.goldenEggs.createdAt })
       .from(schema.goldenEggs)
       .where(sql`${schema.goldenEggs.createdAt} >= ${fromSec} AND ${schema.goldenEggs.createdAt} < ${toSec}`).all(),

@@ -10,7 +10,7 @@ import { Check, Copy, Link as LinkIcon, Loader2, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 
-export type SeriesExternalInvitee = { id: string; name: string; email: string | null; url: string | null; invitedAt: number | null; responded: boolean };
+export type SeriesExternalInvitee = { id: string; name: string; email: string | null; url: string | null; invitedAt: number | null; company?: string | null; responded: boolean };
 
 type Props = { seriesId: string; voting: boolean; inviteToken: string | null; guests: SeriesExternalInvitee[] };
 
@@ -64,6 +64,7 @@ export function SeriesGuestPanel({ seriesId, voting, inviteToken, guests }: Prop
               <span className="text-sm shrink-0">👤</span>
               <span className="text-xs flex-1 min-w-0 truncate" style={{ color: "var(--color-ink-600)" }}>
                 {g.name || "（名前未入力）"}
+                {g.company && <span style={{ color: "var(--color-ink-400)" }}> · {g.company}</span>}
                 {g.email && <span style={{ color: "var(--color-ink-400)" }}> · {g.email}</span>}
                 {g.invitedAt && <span style={{ color: "var(--color-success)" }}> · ✉ 招待メール送信済み</span>}
                 <span style={{ color: g.responded ? "var(--color-success)" : "var(--color-ink-400)" }}> · {g.responded ? "回答済み" : "未回答"}</span>

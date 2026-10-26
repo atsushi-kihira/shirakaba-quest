@@ -9,6 +9,7 @@ import { AlertCircle, Check, Clock, Link as LinkIcon, Loader2 } from "lucide-rea
 import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
+import { GuestCompanyField } from "@/components/guest-company-field";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { name: string; availability: Availability };
@@ -17,7 +18,7 @@ type Candidate = {
   upcomingDates: { startsAt: number; endsAt: number }[]; respondents: Respondent[];
 };
 type View = {
-  inviteeName: string; inviteeEmail: string | null;
+  inviteeName: string; inviteeEmail: string | null; inviteeCompany?: string;
   series: { id: string; title: string; description: string | null; status: string; host: { id: string; name: string; emoji: string } | null };
   candidates: Candidate[];
   myAnswers: Record<string, Availability>;
@@ -53,6 +54,7 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
   const [view, setView] = useState<View | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [company, setCompany] = useState("");
   const [answers, setAnswers] = useState<Record<string, Availability>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -69,6 +71,7 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
         setView(v);
         setName(v.inviteeName);
         setEmail(v.inviteeEmail ?? "");
+        setCompany(v.inviteeCompany ?? "");
         setAnswers(v.myAnswers);
       })
       .catch(() => setProblem({ code: "load_failed", message: "読み込みに失敗しました" }))
@@ -79,12 +82,13 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
     if (!view) return;
     if (!name.trim()) { setSubmitError("お名前を入力してください"); return; }
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
+    if (!company.trim()) { setSubmitError("会社名・屋号を入力してください（個人の方は「個人」）"); return; }
     if (view.candidates.some((c) => !answers[c.id])) { setSubmitError("すべての候補に回答してください"); return; }
     setSubmitError(""); setSubmitting(true);
     try {
       const r = await fetch(`${base}/respond`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), answers }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), company: company.trim(), answers }),
       });
       const json = await r.json();
       if (!r.ok) { setSubmitError(json.error?.message ?? "送信に失敗しました"); return; }
@@ -179,9 +183,13 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
             </div>
             <div>
               <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>メールアドレス <span style={{ color: "var(--color-brand)" }}>*</span></label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="yamada@example.com" className="w-full px-4 py-3 rounded-2xl text-sm outline-none border" style={inputStyle} />
-              <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>日程が確定したら、お知らせします。あなた専用のページURLも送ります。</p>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="yamada@example.com"
+                readOnly={!!view.inviteeEmail} className="w-full px-4 py-3 rounded-2xl text-sm outline-none border" style={inputStyle} />
+              <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+                {view.inviteeEmail ? "招待メールをお送りしたメールアドレスです（変更できません）。日程が確定したら、お知らせします。" : "日程が確定したら、お知らせします。あなた専用のページURLも送ります。"}
+              </p>
             </div>
+            <GuestCompanyField value={company} onChange={setCompany} hostName={series.host?.name} />
 
             <div>
               <p className="text-sm font-medium mb-1" style={{ color: "var(--color-ink-700)" }}>開催パターンの候補への参加可否をお選びください</p>

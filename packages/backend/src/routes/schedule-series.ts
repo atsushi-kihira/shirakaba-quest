@@ -6,12 +6,13 @@
 // POST /api/schedule/series-invite/:inviteToken/respond — 共有URLから、名前・メールアドレスを入れて投票（ゲストを新規に作成）
 // =============================================================
 import { Hono } from "hono";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { PREPARING_MESSAGE, isReserved } from "../services/invite-reservations.ts";
+import { isEmailLike, normalizeEmail, registerGuestAsContact } from "../services/guest-contacts.ts";
 import { parseExtraSlots } from "../services/recurrence.ts";
 import { patternLabel, upcomingDatesFor } from "./meeting-series.ts";
 import type { Env, Variables } from "../types.ts";
@@ -70,6 +71,7 @@ async function buildView(db: Db, series: Series, invitee: Invitee | null) {
   return {
     inviteeName: invitee?.name ?? "",
     inviteeEmail: invitee?.email ?? null,
+    inviteeCompany: invitee?.company ?? "",
     series: { id: series.id, title: series.title, description: series.description, status: series.status, host: host ?? null },
     candidates: candidates.map((cand) => ({
       id: cand.id, note: cand.note, isConfirmed: cand.isConfirmed === 1,
@@ -108,8 +110,6 @@ async function sendBookmarkMail(c: { env: Env; executionCtx: ExecutionContext },
   );
 }
 
-const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
-
 // ---- ゲスト専用URL ----
 async function loadByToken(db: Db, token: string) {
   const invitee = await db.select().from(schema.meetingSeriesExternalInvitees).where(eq(schema.meetingSeriesExternalInvitees.token, token)).get();
@@ -134,15 +134,26 @@ scheduleSeriesRoutes.post("/series/:token/respond", async (c) => {
   const { series, invitee } = found;
   if (series.status !== "voting") return c.json(closed, 400);
 
-  const body = await c.req.json<{ name?: string; email?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; answers?: Record<string, unknown> }));
-  const email = body.email?.trim() || invitee.email || "";
-  if (!email || !isEmail(email)) return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; company?: string; answers?: Record<string, unknown> }));
+  // ゲストは、メールアドレスで特定する。招待時にメールアドレスが分かっているゲストは、メールアドレスを変えられない
+  const hadEmail = !!invitee.email;
+  const email = invitee.email ?? normalizeEmail(body.email ?? "");
+  if (!email || !isEmailLike(email)) return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
+  if (!hadEmail) {
+    const taken = await db.select({ id: schema.meetingSeriesExternalInvitees.id }).from(schema.meetingSeriesExternalInvitees)
+      .where(and(eq(schema.meetingSeriesExternalInvitees.seriesId, series.id), sql`lower(${schema.meetingSeriesExternalInvitees.email}) = ${email}`)).get();
+    if (taken) return c.json({ error: { code: "invalid_input", message: "このメールアドレスは、すでにこの定例会に登録されています。招待メールのURL、または共有URLからご回答ください" } }, 400);
+  }
   const name = body.name?.trim() || invitee.name;
+  if (!name.trim()) return c.json({ error: { code: "invalid_input", message: "お名前を入力してください" } }, 400);
+  const company = body.company?.trim() || invitee.company?.trim() || "";
+  if (!company) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
 
-  await db.update(schema.meetingSeriesExternalInvitees).set({ name, email }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
+  await db.update(schema.meetingSeriesExternalInvitees).set({ name, email, company }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
   await saveAnswers(db, series, invitee.id, body.answers ?? {}, now);
-  // メールアドレスがなかった（人脈・名前だけで招待した）ゲストには、初回の回答時に専用URLをメールでお知らせする
-  if (!invitee.email) await sendBookmarkMail(c, db, series, { name, token: invitee.token }, email);
+  await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId }).catch((e) => console.error("[guest contact] failed", e));
+  // メールアドレスがなかった旧方式のゲストには、初回の回答時に専用URLをメールでお知らせする
+  if (!hadEmail) await sendBookmarkMail(c, db, series, { name, token: invitee.token }, email);
   return c.json({ ok: true, scheduleUrl: `${getFrontendUrl(c.env)}/schedule/series/${invitee.token}` });
 });
 
@@ -170,22 +181,27 @@ scheduleSeriesRoutes.post("/series-invite/:inviteToken/respond", async (c) => {
   }
   if (series.status !== "voting") return c.json(closed, 400);
 
-  const body = await c.req.json<{ name?: string; email?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; answers?: Record<string, unknown> }));
-  const email = body.email?.trim() ?? "";
-  if (!email || !isEmail(email)) return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; company?: string; answers?: Record<string, unknown> }));
+  const email = normalizeEmail(body.email ?? "");
+  if (!email || !isEmailLike(email)) return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
   const name = body.name?.trim() ?? "";
+  if (!name) return c.json({ error: { code: "invalid_input", message: "お名前を入力してください" } }, 400);
+  const company = body.company?.trim() ?? "";
+  if (!company) return c.json({ error: { code: "invalid_input", message: "会社名（屋号）を入力してください。個人の方は「個人」とご入力ください" } }, 400);
 
-  // 同じメールアドレスの人が、すでにいれば、その人の回答として扱う（二重に作らない）
+  // 同じメールアドレス（大文字・小文字は区別しない）のゲストが、すでにいれば、その人の回答を更新する
+  // （主催者があらかじめ登録したゲストが、共有URLから回答した場合も、同じ人として扱う）
   let invitee = await db.select().from(schema.meetingSeriesExternalInvitees)
-    .where(and(eq(schema.meetingSeriesExternalInvitees.seriesId, series.id), eq(schema.meetingSeriesExternalInvitees.email, email))).get();
+    .where(and(eq(schema.meetingSeriesExternalInvitees.seriesId, series.id), sql`lower(${schema.meetingSeriesExternalInvitees.email}) = ${email}`)).get();
   const isNew = !invitee;
   if (!invitee) {
-    const created = { id: newId(), seriesId: series.id, name, email, token: generateRawToken(), contactId: null, invitedAt: null, createdAt: now };
+    const created = { id: newId(), seriesId: series.id, name, email, token: generateRawToken(), contactId: null, invitedAt: null, createdAt: now, company };
     await db.insert(schema.meetingSeriesExternalInvitees).values(created);
     invitee = created;
-  } else if (name && name !== invitee.name) {
-    await db.update(schema.meetingSeriesExternalInvitees).set({ name }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
+  } else if (name !== invitee.name || company !== (invitee.company ?? "")) {
+    await db.update(schema.meetingSeriesExternalInvitees).set({ name, company }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
   }
+  await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId }).catch((e) => console.error("[guest contact] failed", e));
   await saveAnswers(db, series, invitee.id, body.answers ?? {}, now);
   if (isNew) await sendBookmarkMail(c, db, series, { name, token: invitee.token }, email);
   return c.json({ ok: true, scheduleUrl: `${getFrontendUrl(c.env)}/schedule/series/${invitee.token}` });

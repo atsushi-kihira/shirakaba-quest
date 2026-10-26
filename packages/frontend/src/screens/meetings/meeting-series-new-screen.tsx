@@ -14,7 +14,7 @@ import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-
 import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
-import { MeetingGuestSection, guestsToPayload, type GuestDraft } from "@/components/meeting-guest-section";
+import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
 
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
 type Team = { id: string; name: string; emblemEmoji: string };
@@ -211,6 +211,8 @@ export function MeetingSeriesNewScreen() {
     setError("");
     if (!eventSelection) { setError("イベント種別を選んでください"); return; }
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
+    const noEmailGuest = guestMissingEmail(guests);
+    if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（わからない方は、一覧から外して、共有URLをお伝えください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
     if (scope === "collab_team" && !collabTeamId) { setError("対象チームを選択してください"); return; }
     if (scope === "selected" && inviteeIds.length === 0 && guests.length === 0) { setError("招待するメンバー、または外部ゲストを1人以上選んでください"); return; }

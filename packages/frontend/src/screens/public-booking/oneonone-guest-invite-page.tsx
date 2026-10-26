@@ -4,6 +4,7 @@
 // 確定後は既存の公開予約と同じ完了ページ（PublicBookingConfirmation）を再利用する。
 // =============================================================
 import { useEffect, useState } from "react";
+import { GuestCompanyField } from "@/components/guest-company-field";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, User, Mail } from "lucide-react";
@@ -53,6 +54,7 @@ export function OneOnOneGuestInvitePage() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
+  const [guestCompany, setGuestCompany] = useState("");
   const [conferenceType, setConferenceType] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -85,6 +87,7 @@ export function OneOnOneGuestInvitePage() {
           candidateSlotId: selectedId,
           guestName: guestName.trim(),
           guestEmail: guestEmail.trim(),
+          guestCompany: guestCompany.trim(),
           conferenceType: availTypes.length >= 2 ? (conferenceType ?? defaultConferenceType) : undefined,
         }),
       });
@@ -191,6 +194,7 @@ export function OneOnOneGuestInvitePage() {
                 style={{ borderColor: "var(--color-paper-300)", background: "white" }}
               />
             </div>
+            <GuestCompanyField value={guestCompany} onChange={setGuestCompany} hostName={invite.hostName} className="w-full px-3 py-2.5 rounded-xl border text-sm" />
           </div>
 
           <div className="space-y-2 mb-4">
@@ -250,6 +254,7 @@ export function OneOnOneGuestInvitePage() {
               setError("");
               if (!guestName.trim()) { setError("お名前を入力してください"); return; }
               if (!guestEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail.trim())) { setError("メールアドレスを正しく入力してください"); return; }
+              if (!guestCompany.trim()) { setError("会社名・屋号を入力してください（個人の方は「個人」）"); return; }
               submitMutation.mutate();
             }}
             disabled={!selectedId || submitMutation.isPending}
