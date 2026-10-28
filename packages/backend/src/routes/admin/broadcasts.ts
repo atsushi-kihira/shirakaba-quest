@@ -22,6 +22,7 @@ import { computeFeatureUsage, FEATURES } from "../../services/feature-usage.ts";
 import { describeCriteria, normalizeCriteria, resolveRecipients, type RecipientQuery, type RecipientScope } from "../../services/resolve-recipients.ts";
 import { getRenderBase, renderBroadcast, sendBroadcast, type BroadcastContent } from "../../services/broadcast.ts";
 import { CHANGELOG, changelogSince } from "../../services/changelog.ts";
+import { applyTerms, loadTerms } from "../../services/app-terms.ts";
 import { generateFeatureAnnouncement } from "../../services/feature-announcement.ts";
 import type { Env, Variables } from "../../types.ts";
 
@@ -95,6 +96,7 @@ const jstDate = (sec: number): string => new Date((sec + 9 * 3600) * 1000).toISO
 
 adminBroadcastRoutes.get("/feature-announcement/entries", async (c) => {
   const db = createDb(c.env.DB);
+  const terms = await loadTerms(db);
   const last = await db.select({ at: schema.broadcasts.createdAt }).from(schema.broadcasts)
     .where(eq(schema.broadcasts.templateId, FEATURE_ANNOUNCEMENT_ID)).orderBy(desc(schema.broadcasts.createdAt)).limit(1).get();
   const lastSentDate = last ? jstDate(last.at) : null;
@@ -108,7 +110,7 @@ adminBroadcastRoutes.get("/feature-announcement/entries", async (c) => {
     data: {
       since, lastSentDate,
       latestUpdateDate: CHANGELOG.reduce((m, e) => (e.date > m ? e.date : m), ""),
-      entries: changelogSince(since).map((e) => ({ id: e.id, date: e.date, kind: e.kind, title: e.title, summary: e.summary, path: e.path ?? null })),
+      entries: changelogSince(since).map((e) => ({ id: e.id, date: e.date, kind: e.kind, title: applyTerms(e.title, terms), summary: applyTerms(e.summary, terms), path: e.path ?? null })),
     },
   });
 });
@@ -124,6 +126,7 @@ adminBroadcastRoutes.post("/feature-announcement/generate", async (c) => {
   if (entries.length === 0) return badRequest(c, "この期間に、紹介できる新機能・改善がありません。開始日を見直してください");
   const result = await generateFeatureAnnouncement({
     apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", entries, since: b.since,
+    terms: await loadTerms(createDb(c.env.DB)),
   });
   return c.json({ data: { ...result, entryCount: entries.length } });
 });
@@ -131,6 +134,7 @@ adminBroadcastRoutes.post("/feature-announcement/generate", async (c) => {
 // ---- 宛先の選択肢 ----
 adminBroadcastRoutes.get("/options", async (c) => {
   const db = createDb(c.env.DB);
+  const terms = await loadTerms(db);
   const [teams, teamMembers, collabTeams, collabMembers, members] = await Promise.all([
     db.select().from(schema.teams).orderBy(schema.teams.sortOrder).all(),
     db.select({ teamId: schema.teamMembers.teamId }).from(schema.teamMembers).all(),
@@ -150,7 +154,7 @@ adminBroadcastRoutes.get("/options", async (c) => {
       teams: teams.map((t) => ({ id: t.id, name: t.name, emblemEmoji: t.emblemEmoji, memberCount: tc.get(t.id) ?? 0 })),
       collabTeams: collabTeams.map((t) => ({ id: t.id, name: t.name, type: t.type, memberCount: cc.get(t.id) ?? 0 })),
       members: members.sort((a, b) => a.name.localeCompare(b.name, "ja")),
-      features: FEATURES.map((f) => ({ key: f.key, name: f.name, emoji: f.emoji })),
+      features: FEATURES.map((f) => ({ key: f.key, name: applyTerms(f.name, terms), emoji: f.emoji })),
     },
   });
 });
@@ -253,7 +257,7 @@ adminBroadcastRoutes.get("/history", async (c) => {
   const readMap = new Map(reads.map((r) => [r.id, Number(r.n)]));
   // 一覧の見出しは、差し込み項目を読みやすい形にしておく（実際に届いた内容は配信先を選んで確認する）
   const base = await getRenderBase(db, c.env);
-  const headline = (t: string) => t.replace(/\{\{memberName\}\}/g, "○○").replace(/\{\{appTitle\}\}/g, base.appTitle).replace(/\{\{appUrl\}\}/g, base.appUrl);
+  const headline = (t: string) => applyTerms(t, base.terms).replace(/\{\{memberName\}\}/g, "○○").replace(/\{\{appTitle\}\}/g, base.appTitle).replace(/\{\{appUrl\}\}/g, base.appUrl);
   return c.json({
     data: rows.map((r) => ({
       id: r.id, title: headline(r.title), body: r.body, scopeLabel: r.scopeLabel ?? "", recipientCount: r.recipientCount,

@@ -31,6 +31,7 @@ const VARS_HELP = [
   ["{{appUrl}}", "アプリのURL"],
   ["{{usageSummary}}", "ご利用状況（利用した機能・していない機能）※下の「ご利用状況を載せる」がオンのとき"],
   ["{{recommendations}}", "おすすめ機能とそのメリット ※下の「おすすめ機能を載せる」がオンのとき"],
+  ["{{termQuest}}・{{termUsp}}・{{termOneOnOne}}・{{termExternalGuest}}・{{termEnishi}}・{{termEnishiSearch}}・{{termBusinessCommunity}}", "アプリ設定の用語（例：お題→クエスト、ご縁→リファーラル）。「ご縁さがし」の形は {{termEnishiSearch}}"],
 ];
 
 const CARD = "card-paper rounded-2xl p-4";
@@ -287,6 +288,7 @@ function VarsHelp() {
         ))}
       </ul>
       <p className="mt-1">※ ブロックをオンにして本文に項目を書かなかった場合は、本文の末尾に自動で追加されます。</p>
+      <p className="mt-1">※ 文面に「お題」「ご縁さがし」「1to1」「USP」「外部ゲスト」「ビジネスコミュニティ」と書いてあっても、アプリ設定で用語を変えている場合は、配信されるときに、設定の用語に置き換わります（プレビューで確認できます）。</p>
     </details>
   );
 }

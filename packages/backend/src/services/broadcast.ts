@@ -8,6 +8,7 @@ import { schema } from "../db/index.ts";
 import { newId } from "./auth.ts";
 import { FEATURES, FEATURE_MAP, type MemberUsage } from "./feature-usage.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
+import { applyTerms, loadTerms, termVars, DEFAULT_TERMS, type AppTerms } from "./app-terms.ts";
 import { MailService } from "./mailer.ts";
 import type { Recipient, RecipientScope } from "./resolve-recipients.ts";
 import type { Env } from "../types.ts";
@@ -21,35 +22,38 @@ export type BroadcastContent = {
   includeRecommendations: boolean;
 };
 
-export type RenderContext = { memberName: string; appTitle: string; appUrl: string };
+/** terms は、アプリ設定の用語（お題・ご縁など）。省略すると標準の用語のまま */
+export type RenderContext = { memberName: string; appTitle: string; appUrl: string; terms?: AppTerms };
 
 function replaceVars(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, k: string) => vars[k] ?? "");
 }
 
-function buildUsageBlock(usage: MemberUsage): string {
-  const lines = FEATURES.map((f) => `${usage.used.includes(f.key) ? "✅" : "⬜"} ${f.name}`);
+function buildUsageBlock(usage: MemberUsage, terms: AppTerms): string {
+  const lines = FEATURES.map((f) => `${usage.used.includes(f.key) ? "✅" : "⬜"} ${applyTerms(f.name, terms)}`);
   return `▼ ご利用状況（${usage.used.length}/${FEATURES.length}機能）\n${lines.join("\n")}`;
 }
 
-function buildRecommendationsBlock(usage: MemberUsage, appUrl: string): string {
+function buildRecommendationsBlock(usage: MemberUsage, appUrl: string, terms: AppTerms): string {
   if (usage.recommended.length === 0) {
     return "▼ ご利用状況\nすべての機能を十分にご活用いただいています。ありがとうございます！";
   }
   const items = usage.recommended.map((key) => {
     const f = FEATURE_MAP.get(key)!;
-    return `■ ${f.emoji} ${f.name}\n${f.benefit}\n▶ ${appUrl}${f.path}`;
+    return `■ ${f.emoji} ${applyTerms(f.name, terms)}\n${applyTerms(f.benefit, terms)}\n▶ ${appUrl}${f.path}`;
   });
   return `▼ こんな機能もおすすめです\n${items.join("\n\n")}`;
 }
 
 /** 1人分の件名・本文を組み立てる（プレビューと配信で共通） */
 export function renderBroadcast(content: BroadcastContent, usage: MemberUsage, ctx: RenderContext): { title: string; body: string } {
-  const vars: Record<string, string> = { memberName: ctx.memberName, appTitle: ctx.appTitle, appUrl: ctx.appUrl };
-  const usageBlock = content.includeUsage ? buildUsageBlock(usage) : "";
-  const recBlock = content.includeRecommendations ? buildRecommendationsBlock(usage, ctx.appUrl) : "";
+  const terms = ctx.terms ?? DEFAULT_TERMS;
+  const vars: Record<string, string> = { memberName: ctx.memberName, appTitle: ctx.appTitle, appUrl: ctx.appUrl, ...termVars(terms) };
+  const usageBlock = content.includeUsage ? buildUsageBlock(usage, terms) : "";
+  const recBlock = content.includeRecommendations ? buildRecommendationsBlock(usage, ctx.appUrl, terms) : "";
 
-  let body = content.body;
+  // 文面（件名・本文）の用語を、アプリ設定の用語にそろえる（受信者の名前などを差し込む前に行う）
+  let body = applyTerms(content.body, terms);
   // 本文にプレースホルダーが無い場合でも、オンにしたブロックは末尾に付ける
   if (content.includeUsage && !/\{\{usageSummary\}\}/.test(body)) body += "\n\n{{usageSummary}}";
   if (content.includeRecommendations && !/\{\{recommendations\}\}/.test(body)) body += "\n\n{{recommendations}}";
@@ -61,12 +65,12 @@ export function renderBroadcast(content: BroadcastContent, usage: MemberUsage, c
   body = replaceVars(body, vars).split(USAGE).join(usageBlock).split(REC).join(recBlock);
   body = body.replace(/\n{3,}/g, "\n\n").trim();
 
-  return { title: replaceVars(content.title, vars).trim(), body };
+  return { title: replaceVars(applyTerms(content.title, terms), vars).trim(), body };
 }
 
-export async function getRenderBase(db: Db, env: Env): Promise<{ appTitle: string; appUrl: string }> {
+export async function getRenderBase(db: Db, env: Env): Promise<{ appTitle: string; appUrl: string; terms: AppTerms }> {
   const design = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
-  return { appTitle: design?.appTitle ?? "白樺クエスト", appUrl: getFrontendUrl(env) };
+  return { appTitle: design?.appTitle ?? "白樺クエスト", appUrl: getFrontendUrl(env), terms: await loadTerms(db) };
 }
 
 export type SendBroadcastArgs = {

@@ -7,6 +7,7 @@
 // =============================================================
 import { callClaude } from "./member-collab.ts";
 import type { ChangelogEntry } from "./changelog.ts";
+import { applyTerms, type AppTerms } from "./app-terms.ts";
 
 export type FeatureAnnouncement = { title: string; body: string; source: "ai" | "template" };
 
@@ -25,7 +26,7 @@ export function templateAnnouncement(entries: ChangelogEntry[]): FeatureAnnounce
   };
 }
 
-function buildPrompt(entries: ChangelogEntry[], since: string): string {
+function buildPrompt(entries: ChangelogEntry[], since: string, terms: AppTerms): string {
   const list = entries.map((e, i) => `${i + 1}. [${e.kind === "feature" ? "新機能" : "大幅な改善"}] ${e.title}（${e.date}）
    概要: ${e.summary}
    メリットの根拠: ${e.benefit}${e.path ? `\n   画面のパス: ${e.path}` : ""}`).join("\n");
@@ -47,6 +48,7 @@ ${list}
 - 本文は、「{{memberName}}さん、いつも{{appTitle}}をご利用いただき、ありがとうございます。」で始め、短い導入のあと、項目を並べ、最後に、一言（「ぜひ、お試しください」など）で結ぶ
 - {{memberName}} {{appTitle}} {{appUrl}} は、そのまま書く（あとで、受信者ごとに、自動で入れ替わる）。{{ }} の形のものは、これ以外、使わない
 - 件名は、「【新機能のお知らせ】」で始め、全体で40文字ほどにする
+- アプリで使っている用語に合わせる。上の更新に書かれている用語（「${terms.quest}」「${terms.oneOnOne}」「${terms.usp}」「${terms.externalGuest}」「${terms.enishi}」「${terms.businessCommunity}」など）は、言い換えず、そのまま使う
 
 出力は、次のJSONだけにする（説明やコードブロックは付けない）:
 {"title": "件名", "body": "本文"}`;
@@ -66,18 +68,21 @@ function parse(content: string): { title: string; body: string } | null {
 }
 
 export async function generateFeatureAnnouncement(args: {
-  apiKey: string | undefined; isDev: boolean; entries: ChangelogEntry[]; since: string;
+  apiKey: string | undefined; isDev: boolean; entries: ChangelogEntry[]; since: string; terms: AppTerms;
 }): Promise<FeatureAnnouncement> {
-  const { apiKey, isDev, entries, since } = args;
-  if (isDev || !apiKey || apiKey === "dev-not-set") return templateAnnouncement(entries);
+  const { apiKey, isDev, since, terms } = args;
+  // アプリ設定の用語（お題 → クエスト、ご縁 → リファーラル など）にそろえてから、文面を作る
+  const entries = args.entries.map((e) => ({ ...e, title: applyTerms(e.title, terms), summary: applyTerms(e.summary, terms), benefit: applyTerms(e.benefit, terms) }));
+  const done = (a: FeatureAnnouncement): FeatureAnnouncement => ({ ...a, title: applyTerms(a.title, terms), body: applyTerms(a.body, terms) });
+  if (isDev || !apiKey || apiKey === "dev-not-set") return done(templateAnnouncement(entries));
   try {
-    const out = parse(await callClaude(apiKey, buildPrompt(entries.slice(0, MAX_ITEMS_FOR_AI * 3), since)));
-    if (!out) return templateAnnouncement(entries);
+    const out = parse(await callClaude(apiKey, buildPrompt(entries.slice(0, MAX_ITEMS_FOR_AI * 3), since, terms)));
+    if (!out) return done(templateAnnouncement(entries));
     // 受信者ごとの差し込みが入らない文面は使わない（あいさつの宛名が抜けるため）
     if (!out.body.includes("{{memberName}}")) out.body = `{{memberName}}さん\n\n${out.body}`;
-    return { ...out, source: "ai" };
+    return done({ ...out, source: "ai" });
   } catch (e) {
     console.error("[feature-announcement] AIでの作成に失敗", e);
-    return templateAnnouncement(entries);
+    return done(templateAnnouncement(entries));
   }
 }
