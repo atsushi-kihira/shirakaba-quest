@@ -11,6 +11,7 @@ import { api, ApiError } from "@/lib/api";
 import { useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { SchedulingMethodSelector, type SchedulingMethod } from "../meetings/_scheduling-method-selector";
 import { DurationSelect } from "@/components/duration-select";
+import { useDefaultMeetingDuration } from "@/hooks/use-default-meeting-duration";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 import {
@@ -39,7 +40,18 @@ export function NormalRequestModal({
   const googleConnected = googleStatusData?.data.connected ?? false;
 
   const [title, setTitle] = useState(`${responderName}さんとの1to1`);
-  const [duration, setDuration] = useState(30);
+  // 所要時間の初期値は、マイページ（日程調整設定）の「デフォルトの会議時間」。設定の読み込み後に、まだ本人が変えていなければ、一度だけ反映する
+  const { duration: defaultDuration, loaded: defaultDurationLoaded } = useDefaultMeetingDuration();
+  const [duration, setDuration] = useState(defaultDuration);
+  const durationTouched = useRef(false);
+  const didApplyDefaultDuration = useRef(false);
+  useEffect(() => {
+    if (!defaultDurationLoaded || didApplyDefaultDuration.current || durationTouched.current) return;
+    didApplyDefaultDuration.current = true;
+    setDuration(defaultDuration);
+    // まだ日時を入れていない候補日の行は、終了時刻を新しい所要時間にそろえる
+    setCandidateRows((rows) => rows.map((r) => (r.date ? r : emptyCandidateRow(defaultDuration))));
+  }, [defaultDurationLoaded, defaultDuration]);
   const [note, setNote] = useState("");
   const [notifyByEmail, setNotifyByEmail] = useState(true);
   // 日程の決め方: 初期値はカレンダー連携状況が分かるまで未確定。連携済みなら「公開予約URLを使う」、
@@ -51,7 +63,7 @@ export function NormalRequestModal({
     didSetDefaultMethod.current = true;
     setSchedulingMethod(googleStatusData.data.connected ? "public_url" : "candidates");
   }, [googleStatusData]);
-  const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(30), emptyCandidateRow(30)]);
+  const [candidateRows, setCandidateRows] = useState<CandidateRow[]>([emptyCandidateRow(defaultDuration), emptyCandidateRow(defaultDuration)]);
   const [eventCampaignId, setEventCampaignId] = useState("");
   const [error, setError] = useState("");
 
@@ -175,7 +187,7 @@ export function NormalRequestModal({
           </div>
 
           <div>
-            <DurationSelect value={duration} onChange={setDuration} label="所要時間" />
+            <DurationSelect value={duration} onChange={(v) => { durationTouched.current = true; setDuration(v); }} label="所要時間" />
             <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
               すべての候補日時に共通の所要時間です（候補日時は開始時刻だけを選びます）。あなたの予約ページ全体の設定は変わりません
             </p>

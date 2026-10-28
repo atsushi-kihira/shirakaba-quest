@@ -2,8 +2,9 @@
 // 「日程を指定して1to1を申し込む」モーダル
 // 既に別の手段で日程調整済みの相手に対し、日時・会議ツールを指定して申し込む。
 // =============================================================
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DurationSelect } from "@/components/duration-select";
+import { useDefaultMeetingDuration } from "@/hooks/use-default-meeting-duration";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
@@ -38,7 +39,13 @@ export function PrearrangedRequestModal({
   const [title, setTitle] = useState(`${responderName}さんとの1to1`);
   const [date, setDate] = useState(todayYMD());
   const [time, setTime] = useState(DEFAULT_START_TIME);
-  const [duration, setDuration] = useState(30);
+  // 所要時間の初期値は、マイページ（日程調整設定）の「デフォルトの会議時間」（読み込み後に、まだ本人が変えていなければ、一度だけ反映する）
+  const { duration: defaultDuration, loaded: defaultDurationLoaded } = useDefaultMeetingDuration();
+  const [duration, setDuration] = useState(defaultDuration);
+  const durationTouched = useRef(false);
+  useEffect(() => {
+    if (defaultDurationLoaded && !durationTouched.current) setDuration(defaultDuration);
+  }, [defaultDurationLoaded, defaultDuration]);
   const [conferenceType, setConferenceType] = useState<"zoom" | "google_meet" | "manual" | "none">("none");
   const [conferenceUrl, setConferenceUrl] = useState("");
   const [note, setNote] = useState("");
@@ -145,7 +152,7 @@ export function PrearrangedRequestModal({
             </div>
           </div>
 
-          <DurationSelect value={duration} onChange={setDuration} label="所要時間" />
+          <DurationSelect value={duration} onChange={(v) => { durationTouched.current = true; setDuration(v); }} label="所要時間" />
 
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>会議ツール</label>

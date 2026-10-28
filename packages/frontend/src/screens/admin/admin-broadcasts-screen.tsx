@@ -4,7 +4,7 @@
 // =============================================================
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Send, Eye, Plus, Pencil, Trash2, X, ChevronDown, ChevronUp } from "lucide-react";
+import { Loader2, Send, Eye, Plus, Pencil, Trash2, X, ChevronDown, ChevronUp, Sparkles } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import {
   RecipientScopePicker, EMPTY_CRITERIA, isRecipientReady, toRecipientPayload,
@@ -34,6 +34,8 @@ const VARS_HELP = [
 ];
 
 const CARD = "card-paper rounded-2xl p-4";
+/** 「新機能のお知らせ」（指定した日以降の更新から、AIが紹介文を作る）。配信履歴の templateId にも、この値が入る */
+const FEATURE_ANNOUNCEMENT_ID = "feature_announcement";
 const INPUT_STYLE = { borderColor: "var(--color-paper-300)" } as const;
 
 function errMsg(e: unknown, fallback: string) {
@@ -101,6 +103,11 @@ function SendPanel({ templates, options }: { templates: Template[]; options: (Re
   function applyTemplate(id: string) {
     setTemplateId(id);
     setPreview(null);
+    if (id === FEATURE_ANNOUNCEMENT_ID) {
+      // 文面は、下の「新機能のお知らせ」の欄で、期間を選んで自動作成する
+      setTitle(""); setBody(""); setIncludeUsage(false); setIncludeRecommendations(false);
+      return;
+    }
     const t = templates.find((x) => x.id === id);
     if (!t) return;
     setTitle(t.title); setBody(t.body);
@@ -156,8 +163,12 @@ function SendPanel({ templates, options }: { templates: Template[]; options: (Re
         <select value={templateId} onChange={(e) => applyTemplate(e.target.value)}
           className="w-full rounded-xl px-3 py-2 text-sm border mb-3" style={INPUT_STYLE}>
           <option value="">テンプレートを選択…（選ばずに直接入力もできます）</option>
+          <option value={FEATURE_ANNOUNCEMENT_ID}>✨ 新機能のお知らせ（期間の更新から、自動で作成）</option>
           {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
+        {templateId === FEATURE_ANNOUNCEMENT_ID && (
+          <FeatureAnnouncementBuilder onGenerated={(r) => { setTitle(r.title); setBody(r.body); setIncludeUsage(false); setIncludeRecommendations(false); setPreview(null); }} />
+        )}
         <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
           ここでの編集は今回の配信だけに反映されます（テンプレート自体は変わりません）。
         </p>
@@ -283,6 +294,90 @@ function VarsHelp() {
 // ---------------------------------------------------------------
 // 文面テンプレート
 // ---------------------------------------------------------------
+// 「新機能のお知らせ」: 指定した日以降に公開した、機能追加・大幅改善から、機能の概要とメリットの紹介文を、AIで自動作成する
+type FeatureEntry = { id: string; date: string; kind: "feature" | "improvement"; title: string; summary: string; path: string | null };
+type FeatureEntriesResponse = { data: { since: string; lastSentDate: string | null; latestUpdateDate: string; entries: FeatureEntry[] } };
+
+function FeatureAnnouncementBuilder({ onGenerated }: { onGenerated: (r: { title: string; body: string }) => void }) {
+  const [since, setSince] = useState("");
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState<{ kind: "ok" | "info" | "error"; text: string } | null>(null);
+
+  const { data, isFetching } = useQuery({
+    queryKey: ["admin", "broadcasts", "feature-entries", since],
+    queryFn: () => api.get<FeatureEntriesResponse>(`/admin/broadcasts/feature-announcement/entries${since ? `?since=${since}` : ""}`),
+  });
+  // 初めて開いたときは、開始日の既定（前回の配信日の翌日。初めてなら30日前）を反映する
+  useEffect(() => { if (!since && data?.data.since) setSince(data.data.since); }, [data, since]);
+
+  const entries = data?.data.entries ?? [];
+  const picked = entries.filter((e) => !excluded.has(e.id));
+
+  const generate = useMutation({
+    mutationFn: () => api.post<{ data: { title: string; body: string; source: "ai" | "template" } }>("/admin/broadcasts/feature-announcement/generate", {
+      since, entryIds: picked.map((e) => e.id),
+    }),
+    onSuccess: (res) => {
+      onGenerated({ title: res.data.title, body: res.data.body });
+      setNote(res.data.source === "ai"
+        ? { kind: "ok", text: "AIが紹介文を作りました。下の件名・本文を確認して、必要なら直してから配信してください。" }
+        : { kind: "info", text: "AIでの作成ができなかったため、更新の内容から、定型の文面で作りました。下の件名・本文を確認・編集してください。" });
+    },
+    onError: (e) => setNote({ kind: "error", text: errMsg(e, "紹介文の作成に失敗しました") }),
+  });
+
+  function toggle(id: string) {
+    setExcluded((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+
+  return (
+    <div className="rounded-xl p-3 mb-3" style={{ background: "rgba(212,160,59,0.1)", border: "1px solid rgba(212,160,59,0.35)" }}>
+      <p className="text-sm font-semibold mb-1" style={{ color: "var(--color-ink-800)" }}>✨ 新機能のお知らせを、自動で作成</p>
+      <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
+        指定した日以降に公開した、機能追加・大幅な改善を、AIが「機能の概要」と「使うメリット」に着目して紹介します。
+        {data?.data.lastSentDate && `（前回の配信：${data.data.lastSentDate}）`}
+      </p>
+      <label className="flex items-center gap-2 text-sm mb-2" style={{ color: "var(--color-ink-700)" }}>
+        開始日
+        <input type="date" value={since} onChange={(e) => { setSince(e.target.value); setNote(null); }}
+          className="rounded-xl px-3 py-1.5 text-sm border" style={INPUT_STYLE} />
+        <span className="text-xs" style={{ color: "var(--color-ink-400)" }}>以降の更新が対象です</span>
+      </label>
+
+      {isFetching && entries.length === 0 ? (
+        <div className="flex justify-center py-3"><Loader2 size={16} className="animate-spin" style={{ color: "var(--color-ink-400)" }} /></div>
+      ) : entries.length === 0 ? (
+        <p className="text-xs py-2" style={{ color: "var(--color-ink-500)" }}>
+          この期間に公開した新機能・改善は、ありません{data?.data.latestUpdateDate && `（最新の更新は ${data.data.latestUpdateDate}）`}。開始日を、もっと前にしてください。
+        </p>
+      ) : (
+        <>
+          <p className="text-xs mb-1" style={{ color: "var(--color-ink-600)" }}>対象の更新（{picked.length}/{entries.length}件）。紹介しないものは、チェックを外してください。</p>
+          <div className="max-h-56 overflow-y-auto space-y-1 mb-2">
+            {entries.map((e) => (
+              <label key={e.id} className="flex items-start gap-2 text-xs rounded-lg px-2 py-1.5 cursor-pointer" style={{ background: "var(--color-paper-100)" }}>
+                <input type="checkbox" checked={!excluded.has(e.id)} onChange={() => toggle(e.id)} className="mt-0.5" />
+                <span className="min-w-0">
+                  <span className="font-medium" style={{ color: "var(--color-ink-800)" }}>{e.kind === "feature" ? "🆕" : "✨"} {e.title}</span>
+                  <span className="ml-1.5" style={{ color: "var(--color-ink-400)" }}>{e.date}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+      <button onClick={() => { setNote(null); generate.mutate(); }} disabled={generate.isPending || picked.length === 0 || !since}
+        className="flex items-center gap-1.5 text-sm font-medium px-4 py-2 rounded-xl text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+        {generate.isPending ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+        {generate.isPending ? "作成しています…" : "この内容で、紹介文を自動作成する"}
+      </button>
+      {note && (
+        <p className="text-xs mt-2" style={{ color: note.kind === "error" ? "var(--color-brand)" : note.kind === "ok" ? "var(--color-success)" : "var(--color-ink-600)" }}>{note.text}</p>
+      )}
+    </div>
+  );
+}
+
 function TemplatesPanel({ templates }: { templates: Template[] }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Template | "new" | null>(null);

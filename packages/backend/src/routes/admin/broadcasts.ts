@@ -4,6 +4,8 @@
 // POST   /api/admin/broadcasts/templates          — テンプレート作成
 // PATCH  /api/admin/broadcasts/templates/:id      — テンプレート更新
 // DELETE /api/admin/broadcasts/templates/:id      — テンプレート削除
+// GET    /api/admin/broadcasts/feature-announcement/entries?since=YYYY-MM-DD — 「新機能のお知らせ」の対象になる更新の一覧（since 省略時は、前回の配信日）
+// POST   /api/admin/broadcasts/feature-announcement/generate — 指定した更新から、AIで紹介文（件名・本文）を作る
 // GET    /api/admin/broadcasts/options            — 宛先の選択肢（ギルド・チーム・メンバー）と機能一覧
 // POST   /api/admin/broadcasts/recipients         — 宛先の確認（人数・メンバーごとの利用状況）
 // POST   /api/admin/broadcasts/preview            — 指定メンバーに届く文面のプレビュー
@@ -19,6 +21,8 @@ import { newId } from "../../services/auth.ts";
 import { computeFeatureUsage, FEATURES } from "../../services/feature-usage.ts";
 import { describeCriteria, normalizeCriteria, resolveRecipients, type RecipientQuery, type RecipientScope } from "../../services/resolve-recipients.ts";
 import { getRenderBase, renderBroadcast, sendBroadcast, type BroadcastContent } from "../../services/broadcast.ts";
+import { CHANGELOG, changelogSince } from "../../services/changelog.ts";
+import { generateFeatureAnnouncement } from "../../services/feature-announcement.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminBroadcastRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -82,6 +86,46 @@ adminBroadcastRoutes.delete("/templates/:id", async (c) => {
   if (t?.systemKey) return badRequest(c, "自動配信に使われているテンプレートは削除できません（内容の編集はできます）");
   await db.delete(schema.broadcastTemplates).where(eq(schema.broadcastTemplates.id, c.req.param("id")));
   return c.json({ ok: true });
+});
+
+// ---- 新機能のお知らせ（指定した日以降の更新から、AIが紹介文を作る） ----
+export const FEATURE_ANNOUNCEMENT_ID = "feature_announcement";
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+const jstDate = (sec: number): string => new Date((sec + 9 * 3600) * 1000).toISOString().slice(0, 10);
+
+adminBroadcastRoutes.get("/feature-announcement/entries", async (c) => {
+  const db = createDb(c.env.DB);
+  const last = await db.select({ at: schema.broadcasts.createdAt }).from(schema.broadcasts)
+    .where(eq(schema.broadcasts.templateId, FEATURE_ANNOUNCEMENT_ID)).orderBy(desc(schema.broadcasts.createdAt)).limit(1).get();
+  const lastSentDate = last ? jstDate(last.at) : null;
+  const requested = c.req.query("since");
+  // 開始日の既定は、前回の配信日の翌日（なければ30日前）
+  const defaultSince = last
+    ? jstDate(last.at + 86400)
+    : jstDate(Math.floor(Date.now() / 1000) - 30 * 86400);
+  const since = requested && YMD.test(requested) ? requested : defaultSince;
+  return c.json({
+    data: {
+      since, lastSentDate,
+      latestUpdateDate: CHANGELOG.reduce((m, e) => (e.date > m ? e.date : m), ""),
+      entries: changelogSince(since).map((e) => ({ id: e.id, date: e.date, kind: e.kind, title: e.title, summary: e.summary, path: e.path ?? null })),
+    },
+  });
+});
+
+adminBroadcastRoutes.post("/feature-announcement/generate", async (c) => {
+  const b = await c.req.json<{ since?: string; entryIds?: string[] }>().catch(() => ({} as { since?: string; entryIds?: string[] }));
+  if (!b.since || !YMD.test(b.since)) return badRequest(c, "開始日を指定してください");
+  let entries = changelogSince(b.since);
+  if (Array.isArray(b.entryIds)) {
+    const picked = new Set(b.entryIds);
+    entries = entries.filter((e) => picked.has(e.id));
+  }
+  if (entries.length === 0) return badRequest(c, "この期間に、紹介できる新機能・改善がありません。開始日を見直してください");
+  const result = await generateFeatureAnnouncement({
+    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", entries, since: b.since,
+  });
+  return c.json({ data: { ...result, entryCount: entries.length } });
 });
 
 // ---- 宛先の選択肢 ----
