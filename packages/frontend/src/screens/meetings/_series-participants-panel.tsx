@@ -6,7 +6,7 @@
 // =============================================================
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, UserPlus } from "lucide-react";
+import { Loader2, UserPlus, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { MemberSelectList, type SelectableMember } from "@/components/member-select-list";
@@ -20,11 +20,13 @@ type Props = {
   currentMemberIds: string[];
   /** グループで作成した定例会の場合、そのグループ名 */
   groupName: string | null;
+  /** 主催者が外せるメンバー（絵文字・名前つき） */
+  removableMembers: Array<{ id: string; name: string; emoji: string }>;
 };
 
 const errText = (e: unknown): string => (e instanceof ApiError ? e.message : "うまくいきませんでした。時間をおいてもう一度お試しください");
 
-export function SeriesParticipantsPanel({ seriesId, scope, confirmed, currentMemberIds, groupName }: Props) {
+export function SeriesParticipantsPanel({ seriesId, scope, confirmed, currentMemberIds, groupName, removableMembers }: Props) {
   const { termExternalGuest } = useSettings();
   const qc = useQueryClient();
   const [panel, setPanel] = useState<"member" | "guest" | null>(null);
@@ -69,6 +71,12 @@ export function SeriesParticipantsPanel({ seriesId, scope, confirmed, currentMem
     onError: fail,
   });
 
+  const removeMember = useMutation({
+    mutationFn: (id: string) => api.delete(`/meeting-series/${seriesId}/members/${id}`),
+    onSuccess: () => done(confirmed ? "外しました。これから開催される回からも外れました。" : "外しました。"),
+    onError: fail,
+  });
+
   function submitGuests() {
     setError("");
     const bad = guestMissingEmail(guestDrafts);
@@ -86,6 +94,24 @@ export function SeriesParticipantsPanel({ seriesId, scope, confirmed, currentMem
         あとから人を追加できます。{confirmed ? "追加した人は、確定済みのこれからの開催回すべてに入り、お知らせが届きます。" : "追加した人には、投票のお願いが届きます。"}
         {groupName && <>　このミーティングはグループ「{groupName}」で作成したので、グループに人を追加しても、自動でここに招待されます。</>}
       </p>
+
+      {removableMembers.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>👥 参加メンバー（✕で外せます）</p>
+          <div className="flex flex-wrap gap-1.5">
+            {removableMembers.map((m) => (
+              <button key={m.id} type="button" disabled={removeMember.isPending} aria-label={`${m.name}さんをこの定例会から外す`}
+                onClick={() => {
+                  if (window.confirm(`「${m.name}」さんを、この定例会から外しますか？\n${confirmed ? "これから開催される回からも外れます（終わった回は、そのままです）。" : "投票も消えます。"}${groupName ? `\nグループ「${groupName}」には残ります。` : ""}`)) removeMember.mutate(m.id);
+                }}
+                className="flex items-center gap-1 pl-2 pr-1.5 py-1 rounded-full text-xs font-medium disabled:opacity-50"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-800)" }}>
+                <span>{m.emoji}</span><span>{m.name}</span><X size={12} style={{ color: "var(--color-ink-500)" }} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className={`grid gap-2 ${canAddMembers ? "grid-cols-2" : "grid-cols-1"}`}>
         {canAddMembers && (

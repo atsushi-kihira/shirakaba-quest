@@ -47,6 +47,8 @@ type SeriesDetail = {
   inviteToken?: string | null;
   /** グループで作成した定例会の、グループ名（主催者にだけ返る） */
   groupName?: string | null;
+  /** 主催者が外せるメンバーのID（主催者にだけ返る） */
+  removableMemberIds?: string[];
   occurrences: Occurrence[];
 };
 
@@ -280,7 +282,8 @@ export function MeetingSeriesDetailScreen() {
       {/* 参加者の追加（主催者のみ。投票中・確定済みの定例会） */}
       {series.isHost && (series.status === "voting" || series.status === "confirmed") && (
         <SeriesParticipantsPanel seriesId={series.id} scope={series.scope} confirmed={series.status === "confirmed"}
-          currentMemberIds={series.targetMembers.filter((m) => !m.isExternal).map((m) => m.id)} groupName={series.groupName ?? null} />
+          currentMemberIds={series.targetMembers.filter((m) => !m.isExternal).map((m) => m.id)} groupName={series.groupName ?? null}
+          removableMembers={series.targetMembers.filter((m) => !m.isExternal && (series.removableMemberIds ?? []).includes(m.id))} />
       )}
 
       {series.status === "voting" && (

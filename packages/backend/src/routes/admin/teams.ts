@@ -11,6 +11,7 @@
 // PATCH  /api/admin/teams/:id/members/:memberId/leader
 // =============================================================
 import { Hono } from "hono";
+import { addMemberToScopedSeries } from "../../services/meeting-participants.ts";
 import { eq, and, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
@@ -203,6 +204,11 @@ adminTeamRoutes.post("/:id/members", async (c) => {
     isLeader: isLeader ? 1 : 0,
     joinedAt: now,
   }).onConflictDoNothing();
+
+  // このギルドを対象にした確定済みの定例会の、これから開催される回にも入れる（管理者の一括作業のため、メールは送らず、お知らせだけ出す）
+  await addMemberToScopedSeries(
+    { db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, memberId, { kind: "team", teamId: c.req.param("id") },
+  ).catch((e) => console.error("[admin teams] series sync failed", e));
 
   return c.json({ ok: true });
 });

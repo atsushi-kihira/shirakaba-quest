@@ -17,6 +17,7 @@
 // DELETE /api/admin/members/registration-pending?email=…  — 一覧から外す（下書きを削除）
 // =============================================================
 import { Hono } from "hono";
+import { addMemberToScopedSeries } from "../../services/meeting-participants.ts";
 import { and, eq, gt, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { MailService } from "../../services/mailer.ts";
@@ -352,6 +353,10 @@ adminMemberRoutes.patch("/:id/approve", async (c) => {
     })
     .where(eq(schema.members.id, id));
 
+  // 全員を対象にした確定済みの定例会の、これから開催される回にも入れる（メールは送らず、お知らせだけ出す）
+  await addMemberToScopedSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, id, { kind: "all" })
+    .catch((e) => console.error("[admin members] series sync failed", e));
+
   if (member) {
     const mailer = new MailService(db, c.env);
     const loginUrl = getFrontendUrl(c.env);
@@ -416,6 +421,10 @@ adminMemberRoutes.patch("/:id/reactivate", async (c) => {
   await db.update(schema.members)
     .set({ status: "active", updatedAt: now })
     .where(eq(schema.members.id, c.req.param("id")));
+
+  // 休会中に始まった確定済みの定例会（全員が対象）にも、これから開催される回から入れる（メールは送らず、お知らせだけ出す）
+  await addMemberToScopedSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, c.req.param("id"), { kind: "all" })
+    .catch((e) => console.error("[admin members] series sync failed", e));
 
   return c.json({ ok: true });
 });

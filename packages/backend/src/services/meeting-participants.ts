@@ -3,6 +3,8 @@
 //   ・追加した人は、すでに確定した回（まだ終わっていない回）にも入れる。確定済みなら日程を、募集中なら投票のお願いを、メールとアプリ内のお知らせで伝える
 //   ・定例会の外部ゲストは、定例会に1人として登録する（ゲスト用ページに、確定済みの全開催日が並ぶ）
 //   ・「グループ」で作成したミーティング・定例会へは、グループに人が加わったときに propagateGroupAdditions でまとめて追加する
+//   ・ギルドにメンバーが加わった・メンバーが承認された（休会から戻った）ときは、そのギルド／全員を対象にした確定済みの定例会の、これから開催される回に入れる
+//     （管理者がまとめて作業するため、メールは送らず、ホーム・通知画面のお知らせだけ出す）（addMemberToScopedSeries）
 //   ・グループから人が外れたときは、そのグループで作成した、これから開催される会から、その人を外す（propagateGroupRemovals）。終わった回は、そのまま
 // 通知メールは、waitUntil でレスポンス後に送る。
 // =============================================================
@@ -14,7 +16,7 @@ import { newId, generateRawToken } from "./auth.ts";
 import { MailService } from "./mailer.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
 import { formatScheduleBlock } from "./schedule-text.ts";
-import { queueMeetingCalendarSync, reconcileMembersCalendar } from "./memberCalendarSync.ts";
+import { queueMeetingCalendarSync, queueMemberCalendarSync, reconcileMembersCalendar } from "./memberCalendarSync.ts";
 
 export type ParticipantsCtx = { db: Db; env: Env; waitUntil: (p: Promise<unknown>) => void };
 export type GuestToAdd = { name: string; email: string; contactId?: string | null };
@@ -377,6 +379,17 @@ async function removeGuestsFromMeeting(db: Db, meetingId: string, emails: string
   return rows.length;
 }
 
+/** 定例会から、メンバーを外す。投票・個別の追加と、これから開催される各回の招待・回答・辞退を消す（終わった回は、そのまま） */
+export async function removeMembersFromSeries(ctx: ParticipantsCtx, series: SeriesRow, memberIds: string[]): Promise<void> {
+  const { db, env } = ctx;
+  const ids = memberIds.filter((id) => id !== series.hostMemberId);
+  if (ids.length === 0) return;
+  await db.delete(schema.meetingSeriesInvitees).where(and(eq(schema.meetingSeriesInvitees.seriesId, series.id), inArray(schema.meetingSeriesInvitees.memberId, ids)));
+  await db.delete(schema.meetingSeriesResponses).where(and(eq(schema.meetingSeriesResponses.seriesId, series.id), inArray(schema.meetingSeriesResponses.memberId, ids)));
+  for (const o of await upcomingSeriesOccurrences(db, series.id)) await removeMembersFromMeeting(db, o.meetingId, ids);
+  ctx.waitUntil(reconcileMembersCalendar(db, env, ids).catch((e) => console.error("[series remove members] calendar sync failed", e)));
+}
+
 export async function propagateGroupRemovals(
   ctx: ParticipantsCtx, groupId: string, rem: GroupRemovals,
 ): Promise<{ meetings: number; series: number }> {
@@ -401,12 +414,7 @@ export async function propagateGroupRemovals(
     .where(and(eq(schema.meetingSeries.groupId, groupId), inArray(schema.meetingSeries.status, ["voting", "confirmed"]))).all();
   for (const series of seriesList) {
     if (!(await seriesIsOpenForAdditions(db, series))) continue;
-    if (memberIds.length > 0) {
-      await db.delete(schema.meetingSeriesInvitees).where(and(eq(schema.meetingSeriesInvitees.seriesId, series.id), inArray(schema.meetingSeriesInvitees.memberId, memberIds)));
-      await db.delete(schema.meetingSeriesResponses).where(and(eq(schema.meetingSeriesResponses.seriesId, series.id), inArray(schema.meetingSeriesResponses.memberId, memberIds)));
-      for (const o of await upcomingSeriesOccurrences(db, series.id)) await removeMembersFromMeeting(db, o.meetingId, memberIds);
-      ctx.waitUntil(reconcileMembersCalendar(db, env, memberIds).catch((e) => console.error("[group remove] calendar sync failed", e)));
-    }
+    if (memberIds.length > 0) await removeMembersFromSeries(ctx, series, memberIds);
     if (emails.length > 0) {
       const rows = await db.select({ id: schema.meetingSeriesExternalInvitees.id }).from(schema.meetingSeriesExternalInvitees)
         .where(and(eq(schema.meetingSeriesExternalInvitees.seriesId, series.id), inArray(sql`lower(${schema.meetingSeriesExternalInvitees.email})`, emails))).all();
@@ -419,4 +427,49 @@ export async function propagateGroupRemovals(
     seriesCount++;
   }
   return { meetings: meetingCount, series: seriesCount };
+}
+
+// ----------------------------------------------------------------
+// ギルドにメンバーが加わった・メンバーが承認された（休会から戻った）とき、
+// そのギルド／全員を対象にした確定済みの定例会の、これから開催される回に、そのメンバーを入れる
+//   ・確定済みの各回の招待は、確定した時点の名簿で固定されるため、後から対象になった人は、ここで入れないと各回の対象から漏れる
+//   ・管理者がまとめて作業するため、メールは送らない。ホーム・通知画面に出るお知らせ（アプリ内）だけを、定例会ごとに1件出す
+//   ・投票中の定例会は、対象がそのときの所属から決まるため、何もしなくてよい
+// ----------------------------------------------------------------
+export async function addMemberToScopedSeries(
+  ctx: ParticipantsCtx, memberId: string, scope: { kind: "all" } | { kind: "team"; teamId: string },
+): Promise<number> {
+  const { db, env } = ctx;
+  const member = await db.select({ id: schema.members.id }).from(schema.members)
+    .where(and(eq(schema.members.id, memberId), eq(schema.members.status, "active"))).get();
+  if (!member) return 0;
+
+  const seriesList = await db.select().from(schema.meetingSeries).where(and(
+    eq(schema.meetingSeries.status, "confirmed"),
+    scope.kind === "all" ? eq(schema.meetingSeries.scope, "all") : and(eq(schema.meetingSeries.scope, "team"), eq(schema.meetingSeries.teamId, scope.teamId)),
+  )).all();
+
+  const now = nowSec();
+  let count = 0;
+  for (const series of seriesList) {
+    if (series.hostMemberId === memberId) continue;
+    const occ = await upcomingSeriesOccurrences(db, series.id);
+    if (occ.length === 0) continue;
+    const have = new Set<string>();
+    for (const ids of chunkOf(occ.map((o) => o.meetingId), 50)) {
+      const rows = await db.select({ meetingId: schema.meetingInvitees.meetingId }).from(schema.meetingInvitees)
+        .where(and(inArray(schema.meetingInvitees.meetingId, ids), eq(schema.meetingInvitees.memberId, memberId))).all();
+      for (const r of rows) have.add(r.meetingId);
+    }
+    const missing = occ.filter((o) => !have.has(o.meetingId));
+    if (missing.length === 0) continue;
+    for (const o of missing) await db.insert(schema.meetingInvitees).values({ id: newId(), meetingId: o.meetingId, memberId });
+    await db.insert(schema.meetingNotifications).values({
+      id: newId(), meetingId: missing[0].meetingId, memberId, type: "invited", readAt: null, createdAt: now,
+      message: `定例会「${series.title}」の対象になりました（これから全${missing.length}回）`,
+    });
+    count++;
+  }
+  if (count > 0) queueMemberCalendarSync(ctx, db, env, memberId);
+  return count;
 }

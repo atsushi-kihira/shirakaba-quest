@@ -23,7 +23,7 @@ import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
-import { resolveSeriesMemberIds, addMembersToSeries, addGuestsToSeries, seriesIsOpenForAdditions } from "../services/meeting-participants.ts";
+import { resolveSeriesMemberIds, addMembersToSeries, addGuestsToSeries, removeMembersFromSeries, seriesIsOpenForAdditions } from "../services/meeting-participants.ts";
 import { generateRawToken } from "../services/auth.ts";
 import { computeOccurrences, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent } from "../services/conferenceService.ts";
@@ -36,6 +36,15 @@ function chunkOf<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
   return chunks;
+}
+
+/** 主催者が外せるメンバー（「指定」「グループ」の定例会は全員。それ以外は、あとから個別に追加した人。主催者本人は除く） */
+async function removableSeriesMemberIds(db: ReturnType<typeof createDb>, series: typeof schema.meetingSeries.$inferSelect): Promise<string[]> {
+  const rows = await db.select({ memberId: schema.meetingSeriesInvitees.memberId }).from(schema.meetingSeriesInvitees)
+    .where(eq(schema.meetingSeriesInvitees.seriesId, series.id)).all();
+  const individual = rows.map((r) => r.memberId);
+  const ids = series.scope === "selected" ? [...new Set([...individual, ...(await resolveSeriesMemberIds(db, series))])] : individual;
+  return ids.filter((id) => id !== series.hostMemberId);
 }
 
 export const meetingSeriesRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -732,6 +741,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
   const eventPoints = await attendancePointsFor(db, { eventCampaignId: series.eventCampaignId, eventTypeDefId: series.eventTypeDefId });
 
   // グループで作成した定例会は、主催者にだけ、グループ名を返す（グループは本人だけのもの）
+  const removableMemberIds = isHost ? await removableSeriesMemberIds(db, series) : [];
   const groupName = isHost && series.groupId
     ? (await db.select({ name: schema.meetingGroups.name }).from(schema.meetingGroups).where(eq(schema.meetingGroups.id, series.groupId)).get())?.name ?? null
     : null;
@@ -766,6 +776,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       })),
       inviteToken: isHost ? series.inviteToken ?? null : null,
       groupName,
+      removableMemberIds,
       occurrences,
     },
   });
@@ -809,6 +820,33 @@ meetingSeriesRoutes.post("/:id/members", async (c) => {
   if (!body.memberIds?.length) return c.json({ error: { code: "invalid_input", message: "追加するメンバーを選んでください" } }, 400);
   const added = await addMembersToSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, series, body.memberIds);
   return c.json({ data: { added } });
+});
+
+// ----------------------------------------------------------------
+// DELETE /api/meeting-series/:id/members/:memberId — メンバーを外す（主催者のみ）
+// 投票と、これから開催される各回の招待を消す。終わった回は、そのまま
+// 「指定」「グループ」の定例会のメンバーと、あとから個別に追加したメンバーが対象（全員・ギルド・チームの所属は、ここでは外せない）
+// ----------------------------------------------------------------
+meetingSeriesRoutes.delete("/:id/members/:memberId", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id, memberId: targetId } = c.req.param();
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ外せます" } }, 403);
+  if (targetId === series.hostMemberId) return c.json({ error: { code: "invalid_input", message: "主催者本人は外せません" } }, 400);
+  if (!(await seriesIsOpenForAdditions(db, series))) {
+    return c.json({ error: { code: "invalid_status", message: "終了した、または中止された定例会からは、外せません" } }, 400);
+  }
+  if (!(await resolveSeriesMemberIds(db, series)).includes(targetId)) {
+    return c.json({ error: { code: "not_found", message: "このメンバーは、すでにこの定例会の対象に入っていません" } }, 404);
+  }
+  if (!(await removableSeriesMemberIds(db, series)).includes(targetId)) {
+    return c.json({ error: { code: "invalid_input", message: "このメンバーは、ここから外せません（全員・ギルド・チームの所属で対象になっています）" } }, 400);
+  }
+  await removeMembersFromSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, series, [targetId]);
+  return c.json({ ok: true });
 });
 
 // ----------------------------------------------------------------

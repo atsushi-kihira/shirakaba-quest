@@ -75,13 +75,17 @@ export function MeetingGroupsScreen() {
         <label htmlFor="group-name" className="block text-sm font-medium" style={{ color: "var(--color-ink-700)" }}>新しいグループを作る</label>
         <div className="flex gap-2">
           <input id="group-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="グループの名前（例：勉強会メンバー）"
-            onKeyDown={(e) => { if (e.key === "Enter" && name.trim() && !create.isPending) create.mutate(); }}
+            onKeyDown={(e) => {
+              // 日本語入力の文字確定（Enter）では、送信しない（Safari は、確定直後のキー入力が keyCode 229 になる）
+              if (e.key === "Enter" && !e.nativeEvent.isComposing && e.keyCode !== 229 && name.trim() && !create.isPending) create.mutate();
+            }}
             className="flex-1 min-w-0 px-4 py-2.5 rounded-2xl text-sm outline-none border" style={inputStyle} />
           <button type="button" onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}
             className="shrink-0 flex items-center gap-1.5 px-4 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
             {create.isPending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}作る
           </button>
         </div>
+        <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>自分は、最初からメンバーに入っています（主催者として、このグループで作った予定に、いつも参加します）。</p>
         {createError && <p className="text-xs" style={{ color: "var(--color-brand)" }}>{createError}</p>}
       </div>
 
@@ -106,7 +110,8 @@ type CardProps = { group: MeetingGroup; open: boolean; onToggle: () => void; onC
 
 function GroupCard({ group, open, onToggle, onChanged }: CardProps) {
   const { termExternalGuest } = useSettings();
-  const meId = useAuthStore((s) => s.user?.id);
+  const me = useAuthStore((s) => s.user);
+  const meId = me?.id;
   const [panel, setPanel] = useState<"member" | "guest" | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -182,7 +187,7 @@ function GroupCard({ group, open, onToggle, onChanged }: CardProps) {
         <span className="flex-1 min-w-0">
           <span className="block text-sm font-semibold truncate" style={{ color: "var(--color-ink-900)" }}>{group.name}</span>
           <span className="block text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-            メンバー{group.members.length}名・{termExternalGuest}{group.guests.length}人
+            メンバー{group.members.length + 1}名（自分を含む）・{termExternalGuest}{group.guests.length}人
             {linked > 0 && `・使用中の予定${linked}件`}
           </span>
         </span>
@@ -211,12 +216,14 @@ function GroupCard({ group, open, onToggle, onChanged }: CardProps) {
 
           {/* メンバー */}
           <div className="space-y-2">
-            <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>👥 メンバー（{group.members.length}名）</p>
-            {group.members.length === 0 ? (
-              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>まだメンバーがいません。</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {group.members.map((m) => (
+            <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>👥 メンバー（自分を含めて{group.members.length + 1}名）</p>
+            <div className="flex flex-wrap gap-1.5">
+              {/* 自分は、主催者として、いつもこのグループで作った予定に参加する（外せない） */}
+              <span className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium" title="あなたは、主催者として、このグループで作った予定に、いつも参加します"
+                style={{ background: "rgba(181,56,75,0.08)", border: "1px solid rgba(181,56,75,0.3)", color: "var(--color-ink-800)" }}>
+                <span>{me?.emoji ?? "😊"}</span><span>{me?.name ?? "自分"}（自分）</span>
+              </span>
+              {group.members.map((m) => (
                   <button key={m.id} type="button" disabled={removeMember.isPending} aria-label={`${m.name}さんをグループから外す`}
                     onClick={() => { if (window.confirm(`「${m.name}」さんを、このグループから外しますか？\nこのグループで作った、これから開催されるミーティング・定例会からも外れます（終わった回は、そのままです）。`)) removeMember.mutate(m.id); }}
                     className="flex items-center gap-1 pl-2 pr-1.5 py-1 rounded-full text-xs font-medium disabled:opacity-50"
@@ -224,8 +231,8 @@ function GroupCard({ group, open, onToggle, onChanged }: CardProps) {
                     <span>{m.emoji}</span><span>{m.name}</span><X size={12} style={{ color: "var(--color-ink-500)" }} />
                   </button>
                 ))}
-              </div>
-            )}
+            </div>
+            <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>自分は、主催者として、このグループで作った予定に、いつも参加します（追加する必要はありません）。</p>
             <button type="button" onClick={() => { setPanel(panel === "member" ? null : "member"); setError(""); }} aria-expanded={panel === "member"}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium"
               style={{ background: panel === "member" ? "var(--color-paper-300)" : "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
