@@ -10,6 +10,7 @@ import { FEATURES, FEATURE_MAP, type MemberUsage } from "./feature-usage.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
 import { applyTerms, loadTerms, termVars, DEFAULT_TERMS, type AppTerms } from "./app-terms.ts";
 import { MailService } from "./mailer.ts";
+import { sendPushToMember } from "./push.ts";
 import type { Recipient, RecipientScope } from "./resolve-recipients.ts";
 import type { Env } from "../types.ts";
 
@@ -130,6 +131,19 @@ export async function sendBroadcast(args: SendBroadcastArgs): Promise<{ broadcas
         await Promise.all(targets.slice(i, i + MAIL_CONCURRENCY).map((x) =>
           mailer.send("admin_broadcast", x.recipient.email, { appTitle: base.appTitle, subject: x.title, body: x.body })
             .catch((e) => console.error("[broadcast mail] failed", x.recipient.id, e))
+        ));
+      }
+    })());
+  }
+
+  // メールを送らない配信でも、プッシュ通知を購読している端末には、すぐに届ける（開いている画面は、すぐに更新される）。
+  // メールも送る配信では、メールと同じ内容のプッシュ通知が、メールの送信とあわせて届く
+  if (!args.sendEmail) {
+    args.waitUntil((async () => {
+      for (let i = 0; i < rendered.length; i += MAIL_CONCURRENCY) {
+        await Promise.all(rendered.slice(i, i + MAIL_CONCURRENCY).map((x) =>
+          sendPushToMember(db, env, x.recipient.id, { title: x.title, body: x.body.replace(/\s+/g, " ").slice(0, 120), url: "/notifications" })
+            .catch((e) => console.error("[broadcast push] failed", x.recipient.id, e))
         ));
       }
     })());

@@ -7,6 +7,8 @@
 // PATCH  /api/admin/members/:id/leave        — 休会にする（記録は残す）
 // PATCH  /api/admin/members/:id/reactivate   — 休会からアクティブに戻す
 // DELETE /api/admin/members/:id              — 完全削除（記録ごと全削除。メールアドレスが再登録可能になる）
+// PATCH  /api/admin/members/:id/profile      — プロフィールの編集（マイページの「プロフィール編集」と同じ項目すべて）
+// POST   /api/admin/members/:id/avatar       — アバター画像のアップロード／DELETE で絵文字に戻す
 // PATCH  /api/admin/members/:id/roles
 // PATCH  /api/admin/members/:id/email         — メールアドレスを代行で変更（本人が確認メールを受け取れない場合用）
 // GET    /api/admin/members/registration-pending   — メール確認が済んでいない（登録が完了していない）人の一覧
@@ -24,7 +26,8 @@ import {
 } from "../../services/registration.ts";
 import { hardDeleteMember } from "../../services/memberDeletion.ts";
 import { applyEmailChange, findLinkedAdmin, isEmailInUse, isValidEmailFormat } from "../../services/email-change.ts";
-import { getCardImageDataUrl } from "../../services/card-image.ts";
+import { getCardImageDataUrl, saveAvatarImage } from "../../services/card-image.ts";
+import { buildProfilePatch, type ProfileBody } from "../../services/member-profile.ts";
 import {
   getActiveMemberIdsWithRole,
   grantMemberRole,
@@ -242,6 +245,39 @@ const VALID_MEMBER_ROLES: MemberRoleName[] = [
   "pilot1", "pilot2", "power_team_coordinator",
   "mentor_coordinator", "personal_mentor", "topic_mentor",
 ];
+
+// ---- PATCH /api/admin/members/:id/profile ----
+// 本人がマイページの「プロフィール編集」で変えられる項目を、管理者が代わりに編集する（メールアドレスは、下の /email で変更する）
+adminMemberRoutes.patch("/:id/profile", async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param("id");
+  const member = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.id, id)).get();
+  if (!member) return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+  const body = await c.req.json<ProfileBody>().catch(() => ({} as ProfileBody));
+  const built = buildProfilePatch(body, Math.floor(Date.now() / 1000));
+  if (!built.ok) return c.json({ error: { code: "invalid_input", message: built.message } }, 400);
+  await db.update(schema.members).set(built.patch).where(eq(schema.members.id, id));
+  return c.json({ ok: true });
+});
+
+// ---- POST/DELETE /api/admin/members/:id/avatar ---- アバター画像の登録（アップロード）／絵文字に戻す
+adminMemberRoutes.post("/:id/avatar", async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param("id");
+  const member = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.id, id)).get();
+  if (!member) return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
+  const body = await c.req.json<{ imageBase64?: string }>().catch(() => ({} as { imageBase64?: string }));
+  if (!body.imageBase64) return c.json({ error: { code: "bad_request", message: "画像データが必要です" } }, 400);
+  const key = await saveAvatarImage(c.env.R2, id, body.imageBase64);
+  await db.update(schema.members).set({ avatarImageKey: key, updatedAt: Math.floor(Date.now() / 1000) }).where(eq(schema.members.id, id));
+  return c.json({ ok: true });
+});
+
+adminMemberRoutes.delete("/:id/avatar", async (c) => {
+  const db = createDb(c.env.DB);
+  await db.update(schema.members).set({ avatarImageKey: null, updatedAt: Math.floor(Date.now() / 1000) }).where(eq(schema.members.id, c.req.param("id")));
+  return c.json({ ok: true });
+});
 
 // ---- PATCH /api/admin/members/:id/roles ----
 // body: { role: MemberRoleName, enabled: boolean }

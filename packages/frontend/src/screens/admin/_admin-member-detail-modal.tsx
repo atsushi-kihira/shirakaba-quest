@@ -4,11 +4,13 @@
 // 金の卵/ガチョウ・バッジ・ポイント/活動履歴）を、1to1の有無にかかわらずすべて表示する。
 // ポイントの見せ方（シーズン／累計）は、一般ユーザーのプロフィールと同じ PointsSummary を使う。
 // =============================================================
-import { useQuery } from "@tanstack/react-query";
-import { Building2, Calendar, Mail, MapPin, Phone, X } from "lucide-react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Building2, Calendar, Mail, MapPin, Pencil, Phone, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { PointsSummary } from "@/components/points-summary";
+import { MemberProfileEditModal } from "@/components/member-profile-edit-modal";
 import { useSettings } from "@/hooks/use-settings";
 import { fmtDateISO, fmtDateTimeFull } from "@/lib/date";
 import { buildSkillDescription } from "@shared/types";
@@ -35,6 +37,8 @@ export type AdminMemberDetailBase = {
   instagramUrl?: string | null;
   customFields?: Record<string, unknown> | null;
   businessCommunityJoinedDate?: string | null;
+  characterKey?: string | null;
+  timezone?: string | null;
   skills: Skill[];
   status: string;
   approvedAt: number | null;
@@ -79,6 +83,8 @@ function Row({ icon, children }: { icon: React.ReactNode; children: React.ReactN
 
 export function AdminMemberDetailModal({ member, onClose }: { member: AdminMemberDetailBase; onClose: () => void }) {
   const { termUsp, termBusinessCommunity, timezone: tz } = useSettings();
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
   const id = member.id;
 
   const { data: detailData, isLoading } = useQuery({
@@ -108,12 +114,18 @@ export function AdminMemberDetailModal({ member, onClose }: { member: AdminMembe
     || member.facebookUrl || member.linkedinUrl || member.instagramUrl || member.qrCodeUrl || customFields.length > 0);
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" style={{ background: "rgba(0,0,0,0.4)" }} onClick={onClose}>
       <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 space-y-3"
         style={{ background: "var(--color-paper-100)" }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-klee)" }}>メンバー詳細</h2>
-          <button onClick={onClose} className="p-1.5 rounded-full" aria-label="閉じる"><X size={18} style={{ color: "var(--color-ink-500)" }} /></button>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setEditing(true)} className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full text-white" style={{ background: "var(--color-brand)" }}>
+              <Pencil size={12} />プロフィールを編集
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded-full" aria-label="閉じる"><X size={18} style={{ color: "var(--color-ink-500)" }} /></button>
+          </div>
         </div>
 
         {/* 基本情報 */}
@@ -278,6 +290,12 @@ export function AdminMemberDetailModal({ member, onClose }: { member: AdminMembe
         </div>
       </div>
     </div>
+    {/* 管理者による、プロフィールの編集（マイページの「プロフィール編集」と同じ項目すべて）。保存すると、メンバー一覧・この画面に反映される */}
+    {editing && (
+      <MemberProfileEditModal member={member} mode="admin" onClose={() => setEditing(false)}
+        onSaved={() => { setEditing(false); qc.invalidateQueries({ queryKey: ["admin", "members"] }); qc.invalidateQueries({ queryKey: ["member", id] }); }} />
+    )}
+    </>
   );
 }
 

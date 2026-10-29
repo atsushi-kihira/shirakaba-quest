@@ -14,6 +14,8 @@ import { useGuestFollowups, usePendingExternalOneOnOneCount } from "@/hooks/use-
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useBroadcastNotifications } from "@/hooks/use-broadcast-notifications";
 import { useActionItems } from "@/hooks/use-action-items";
+import { useLiveUpdates } from "@/hooks/use-live-updates";
+import { LiveToast } from "@/components/live-toast";
 import { api } from "@/lib/api";
 
 // 承認待ち（ゲスト）状態のメンバーには使わせない画面（ナビ自体を非活性表示にする）
@@ -74,6 +76,8 @@ function useScreenViewTracking() {
 
 export function AppLayout() {
   useAppTitle();
+  // プッシュ通知が届いたら、画面をすぐに更新して、画面の中でもお知らせする
+  const live = useLiveUpdates();
   useScreenViewTracking();
   const pendingCount = usePendingCount();
   const meetingPendingCount = useMeetingPendingCount();
@@ -119,6 +123,7 @@ export function AppLayout() {
 
   return (
     <div className="flex min-h-dvh" style={{ background: "var(--color-paper-100)" }}>
+      <LiveToast toast={live.toast} onDismiss={live.dismiss} />
       {/* PC: 左サイドバー */}
       <nav className="hidden lg:flex flex-col w-60 shrink-0 border-r pt-6 px-4 gap-1"
         style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}>

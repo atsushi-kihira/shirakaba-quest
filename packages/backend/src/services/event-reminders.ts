@@ -4,7 +4,8 @@
 // 届ける相手が自分で決める設定（主催者が相手に一方的に送るものではない）
 //   ・初期設定: マイページで決める（行がなければ「1日前・ホーム画面とメールの両方」）
 //   ・予定ごとの設定: その予定だけ違う設定にしたいとき（定例会は、全回まとめて設定できる）
-//   ・何日前の何時か: 1〜14日前から最大2つ、それぞれに時刻（0〜23時。分は指定しない）（例: 3日前の9時と、1日前の9時）／届け方: ホーム画面・メール・両方
+//   ・「当日」のリマインドは、リマインドを受け取るなら、かならず入る（初期値は当日の9時。時刻は変えられるが、外せない）。
+//     これに加えて、1〜14日前から最大2つ、それぞれに時刻（0〜23時。分は指定しない）を足せる（初期値は、1日前の9時。外してもよい）／届け方: ホーム画面・メール・両方
 //
 // 届く時刻と届ける相手
 //   ・「N日前のH時」は、予定の日のN日前のH時（その人のタイムゾーン。初期値は8時）。毎時の定期実行で、その時刻を過ぎたものを届ける
@@ -19,6 +20,7 @@ import { schema } from "../db/index.ts";
 import { newId } from "./auth.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
 import { MailService } from "./mailer.ts";
+import { sendPushToMember } from "./push.ts";
 import { formatRange } from "./schedule-text.ts";
 import type { Env } from "../types.ts";
 
@@ -27,8 +29,12 @@ export type ReminderItem = { days: number; hour: number };
 export type ReminderSetting = { items: ReminderItem[]; channel: ReminderChannel };
 export type ReminderTargetKind = "oneonone" | "meeting" | "series" | "booking";
 
-export const DEFAULT_HOUR = 8;
-export const DEFAULT_REMINDER: ReminderSetting = { items: [{ days: 1, hour: DEFAULT_HOUR }], channel: "both" };
+/** 初期の通知時刻（9時）。「当日」と「1日前」の、初期値 */
+export const DEFAULT_HOUR = 9;
+/** 以前の設定（時刻の指定がなく、朝8時固定だったもの）の通知時刻 */
+const LEGACY_HOUR = 8;
+/** 初期設定: 当日の9時と、1日前の9時（ホーム画面とメールの両方） */
+export const DEFAULT_REMINDER: ReminderSetting = { items: [{ days: 1, hour: DEFAULT_HOUR }, { days: 0, hour: DEFAULT_HOUR }], channel: "both" };
 export const MAX_REMIND_DAYS = 14;
 const GRACE_SECONDS = 24 * 3600;
 const HORIZON_DAYS = MAX_REMIND_DAYS + 2;
@@ -36,27 +42,33 @@ const MAIL_CONCURRENCY = 5;
 
 export const TARGET_KINDS: ReminderTargetKind[] = ["oneonone", "meeting", "series", "booking"];
 
-/** 入力された設定を検証して整える（不正なら null）。items は {days: 何日前か, hour: 何時か}。何日前かは重ならない最大2つ */
+/**
+ * 入力された設定を検証して整える（不正なら null）。items は {days: 何日前か（0=当日）, hour: 何時か}。
+ * リマインドを受け取る（items が空でない）ときは、「当日」の項目がかならず入る（入っていなければ、当日の9時を足す）。
+ * 当日のほかに、何日前かが重ならない最大2つまで足せる
+ */
 export function normalizeSetting(raw: { items?: unknown; channel?: unknown }): ReminderSetting | null {
-  if (!Array.isArray(raw.items) || raw.items.length > 2) return null;
+  if (!Array.isArray(raw.items) || raw.items.length > 3) return null;
   const items: ReminderItem[] = [];
   for (const x of raw.items as Array<{ days?: unknown; hour?: unknown }>) {
     const days = Number(x?.days);
     const hour = Number(x?.hour);
-    if (!Number.isInteger(days) || days < 1 || days > MAX_REMIND_DAYS) return null;
+    if (!Number.isInteger(days) || days < 0 || days > MAX_REMIND_DAYS) return null;
     if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
     if (items.some((i) => i.days === days)) return null;
     items.push({ days, hour });
   }
   if (raw.channel !== "home" && raw.channel !== "email" && raw.channel !== "both") return null;
+  if (items.length > 0 && !items.some((i) => i.days === 0)) items.push({ days: 0, hour: DEFAULT_HOUR });
+  if (items.filter((i) => i.days > 0).length > 2) return null;
   return { items: items.sort((a, b) => b.days - a.days), channel: raw.channel };
 }
 
-/** DBの値から設定を作る。以前の形式（何日前かの数字だけの配列）は、朝8時として読む */
+/** DBの値から設定を作る。以前の形式（何日前かの数字だけの配列）は、朝8時として読む。「当日」の項目がない設定には、当日の9時を足す */
 export function parseSetting(itemsJson: string | null | undefined, channel: string | null | undefined): ReminderSetting {
   try {
     const raw = JSON.parse(itemsJson ?? "[1]") as unknown;
-    const items = Array.isArray(raw) ? raw.map((x) => (typeof x === "number" ? { days: x, hour: DEFAULT_HOUR } : x)) : null;
+    const items = Array.isArray(raw) ? raw.map((x) => (typeof x === "number" ? { days: x, hour: LEGACY_HOUR } : x)) : null;
     const parsed = normalizeSetting({ items, channel });
     if (parsed) return parsed;
   } catch { /* 既定に戻す */ }
@@ -309,6 +321,11 @@ export async function runEventReminders(db: Db, env: Env, now: number = Math.flo
       }).onConflictDoNothing();
       sent++;
 
+      // ホーム画面だけの設定でも、プッシュ通知を購読している端末には、すぐに届ける（メールもある設定では、メールと同じ内容のプッシュ通知が、メールの送信とあわせて届く）
+      if (setting.channel === "home") {
+        mailJobs.push(() => sendPushToMember(db, env, memberId, { title, body: dateText, url: occ.path })
+          .catch((e) => console.error("[reminder push] failed", memberId, occ.kind, occ.refId, e)));
+      }
       if ((setting.channel === "email" || setting.channel === "both") && member.email) {
         const detailLines = [
           occ.hostName && occ.hostId !== memberId ? `👤 主催：${occ.hostName}` : "",

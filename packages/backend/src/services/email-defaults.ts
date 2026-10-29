@@ -890,7 +890,7 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     emailKey: "event_reminder",
     label: "予定のリマインド（1to1・ミーティング・定例会）",
     category: "meeting",
-    triggerDescription: "確定している予定の「N日前のH時」（受け取る本人がマイページや予定ごとに設定。初期設定は1日前の8時）に、参加する本人に送信",
+    triggerDescription: "確定している予定の「当日」と「N日前」のH時（受け取る本人がマイページや予定ごとに設定。初期設定は、当日の9時と1日前の9時）に、参加する本人に送信",
     enabled: true,
     subject: "【{{appTitle}}】{{whenWord}}は「{{title}}」です",
     bodyText: `{{memberName}} さん

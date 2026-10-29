@@ -16,6 +16,7 @@ import { saveCardImage, saveAvatarImage, getCardImageDataUrl } from "../services
 import { checkAndAwardBadges } from "../services/badge.ts";
 import { getActiveSeasonPoints } from "../services/season-points.ts";
 import { VALID_THEMES } from "../services/theme.ts";
+import { buildProfilePatch, type ProfileBody } from "../services/member-profile.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -257,61 +258,11 @@ memberRoutes.patch("/me", async (c) => {
     return c.json({ error: { code: "forbidden", message: "メンバーのみ利用可能です" } }, 403);
   }
 
-  const body = await c.req.json<Partial<{
-    name: string;
-    furigana: string;
-    romaji: string;
-    emoji: string;
-    bgColor: string;
-    company: string;
-    role: string;
-    phone: string;
-    address: string;
-    characterKey: string | null;
-    category: string;
-    businessDescription: string;
-    skills: Skill[];
-    qrCodeUrl: string;
-    facebookUrl: string;
-    linkedinUrl: string;
-    instagramUrl: string;
-    customFields: Record<string, string>;
-    timezone: string | null;
-    businessCommunityJoinedDate: string | null;
-  }>>();
+  const body = await c.req.json<ProfileBody>().catch(() => ({} as ProfileBody));
+  const built = buildProfilePatch(body, Math.floor(Date.now() / 1000));
+  if (!built.ok) return c.json({ error: { code: "invalid_input", message: built.message } }, 400);
 
-  if (body.businessCommunityJoinedDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(body.businessCommunityJoinedDate)) {
-    return c.json({ error: { code: "invalid_input", message: "入会日の形式が正しくありません" } }, 400);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-
-  await db
-    .update(schema.members)
-    .set({
-      ...(body.name              !== undefined && { name: body.name }),
-      ...(body.furigana          !== undefined && { furigana: body.furigana }),
-      ...(body.romaji            !== undefined && { romaji: body.romaji }),
-      ...(body.emoji             !== undefined && { emoji: body.emoji }),
-      ...(body.bgColor           !== undefined && { bgColor: body.bgColor }),
-      ...(body.company           !== undefined && { company: body.company }),
-      ...(body.role              !== undefined && { role: body.role }),
-      ...(body.phone             !== undefined && { phone: body.phone }),
-      ...(body.address           !== undefined && { address: body.address }),
-      ...(body.characterKey      !== undefined && { characterKey: body.characterKey }),
-      ...(body.category          !== undefined && { category: body.category }),
-      ...(body.businessDescription !== undefined && { businessDescription: body.businessDescription }),
-      ...(body.skills            !== undefined && { skills: JSON.stringify(body.skills) }),
-      ...(body.qrCodeUrl         !== undefined && { qrCodeUrl: body.qrCodeUrl }),
-      ...(body.facebookUrl       !== undefined && { facebookUrl: body.facebookUrl }),
-      ...(body.linkedinUrl       !== undefined && { linkedinUrl: body.linkedinUrl }),
-      ...(body.instagramUrl      !== undefined && { instagramUrl: body.instagramUrl }),
-      ...(body.customFields      !== undefined && { customFields: JSON.stringify(body.customFields) }),
-      ...(body.timezone          !== undefined && { timezone: body.timezone }),
-      ...(body.businessCommunityJoinedDate !== undefined && { businessCommunityJoinedDate: body.businessCommunityJoinedDate }),
-      updatedAt: now,
-    })
-    .where(eq(schema.members.id, userId));
+  await db.update(schema.members).set(built.patch).where(eq(schema.members.id, userId));
 
   return c.json({ ok: true });
 });

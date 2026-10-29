@@ -25,7 +25,7 @@ export const reminderRoutes = new Hono<{ Bindings: Env; Variables: Variables }>(
 reminderRoutes.use("*", authMiddleware);
 
 const invalid = (message: string) => ({ error: { code: "invalid", message } });
-const INVALID_SETTING = "リマインドの設定が正しくありません。何日前の何時か（1〜14日前、最大2つ）と、届け方を選び直してください";
+const INVALID_SETTING = "リマインドの設定が正しくありません。「当日」の時刻と、何日前の何時か（1〜14日前、最大2つ）、届け方を選び直してください";
 
 async function myId(c: { get: (k: "userId" | "userType") => never | string }, db: ReturnType<typeof createDb>): Promise<string | null> {
   return resolveEffectiveMemberId(db, c.get("userId") as string, c.get("userType") as "member" | "admin");

@@ -8,6 +8,7 @@ import { Loader2, Users, ScrollText, Trophy, QrCode, ChevronRight, ChevronDown, 
 import { api } from "@/lib/api";
 import { useBroadcastNotifications, type BroadcastNotification } from "@/hooks/use-broadcast-notifications";
 import { useReminderNotices } from "@/hooks/use-reminder-notices";
+import { PushPromptCard } from "@/components/push-prompt-card";
 import { useGuestContactProposals } from "@/hooks/use-guest-contact-proposals";
 import { LinkifiedText } from "@/components/linkified-text";
 import { MemberAvatar } from "@/components/member-avatar";
@@ -587,6 +588,9 @@ export function HomeScreen() {
           )}
         </div>
       </div>
+
+      {/* プッシュ通知のご案内（オンにしていない方だけ） */}
+      {approved && <PushPromptCard />}
 
       {/* もうすぐの予定（リマインド） */}
       {reminderNotices.length > 0 && (
