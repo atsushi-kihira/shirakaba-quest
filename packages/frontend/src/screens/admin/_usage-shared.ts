@@ -24,6 +24,8 @@ export type MemberUsage = {
   view: number;
   /** 画面閲覧数のうち、協働画面（協働マップ・チーム詳細など） */
   collabView: number;
+  /** 画面閲覧数の画面ごとの内訳（キーは UsageReport.screens の screen。閲覧のない画面は含まれない） */
+  viewsByScreen: Record<string, number>;
   oneonone: number;
   contact: number;
   contactEight: number;
@@ -43,6 +45,8 @@ export type UsageReport = {
   unit: PeriodChoice;
   rangeStart: string | null;
   rangeEnd: string | null;
+  /** 画面閲覧数の内訳に出す画面の一覧（メニューの順） */
+  screens: { screen: string; label: string }[];
   viewBreakdown: { screen: string; label: string; count: number }[];
 };
 

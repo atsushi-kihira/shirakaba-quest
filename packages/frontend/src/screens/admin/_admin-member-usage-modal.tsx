@@ -26,6 +26,7 @@ type Partner = {
 };
 type MemberUsageDetail = {
   row: MemberUsage;
+  screens: { screen: string; label: string }[];
   partners: Partner[];
   externalOneOnOne: number;
   unit: PeriodChoice;
@@ -165,6 +166,20 @@ export function AdminMemberUsageModal({ memberId, initialUnit, initialDate, onCl
                   </div>
                 ))}
               </div>
+              <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>画面閲覧数の内訳</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-3">
+                {(detail?.screens ?? []).map((s) => {
+                  const n = row.viewsByScreen[s.screen] ?? 0;
+                  return (
+                    <div key={s.screen} className="rounded-xl px-3 py-2" style={{ background: "var(--color-paper-200)" }}>
+                      <p className="text-[11px]" style={{ color: "var(--color-ink-500)" }}>{s.label}</p>
+                      <p className="text-lg font-bold tabular-nums" style={{ color: n === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>
+                        {n}<span className="text-xs font-normal ml-0.5" style={{ color: "var(--color-ink-500)" }}>回</span>
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
               <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>操作件数の内訳</p>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {FEATURES.map((f) => {
@@ -184,7 +199,7 @@ export function AdminMemberUsageModal({ memberId, initialUnit, initialDate, onCl
                 })}
               </div>
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
-                訪問回数は、最後の利用から30分あいたら別の訪問と数えます。画面閲覧数は {row.views} 回で、内訳は、ホーム・ミーティング・通知などが {row.view} 回、協働画面が {row.collabView} 回です。
+                訪問回数は、最後の利用から30分あいたら別の訪問と数えます。画面閲覧数は、見た画面の数です（同じ画面の5分以内の連続閲覧は1回）。
                 操作件数は、上の内訳の合計です（ログイン・訪問・画面の閲覧は含みません）。
               </p>
             </>

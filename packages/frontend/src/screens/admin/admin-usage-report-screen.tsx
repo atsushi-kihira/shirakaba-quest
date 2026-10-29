@@ -9,7 +9,13 @@ import { AdminMemberUsageModal } from "./_admin-member-usage-modal";
 import { FEATURES, STATUS_LABEL, fmtDate, useUsagePeriod, useUsageReport, type MemberUsage, type FeatureKey } from "./_usage-shared";
 import { UsageSummaryCards } from "./_usage-summary-cards";
 
-type SortKey = "name" | "status" | "lastLoginAt" | FeatureKey | "visits" | "views" | "actions";
+/** `screen:home` のように、画面ごとの閲覧数の列を指す */
+type SortKey = "name" | "status" | "lastLoginAt" | FeatureKey | "visits" | "views" | "actions" | `screen:${string}`;
+
+function sortValue(r: MemberUsage, key: SortKey): string | number | null {
+  if (key.startsWith("screen:")) return r.viewsByScreen[key.slice("screen:".length)] ?? 0;
+  return r[key as keyof MemberUsage] as string | number | null;
+}
 
 export function AdminUsageReportScreen() {
   // 集計期間（日・週・月・累計）。訪問回数・サマリー・機能別・メンバー別のすべてに共通で反映される
@@ -27,6 +33,9 @@ export function AdminUsageReportScreen() {
   // メンバー別の表では、ゲストと休会中の人は、チェックしたときだけ表示する
   const [showGuests, setShowGuests] = useState(false);
   const [showOnLeave, setShowOnLeave] = useState(false);
+  // 画面閲覧数を、画面ごとの列に分けて表示するか
+  const [splitViews, setSplitViews] = useState(false);
+  const screens = data?.screens ?? [];
   const guestCount = rows.filter((r) => r.status === "guest").length;
   const onLeaveCount = rows.filter((r) => r.status === "on_leave").length;
   const tableRows = useMemo(
@@ -36,8 +45,8 @@ export function AdminUsageReportScreen() {
 
   const sortedRows = useMemo(() => {
     return [...tableRows].sort((a, b) => {
-      const av = a[sortKey as keyof MemberUsage];
-      const bv = b[sortKey as keyof MemberUsage];
+      const av = sortValue(a, sortKey);
+      const bv = sortValue(b, sortKey);
       if (typeof av === "string" || typeof bv === "string" || sortKey === "lastLoginAt") {
         const as = av ?? "";
         const bs = bv ?? "";
@@ -62,6 +71,9 @@ export function AdminUsageReportScreen() {
     totalExclTop: mostActive ? rows.filter((r) => r.id !== mostActive.id).reduce((s, r) => s + (r[f.key] as number), 0) : 0,
   }));
   const maxFeatureTotal = Math.max(1, ...featureTotals.map((f) => f.total));
+  // 画面別の閲覧数（全体）。閲覧のない画面も、0件として並べる
+  const viewTotals = screens.map((s) => ({ ...s, total: data?.viewBreakdown.find((v) => v.screen === s.screen)?.count ?? 0 }));
+  const maxViewTotal = Math.max(1, ...viewTotals.map((v) => v.total));
 
   function ThSort({ label, sortKeyValue, hint }: { label: string; sortKeyValue: SortKey; hint?: string }) {
     const active = sortKey === sortKeyValue;
@@ -141,16 +153,35 @@ export function AdminUsageReportScreen() {
             </div>
             <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
               1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数です。ログインや、画面を見ただけの利用は含めていません。
-              画面を見た回数は、メンバー別の「画面閲覧数」にまとめています（同じ画面の5分以内の連続閲覧は1回）。
-              {data?.viewBreakdown && data.viewBreakdown.length > 0
-                ? ` 画面別の内訳：${data.viewBreakdown.map((v) => `${v.label} ${v.count}`).join("、")}`
-                : " 画面の閲覧は、まだ記録がありません。これから画面が開かれると、ここに内訳が表示されます。"}
+              画面を見た回数は、メンバー別の「画面閲覧数」と、下の「画面別の閲覧数」にまとめています。
             </p>
             {mostActive && (
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-400)" }}>
                 カッコ内は「{mostActive.name}」を除いた合計です（最も活発に利用しているメンバーの件数だけで全体の傾向が見えにくくならないよう、参考として併記しています）。
               </p>
             )}
+          </div>
+
+          {/* 画面別の閲覧数（合計） */}
+          <div className="card-paper p-5">
+            <h2 className="font-semibold text-base mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
+              画面別の閲覧数（{periodLabel}）
+            </h2>
+            <div className="space-y-2">
+              {viewTotals.map((v) => (
+                <div key={v.screen} className="flex items-center gap-3">
+                  <span className="w-28 shrink-0 text-xs" style={{ color: "var(--color-ink-600)" }}>{v.label}</span>
+                  <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "var(--color-paper-200)" }}>
+                    <div className="h-full rounded-full" style={{ width: `${v.total === 0 ? 0 : Math.max(4, Math.round((v.total / maxViewTotal) * 100))}%`, background: "var(--color-accent)" }} />
+                  </div>
+                  <span className="w-24 shrink-0 text-right text-xs font-semibold tabular-nums" style={{ color: "var(--color-ink-800)" }}>{v.total.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
+              メンバー別の「画面閲覧数」の合計を、見た画面ごとに分けたものです（同じ画面の5分以内の連続閲覧は1回）。協働は、協働マップ・チーム詳細などの画面です。
+              画面の閲覧は、記録の仕組みができた日以降の分だけです。
+            </p>
           </div>
 
           {/* メンバー別内訳 */}
@@ -174,9 +205,14 @@ export function AdminUsageReportScreen() {
                 <input type="checkbox" checked={showOnLeave} onChange={(e) => setShowOnLeave(e.target.checked)} />
                 休会中（{onLeaveCount}人）
               </label>
+              <span className="text-xs ml-2" style={{ color: "var(--color-ink-500)" }}>表の見え方：</span>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={splitViews} onChange={(e) => setSplitViews(e.target.checked)} />
+                画面閲覧数を、画面ごとに分けて表示する
+              </label>
             </div>
             <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
-              <table className="w-full" style={{ minWidth: 1120 }}>
+              <table className="w-full" style={{ minWidth: splitViews ? 1120 + screens.length * 72 : 1120 }}>
                 <thead>
                   <tr>
                     <th onClick={() => handleSort("name")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 left-0 z-10"
@@ -192,6 +228,7 @@ export function AdminUsageReportScreen() {
                     <ThSort label="最終ログイン・利用" sortKeyValue="lastLoginAt" />
                     <ThSort label="訪問回数" sortKeyValue="visits" hint="アプリを使った回数です。最後の利用から30分あいたら、別の訪問と数えます" />
                     <ThSort label="画面閲覧数" sortKeyValue="views" hint="見た画面の数です（ホーム・ミーティング・通知などと、協働画面の合計。同じ画面の5分以内の連続閲覧は1回）" />
+                    {splitViews && screens.map((s) => <ThSort key={s.screen} label={`👀${s.label}`} sortKeyValue={`screen:${s.screen}`} hint={`「${s.label}」画面の閲覧数`} />)}
                     {FEATURES.map((f) => <ThSort key={f.key} label={f.label} sortKeyValue={f.key} />)}
                     <ThSort label="操作件数" sortKeyValue="actions" hint="1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数の合計です（ログイン・訪問・画面の閲覧は含みません）" />
                   </tr>
@@ -217,6 +254,10 @@ export function AdminUsageReportScreen() {
                       </td>
                       <td className="px-2.5 py-2 text-right text-sm font-bold tabular-nums" style={{ color: r.visits === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.visits}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.views === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }} title={`情報参照 ${r.view} ／ 協働画面 ${r.collabView}`}>{r.views}</td>
+                      {splitViews && screens.map((s) => {
+                        const n = r.viewsByScreen[s.screen] ?? 0;
+                        return <td key={s.screen} className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: n === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{n}</td>;
+                      })}
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.oneonone === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.oneonone}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums whitespace-nowrap" style={{ color: r.contact === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>
                         {r.contact}{r.contactEight > 0 && <span className="text-xs ml-1" style={{ color: "var(--color-ink-400)" }}>(内Eight{r.contactEight})</span>}

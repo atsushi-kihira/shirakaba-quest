@@ -67,6 +67,8 @@ async function lastTimesByMember(db: ReturnType<typeof createDb>): Promise<Map<s
 // ---- GET /api/admin/usage-report ----
 /** 協働画面（/collab 以下）の閲覧。画面閲覧数の内訳では、「情報参照」とは分けて数える */
 const COLLAB_SCREEN = "collab";
+/** 画面閲覧数の内訳に出す画面の一覧（メニューの順） */
+const SCREEN_LIST = Object.entries(VIEW_SCREENS).map(([screen, label]) => ({ screen, label }));
 
 type TimedRow = { memberId: string | null; at: number };
 
@@ -195,8 +197,9 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
   // 画面の閲覧は、協働画面（協働マップ・チーム詳細など）と、それ以外（情報参照）に分けて数え、合計を画面閲覧数とする
   const viewMap = countByMember(screenViewRows.filter((r) => r.screen !== COLLAB_SCREEN));
   const collabViewMap = countByMember(screenViewRows.filter((r) => r.screen === COLLAB_SCREEN));
-  // 画面ごとの閲覧回数の内訳（対象メンバーのみ。管理画面の「画面閲覧数」の説明に使う）
+  // 画面ごとの閲覧回数の内訳（メンバーごと、および対象メンバー全体。管理画面の「画面閲覧数」の内訳に使う）
   const memberIdSet = new Set(members.map((m) => m.id));
+  const viewsByScreenMap = new Map<string, Record<string, number>>();
   const viewBreakdown: Record<string, number> = {};
   for (const r of screenViewRows) {
     if (!r.memberId || !memberIdSet.has(r.memberId)) continue;
@@ -204,6 +207,9 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
       const { ymd } = localParts(r.at, tz);
       if (ymd < range.rangeStart || ymd > range.rangeEnd) continue;
     }
+    const byScreen = viewsByScreenMap.get(r.memberId) ?? {};
+    byScreen[r.screen] = (byScreen[r.screen] ?? 0) + 1;
+    viewsByScreenMap.set(r.memberId, byScreen);
     viewBreakdown[r.screen] = (viewBreakdown[r.screen] ?? 0) + 1;
   }
 
@@ -229,6 +235,7 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
       visits,
       views: view + collabView,
       view, collabView,
+      viewsByScreen: viewsByScreenMap.get(m.id) ?? {},
       oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi,
       // 操作件数は、データを作る・更新する操作の件数（ログイン・訪問・画面の閲覧は含めない）
       actions: oneonone + contact + egg + goose + meeting + quest + cardOrder + enishi,
@@ -240,6 +247,8 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
     unit,
     rangeStart: range?.rangeStart ?? null,
     rangeEnd: range?.rangeEnd ?? null,
+    // 画面の一覧（メニューの順）。メンバーごとの viewsByScreen の見出しに使う
+    screens: SCREEN_LIST,
     viewBreakdown: Object.entries(viewBreakdown)
       .map(([screen, count]) => ({ screen, label: VIEW_SCREENS[screen] ?? screen, count }))
       .sort((a, b) => b.count - a.count),
@@ -268,7 +277,7 @@ adminUsageReportRoutes.get("/", async (c) => {
 
 // ---- GET /api/admin/usage-report/members/:id ----
 // メンバー1人の利用状況の詳細。期間は一覧と同じ指定（unit・date・tz）。
-//   row: 一覧の1行と同じ内訳、partners: よくやりとりしている相手（1to1・ミーティング）、externalOneOnOne: 外部ゲストとの1to1の件数。
+//   row: 一覧の1行と同じ内訳（画面ごとの閲覧数 viewsByScreen を含む）、screens: 画面の一覧、partners: よくやりとりしている相手（1to1・ミーティング）、externalOneOnOne: 外部ゲストとの1to1の件数。
 // 訪問回数の棒グラフは GET /access?memberId=... で取得する。
 
 /** ミーティングの参加者が多すぎる回（全員向けの定例会など）は、「よく一緒になる相手」の判定から外す */
@@ -386,5 +395,5 @@ adminUsageReportRoutes.get("/members/:id", async (c) => {
   if (!row) return c.json({ error: { code: "not_found", message: "メンバーが見つかりませんでした" } }, 404);
   const range = report.rangeStart && report.rangeEnd ? { rangeStart: report.rangeStart, rangeEnd: report.rangeEnd } : null;
   const { partners, externalOneOnOne } = await buildPartners(db, memberId, range, period.tz);
-  return c.json({ data: { row, partners, externalOneOnOne, unit: report.unit, rangeStart: report.rangeStart, rangeEnd: report.rangeEnd } });
+  return c.json({ data: { row, screens: report.screens, partners, externalOneOnOne, unit: report.unit, rangeStart: report.rangeStart, rangeEnd: report.rangeEnd } });
 });
