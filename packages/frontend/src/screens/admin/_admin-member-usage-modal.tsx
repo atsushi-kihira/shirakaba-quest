@@ -1,8 +1,8 @@
 // =============================================================
 // 管理画面 — メンバーの利用状況（利用状況レポートのメンバー行から開く）
 //   ・プロフィール（詳しい内容は「プロフィールの詳細」から、メンバー詳細で確認できる）
-//   ・アクセス数（期間に応じた棒グラフ）
-//   ・機能ごとの利用数
+//   ・訪問回数（期間に応じた棒グラフ）
+//   ・訪問回数・画面閲覧数・操作件数と、機能ごとの操作件数
 //   ・よくやりとりしている相手（1to1・ミーティング）
 // 期間（日・週・月・累計）は、このダイアログの中で切り替えられる。開いたときは利用状況レポートの期間と同じ。
 // =============================================================
@@ -124,7 +124,7 @@ export function AdminMemberUsageModal({ memberId, initialUnit, initialDate, onCl
           )}
         </div>
 
-        {/* 期間の切り替え（以降のアクセス数・機能ごとの利用数・やりとりの相手がこの期間の数字になる） */}
+        {/* 期間の切り替え（以降の訪問回数・機能ごとの操作件数・やりとりの相手がこの期間の数字になる） */}
         <div className={SECTION}>
           <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>📅 集計期間（この下のすべてが、この期間の数字です）</p>
           <PeriodSwitcher
@@ -139,18 +139,33 @@ export function AdminMemberUsageModal({ memberId, initialUnit, initialDate, onCl
           />
         </div>
 
-        {/* アクセス数 */}
-        <AccessChart unit={unit} date={date} memberId={memberId} title="📈 このメンバーのアクセス数" hideUniqueMembers />
+        {/* 訪問回数 */}
+        <AccessChart unit={unit} date={date} memberId={memberId} title="📈 このメンバーの訪問回数" hideUniqueMembers />
 
-        {/* 機能ごとの利用数 */}
+        {/* 訪問回数・画面閲覧数・操作件数と、機能ごとの操作件数 */}
         <div className={SECTION}>
-          <h3 className="text-sm font-semibold mb-3" style={H}>📊 機能ごとの利用数</h3>
+          <h3 className="text-sm font-semibold mb-3" style={H}>📊 利用のまとめ</h3>
           {isLoading && !row ? (
             <div className="flex justify-center py-6"><Loader2 size={20} className="animate-spin" style={{ color: "var(--color-ink-400)" }} /></div>
           ) : isError || !row ? (
             <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>利用数を取得できませんでした。時間をおいてもう一度お試しください。</p>
           ) : (
             <>
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {([
+                  { label: "訪問回数", value: row.visits, unit: "回", color: "var(--color-ink-800)" },
+                  { label: "画面閲覧数", value: row.views, unit: "回", color: "var(--color-ink-800)" },
+                  { label: "操作件数", value: row.actions, unit: "件", color: "var(--color-brand)" },
+                ]).map((m) => (
+                  <div key={m.label} className="rounded-xl px-3 py-2" style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
+                    <p className="text-[11px]" style={{ color: "var(--color-ink-500)" }}>{m.label}</p>
+                    <p className="text-xl font-bold tabular-nums" style={{ color: m.value === 0 ? "var(--color-ink-400)" : m.color }}>
+                      {m.value}<span className="text-xs font-normal ml-0.5" style={{ color: "var(--color-ink-500)" }}>{m.unit}</span>
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>操作件数の内訳</p>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {FEATURES.map((f) => {
                   const value = row[f.key];
@@ -162,16 +177,15 @@ export function AdminMemberUsageModal({ memberId, initialUnit, initialDate, onCl
                         {f.key === "contact" && row.contactEight > 0 && (
                           <span className="text-[11px] font-normal ml-1" style={{ color: "var(--color-ink-400)" }}>（内Eight {row.contactEight}）</span>
                         )}
-                        <span className="text-xs font-normal ml-0.5" style={{ color: "var(--color-ink-500)" }}>{f.key === "login" ? "日" : "件"}</span>
+                        <span className="text-xs font-normal ml-0.5" style={{ color: "var(--color-ink-500)" }}>件</span>
                       </p>
                     </div>
                   );
                 })}
               </div>
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
-                アクセス数合計 <b style={{ color: "var(--color-ink-800)" }}>{row.access}</b> 回（アプリを開いた回数。5分以内の続けての利用は1回と数えます）。
-                利用操作の合計 <b style={{ color: "var(--color-brand)" }}>{row.total}</b> 件（上の項目のうち、画面を見ただけの「情報参照」「協働画面」を除いた合計です）。
-                「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日も数えています。
+                訪問回数は、最後の利用から30分あいたら別の訪問と数えます。画面閲覧数は {row.views} 回で、内訳は、ホーム・ミーティング・通知などが {row.view} 回、協働画面が {row.collabView} 回です。
+                操作件数は、上の内訳の合計です（ログイン・訪問・画面の閲覧は含みません）。
               </p>
             </>
           )}

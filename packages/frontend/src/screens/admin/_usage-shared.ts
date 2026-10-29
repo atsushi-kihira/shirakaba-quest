@@ -1,6 +1,7 @@
 // =============================================================
 // 管理画面 — 利用状況の共通の型・定数・フック（管理ダッシュボードの概要・利用状況レポート・メンバー別の詳細で共通に使う）
-//   ・集計期間（日・週・月・累計）の状態と、利用件数の取得
+//   ・集計期間（日・週・月・累計）の状態と、訪問回数・画面閲覧数・操作件数の取得
+//   ・訪問回数: 最後の利用から30分あいたら別の訪問と数える／画面閲覧数: 見た画面の数／操作件数: データを作る・更新する操作の件数
 // 全体のサマリーの表示は _usage-summary-cards.tsx
 // =============================================================
 import { useState } from "react";
@@ -15,7 +16,14 @@ export type MemberUsage = {
   status: string;
   registeredAt: number;
   lastLoginAt: number | null;
-  login: number;
+  /** 訪問回数（最後の利用から30分あいたら、別の訪問） */
+  visits: number;
+  /** 画面閲覧数（情報参照＋協働画面） */
+  views: number;
+  /** 画面閲覧数のうち、協働画面以外（ホーム・ミーティング・通知など） */
+  view: number;
+  /** 画面閲覧数のうち、協働画面（協働マップ・チーム詳細など） */
+  collabView: number;
   oneonone: number;
   contact: number;
   contactEight: number;
@@ -25,12 +33,8 @@ export type MemberUsage = {
   quest: number;
   cardOrder: number;
   enishi: number;
-  view: number;
-  collabView: number;
-  /** アクセス数の合計（アプリを開いた回数） */
-  access: number;
-  /** 利用操作の合計（ログイン日数・1to1・人脈登録など、何かを作った・実行した件数。情報参照・協働画面は含めない） */
-  total: number;
+  /** 操作件数（1to1・人脈登録など、何かを作った・実行した件数。ログイン・訪問・画面の閲覧は含めない） */
+  actions: number;
 };
 
 export type UsageReport = {
@@ -50,12 +54,10 @@ export const STATUS_LABEL: Record<string, string> = {
   rejected: "利用却下",
 };
 
-export type FeatureKey = "login" | "view" | "collabView" | "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
+/** 操作件数の内訳（機能ごと） */
+export type FeatureKey = "oneonone" | "contact" | "egg" | "goose" | "meeting" | "quest" | "cardOrder" | "enishi";
 
 export const FEATURES: { key: FeatureKey; label: string }[] = [
-  { key: "login", label: "ログイン日数" },
-  { key: "view", label: "情報参照" },
-  { key: "collabView", label: "協働画面" },
   { key: "oneonone", label: "1to1" },
   { key: "contact", label: "人脈登録" },
   { key: "egg", label: "金の卵" },

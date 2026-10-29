@@ -1,10 +1,12 @@
 // =============================================================
-// メンバーのアクセス記録と、管理画面のアクセス数グラフ用の集計
-// 「アクセス」= メンバーがアプリを開いたこと（ログイン情報の取得）。同じメンバーの5分以内の連続アクセスは1回と数える。
+// メンバーのアクセス記録（アプリを開いた・画面を見た）と、管理画面の訪問回数グラフ用の集計
+// 記録する「アクセス」= メンバーがアプリを開いたこと（ログイン情報の取得）。同じメンバーの5分以内の連続アクセスは1回と数える。
+// 管理画面に出す「訪問回数」は、アクセス・画面の閲覧・操作の時刻をまとめ、30分あいたら別の訪問と数える（usage-visits.ts）。
 // =============================================================
-import { and, desc, eq, gte, lt } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
+import { collectActivityTimes, visitStarts } from "./usage-visits.ts";
 
 const DEDUPE_SECONDS = 5 * 60;
 
@@ -114,29 +116,45 @@ export function periodRange(unit: AccessUnit, dateYmd: string): { startMs: numbe
 }
 
 /**
- * 指定した日を含む期間（日・週・月）、または累計（月ごと）のアクセス数を、指定のタイムゾーンで集計する。
- * memberId を指定すると、そのメンバーのアクセスだけを数える。
+ * 指定した日を含む期間（日・週・月）、または累計（月ごと）の訪問回数を、指定のタイムゾーンで集計する（訪問が始まった時刻で数える）。
+ * memberId を指定すると、そのメンバーの訪問だけを数える。
  */
 export async function summarizeAccess(db: Db, unit: AccessUnit | "all", dateYmd: string, tzInput: string, memberId?: string): Promise<AccessSummary> {
   const tz = isValidTimeZone(tzInput) ? tzInput : "Asia/Tokyo";
   const who = memberId ? eq(schema.accessLogs.memberId, memberId) : undefined;
 
+  // アクセス（アプリを開いた・画面を見た）の記録が始まった日時
   const first = await db.select({ at: schema.accessLogs.createdAt }).from(schema.accessLogs)
     .where(who).orderBy(schema.accessLogs.createdAt).limit(1).get();
   const trackingStartedAt = first?.at ?? null;
+
+  // 集める期間（タイムゾーンのずれを見込んで前後1日ずつ広め）。累計は、すべて
+  let fromSec = 0;
+  let toSec = Number.MAX_SAFE_INTEGER;
+  if (unit !== "all") {
+    const r = periodRange(unit, dateYmd);
+    fromSec = Math.floor((r.startMs - DAY_MS) / 1000);
+    toSec = Math.floor((r.endMs + 2 * DAY_MS) / 1000);
+  }
+  // メンバーごとの訪問の開始時刻（利用状況レポートと同じく、削除済み・存在しないメンバーは数えない）
+  const activeIds = memberId ? null : new Set((await db.select({ id: schema.members.id }).from(schema.members).where(ne(schema.members.status, "deleted")).all()).map((m) => m.id));
+  const visits: { memberId: string; at: number }[] = [];
+  for (const [id, times] of await collectActivityTimes(db, { fromSec, toSec, memberId })) {
+    if (activeIds && !activeIds.has(id)) continue;
+    for (const at of visitStarts(times)) visits.push({ memberId: id, at });
+  }
+  const earliestVisit = visits.reduce<number | null>((m, v) => (m === null || v.at < m ? v.at : m), null);
 
   // バケット（棒）の用意
   const buckets: { key: string; label: string; count: number; members: Set<string> }[] = [];
   let rangeStart: string | null = null;
   let rangeEnd: string | null = null;
-  let fromSec = 0;
-  let toSec = Number.MAX_SAFE_INTEGER;
   /** 日時をどの棒に入れるか（範囲外なら null） */
   let keyOf: (ymd: string, hour: number) => string | null;
 
   if (unit === "all") {
-    // 最初の記録の月から今月まで、月ごとに1本（記録がなければ今月だけ）
-    const startYmd = localParts(trackingStartedAt ?? Math.floor(Date.now() / 1000), tz).ymd;
+    // 最初の訪問の月から今月まで、月ごとに1本（訪問がなければ今月だけ）
+    const startYmd = localParts(earliestVisit ?? Math.floor(Date.now() / 1000), tz).ymd;
     const endYmd = localParts(Math.floor(Date.now() / 1000), tz).ymd;
     let y = Number(startYmd.slice(0, 4)); let m = Number(startYmd.slice(5, 7));
     const endY = Number(endYmd.slice(0, 4)); const endM = Number(endYmd.slice(5, 7));
@@ -150,9 +168,6 @@ export async function summarizeAccess(db: Db, unit: AccessUnit | "all", dateYmd:
   } else {
     const r = periodRange(unit, dateYmd);
     rangeStart = r.rangeStart; rangeEnd = r.rangeEnd;
-    // タイムゾーンのずれを見込んで前後1日ずつ広めに取り、日付で絞り込む
-    fromSec = Math.floor((r.startMs - DAY_MS) / 1000);
-    toSec = Math.floor((r.endMs + 2 * DAY_MS) / 1000);
     if (unit === "day") {
       for (let h = 0; h < 24; h++) buckets.push({ key: String(h), label: `${h}`, count: 0, members: new Set() });
     } else {
@@ -169,15 +184,10 @@ export async function summarizeAccess(db: Db, unit: AccessUnit | "all", dateYmd:
     keyOf = (ymd, hour) => (ymd < lo || ymd > hi ? null : unit === "day" ? String(hour) : ymd);
   }
 
-  const rows = await db.select({ memberId: schema.accessLogs.memberId, at: schema.accessLogs.createdAt })
-    .from(schema.accessLogs)
-    .where(and(gte(schema.accessLogs.createdAt, fromSec), lt(schema.accessLogs.createdAt, toSec), who))
-    .all();
-
   const byKey = new Map(buckets.map((b) => [b.key, b]));
   const all = new Set<string>();
   let total = 0;
-  for (const r of rows) {
+  for (const r of visits) {
     const { ymd, hour } = localParts(r.at, tz);
     const key = keyOf(ymd, hour);
     const b = key === null ? undefined : byKey.get(key);

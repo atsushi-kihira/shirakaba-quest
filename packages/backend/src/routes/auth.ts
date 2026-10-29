@@ -216,7 +216,7 @@ authRoutes.get("/me", authMiddleware, async (c) => {
       hasMemberRole(db, member.id, "pilot2"),
     ]);
 
-    // アクセス数の集計用に記録する（管理画面の「利用状況」）。失敗してもログイン情報の取得には影響させない
+    // 訪問回数の集計用に記録する（管理画面の「利用状況」）。失敗してもログイン情報の取得には影響させない
     c.executionCtx.waitUntil(recordAccess(db, member.id));
 
     return c.json({

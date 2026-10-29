@@ -1,5 +1,5 @@
 // =============================================================
-// 管理画面 — 利用状況レポート（メンバーごとのログイン・機能別利用件数）
+// 管理画面 — 利用状況レポート（メンバーごとの訪問回数・画面閲覧数・操作件数）
 // =============================================================
 import { useMemo, useState } from "react";
 import { ChevronUp, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
@@ -9,17 +9,17 @@ import { AdminMemberUsageModal } from "./_admin-member-usage-modal";
 import { FEATURES, STATUS_LABEL, fmtDate, useUsagePeriod, useUsageReport, type MemberUsage, type FeatureKey } from "./_usage-shared";
 import { UsageSummaryCards } from "./_usage-summary-cards";
 
-type SortKey = "name" | "status" | "lastLoginAt" | FeatureKey | "access" | "total";
+type SortKey = "name" | "status" | "lastLoginAt" | FeatureKey | "visits" | "views" | "actions";
 
 export function AdminUsageReportScreen() {
-  // 集計期間（日・週・月・累計）。アクセス数・サマリー・機能別・メンバー別のすべてに共通で反映される
+  // 集計期間（日・週・月・累計）。訪問回数・サマリー・機能別・メンバー別のすべてに共通で反映される
   const period = useUsagePeriod("all");
   const { unit, date, tz } = period;
   const { data, isLoading } = useUsageReport(unit, date, tz);
   const periodLabel = unit === "all" ? "累計" : rangeTitle(unit, data?.rangeStart ?? null, data?.rangeEnd ?? null);
   const [detailMemberId, setDetailMemberId] = useState<string | null>(null);
 
-  const [sortKey, setSortKey] = useState<SortKey>("total");
+  const [sortKey, setSortKey] = useState<SortKey>("actions");
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
 
   const rows = data?.data ?? [];
@@ -54,7 +54,7 @@ export function AdminUsageReportScreen() {
     else { setSortKey(key); setSortDir(-1); }
   }
 
-  const mostActive = [...rows].sort((a, b) => b.total - a.total)[0];
+  const mostActive = [...rows].sort((a, b) => b.actions - a.actions)[0];
 
   const featureTotals = FEATURES.map((f) => ({
     ...f,
@@ -86,7 +86,7 @@ export function AdminUsageReportScreen() {
         📊 利用状況レポート
       </h1>
       <p className="text-sm mb-6" style={{ color: "var(--color-ink-500)" }}>
-        メンバーごとの利用日数・機能別の利用件数を確認できます
+        メンバーごとの訪問回数・画面閲覧数・操作件数を確認できます
       </p>
 
       {isLoading ? (
@@ -98,7 +98,7 @@ export function AdminUsageReportScreen() {
           {/* 集計期間（サマリー・機能別・メンバー別の内訳に反映される） */}
           <div className="card-paper p-4 sticky top-0 z-20" style={{ background: "var(--color-paper-50)", boxShadow: "0 2px 10px rgba(60,40,20,0.12)" }}>
             <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>
-              📅 集計期間（アクセス数・機能別の利用件数・メンバー別の内訳のすべてが、この期間の数字になります。画面を下へ動かしても、ここは見えたままです）
+              📅 集計期間（訪問回数・機能別の操作件数・メンバー別の内訳のすべてが、この期間の数字になります。画面を下へ動かしても、ここは見えたままです）
             </p>
             <PeriodSwitcher
               units={["day", "week", "month", "all"]}
@@ -115,13 +115,13 @@ export function AdminUsageReportScreen() {
           {/* 全体サマリー */}
           <UsageSummaryCards rows={rows} unit={unit} />
 
-          {/* アクセス数（期間に応じた棒グラフ） */}
+          {/* 訪問回数（期間に応じた棒グラフ） */}
           <AccessChart unit={unit} date={date} />
 
-          {/* 機能別の利用件数（合計） */}
+          {/* 機能別の操作件数（合計） */}
           <div className="card-paper p-5">
             <h2 className="font-semibold text-base mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
-              機能別の利用件数（{periodLabel}）
+              機能別の操作件数（{periodLabel}）
             </h2>
             <div className="space-y-2">
               {featureTotals.map((f) => (
@@ -140,10 +140,11 @@ export function AdminUsageReportScreen() {
               ))}
             </div>
             <p className="text-xs mt-3" style={{ color: "var(--color-ink-500)" }}>
-              「情報参照」は、ホーム・ミーティング・通知などの画面を開いて見た回数です（ログインしたままの継続利用も含みます。同じ画面の5分以内の連続閲覧は1回）。協働マップ・チーム詳細などの「協働画面」は、情報参照とは別に数えています。
+              1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数です。ログインや、画面を見ただけの利用は含めていません。
+              画面を見た回数は、メンバー別の「画面閲覧数」にまとめています（同じ画面の5分以内の連続閲覧は1回）。
               {data?.viewBreakdown && data.viewBreakdown.length > 0
-                ? ` 内訳：${data.viewBreakdown.map((v) => `${v.label} ${v.count}`).join("、")}`
-                : " まだ記録がありません。これから画面が開かれると、ここに内訳が表示されます。"}
+                ? ` 画面別の内訳：${data.viewBreakdown.map((v) => `${v.label} ${v.count}`).join("、")}`
+                : " 画面の閲覧は、まだ記録がありません。これから画面が開かれると、ここに内訳が表示されます。"}
             </p>
             {mostActive && (
               <p className="text-xs mt-3" style={{ color: "var(--color-ink-400)" }}>
@@ -155,11 +156,12 @@ export function AdminUsageReportScreen() {
           {/* メンバー別内訳 */}
           <div className="card-paper p-5">
             <h2 className="font-semibold text-base mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-800)" }}>
-              メンバー別 利用件数内訳（{periodLabel}）
+              メンバー別の利用状況（{periodLabel}）
             </h2>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-              列見出しをタップ・クリックすると並び替えできます。ゲストと休会中の方は、最初は表示しません（下のチェックで表示できます）。上のサマリーや機能別の件数には、これらの方も含まれています。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・アクセス数・機能ごとの利用数・よくやりとりしている相手）を見られます。「アクセス数合計」は、アプリを開いた回数です（5分以内の続けての利用は1回と数えます）。「利用操作の合計」は、ログイン日数・1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数を足したもので、画面を見ただけの「情報参照」「協働画面」は含めていません。
-              「ログイン日数」は、ログインした日に加え、ログインしたまま使い続けた日（アプリを開いた・画面を見た・何かを登録した日）も1日と数えます。記録の仕組みができる前の分は、1to1や人脈の登録などの操作があった日で補っています。
+              列見出しをタップ・クリックすると並び替えできます。ゲストと休会中の方は、最初は表示しません（下のチェックで表示できます）。上のサマリーや機能別の件数には、これらの方も含まれています。メンバーの行をタップ・クリックすると、そのメンバーの詳しい利用状況（プロフィール・訪問回数・機能ごとの操作件数・よくやりとりしている相手）を見られます。
+              「訪問回数」は、アプリを使った回数です。ログイン・アプリを開いた・画面を見た・何かを登録した、などの利用の時刻をつなげて、最後の利用から30分あいたら、別の訪問と数えます。「画面閲覧数」は、見た画面の数です（ホーム・ミーティング・通知などと、協働マップ・チーム詳細などの協働画面の合計。同じ画面の5分以内の連続閲覧は1回）。「操作件数」は、1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数を足したものです。
+              画面の閲覧とアプリを開いた記録は、記録の仕組みができた日以降にしかありません。それ以前の訪問は、1to1や人脈の登録などの操作があった時刻から数えています。
               「1to1」は、メンバー同士の1to1に、外部ゲストとの予約・予約ページ経由の1to1（キャンセルを除く）を加えた件数です。{unit !== "all" && "（件数は上で選んだ期間のもの。最終ログインは、期間に関係なく最も新しい日です）"}
             </p>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 mb-3 text-sm" style={{ color: "var(--color-ink-700)" }}>
@@ -188,9 +190,10 @@ export function AdminUsageReportScreen() {
                       状態
                     </th>
                     <ThSort label="最終ログイン・利用" sortKeyValue="lastLoginAt" />
+                    <ThSort label="訪問回数" sortKeyValue="visits" hint="アプリを使った回数です。最後の利用から30分あいたら、別の訪問と数えます" />
+                    <ThSort label="画面閲覧数" sortKeyValue="views" hint="見た画面の数です（ホーム・ミーティング・通知などと、協働画面の合計。同じ画面の5分以内の連続閲覧は1回）" />
                     {FEATURES.map((f) => <ThSort key={f.key} label={f.label} sortKeyValue={f.key} />)}
-                    <ThSort label="アクセス数合計" sortKeyValue="access" hint="アプリを開いた回数の合計です（5分以内の続けての利用は1回と数えます）" />
-                    <ThSort label="利用操作の合計" sortKeyValue="total" hint="ログイン日数・1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数の合計です（情報参照・協働画面は含みません）" />
+                    <ThSort label="操作件数" sortKeyValue="actions" hint="1to1・人脈登録・金の卵・金のガチョウ・ミーティング主催・クエスト挑戦・カード発注・ご縁さがしの件数の合計です（ログイン・訪問・画面の閲覧は含みません）" />
                   </tr>
                 </thead>
                 <tbody>
@@ -212,9 +215,8 @@ export function AdminUsageReportScreen() {
                           <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>利用なし</span>
                         ) : fmtDate(r.lastLoginAt)}
                       </td>
-                      <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.login === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.login}</td>
-                      <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.view === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.view}</td>
-                      <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.collabView === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.collabView}</td>
+                      <td className="px-2.5 py-2 text-right text-sm font-bold tabular-nums" style={{ color: r.visits === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.visits}</td>
+                      <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.views === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }} title={`情報参照 ${r.view} ／ 協働画面 ${r.collabView}`}>{r.views}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.oneonone === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.oneonone}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums whitespace-nowrap" style={{ color: r.contact === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>
                         {r.contact}{r.contactEight > 0 && <span className="text-xs ml-1" style={{ color: "var(--color-ink-400)" }}>(内Eight{r.contactEight})</span>}
@@ -225,8 +227,7 @@ export function AdminUsageReportScreen() {
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.quest === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.quest}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.cardOrder === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.cardOrder}</td>
                       <td className="px-2.5 py-2 text-right text-sm tabular-nums" style={{ color: r.enishi === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.enishi}</td>
-                      <td className="px-2.5 py-2 text-right text-sm font-bold tabular-nums" style={{ color: r.access === 0 ? "var(--color-ink-400)" : "var(--color-ink-800)" }}>{r.access}</td>
-                      <td className="px-2.5 py-2 text-right text-sm font-bold tabular-nums" style={{ color: "var(--color-brand)" }}>{r.total}</td>
+                      <td className="px-2.5 py-2 text-right text-sm font-bold tabular-nums" style={{ color: r.actions === 0 ? "var(--color-ink-400)" : "var(--color-brand)" }}>{r.actions}</td>
                     </tr>
                   ))}
                 </tbody>

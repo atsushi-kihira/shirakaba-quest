@@ -1,6 +1,6 @@
 // =============================================================
-// 管理画面 — アクセス数の棒グラフ（日＝1時間ごと／週＝曜日ごと／月＝日ごと／累計＝月ごと）。期間は画面全体の指定に従う
-// 「アクセス」= メンバーがアプリを開いた回数（同じメンバーの5分以内の連続アクセスは1回）
+// 管理画面 — 訪問回数の棒グラフ（日＝1時間ごと／週＝曜日ごと／月＝日ごと／累計＝月ごと）。期間は画面全体の指定に従う
+// 「訪問」= メンバーの一連の利用。ログイン・アプリを開いた・画面を見た・操作した時刻をつなげ、最後の利用から30分あいたら別の訪問
 // =============================================================
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -24,14 +24,14 @@ type AccessChartProps = {
   /** 集計期間。画面全体の期間の指定に合わせて表示する（このグラフの中に切り替えはない） */
   unit: PeriodChoice;
   date: string;
-  /** 指定すると、そのメンバーだけのアクセス数 */
+  /** 指定すると、そのメンバーだけの訪問回数 */
   memberId?: string;
   title?: string;
-  /** 「アクセスした人」を出さない（メンバー個人のグラフ用） */
+  /** 「訪問した人」を出さない（メンバー個人のグラフ用） */
   hideUniqueMembers?: boolean;
 };
 
-export function AccessChart({ unit, date, memberId, title = "📈 アクセス数", hideUniqueMembers }: AccessChartProps) {
+export function AccessChart({ unit, date, memberId, title = "📈 訪問回数", hideUniqueMembers }: AccessChartProps) {
   const tz = useTimezone();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["admin", "usage-report", "access", unit, date, tz, memberId ?? null],
@@ -53,12 +53,12 @@ export function AccessChart({ unit, date, memberId, title = "📈 アクセス�
       {isLoading ? (
         <div className="flex items-center justify-center h-52"><Loader2 size={22} className="animate-spin" style={{ color: "var(--color-ink-400)" }} /></div>
       ) : isError || !summary ? (
-        <p className="text-sm text-center py-16" style={{ color: "var(--color-ink-500)" }}>アクセス数を取得できませんでした。時間をおいてもう一度お試しください。</p>
+        <p className="text-sm text-center py-16" style={{ color: "var(--color-ink-500)" }}>訪問回数を取得できませんでした。時間をおいてもう一度お試しください。</p>
       ) : (
         <>
           <div className="flex gap-5 mb-3 text-xs" style={{ color: "var(--color-ink-500)" }}>
-            <span>アクセス <b className="text-base" style={{ color: "var(--color-brand)" }}>{summary.total.toLocaleString()}</b> 回</span>
-            {!hideUniqueMembers && <span>アクセスした人 <b className="text-base" style={{ color: "var(--color-ink-900)" }}>{summary.uniqueMembers}</b> 人</span>}
+            <span>訪問 <b className="text-base" style={{ color: "var(--color-brand)" }}>{summary.total.toLocaleString()}</b> 回</span>
+            {!hideUniqueMembers && <span>訪問した人 <b className="text-base" style={{ color: "var(--color-ink-900)" }}>{summary.uniqueMembers}</b> 人</span>}
           </div>
 
           <div className="overflow-x-auto">
@@ -81,10 +81,10 @@ export function AccessChart({ unit, date, memberId, title = "📈 アクセス�
 
           <p className="text-xs mt-3" style={{ color: "var(--color-ink-400)" }}>
             {unit === "day" ? "横軸は時刻（0〜23時）" : unit === "week" ? "横軸は曜日（月曜始まり）" : unit === "month" ? "横軸は日" : "横軸は月"}。
-            メンバーがアプリを開いた回数です（5分以内の連続アクセスは1回）。
+            メンバーがアプリを使った回数です（最後の利用から30分あいたら、別の訪問と数えます）。
             {summary.trackingStartedAt
-              ? ` 記録は${fmtDateISO(summary.trackingStartedAt, tz)}から始まっています。`
-              : " まだ記録がありません。これからアクセスがあると、ここに表示されます。"}
+              ? ` アプリを開いた・画面を見た記録は${fmtDateISO(summary.trackingStartedAt, tz)}から始まっていて、それ以前は、登録や操作の時刻から数えています。`
+              : " アプリを開いた・画面を見た記録は、まだありません。これからの利用が記録されると、より正確になります。"}
           </p>
         </>
       )}

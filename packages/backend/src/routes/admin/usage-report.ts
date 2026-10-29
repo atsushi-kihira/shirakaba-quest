@@ -1,8 +1,11 @@
 // =============================================================
 // 管理者向け 利用状況レポート
-// GET /api/admin/usage-report?unit=day|week|month|all&date=YYYY-MM-DD&tz=Asia/Tokyo — メンバーごとの利用件数（ログイン・機能別の内訳）。
+// GET /api/admin/usage-report?unit=day|week|month|all&date=YYYY-MM-DD&tz=Asia/Tokyo — メンバーごとの訪問回数・画面閲覧数・操作件数（機能別の内訳つき）。
 //   unit を省略すると累計。日・週・月を指定すると、その期間（date を含む期間）の件数
-// GET /api/admin/usage-report/access?unit=day|week|month|all&date=YYYY-MM-DD&tz=Asia/Tokyo[&memberId=] — アクセス数（棒グラフ用。all は月ごと）
+//   ・訪問回数（visits）: 最後の利用から30分あいたら別の訪問と数える（services/usage-visits.ts）
+//   ・画面閲覧数（views）: 見た画面の数（情報参照 view ＋ 協働画面 collabView）
+//   ・操作件数（actions）: データを作る・更新する操作の件数（ログインや画面の閲覧は含めない）
+// GET /api/admin/usage-report/access?unit=day|week|month|all&date=YYYY-MM-DD&tz=Asia/Tokyo[&memberId=] — 訪問回数（棒グラフ用。all は月ごと）
 // GET /api/admin/usage-report/members/:id?unit=...&date=...&tz=... — メンバー1人の内訳と、よくやりとりしている相手
 //
 // 集計対象は必ず「一般ユーザー（メンバー）向け機能」に限定すること。管理ダッシュボード側の操作
@@ -17,6 +20,7 @@ import { Hono } from "hono";
 import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { createDb, schema, type Db } from "../../db/index.ts";
 import { VIEW_SCREENS, isValidTimeZone, localParts, periodRange, summarizeAccess, type AccessUnit } from "../../services/access-log.ts";
+import { collectActivityTimes, visitStarts } from "../../services/usage-visits.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminUsageReportRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -31,7 +35,7 @@ function toCountMap(rows: { memberId: string | null; cnt: number }[]): Map<strin
 
 // ---- GET /api/admin/usage-report/access ----
 // unit: day（1時間ごと）／ week（曜日ごと・月曜始まり）／ month（その月の日ごと）／ all（月ごと・これまでの累計）。
-// date は表示したい期間に含まれる日（all では不要）。memberId を付けると、そのメンバーだけのアクセス数。
+// date は表示したい期間に含まれる日（all では不要）。memberId を付けると、そのメンバーだけの訪問回数。
 adminUsageReportRoutes.get("/access", async (c) => {
   const period = parsePeriodQuery(c);
   if (!period) return c.json(INVALID_DATE, 400);
@@ -61,7 +65,7 @@ async function lastTimesByMember(db: ReturnType<typeof createDb>): Promise<Map<s
 }
 
 // ---- GET /api/admin/usage-report ----
-/** 協働画面（/collab 以下）の閲覧。「情報参照」とは分けて数える */
+/** 協働画面（/collab 以下）の閲覧。画面閲覧数の内訳では、「情報参照」とは分けて数える */
 const COLLAB_SCREEN = "collab";
 
 type TimedRow = { memberId: string | null; at: number };
@@ -81,13 +85,9 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
     .all();
 
   const [
-    logins,
     contacts, eggs, geese, meetingsHosted, questAttempts, cardOrders, enishiSearches, screenViewRows,
-    accessRows, sessionsAll, bookingRows, lastTimes,
+    sessionsAll, bookingRows, lastTimes, activityTimes,
   ] = await Promise.all([
-    db.select({ memberId: schema.authSessions.userId, at: schema.authSessions.createdAt })
-      .from(schema.authSessions)
-      .where(sql`${schema.authSessions.userType} = 'member' AND ${schema.authSessions.createdAt} >= ${fromSec} AND ${schema.authSessions.createdAt} < ${toSec}`).all(),
     db.select({ memberId: schema.externalContacts.ownerMemberId, at: schema.externalContacts.createdAt, source: schema.externalContacts.source })
       .from(schema.externalContacts)
       // ゲストの回答で自動登録された人脈は、本人が登録した利用としては数えない
@@ -114,11 +114,7 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
     db.select({ memberId: schema.screenViews.memberId, at: schema.screenViews.createdAt, screen: schema.screenViews.screen })
       .from(schema.screenViews)
       .where(sql`${schema.screenViews.createdAt} >= ${fromSec} AND ${schema.screenViews.createdAt} < ${toSec}`).all(),
-    // ログイン済みのまま使い続けた日（アプリを開いた記録）
-    db.select({ memberId: schema.accessLogs.memberId, at: schema.accessLogs.createdAt })
-      .from(schema.accessLogs)
-      .where(sql`${schema.accessLogs.createdAt} >= ${fromSec} AND ${schema.accessLogs.createdAt} < ${toSec}`).all(),
-    // 1to1（メンバー同士）。件数の数え方と、「その日に操作があった」ことの確認（申込・回答・完了の日）の両方に使う
+    // 1to1（メンバー同士）。件数の数え方と、最終利用の日時（申込・回答・完了の日）の両方に使う
     db.select({
       requesterId: schema.oneOnOneSessions.requesterId, responderId: schema.oneOnOneSessions.responderId,
       requestedAt: schema.oneOnOneSessions.requestedAt, respondedAt: schema.oneOnOneSessions.respondedAt,
@@ -130,6 +126,8 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
     }).from(schema.bookings).where(sql`${schema.bookings.oneOnOneSessionId} IS NULL AND ${schema.bookings.status} != 'cancelled'`).all(),
     // 最終ログイン・利用の日時：期間に関係なく、これまでで最も新しいもの（ログイン、アプリを開いた、画面を見た、各種の登録・操作）
     lastTimesByMember(db),
+    // 訪問回数の元になる、利用（ログイン・アプリを開いた・画面を見た・各種の操作）の時刻
+    collectActivityTimes(db, { fromSec, toSec }),
   ]);
 
   // 指定した期間（タイムゾーンでの日付）に入る行だけを、メンバーごとに数える
@@ -158,29 +156,11 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
     return Number.isFinite(at) ? [{ ...b, at }] : [];
   });
 
-  // ログイン（回数）＝ログインした日、または、ログイン済みのまま利用した日の数。
-  // ログイン済みだとログイン画面を通らないため、新しいログインの記録だけでは利用が数えられない。そこで、次のどれかがあった日を1日と数える。
-  //  ・新しいログイン、アプリを開いた記録、画面を見た記録
-  //  ・その日に行った操作の記録（1to1の申込・回答・完了、人脈・金の卵・ガチョウの登録、ミーティングの作成、お題への挑戦、カード発注、ご縁さがし、外部ゲストとの予約）
-  //    ※ アプリを開いた・画面を見た記録は、記録の仕組みができた日以降にしかないため、それ以前の分は操作の記録で補っている
-  const loginDays = new Map<string, Set<string>>();
-  const addUseDay = (memberId: string | null | undefined, at: number | null | undefined) => {
-    if (!memberId || at == null || !inRange(at)) return;
-    const set = loginDays.get(memberId) ?? new Set<string>();
-    set.add(localParts(at, tz).ymd);
-    loginDays.set(memberId, set);
-  };
-  for (const list of [logins, accessRows, screenViewRows, contacts, eggs, geese, meetingsHosted, questAttempts, cardOrders, enishiSearches] as TimedRow[][]) {
-    for (const r of list) addUseDay(r.memberId, r.at);
+  // 訪問回数：メンバーごとに、利用の時刻を30分あいたところで区切り、期間内に始まった訪問を数える
+  const visitMap = new Map<string, number>();
+  for (const [id, times] of activityTimes) {
+    visitMap.set(id, visitStarts(times).filter(inRange).length);
   }
-  for (const ss of sessionsAll) {
-    addUseDay(ss.requesterId, ss.requestedAt);
-    addUseDay(ss.requesterId, ss.requesterCompletedAt);
-    addUseDay(ss.responderId, ss.respondedAt);
-    addUseDay(ss.responderId, ss.responderCompletedAt);
-  }
-  for (const b of bookingEvents) addUseDay(b.hostMemberId, b.at);
-  const loginMap = new Map([...loginDays].map(([id, days]) => [id, days.size]));
 
   // 最終ログイン・利用の日時：期間に関係なく、これまでで最も新しいもの
   const lastLoginMap = new Map(lastTimes);
@@ -212,16 +192,14 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
   const questMap = countByMember(questAttempts);
   const cardOrderMap = countByMember(cardOrders);
   const enishiMap = countByMember(enishiSearches);
-  // アクセス数＝アプリを開いた回数（記録の仕組みができた日以降。5分以内の続けての利用は1回と数える）。「利用操作の合計」とは別に出す
-  const accessMap = countByMember(accessRows);
-  // 画面の閲覧は、協働画面（協働マップ・チーム詳細など）と、それ以外（情報参照）に分けて数える
+  // 画面の閲覧は、協働画面（協働マップ・チーム詳細など）と、それ以外（情報参照）に分けて数え、合計を画面閲覧数とする
   const viewMap = countByMember(screenViewRows.filter((r) => r.screen !== COLLAB_SCREEN));
   const collabViewMap = countByMember(screenViewRows.filter((r) => r.screen === COLLAB_SCREEN));
-  // 画面ごとの閲覧回数の内訳（対象メンバーのみ。管理画面の「情報参照」の説明に使う）
+  // 画面ごとの閲覧回数の内訳（対象メンバーのみ。管理画面の「画面閲覧数」の説明に使う）
   const memberIdSet = new Set(members.map((m) => m.id));
   const viewBreakdown: Record<string, number> = {};
   for (const r of screenViewRows) {
-    if (!r.memberId || !memberIdSet.has(r.memberId) || r.screen === COLLAB_SCREEN) continue;
+    if (!r.memberId || !memberIdSet.has(r.memberId)) continue;
     if (range) {
       const { ymd } = localParts(r.at, tz);
       if (ymd < range.rangeStart || ymd > range.rangeEnd) continue;
@@ -230,7 +208,7 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
   }
 
   const data = members.map((m) => {
-    const login = loginMap.get(m.id) ?? 0;
+    const visits = visitMap.get(m.id) ?? 0;
     const oneonone = oneOnOneMap.get(m.id) ?? 0;
     const contact = contactMap.get(m.id) ?? 0;
     const contactEight = contactEightMap.get(m.id) ?? 0;
@@ -248,10 +226,12 @@ async function buildUsageReport(db: Db, unit: AccessUnit | "all", date: string, 
       status: m.status,
       registeredAt: m.createdAt,
       lastLoginAt: lastLoginMap.get(m.id) ?? null,
-      login, oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi, view, collabView,
-      access: accessMap.get(m.id) ?? 0,
-      // 利用操作の合計は、データを作る・更新する操作の件数（画面を見ただけの「情報参照」は含めない）
-      total: login + oneonone + contact + egg + goose + meeting + quest + cardOrder + enishi,
+      visits,
+      views: view + collabView,
+      view, collabView,
+      oneonone, contact, contactEight, egg, goose, meeting, quest, cardOrder, enishi,
+      // 操作件数は、データを作る・更新する操作の件数（ログイン・訪問・画面の閲覧は含めない）
+      actions: oneonone + contact + egg + goose + meeting + quest + cardOrder + enishi,
     };
   });
 
@@ -289,7 +269,7 @@ adminUsageReportRoutes.get("/", async (c) => {
 // ---- GET /api/admin/usage-report/members/:id ----
 // メンバー1人の利用状況の詳細。期間は一覧と同じ指定（unit・date・tz）。
 //   row: 一覧の1行と同じ内訳、partners: よくやりとりしている相手（1to1・ミーティング）、externalOneOnOne: 外部ゲストとの1to1の件数。
-// アクセス数の棒グラフは GET /access?memberId=... で取得する。
+// 訪問回数の棒グラフは GET /access?memberId=... で取得する。
 
 /** ミーティングの参加者が多すぎる回（全員向けの定例会など）は、「よく一緒になる相手」の判定から外す */
 const PARTNER_MEETING_MAX_PARTICIPANTS = 15;
