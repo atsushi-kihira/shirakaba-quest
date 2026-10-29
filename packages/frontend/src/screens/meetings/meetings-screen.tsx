@@ -275,6 +275,20 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                 </div>
                 <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
               </Link>
+              <Link
+                to="/meetings/groups"
+                className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
+                style={{ background: "var(--color-paper-200)" }}
+              >
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(181,56,75,0.1)" }}>
+                  👥
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>グループを管理する</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>メンバーや外部ゲストをまとめて、ミーティングや定例会に招待する</p>
+                </div>
+                <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
+              </Link>
             </>
           ) : (
             <>

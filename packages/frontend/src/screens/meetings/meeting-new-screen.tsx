@@ -15,6 +15,7 @@ import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
 import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 import { MemberSelectList } from "@/components/member-select-list";
+import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components/group-scope-picker";
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
 
@@ -67,7 +68,8 @@ export function MeetingNewScreen() {
   const prefillTeamId = searchParams.get("collabTeamId") ?? "";
   const [title, setTitle] = useState(searchParams.get("title") ?? "");
   const [description, setDescription] = useState("");
-  const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected">(prefillTeamId ? "collab_team" : "all");
+  const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected" | "group">(prefillTeamId ? "collab_team" : "all");
+  const [groupId, setGroupId] = useState("");
   const [teamId, setTeamId] = useState("");
   const [collabTeamId, setCollabTeamId] = useState(prefillTeamId);
   const [inviteeIds, setInviteeIds] = useState<string[]>([]);
@@ -120,6 +122,10 @@ export function MeetingNewScreen() {
     // 「全員」選択時にも、送信前の確認ダイアログで対象人数を表示するために取得する
     enabled: scope === "selected" || scope === "all",
   });
+
+  const { data: groupsData, isLoading: groupsLoading } = useMeetingGroups(scope === "group");
+  const groups = groupsData?.data ?? [];
+  const selectedGroup = groups.find((g) => g.id === groupId);
 
   const createMutation = useMutation({
     mutationFn: (body: object) => api.post<{ data: { id: string } }>("/meetings", body),
@@ -223,6 +229,8 @@ export function MeetingNewScreen() {
     if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（わからない方は、一覧から外して、共有URLをお伝えください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
     if (scope === "collab_team" && !collabTeamId) { setError("対象チームを選択してください"); return; }
+    if (scope === "group" && !selectedGroup) { setError("グループを選択してください"); return; }
+    if (scope === "group" && !groupHasPeople(selectedGroup) && guests.length === 0) { setError("選んだグループに、メンバーか外部ゲストが入っていません。グループに追加してください"); return; }
     if (meetingMode === "confirmed" && conferenceMode === "manual" && !conferenceUrl.trim()) {
       setError("会議URLを入力してください"); return;
     }
@@ -241,6 +249,7 @@ export function MeetingNewScreen() {
       teamId: scope === "team" ? teamId : undefined,
       collabTeamId: scope === "collab_team" ? collabTeamId : undefined,
       inviteeIds: scope === "selected" ? inviteeIds : undefined,
+      groupId: scope === "group" ? groupId : undefined,
       ...selectionToPayload(eventSelection),
       registrationDeadline: registrationDeadline
         ? Math.floor(new Date(registrationDeadline).getTime() / 1000)
@@ -351,8 +360,8 @@ export function MeetingNewScreen() {
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
             対象者
           </label>
-          <div className="grid grid-cols-2 gap-2">
-            {(["all", "team", "collab_team", "selected"] as const).map((s) => (
+          <div className="grid grid-cols-3 gap-2">
+            {(["all", "team", "collab_team", "selected", "group"] as const).map((s) => (
               <button
                 key={s}
                 onClick={() => setScope(s)}
@@ -362,7 +371,7 @@ export function MeetingNewScreen() {
                   color: scope === s ? "white" : "var(--color-ink-600)",
                 }}
               >
-                {s === "all" ? "全員" : s === "team" ? "ギルド" : s === "collab_team" ? "チーム" : "指定"}
+                {s === "all" ? "全員" : s === "team" ? "ギルド" : s === "collab_team" ? "チーム" : s === "selected" ? "指定" : "グループ"}
               </button>
             ))}
           </div>
@@ -409,6 +418,10 @@ export function MeetingNewScreen() {
                 ))
               )}
             </div>
+          )}
+
+          {scope === "group" && (
+            <GroupScopePicker groups={groups} loading={groupsLoading} value={groupId} onChange={setGroupId} />
           )}
 
           {scope === "selected" && (
@@ -469,10 +482,10 @@ export function MeetingNewScreen() {
             <div className="card-paper rounded-2xl px-3 py-3 mb-2">
               {dateInputMode === "ai" ? (
                 <AiSlotSearchPanel
-                  scope={scope}
+                  scope={scope === "group" ? "selected" : scope}
                   teamId={teamId || undefined}
                   collabTeamId={collabTeamId || undefined}
-                  inviteeIds={inviteeIds}
+                  inviteeIds={scope === "group" ? (selectedGroup?.members.map((m) => m.id) ?? []) : inviteeIds}
                   allMembers={scope === "all" ? members : undefined}
                   onResults={handleAiResults}
                   durationMinutes={duration}

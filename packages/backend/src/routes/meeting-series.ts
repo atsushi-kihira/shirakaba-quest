@@ -22,6 +22,8 @@ import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
+import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
+import { resolveSeriesMemberIds, addMembersToSeries, addGuestsToSeries, seriesIsOpenForAdditions } from "../services/meeting-participants.ts";
 import { generateRawToken } from "../services/auth.ts";
 import { computeOccurrences, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent } from "../services/conferenceService.ts";
@@ -104,35 +106,6 @@ function usesDayOfWeek(t: RecurrenceType): boolean {
   return t === "weekly" || t === "biweekly" || t === "monthly";
 }
 
-// 表示・投票状況の対象メンバーには常にホストを含める（通常ミーティングの getTargetMembers と同じ扱い）。
-// 開催回への招待（meetingInvitees）を作る際は呼び出し側でホストを除外して使う。
-async function resolveSeriesMemberIds(
-  db: ReturnType<typeof createDb>,
-  series: { id: string; hostMemberId: string; scope: string; teamId?: string | null; collabTeamId: string | null }
-): Promise<string[]> {
-  let ids: string[] = [];
-  if (series.scope === "all") {
-    const rows = await db.select({ id: schema.members.id }).from(schema.members)
-      .where(eq(schema.members.status, "active")).all();
-    ids = rows.map((r) => r.id);
-  } else if (series.scope === "team" && series.teamId) {
-    const rows = await db.select({ memberId: schema.teamMembers.memberId })
-      .from(schema.teamMembers).where(eq(schema.teamMembers.teamId, series.teamId)).all();
-    ids = rows.map((r) => r.memberId);
-  } else if (series.scope === "collab_team" && series.collabTeamId) {
-    const rows = await db.select({ memberId: schema.collabTeamMembers.memberId })
-      .from(schema.collabTeamMembers)
-      .where(and(eq(schema.collabTeamMembers.teamId, series.collabTeamId), eq(schema.collabTeamMembers.status, "active")))
-      .all();
-    ids = rows.map((r) => r.memberId);
-  } else if (series.scope === "selected") {
-    const rows = await db.select({ memberId: schema.meetingSeriesInvitees.memberId })
-      .from(schema.meetingSeriesInvitees).where(eq(schema.meetingSeriesInvitees.seriesId, series.id)).all();
-    ids = rows.map((r) => r.memberId);
-  }
-  return [...new Set([series.hostMemberId, ...ids])];
-}
-
 // ----------------------------------------------------------------
 // POST /api/meeting-series — 作成
 // ----------------------------------------------------------------
@@ -159,10 +132,12 @@ meetingSeriesRoutes.post("/", async (c) => {
   const body = await c.req.json<{
     title: string;
     description?: string;
-    scope: "all" | "team" | "collab_team" | "selected";
+    scope: "all" | "team" | "collab_team" | "selected" | "group";
     teamId?: string;
     collabTeamId?: string;
     inviteeIds?: string[];
+    /** scope=group 用。主催者本人が作ったグループのID */
+    groupId?: string;
     deadline?: number;
     eventTypeDefId?: string;
     /** 紐づけるイベント（インスタンス）。ポイントはここに設定されている */
@@ -196,6 +171,17 @@ meetingSeriesRoutes.post("/", async (c) => {
   const dateMode: "recurring" | "fixed" = mode === "confirmed" && body.dateMode === "fixed" ? "fixed" : "recurring";
 
   if (!body.title?.trim()) return c.json({ error: { code: "invalid_input", message: "タイトルを入力してください" } }, 400);
+  // 対象者を「グループ」で指定した場合は、グループのメンバーを招待メンバー（scope=selected）に、外部ゲストをゲストにする。
+  // 作成した定例会にグループIDを残し、グループに後から人が加わったときに、この定例会にも招待できるようにする
+  let groupId: string | null = null;
+  if (body.scope === "group") {
+    const loaded = await loadGroupForCreate(db, memberId, body.groupId);
+    if (!loaded.ok) return c.json({ error: { code: "invalid_input", message: loaded.message } }, 400);
+    groupId = loaded.group.id;
+    body.scope = "selected";
+    body.inviteeIds = loaded.group.memberIds;
+    body.guests = mergeGuestInputs(loaded.group.guests, body.guests);
+  }
   if (body.scope === "team" && !body.teamId) {
     return c.json({ error: { code: "invalid_input", message: "ギルドを指定してください" } }, 400);
   }
@@ -371,6 +357,7 @@ meetingSeriesRoutes.post("/", async (c) => {
     scope: body.scope,
     teamId: body.scope === "team" ? body.teamId ?? null : null,
     collabTeamId: body.scope === "collab_team" ? body.collabTeamId ?? null : null,
+    groupId,
     status: mode === "confirmed" ? "confirmed" : "voting",
     deadline: body.deadline ?? null,
     endCondition: dateMode === "fixed" ? null : body.endCondition ?? null,
@@ -593,7 +580,8 @@ meetingSeriesRoutes.get("/", async (c) => {
     (s.scope === "all" && approved) ||
     (s.scope === "team" && s.teamId && myTeamIds.has(s.teamId)) ||
     (s.scope === "collab_team" && s.collabTeamId && myCollabTeamIds.has(s.collabTeamId)) ||
-    (s.scope === "selected" && myInviteSeriesIds.has(s.id))
+    // 「指定」「グループ」、およびあとから個別に追加されたメンバー
+    myInviteSeriesIds.has(s.id)
   );
 
   const hostIds = [...new Set(mine.map((s) => s.hostMemberId))];
@@ -743,6 +731,11 @@ meetingSeriesRoutes.get("/:id", async (c) => {
     : null;
   const eventPoints = await attendancePointsFor(db, { eventCampaignId: series.eventCampaignId, eventTypeDefId: series.eventTypeDefId });
 
+  // グループで作成した定例会は、主催者にだけ、グループ名を返す（グループは本人だけのもの）
+  const groupName = isHost && series.groupId
+    ? (await db.select({ name: schema.meetingGroups.name }).from(schema.meetingGroups).where(eq(schema.meetingGroups.id, series.groupId)).get())?.name ?? null
+    : null;
+
   return c.json({
     data: {
       id: series.id, title: series.title, description: series.description,
@@ -772,6 +765,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
         invitedAt: isHost ? e.invitedAt ?? null : null, company: isHost ? e.company ?? null : null, responded: respondedExternalIds.has(e.id),
       })),
       inviteToken: isHost ? series.inviteToken ?? null : null,
+      groupName,
       occurrences,
     },
   });
@@ -792,6 +786,51 @@ meetingSeriesRoutes.post("/:id/invite", async (c) => {
   const inviteToken = generateRawToken();
   await db.update(schema.meetingSeries).set({ inviteToken, updatedAt: Math.floor(Date.now() / 1000) }).where(eq(schema.meetingSeries.id, series.id));
   return c.json({ data: { inviteToken } }, 201);
+});
+
+// ----------------------------------------------------------------
+// POST /api/meeting-series/:id/members — メンバーを追加（主催者のみ）
+// 確定済みの定例会では、これから開催されるすべての回にも入れ、日程をお知らせする
+// ----------------------------------------------------------------
+meetingSeriesRoutes.post("/:id/members", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, c.req.param("id"))).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ追加できます" } }, 403);
+  if (!(await seriesIsOpenForAdditions(db, series))) {
+    return c.json({ error: { code: "invalid_status", message: "終了した、または中止された定例会には、追加できません" } }, 400);
+  }
+  if (series.scope === "all") {
+    return c.json({ error: { code: "invalid_input", message: "全員が対象の定例会なので、メンバーを追加する必要はありません" } }, 400);
+  }
+  const body = await c.req.json<{ memberIds?: string[] }>();
+  if (!body.memberIds?.length) return c.json({ error: { code: "invalid_input", message: "追加するメンバーを選んでください" } }, 400);
+  const added = await addMembersToSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, series, body.memberIds);
+  return c.json({ data: { added } });
+});
+
+// ----------------------------------------------------------------
+// POST /api/meeting-series/:id/guests — 外部ゲストを追加（主催者のみ）
+// 確定済みの定例会では、ゲスト用ページに、これからの全開催日が並ぶ。メールアドレスのある人には案内メールを送る
+// ----------------------------------------------------------------
+meetingSeriesRoutes.post("/:id/guests", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, c.req.param("id"))).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ追加できます" } }, 403);
+  if (!(await seriesIsOpenForAdditions(db, series))) {
+    return c.json({ error: { code: "invalid_status", message: "終了した、または中止された定例会には、追加できません" } }, 400);
+  }
+  const body = await c.req.json<{ guests?: GuestInput[] }>();
+  if (!body.guests?.length) return c.json({ error: { code: "invalid_input", message: "追加するゲストを入力してください" } }, 400);
+  const resolved = await resolveGuests(db, memberId, body.guests);
+  if (!resolved.ok) return c.json({ error: { code: "invalid_input", message: resolved.message } }, 400);
+  const added = await addGuestsToSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, series, resolved.guests);
+  return c.json({ data: { added, skipped: resolved.guests.length - added } });
 });
 
 // ----------------------------------------------------------------

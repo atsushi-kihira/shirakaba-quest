@@ -51,6 +51,7 @@ import { insertCalendarEvent } from "../services/googleClient.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
+import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
 import { searchCommonFreeSlots } from "../services/meetingSlotSearch.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -122,10 +123,12 @@ meetingRoutes.post("/", async (c) => {
   const body = await c.req.json<{
     title: string;
     description?: string;
-    scope: "all" | "team" | "collab_team" | "selected";
+    scope: "all" | "team" | "collab_team" | "selected" | "group";
     teamId?: string;
     collabTeamId?: string;
     inviteeIds?: string[];   // scope=selected 用
+    /** scope=group 用。主催者本人が作ったグループのID */
+    groupId?: string;
     deadline?: number;
     eventCampaignId?: string;
     eventTypeDefId?: string;
@@ -161,6 +164,18 @@ meetingRoutes.post("/", async (c) => {
   }
   if (body.scope === "collab_team" && !body.collabTeamId) {
     return c.json({ error: { code: "invalid_input", message: "対象チームを指定してください" } }, 400);
+  }
+
+  // 対象者を「グループ」で指定した場合は、グループのメンバーを招待メンバー（scope=selected）に、外部ゲストをゲストにする。
+  // 作成した会にグループIDを残し、グループに後から人が加わったときに、この会にも招待できるようにする
+  let groupId: string | null = null;
+  if (body.scope === "group") {
+    const loaded = await loadGroupForCreate(db, memberId, body.groupId);
+    if (!loaded.ok) return c.json({ error: { code: "invalid_input", message: loaded.message } }, 400);
+    groupId = loaded.group.id;
+    body.scope = "selected";
+    body.inviteeIds = loaded.group.memberIds;
+    body.guests = mergeGuestInputs(loaded.group.guests, body.guests);
   }
 
   const confirmNow = body.confirmNow === true;
@@ -217,6 +232,7 @@ meetingRoutes.post("/", async (c) => {
     scope: body.scope ?? "all",
     teamId: body.scope === "team" ? body.teamId ?? null : null,
     collabTeamId: body.scope === "collab_team" ? body.collabTeamId ?? null : null,
+    groupId,
     status: confirmNow ? "confirmed" : "open",
     confirmedCandidateId: null,
     deadline: body.deadline ?? null,
@@ -1344,6 +1360,11 @@ meetingRoutes.get("/:id", async (c) => {
     }));
   }
 
+  // グループで作成したミーティングは、主催者にだけ、グループ名を返す（グループは本人だけのもの）
+  const groupName = isHost && meeting.groupId
+    ? (await db.select({ name: schema.meetingGroups.name }).from(schema.meetingGroups).where(eq(schema.meetingGroups.id, meeting.groupId)).get())?.name ?? null
+    : null;
+
   return c.json({
     data: {
       meeting: {
@@ -1367,6 +1388,7 @@ meetingRoutes.get("/:id", async (c) => {
         seriesId: meeting.seriesId,
         seriesOccurrenceIndex: meeting.seriesOccurrenceIndex,
         inviteToken: isHost ? (meeting.inviteToken ?? null) : null,
+        groupName,
         createdAt: meeting.createdAt,
         updatedAt: meeting.updatedAt,
       },

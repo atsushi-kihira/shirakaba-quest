@@ -24,6 +24,7 @@ import { OneOnOneMeetingScreen } from "@/screens/meetings/one-on-one-meeting-scr
 import { MeetingDetailScreen } from "@/screens/meetings/meeting-detail-screen";
 import { MeetingSeriesNewScreen } from "@/screens/meetings/meeting-series-new-screen";
 import { MeetingSeriesDetailScreen } from "@/screens/meetings/meeting-series-detail-screen";
+import { MeetingGroupsScreen } from "@/screens/meetings/meeting-groups-screen";
 import { ScheduleScreen } from "@/screens/schedule/schedule-screen";
 import { ScheduleInviteScreen } from "@/screens/schedule/schedule-invite-screen";
 import { ScheduleSeriesScreen, ScheduleSeriesInviteScreen } from "@/screens/schedule/schedule-series-screen";
@@ -154,6 +155,7 @@ export default function App() {
                 <Route element={<ApprovedMemberGuard />}>
                   <Route path="meetings/new" element={<MeetingNewScreen />} />
                   <Route path="meetings/series/new" element={<MeetingSeriesNewScreen />} />
+                  <Route path="meetings/groups" element={<MeetingGroupsScreen />} />
                   <Route path="meetings/series/:id" element={<MeetingSeriesDetailScreen />} />
                   <Route path="meetings/:id" element={<MeetingDetailScreen />} />
                 </Route>

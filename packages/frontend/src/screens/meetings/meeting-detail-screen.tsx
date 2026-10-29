@@ -45,6 +45,8 @@ type Meeting = {
   seriesId: string | null;
   seriesOccurrenceIndex: number | null;
   inviteToken: string | null;
+  /** グループで作成したミーティングの、グループ名（主催者にだけ返る） */
+  groupName?: string | null;
 };
 type LinkedEvent = { id: string; title: string; multiplier: number | null };
 type AttendanceRecord = { memberId: string; status: "attended" | "absent"; candidateId: string | null; pointsAwarded: number | null };
@@ -1691,6 +1693,11 @@ export function MeetingDetailScreen() {
       {meeting.status !== "cancelled" && (
         <div className="card-paper rounded-3xl p-4 mb-5 space-y-2">
           <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>👥 招待の管理</h2>
+          {isHost && meeting.groupName && (
+            <p className="text-xs mb-1 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-600)" }}>
+              グループ「{meeting.groupName}」で作成しました。グループに人を追加すると、このミーティングにも自動で招待されます。
+            </p>
+          )}
 
           {/* メンバー追加ボタン（指定メンバー対象ミーティングのみ） */}
           {meeting.scope === "selected" && (

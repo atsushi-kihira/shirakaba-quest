@@ -17,6 +17,7 @@ import { SeriesConferenceUrlsModal, type SeriesUrlPayload } from "./_series-conf
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { EventReminderSetting } from "@/components/reminder-settings";
 import { SeriesGuestPanel, type SeriesExternalInvitee } from "./_series-guest-panel";
+import { SeriesParticipantsPanel } from "./_series-participants-panel";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -33,7 +34,7 @@ type SeriesDetail = {
   event: { id: string; title: string; ended: boolean; points: number } | null;
   eventType: { id: string; name: string; emoji: string; pointValue: number } | null;
   hostMemberId: string; isHost: boolean; hostName: string | null;
-  scope: "collab_team" | "selected"; collabTeamId: string | null;
+  scope: string; collabTeamId: string | null;
   status: "voting" | "confirmed" | "ended" | "cancelled";
   deadline: number | null;
   endCondition: "date" | "count" | null; endDate: number | null; occurrenceCount: number | null;
@@ -44,6 +45,8 @@ type SeriesDetail = {
   targetMembers: TargetMember[];
   externalInvitees?: SeriesExternalInvitee[];
   inviteToken?: string | null;
+  /** グループで作成した定例会の、グループ名（主催者にだけ返る） */
+  groupName?: string | null;
   occurrences: Occurrence[];
 };
 
@@ -272,6 +275,12 @@ export function MeetingSeriesDetailScreen() {
       {/* 外部ゲスト（主催者のみ。共有URL・ゲストの一覧） */}
       {series.isHost && series.status !== "cancelled" && (
         <SeriesGuestPanel seriesId={series.id} voting={series.status === "voting"} inviteToken={series.inviteToken ?? null} guests={series.externalInvitees ?? []} />
+      )}
+
+      {/* 参加者の追加（主催者のみ。投票中・確定済みの定例会） */}
+      {series.isHost && (series.status === "voting" || series.status === "confirmed") && (
+        <SeriesParticipantsPanel seriesId={series.id} scope={series.scope} confirmed={series.status === "confirmed"}
+          currentMemberIds={series.targetMembers.filter((m) => !m.isExternal).map((m) => m.id)} groupName={series.groupName ?? null} />
       )}
 
       {series.status === "voting" && (

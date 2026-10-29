@@ -844,6 +844,7 @@ export const meetings = sqliteTable("meetings", {
   lastReminderSentAt:    integer("last_reminder_sent_at"),
   seriesId:              text("series_id"), // 定例会（meeting_series）から生成された回の場合に設定
   seriesOccurrenceIndex: integer("series_occurrence_index"), // シリーズ内の何回目か（1始まり）
+  groupId:               text("group_id"), // 対象者を「グループ」で指定して作成した場合のグループID（series由来の回には設定しない）
   createdAt:             integer("created_at").notNull(),
   updatedAt:             integer("updated_at").notNull(),
 });
@@ -942,6 +943,7 @@ export const meetingSeries = sqliteTable("meeting_series", {
   inviteToken:         text("invite_token"), // 外部ゲスト用の共有URLのトークン
   eventTypeDefId:      text("event_type_def_id"),
   eventCampaignId:     text("event_campaign_id"), // 紐づけたイベント（インスタンス）。ポイントはここに設定する
+  groupId:             text("group_id"),          // 対象者を「グループ」で指定して作成した場合のグループID
   createdAt:           integer("created_at").notNull(),
   updatedAt:           integer("updated_at").notNull(),
 });
@@ -1380,3 +1382,39 @@ export const guestContactProposals = sqliteTable("guest_contact_proposals", {
   createdAt:     integer("created_at").notNull(),
   resolvedAt:    integer("resolved_at"),
 });
+
+
+// ---- 対象者の「グループ」（ミーティング・定例会の対象者として、あらかじめまとめておく。作成した本人だけが使える）----
+// メンバーと外部ゲスト（ビジター）の両方を入れられる。グループで作成したミーティング・定例会（meetings.group_id / meeting_series.group_id）
+// には、グループに後から追加された人も、確定済みの回を含めて招待される。
+export const meetingGroups = sqliteTable("meeting_groups", {
+  id:            text("id").primaryKey(),
+  ownerMemberId: text("owner_member_id").notNull(),
+  name:          text("name").notNull(),
+  createdAt:     integer("created_at").notNull(),
+  updatedAt:     integer("updated_at").notNull(),
+});
+
+export const meetingGroupMembers = sqliteTable(
+  "meeting_group_members",
+  {
+    id:        text("id").primaryKey(),
+    groupId:   text("group_id").notNull(),
+    memberId:  text("member_id").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_meeting_group_member").on(t.groupId, t.memberId)]
+);
+
+export const meetingGroupGuests = sqliteTable(
+  "meeting_group_guests",
+  {
+    id:        text("id").primaryKey(),
+    groupId:   text("group_id").notNull(),
+    name:      text("name").notNull(),
+    email:     text("email").notNull(), // 小文字にそろえて保存
+    contactId: text("contact_id"),      // 外部人脈から追加した場合の人脈ID
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_meeting_group_guest_email").on(t.groupId, t.email)]
+);
