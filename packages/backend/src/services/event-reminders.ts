@@ -391,11 +391,19 @@ export async function listHomeNotices(db: Db, memberId: string, now: number = Ma
   }
   const bookingStart = new Map(bookingRows.filter((b) => b.status === "confirmed").map((b) => [b.id, Math.floor(new Date(b.startAtUtc).getTime() / 1000)]));
 
-  return shown
-    .filter((r) =>
-      r.kind === "meeting" ? meetingStarts.get(r.refId)?.has(r.startsAt)
-      : r.kind === "oneonone" ? sessionStart.get(r.refId) === r.startsAt
-      : bookingStart.get(r.refId) === r.startsAt)
+  const valid = shown.filter((r) =>
+    r.kind === "meeting" ? meetingStarts.get(r.refId)?.has(r.startsAt)
+    : r.kind === "oneonone" ? sessionStart.get(r.refId) === r.startsAt
+    : bookingStart.get(r.refId) === r.startsAt);
+  // 同じ予定に複数のリマインドが届いている（例：昨日の「明日は〜です」と、今朝の「今日は〜です」）ときは、いちばん新しい1件だけを出す。
+  // 古いほうは、予定が日付のうえで近づいているのに「明日」などと出てしまい、重なって紛らわしいため
+  const latest = new Map<string, (typeof valid)[number]>();
+  for (const r of valid) {
+    const key = `${r.kind}|${r.refId}|${r.startsAt}`;
+    const cur = latest.get(key);
+    if (!cur || r.createdAt > cur.createdAt || (r.createdAt === cur.createdAt && r.daysBefore < cur.daysBefore)) latest.set(key, r);
+  }
+  return [...latest.values()]
     .sort((a, b) => a.startsAt - b.startsAt)
     .map((r) => ({ id: r.id, kind: r.kind, title: r.title, body: r.body, linkPath: r.linkPath, startsAt: r.startsAt, createdAt: r.createdAt }));
 }

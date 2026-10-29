@@ -81,7 +81,7 @@ export function AdminUsageReportScreen() {
       <th
         onClick={() => handleSort(sortKeyValue)}
         title={hint}
-        className="px-2.5 py-2.5 text-right text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0"
+        className="px-2.5 py-2.5 text-right text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 z-10"
         style={{ color: active ? "var(--color-ink-700)" : "var(--color-ink-500)", background: "var(--color-paper-50)" }}
       >
         <span className="inline-flex items-center gap-0.5">
@@ -211,17 +211,18 @@ export function AdminUsageReportScreen() {
                 画面閲覧数を、画面ごとに分けて表示する
               </label>
             </div>
-            <div className="overflow-x-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)" }}>
+            {/* 人数が多くて下まで見えないときも、列のタイトル行が見えたままになるよう、表の枠の中で縦にもスクロールさせる */}
+            <div className="overflow-auto rounded-2xl" style={{ border: "1px solid var(--color-paper-300)", maxHeight: "min(70vh, 640px)" }}>
               <table className="w-full" style={{ minWidth: splitViews ? 1120 + screens.length * 72 : 1120 }}>
                 <thead>
                   <tr>
-                    <th onClick={() => handleSort("name")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 left-0 z-10"
+                    <th onClick={() => handleSort("name")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 left-0 z-20"
                       style={{ color: sortKey === "name" ? "var(--color-ink-700)" : "var(--color-ink-500)", background: "var(--color-paper-50)" }}>
                       <span className="inline-flex items-center gap-0.5">
                         名前 {sortKey === "name" && (sortDir === -1 ? <ChevronDown size={11} /> : <ChevronUp size={11} />)}
                       </span>
                     </th>
-                    <th onClick={() => handleSort("status")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0"
+                    <th onClick={() => handleSort("status")} className="px-2.5 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap sticky top-0 z-10"
                       style={{ color: sortKey === "status" ? "var(--color-ink-700)" : "var(--color-ink-500)", background: "var(--color-paper-50)" }}>
                       状態
                     </th>
