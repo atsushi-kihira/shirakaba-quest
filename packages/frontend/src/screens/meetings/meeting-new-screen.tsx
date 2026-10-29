@@ -14,12 +14,13 @@ import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
 import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
+import { MemberSelectList } from "@/components/member-select-list";
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
 
 type Team = { id: string; name: string; emblemEmoji: string };
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
-type Member = { id: string; name: string; emoji: string; bgColor: string };
+type Member = { id: string; name: string; emoji: string; bgColor: string; furigana?: string | null; romaji?: string | null };
 type TeamsResponse = { data: Team[] };
 type CollabTeamsResponse = { data: CollabTeam[] };
 type MembersResponse = { data: Member[] };
@@ -411,30 +412,12 @@ export function MeetingNewScreen() {
           )}
 
           {scope === "selected" && (
-            <div className="mt-3 space-y-1.5 max-h-60 overflow-y-auto">
-              {members.map((m) => (
-                <label
-                  key={m.id}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-2xl cursor-pointer transition"
-                  style={{
-                    background: inviteeIds.includes(m.id) ? "rgba(181,56,75,0.08)" : "var(--color-paper-200)",
-                    border: inviteeIds.includes(m.id) ? "1.5px solid rgba(181,56,75,0.3)" : "1.5px solid transparent",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={inviteeIds.includes(m.id)}
-                    onChange={() => toggleInvitee(m.id)}
-                    className="sr-only"
-                  />
-                  <span className={`w-8 h-8 rounded-xl flex items-center justify-center text-lg ${m.bgColor}`}>
-                    {m.emoji}
-                  </span>
-                  <span className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{m.name}</span>
-                  {inviteeIds.includes(m.id) && <span className="ml-auto text-xs" style={{ color: "var(--color-brand)" }}>✓</span>}
-                </label>
-              ))}
-            </div>
+            <MemberSelectList
+              members={members}
+              selectedIds={inviteeIds}
+              onToggle={toggleInvitee}
+              onSetSelected={setInviteeIds}
+            />
           )}
         </div>
 
