@@ -23,6 +23,7 @@ import { notificationRoutes } from "./routes/notifications.ts";
 import { eventRoutes } from "./routes/events.ts";
 import { teamRoutes } from "./routes/teams.ts";
 import { collabRoutes, sweepPendingCompanySummaries } from "./routes/collab.ts";
+import { sweepPendingPrefectures } from "./services/prefecture.ts";
 import { shareStoryRoutes } from "./routes/share-stories.ts";
 import { enishiRoutes } from "./routes/enishi.ts";
 import { registerRoutes } from "./routes/register.ts";
@@ -118,6 +119,20 @@ app.post("/api/internal/sweep-pending-summaries", async (c) => {
   const { hop } = await c.req.json<{ hop?: number }>().catch(() => ({ hop: 0 }));
   const origin = new URL(c.req.url).origin;
   c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, origin, hop ?? 0));
+  return c.json({ ok: true });
+});
+
+// ---- 内部専用: 所在地（都道府県）の自動入力の自己連鎖呼び出し（共有シークレットで保護） ----
+app.post("/api/internal/sweep-pending-prefectures", async (c) => {
+  const secret = c.req.header("x-internal-task-secret");
+  if (!secret || secret !== c.env.INTERNAL_TASK_SECRET) {
+    return c.json({ error: { code: "forbidden", message: "許可されていないリクエストです" } }, 403);
+  }
+  const { createDb } = await import("./db/index.ts");
+  const db = createDb(c.env.DB);
+  const { hop } = await c.req.json<{ hop?: number }>().catch(() => ({ hop: 0 }));
+  const origin = new URL(c.req.url).origin;
+  c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, origin, hop ?? 0));
   return c.json({ ok: true });
 });
 

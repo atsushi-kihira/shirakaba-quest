@@ -18,7 +18,7 @@
 // =============================================================
 import { Hono } from "hono";
 import { addMemberToScopedSeries } from "../../services/meeting-participants.ts";
-import { and, eq, gt, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { MailService } from "../../services/mailer.ts";
 import { getFrontendUrl } from "../../services/frontendUrl.ts";
@@ -29,6 +29,7 @@ import { hardDeleteMember } from "../../services/memberDeletion.ts";
 import { applyEmailChange, findLinkedAdmin, isEmailInUse, isValidEmailFormat } from "../../services/email-change.ts";
 import { getCardImageDataUrl, saveAvatarImage } from "../../services/card-image.ts";
 import { buildProfilePatch, type ProfileBody } from "../../services/member-profile.ts";
+import { prefecturePatch, sweepPendingPrefectures } from "../../services/prefecture.ts";
 import {
   getActiveMemberIdsWithRole,
   grantMemberRole,
@@ -54,6 +55,11 @@ adminMemberRoutes.get("/", async (c) => {
     getActiveMemberIdsWithRole(db, "topic_mentor"),
   ]);
 
+  // 所在地の調べ待ちが残っていれば、いま調べる
+  if (members.some((m) => m.prefectureStatus === "pending" && (m.company || m.address))) {
+    c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
+  }
+
   return c.json({
     data: members.map((m) => ({
       ...m,
@@ -67,6 +73,19 @@ adminMemberRoutes.get("/", async (c) => {
       isTopicMentor: tmIds.has(m.id),
     })),
   });
+});
+
+// ---- POST /api/admin/members/prefecture-recheck ----
+// 所在地（都道府県）が分からなかった・調べに失敗したメンバーと外部人脈を、もう一度、会社名・住所から調べる。
+// 手で入力された所在地は、そのまま。調べ終わるまで少しかかるため、すぐに応答して、あとはバックグラウンドで続ける
+adminMemberRoutes.post("/prefecture-recheck", async (c) => {
+  const db = createDb(c.env.DB);
+  const retry = inArray(schema.members.prefectureStatus, ["not_found", "error"]);
+  await db.update(schema.members).set({ prefectureStatus: "pending", prefectureClaimedAt: null }).where(retry).run();
+  await db.update(schema.externalContacts).set({ prefectureStatus: "pending", prefectureClaimedAt: null })
+    .where(inArray(schema.externalContacts.prefectureStatus, ["not_found", "error"])).run();
+  c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
+  return c.json({ ok: true });
 });
 
 // ---- GET /api/admin/members/registration-pending ----
@@ -252,12 +271,17 @@ const VALID_MEMBER_ROLES: MemberRoleName[] = [
 adminMemberRoutes.patch("/:id/profile", async (c) => {
   const db = createDb(c.env.DB);
   const id = c.req.param("id");
-  const member = await db.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.id, id)).get();
+  const member = await db.select({ id: schema.members.id, company: schema.members.company, address: schema.members.address, prefectureStatus: schema.members.prefectureStatus })
+    .from(schema.members).where(eq(schema.members.id, id)).get();
   if (!member) return c.json({ error: { code: "not_found", message: "メンバーが見つかりません" } }, 404);
   const body = await c.req.json<ProfileBody>().catch(() => ({} as ProfileBody));
   const built = buildProfilePatch(body, Math.floor(Date.now() / 1000));
   if (!built.ok) return c.json({ error: { code: "invalid_input", message: built.message } }, 400);
-  await db.update(schema.members).set(built.patch).where(eq(schema.members.id, id));
+  const prefPatch = prefecturePatch(body, member);
+  await db.update(schema.members).set({ ...built.patch, ...prefPatch }).where(eq(schema.members.id, id));
+  if (prefPatch?.prefectureStatus === "pending") {
+    c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
+  }
   return c.json({ ok: true });
 });
 

@@ -7,6 +7,7 @@
 //   同じメールアドレスでやり直した場合は、新しい内容で上書きする。
 // ・メール確認の完了待ちのまま放置されている人は、下書きの一覧から管理画面で確認できる。
 // =============================================================
+import { sweepPendingPrefectures } from "./prefecture.ts";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
@@ -158,6 +159,9 @@ export async function createPendingMember(
     createdAt: now,
     updatedAt: now,
   });
+
+  // 所在地（都道府県）を、会社名・住所から自動で入れる（レスポンス後に実行）
+  waitUntil(sweepPendingPrefectures(db, env, null, 0));
 
   // 金の卵・金のガチョウ（旧来の登録画面から送られた分のみ登録する）
   const goldenEggs = (body.goldenEggs ?? []).filter((e) => e.description?.trim()).slice(0, 15);

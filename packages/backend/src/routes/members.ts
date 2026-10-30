@@ -17,6 +17,7 @@ import { checkAndAwardBadges } from "../services/badge.ts";
 import { getActiveSeasonPoints } from "../services/season-points.ts";
 import { VALID_THEMES } from "../services/theme.ts";
 import { buildProfilePatch, type ProfileBody } from "../services/member-profile.ts";
+import { prefecturePatch, sweepPendingPrefectures } from "../services/prefecture.ts";
 import type { Env, Variables } from "../types.ts";
 import type { Skill } from "@shared/types";
 
@@ -158,6 +159,9 @@ memberRoutes.get("/", async (c) => {
       customFields: isUnlocked ? parseJson(member.customFields, {}) : null,
       characterKey: member.characterKey ?? null,
       businessCommunityJoinedDate: member.businessCommunityJoinedDate ?? null,
+      // 所在地（都道府県）と、アカウント登録日時。なかま一覧の並べ替え・グループ分けに使う
+      prefecture: member.prefecture ?? null,
+      registeredAt: member.createdAt,
       oneOnOneCount: oneOnOneStatsMap.get(member.id)?.count ?? 0,
       lastOneOnOneAt: oneOnOneStatsMap.get(member.id)?.lastAt ?? null,
       externalContactCount: contactStatsMap.get(member.id)?.total ?? 0,
@@ -242,6 +246,7 @@ memberRoutes.get("/:id", async (c) => {
       customFields: isUnlocked ? parseJson(member.customFields, {}) : null,
       characterKey: member.characterKey ?? null,
       businessCommunityJoinedDate: member.businessCommunityJoinedDate ?? null,
+      prefecture: member.prefecture ?? null,
       externalContactCount,
       externalContactDetailCount,
     },
@@ -262,7 +267,13 @@ memberRoutes.patch("/me", async (c) => {
   const built = buildProfilePatch(body, Math.floor(Date.now() / 1000));
   if (!built.ok) return c.json({ error: { code: "invalid_input", message: built.message } }, 400);
 
-  await db.update(schema.members).set(built.patch).where(eq(schema.members.id, userId));
+  const current = await db.select({ company: schema.members.company, address: schema.members.address, prefectureStatus: schema.members.prefectureStatus })
+    .from(schema.members).where(eq(schema.members.id, userId)).get();
+  const prefPatch = prefecturePatch(body, current ?? null);
+  await db.update(schema.members).set({ ...built.patch, ...prefPatch }).where(eq(schema.members.id, userId));
+  if (prefPatch?.prefectureStatus === "pending") {
+    c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
+  }
 
   return c.json({ ok: true });
 });

@@ -15,6 +15,7 @@ import { useIntroRequestCount } from "@/hooks/use-collab-alerts";
 import { fmtDateShort } from "@/lib/date";
 import { matchesSearchQuery } from "@/lib/contact-search";
 import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActive, type JoinedRange } from "@/components/joined-range-filter";
+import { MemberListOptions, MemberSectionHeader, groupMembers, sortMembers, useMemberListOptions, type MemberFieldAccessors } from "@/components/member-list-options";
 import { ExternalContactsTab } from "./_external-contacts-tab";
 import type { PublicMember } from "@shared/types";
 
@@ -191,11 +192,19 @@ function TeamMemberCard({ tm, isMe }: { tm: TeamMemberEntry; isMe: boolean }) {
   );
 }
 
+// 並べ替え・グループ分けで使う値（アカウント登録日時・入会日・所在地）
+const MEMBER_FIELDS: MemberFieldAccessors<PublicMember> = {
+  registeredAt: (m) => m.registeredAt ?? 0,
+  joinedDate: (m) => m.businessCommunityJoinedDate,
+  prefecture: (m) => m.prefecture,
+};
+
 // ---- メイン画面 ----
 export function MembersScreen() {
   const me = useAuthStore((s) => s.user);
   const [search, setSearch] = useState("");
   const [joinedRange, setJoinedRange] = useState<JoinedRange>(EMPTY_JOINED_RANGE);
+  const { sort, group, setSort, setGroup } = useMemberListOptions("members-screen:list-options");
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>(searchParams.get("tab") === "contacts" ? "contacts" : "all");
   const introRequestCount = useIntroRequestCount();
@@ -234,6 +243,8 @@ export function MembersScreen() {
     if (activeTab === "undone") return m.connectionStatus === "none";
     return false;
   });
+
+  const sections = groupMembers(sortMembers(filteredMembers, sort, MEMBER_FIELDS), group, sort, MEMBER_FIELDS);
 
   const isLoading = activeTab !== "contacts" && (membersLoading || (activeTab === "team" && teamsLoading));
 
@@ -300,6 +311,10 @@ export function MembersScreen() {
 
       {activeTab !== "team" && activeTab !== "contacts" && (
         <JoinedRangeFilter value={joinedRange} onChange={setJoinedRange} />
+      )}
+
+      {activeTab !== "team" && activeTab !== "contacts" && (
+        <MemberListOptions sort={sort} group={group} onSort={setSort} onGroup={setGroup} />
       )}
 
       {/* ローディング */}
@@ -385,8 +400,13 @@ export function MembersScreen() {
                "見つかりませんでした"}
             </p>
           )}
-          {filteredMembers.map((member) => (
-            <MemberCard key={member.id} member={member} collabTeams={collabTeamsByMember.get(member.id)} />
+          {sections.map((section) => (
+            <div key={section.key} className="space-y-3">
+              {group !== "none" && <MemberSectionHeader label={section.label} count={section.items.length} />}
+              {section.items.map((member) => (
+                <MemberCard key={member.id} member={member} collabTeams={collabTeamsByMember.get(member.id)} />
+              ))}
+            </div>
           ))}
         </div>
       )}

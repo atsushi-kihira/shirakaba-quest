@@ -45,6 +45,8 @@ export async function registerGuestAsContact(
       patch.company = company;
       // 非公開以外の人脈では、会社名が入ったので、会社概要を作れるようにする
       if (existing.visibility !== "private") patch.businessSummaryStatus = "pending";
+      // 所在地（都道府県）も、会社名から自動で入れる（手で入力済みのものは、そのまま）
+      if (existing.prefectureStatus !== "manual") { patch.prefecture = null; patch.prefectureStatus = "pending"; }
     }
     if (!existing.email) patch.email = email;
     if (Object.keys(patch).length > 0) await db.update(schema.externalContacts).set({ ...patch, updatedAt: now }).where(eq(schema.externalContacts.id, existing.id));

@@ -1,7 +1,7 @@
 // =============================================================
 // 管理画面 — メンバー管理
 // =============================================================
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle, UserMinus, UserCheck, Trash2, ChevronDown, ChevronUp, Ghost, Ban, Eye } from "lucide-react";
 import { api } from "@/lib/api";
@@ -10,6 +10,7 @@ import { fmtDateISO, fmtDateTimeFull } from "@/lib/date";
 import { Search, X } from "lucide-react";
 import { matchesSearchQuery } from "@/lib/contact-search";
 import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActive, type JoinedRange } from "@/components/joined-range-filter";
+import { MemberListOptions, MemberSectionHeader, groupMembers, sortMembers, useMemberListOptions, type MemberFieldAccessors } from "@/components/member-list-options";
 import { AdminMemberDetailModal, type AdminMemberDetailBase } from "./_admin-member-detail-modal";
 import { AdminChangeEmailModal } from "./_admin-change-email-modal";
 
@@ -116,6 +117,13 @@ function PendingRegistrationsSection({ tz }: { tz: string }) {
   );
 }
 
+// 並べ替え・グループ分けで使う値（アカウント登録日時・入会日・所在地）
+const ADMIN_MEMBER_FIELDS: MemberFieldAccessors<AdminMember> = {
+  registeredAt: (m) => m.createdAt,
+  joinedDate: (m) => m.businessCommunityJoinedDate,
+  prefecture: (m) => m.prefecture,
+};
+
 export function AdminMembersScreen() {
   const qc = useQueryClient();
   const { timezone: tz, termEnishi } = useSettings();
@@ -126,6 +134,7 @@ export function AdminMembersScreen() {
   const [emailEditMemberId, setEmailEditMemberId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [joinedRange, setJoinedRange] = useState<JoinedRange>(EMPTY_JOINED_RANGE);
+  const { sort, group, setSort, setGroup } = useMemberListOptions("admin-members-screen:list-options");
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin", "members"],
@@ -171,7 +180,17 @@ export function AdminMembersScreen() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "members"] }),
   });
 
+  // 所在地が分からなかった・調べに失敗した方（会社名か住所があるのに、都道府県が入っていない方）を、もう一度調べる
+  const recheckPrefecture = useMutation({
+    mutationFn: () => api.post("/admin/members/prefecture-recheck"),
+    onSuccess: () => {
+      // 調べ終わるまで少しかかるため、しばらくしてから一覧を取り直す
+      setTimeout(() => qc.invalidateQueries({ queryKey: ["admin", "members"] }), 20000);
+    },
+  });
+
   const members = data?.data ?? [];
+  const unsetPrefectureCount = members.filter((m) => m.status === "active" && !m.prefecture && !!(m.company?.trim() || m.address?.trim())).length;
   // 「すべて」には休会中・ゲストユーザー・利用却下・削除済みは含めない（アクティブなメンバーと
   // 混ざって見づらくなるため、それぞれ専用タブから見る）
   const SIDE_STATUSES = ["deleted", "on_leave", "guest", "rejected"];
@@ -186,6 +205,7 @@ export function AdminMembersScreen() {
     ) && inJoinedRange(m.businessCommunityJoinedDate, joinedRange)
   );
   const isSearching = search.trim() !== "" || isJoinedRangeActive(joinedRange);
+  const sections = groupMembers(sortMembers(filtered, sort, ADMIN_MEMBER_FIELDS), group, sort, ADMIN_MEMBER_FIELDS);
 
   const pendingCount = members.filter((m) => m.status === "pending").length;
   // 各タブの人数（検索条件にかかわらず、そのステータスの全員）
@@ -212,6 +232,18 @@ export function AdminMembersScreen() {
       )}
 
       <PendingRegistrationsSection tz={tz} />
+
+      {unsetPrefectureCount > 0 && (
+        <div className="mb-4 px-4 py-3 rounded-2xl text-sm flex items-center gap-3 flex-wrap" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+          <span className="flex-1 min-w-0">
+            📍 所在地（都道府県）がまだ入っていないメンバーが {unsetPrefectureCount} 名います。会社名や住所から、自動で調べて入力します（登録・更新のたびに自動で行われます）。
+          </span>
+          <button onClick={() => recheckPrefecture.mutate()} disabled={recheckPrefecture.isPending}
+            className="px-3 py-1.5 rounded-full text-xs font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+            {recheckPrefecture.isPending ? "調べています..." : recheckPrefecture.isSuccess ? "調べ直しを始めました" : "今すぐ調べ直す"}
+          </button>
+        </div>
+      )}
 
       {/* フィルター */}
       <div className="flex gap-2 mb-4 flex-wrap">
@@ -250,6 +282,7 @@ export function AdminMembersScreen() {
         )}
       </div>
       <JoinedRangeFilter value={joinedRange} onChange={setJoinedRange} />
+      <MemberListOptions sort={sort} group={group} onSort={setSort} onGroup={setGroup} />
 
       {/* メンバー一覧 */}
       {isLoading ? (
@@ -265,7 +298,10 @@ export function AdminMembersScreen() {
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          {filtered.map((m) => {
+          {sections.map((section) => (
+            <Fragment key={section.key}>
+              {group !== "none" && <MemberSectionHeader label={section.label} count={section.items.length} />}
+          {section.items.map((m) => {
             const st = STATUS_LABEL[m.status] ?? { label: m.status, color: "var(--color-ink-400)" };
             const isExpanded = expandedId === m.id;
             return (
@@ -298,6 +334,9 @@ export function AdminMembersScreen() {
                       <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
                         {m.category}{m.company ? ` / ${m.company}` : ""}
                       </div>
+                    )}
+                    {m.prefecture && (
+                      <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>📍 {m.prefecture}</div>
                     )}
                     <div className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>
                       登録: {fmtDateISO(m.createdAt, tz)}{m.businessCommunityJoinedDate ? `　入会: ${m.businessCommunityJoinedDate.slice(0, 7).replace("-", "年")}月` : ""}
@@ -512,6 +551,8 @@ export function AdminMembersScreen() {
               </div>
             );
           })}
+            </Fragment>
+          ))}
         </div>
       )}
 

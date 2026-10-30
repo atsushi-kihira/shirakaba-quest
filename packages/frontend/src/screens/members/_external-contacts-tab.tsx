@@ -4,6 +4,7 @@
 // 受け取った紹介依頼一覧
 // 連絡先情報（メール・電話・住所・SNS）はそもそも保存しない設計。
 // =============================================================
+import { LOCATION_VALUES } from "@shared/prefectures";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,6 +29,8 @@ type Contact = {
   businessSummary: string | null;
   businessSummaryDetail: string | null;
   businessSummaryStatus: BusinessSummaryStatus;
+  /** 所在地（都道府県）。会社名から自動で入る */
+  prefecture?: string | null;
 };
 
 // 会社概要の生成状況を一覧で見分けるためのバッジ（一括生成の対象選びに使う。生成済みも含め常に状態を表示する）
@@ -1403,7 +1406,7 @@ function MyContactsSection() {
                         )}
                       </div>
                       <p className="text-xs truncate" style={{ color: "var(--color-ink-500)" }}>
-                        {[ct.specialty, ct.company, ...ct.relationships].filter(Boolean).join(" ・ ") || "（詳細未入力）"}
+                        {[ct.specialty, ct.company, ct.prefecture ? `📍${ct.prefecture}` : null, ...ct.relationships].filter(Boolean).join(" ・ ") || "（詳細未入力）"}
                       </p>
                       {ct.businessSummary && (
                         <p className="text-xs truncate mt-0.5" style={{ color: "var(--color-ink-600)" }}>{ct.businessSummary}</p>
@@ -1448,6 +1451,7 @@ function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () 
   const [relationships, setRelationships] = useState<string[]>(contact.relationships);
   const [note, setNote] = useState(contact.note ?? "");
   const [email, setEmail] = useState(contact.email ?? "");
+  const [prefecture, setPrefecture] = useState(contact.prefecture ?? "");
   const [businessSummary, setBusinessSummary] = useState(contact.businessSummary ?? "");
   const [businessSummaryDetail, setBusinessSummaryDetail] = useState(contact.businessSummaryDetail ?? "");
   const [error, setError] = useState("");
@@ -1457,6 +1461,8 @@ function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () 
       name: name.trim(), specialty: specialty.trim(), company: company.trim(),
       relationships, note: note.trim(), email: email.trim(),
       businessSummary: businessSummary.trim(), businessSummaryDetail: businessSummaryDetail.trim(),
+      // 所在地は、変えたときだけ送る（変えていない自動入力の値が、手入力として固定されないように）。空は「自動で入力」に戻す
+      ...(prefecture !== (contact.prefecture ?? "") ? { prefecture } : {}),
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
@@ -1489,6 +1495,16 @@ function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () 
           className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
         <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
           ここまでは名刺の情報を手入力してください。この先はAIで自動入力できます
+        </p>
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>📍 所在地（都道府県）</label>
+        <select value={prefecture} onChange={(e) => setPrefecture(e.target.value)}
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}>
+          <option value="">（会社名から自動で入力）</option>
+          {LOCATION_VALUES.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
+          会社名を入れると、自動で入力されます。違っていたら、ここで選び直してください
         </p>
 
         <BusinessSummaryFields company={company} name={name} summary={businessSummary} setSummary={setBusinessSummary}

@@ -37,6 +37,7 @@ export type AdminMemberDetailBase = {
   instagramUrl?: string | null;
   customFields?: Record<string, unknown> | null;
   businessCommunityJoinedDate?: string | null;
+  prefecture?: string | null;
   characterKey?: string | null;
   timezone?: string | null;
   skills: Skill[];
@@ -110,7 +111,7 @@ export function AdminMemberDetailModal({ member, onClose }: { member: AdminMembe
   const history = historyData?.data;
 
   const customFields = Object.entries(member.customFields ?? {}).filter(([, v]) => v !== null && v !== "" && v !== undefined);
-  const hasBack = !!(member.company || member.role || member.email || member.phone || member.address
+  const hasBack = !!(member.company || member.role || member.email || member.phone || member.address || member.prefecture
     || member.facebookUrl || member.linkedinUrl || member.instagramUrl || member.qrCodeUrl || customFields.length > 0);
 
   return (
@@ -164,6 +165,7 @@ export function AdminMemberDetailModal({ member, onClose }: { member: AdminMembe
               {member.email && <Row icon={<Mail size={14} />}>{member.email}</Row>}
               {member.phone && <Row icon={<Phone size={14} />}>{member.phone}</Row>}
               {member.address && <Row icon={<MapPin size={14} />}>{member.address}</Row>}
+              {member.prefecture && <Row icon={<MapPin size={14} />}>所在地：{member.prefecture}</Row>}
               {([["Facebook", member.facebookUrl], ["LinkedIn", member.linkedinUrl], ["Instagram", member.instagramUrl], ["QRコードのリンク", member.qrCodeUrl]] as const)
                 .filter(([, url]) => !!url).map(([label, url]) => (
                   <Row key={label} icon={<span className="text-[10px] font-bold">🔗</span>}>

@@ -109,6 +109,8 @@ export type PublicMember = Omit<
   oneOnOneCount: number; // 自分との完了済み1to1回数
   lastOneOnOneAt: number | null; // 自分との直近1to1完了日時（Unix秒）
   businessCommunityJoinedDate?: string | null; // ビジネスコミュニティ入会日（"YYYY-MM-DD"。日は正確でなくてよい）
+  prefecture?: string | null; // 所在地（都道府県）。会社名・住所から自動で入る
+  registeredAt?: number; // アカウント登録日時（Unix秒）
   externalContactCount: number; // 登録している外部人脈の件数（非公開を除く）
   externalContactDetailCount: number; // うち「詳細まで公開」の件数
 };

@@ -43,6 +43,11 @@ export const members = sqliteTable("members", {
   // 例: 白樺チャプターでは「BNI」）への入会日（"YYYY-MM-DD"形式）。日にちは正確でなくてもよく、
   // 年月さえ合っていればよい（日は覚えている範囲・仮の値でよい）。
   businessCommunityJoinedDate: text("business_community_joined_date"),
+
+  // 所在地（都道府県）。会社名・屋号（または名刺の住所）から自動で入力し、本人・管理者が手で直すこともできる
+  prefecture:          text("prefecture"),
+  prefectureStatus:    text("prefecture_status").notNull().default("pending"), // 'pending' | 'processing' | 'done' | 'not_found' | 'manual' | 'error'
+  prefectureClaimedAt: integer("prefecture_claimed_at"),
 });
 
 export const admins = sqliteTable("admins", {
@@ -266,6 +271,11 @@ export const externalContacts = sqliteTable("external_contacts", {
   businessSummaryStatus:      text("business_summary_status").notNull().default("pending"), // 'pending' | 'processing' | 'done' | 'not_found' | 'skipped' | 'error'
   businessSummaryGeneratedAt: integer("business_summary_generated_at"),
   businessSummaryClaimedAt:   integer("business_summary_claimed_at"), // 'processing'に切り替えた時刻。一定時間が経っても完了しない行を再取得するために使う
+
+  // 会社名・屋号の所在地（都道府県）。登録時に会社名からWeb検索で自動入力し、手で直すこともできる
+  prefecture:          text("prefecture"),
+  prefectureStatus:    text("prefecture_status").notNull().default("pending"), // 'pending' | 'processing' | 'done' | 'not_found' | 'manual' | 'error'
+  prefectureClaimedAt: integer("prefecture_claimed_at"),
 });
 
 export const externalContactFavorites = sqliteTable("external_contact_favorites", {

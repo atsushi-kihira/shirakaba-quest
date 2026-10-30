@@ -26,6 +26,8 @@ export type ProfileBody = Partial<{
   customFields: Record<string, string>;
   timezone: string | null;
   businessCommunityJoinedDate: string | null;
+  /** 所在地（都道府県）。空にすると、会社名・住所から自動で入れ直す */
+  prefecture: string | null;
 }>;
 
 export const MAX_SKILLS = 5;

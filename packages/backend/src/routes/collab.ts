@@ -21,6 +21,8 @@ import { addMilestone, canUseActionItems, deleteTeamWorkspaceData, onJoinApprove
 import { awardVisitorOneOnOnePoints } from "../services/oneonone-event.ts";
 import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../services/map-positions.ts";
 import { generateCompanySummary } from "../services/company-summary.ts";
+import { prefecturePatch, sweepPendingPrefectures } from "../services/prefecture.ts";
+import { findPrefecture } from "@shared/prefectures";
 import type { Env, Variables } from "../types.ts";
 
 // 1人あたりの外部人脈の登録上限（1件登録・CSV取込の合計）
@@ -2044,6 +2046,11 @@ collabRoutes.get("/contacts", async (c) => {
     .orderBy(desc(schema.externalContacts.createdAt))
     .all();
 
+  // 所在地の調べ待ちが残っていれば（ゲストの回答から自動登録された人脈など）、いま調べる
+  if (rows.some((r) => r.prefectureStatus === "pending" && r.company)) {
+    c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
+  }
+
   return c.json({ data: await attachRelationships(db, rows) });
 });
 
@@ -2057,6 +2064,7 @@ collabRoutes.post("/contacts", async (c) => {
     name: string; specialty?: string; company?: string; relationships?: string[]; note?: string; visibility?: string;
     email?: string; // 任意。招待メールの送り先にだけ使う（他のメンバーには見せない）
     businessSummary?: string; businessSummaryDetail?: string;
+    prefecture?: string | null; // 所在地（都道府県）。空欄なら、会社名から自動で入れる
     sourceBookingId?: string; // 外部ゲストとの予約から人脈登録した場合、その予約IDを紐づける
   }>();
   if (!body.name?.trim()) return c.json({ error: { code: "invalid_input", message: "名前を入力してください" } }, 400);
@@ -2094,7 +2102,10 @@ collabRoutes.post("/contacts", async (c) => {
         businessSummary: newSummary, businessSummaryDetail: body.businessSummaryDetail?.trim() || null,
         businessSummaryStatus: newSummary ? "done" : (newCompany && visibility !== "private" ? "pending" : "skipped"),
         businessSummaryGeneratedAt: newSummary ? now : null,
+        // 手で入力された所在地はそのまま。入力がなければ、会社名から自動で入れ直す
+        ...(prefecturePatch({ prefecture: body.prefecture ?? "", company: newCompany }, null)),
       }).where(eq(schema.externalContacts.id, auto.id));
+      c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
       await replaceContactRelationships(db, auto.id, normalizeRelationships(body.relationships));
       await db.update(schema.bookings).set({ externalContactId: auto.id }).where(eq(schema.bookings.id, body.sourceBookingId));
       await awardVisitorOneOnOnePoints(db, body.sourceBookingId, meId);
@@ -2125,8 +2136,11 @@ collabRoutes.post("/contacts", async (c) => {
     businessSummaryDetail,
     businessSummaryStatus: businessSummary ? "done" : (company ? "pending" : "skipped"),
     businessSummaryGeneratedAt: businessSummary ? now : null,
+    // 所在地は、手で選ばれていればその値。なければ（既定の pending のまま）会社名から自動で入れる
+    ...(findPrefecture(body.prefecture) ? { prefecture: findPrefecture(body.prefecture), prefectureStatus: "manual" } : {}),
   });
   await replaceContactRelationships(db, id, normalizeRelationships(body.relationships));
+  c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
 
   if (!businessSummary && company && visibility !== "private") {
     const origin = new URL(c.req.url).origin;
@@ -2214,6 +2228,8 @@ collabRoutes.post("/contacts/import", async (c) => {
     const origin = new URL(c.req.url).origin;
     c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, origin, 0));
   }
+  // 所在地（都道府県）も、会社名からバックグラウンドで自動入力する
+  c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
 
   return c.json({ data: { imported: rows.length } }, 201);
 });
@@ -2357,6 +2373,7 @@ collabRoutes.patch("/contacts/:id", async (c) => {
     name?: string; specialty?: string; company?: string; relationships?: string[]; note?: string; visibility?: string;
     email?: string | null; // 空欄・null でメールアドレスを消す
     businessSummary?: string; businessSummaryDetail?: string;
+    prefecture?: string | null; // 所在地（都道府県）。空にすると、会社名から自動で入れ直す
   }>();
   const now = Math.floor(Date.now() / 1000);
   const patchEmail = body.email === undefined ? undefined : (body.email?.trim() || null);
@@ -2384,6 +2401,7 @@ collabRoutes.patch("/contacts/:id", async (c) => {
     };
   }
 
+  const prefPatch = prefecturePatch({ prefecture: body.prefecture, company: body.company !== undefined ? finalCompany : undefined }, contact);
   await db.update(schema.externalContacts).set({
     ...(body.name !== undefined && { name: body.name.trim() }),
     ...(body.specialty !== undefined && { specialty: body.specialty?.trim() || null }),
@@ -2392,8 +2410,12 @@ collabRoutes.patch("/contacts/:id", async (c) => {
     ...(patchEmail !== undefined && { email: patchEmail }),
     ...(body.visibility !== undefined && ["private", "existence", "full"].includes(body.visibility) && { visibility: body.visibility }),
     ...summaryPatch,
+    ...prefPatch,
     updatedAt: now,
   }).where(eq(schema.externalContacts.id, contactId));
+  if (prefPatch?.prefectureStatus === "pending") {
+    c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
+  }
 
   if (body.relationships !== undefined) {
     await replaceContactRelationships(db, contactId, normalizeRelationships(body.relationships));

@@ -3,6 +3,7 @@
 //   ・本人が、マイページで自分のプロフィールを編集する（mode="self"）
 //   ・管理者が、管理画面のメンバー管理で、メンバーのプロフィールを編集する（mode="admin"）。編集できる項目は、どちらも同じ
 // =============================================================
+import { LOCATION_VALUES } from "@shared/prefectures";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Loader2, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react";
@@ -38,6 +39,7 @@ type EditForm = {
   skills: Skill[];
   timezone: string;
   businessCommunityJoinedDate: string;
+  prefecture: string;
 };
 
 /** 編集の対象になるメンバー（マイページの本人の情報・管理画面のメンバーの情報の、どちらも渡せる） */
@@ -57,6 +59,7 @@ export type EditableMember = {
   characterKey?: string | null;
   skills?: Skill[] | null;
   businessCommunityJoinedDate?: string | null;
+  prefecture?: string | null;
   avatarImageKey?: string | null;
   timezone?: string | null;
 };
@@ -87,6 +90,7 @@ export function MemberProfileEditModal({ member, mode = "self", onClose, onSaved
     skills: (member.skills ?? []) as Skill[],
     timezone: (admin ? member.timezone : authUser?.timezone) ?? "Asia/Tokyo",
     businessCommunityJoinedDate: member.businessCommunityJoinedDate ?? "",
+    prefecture: member.prefecture ?? "",
   });
   const [error, setError] = useState("");
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
@@ -136,6 +140,8 @@ export function MemberProfileEditModal({ member, mode = "self", onClose, onSaved
       skills: form.skills,
       timezone: form.timezone,
       businessCommunityJoinedDate: form.businessCommunityJoinedDate || null,
+      // 所在地は、変えたときだけ送る（変えていない自動入力の値が、手入力として固定されないように）。空は「自動で入力」に戻す
+      ...(form.prefecture !== (member.prefecture ?? "") ? { prefecture: form.prefecture } : {}),
     }),
     onSuccess: onSaved,
     onError: (e: Error) => setError(e.message),
@@ -298,6 +304,23 @@ export function MemberProfileEditModal({ member, mode = "self", onClose, onSaved
               className="w-full rounded-2xl border px-3"
               style={{ fontSize: "16px", padding: "10px 12px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}
             />
+          </div>
+
+          {/* 所在地（都道府県） */}
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>📍 所在地（会社・屋号のある都道府県）</label>
+            <select
+              value={form.prefecture}
+              onChange={(e) => setForm((f) => ({ ...f, prefecture: e.target.value }))}
+              className="w-full rounded-2xl border px-3"
+              style={{ fontSize: "15px", padding: "10px 12px", borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-800)" }}
+            >
+              <option value="">（会社名・住所から自動で入力）</option>
+              {LOCATION_VALUES.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+              会社名や住所を入れると、自動で入力されます。違っていたら、ここで選び直してください。
+            </p>
           </div>
 
           {/* ビジネスコミュニティ入会日 */}
