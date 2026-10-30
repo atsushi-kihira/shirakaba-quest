@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 import { useBroadcastNotifications, type BroadcastNotification } from "@/hooks/use-broadcast-notifications";
 import { useReminderNotices } from "@/hooks/use-reminder-notices";
 import { PushPromptCard } from "@/components/push-prompt-card";
+import { PrefecturePromptCard } from "@/components/prefecture-prompt-card";
 import { useGuestContactProposals } from "@/hooks/use-guest-contact-proposals";
 import { LinkifiedText } from "@/components/linkified-text";
 import { MemberAvatar } from "@/components/member-avatar";
@@ -524,6 +525,9 @@ export function HomeScreen() {
           ))}
         </div>
       )}
+
+      {/* 所在地を自動では調べられなかった人への、入力のお願い（承認済みのメンバーのみ） */}
+      {approved && <PrefecturePromptCard />}
 
       {/* プロフィール補完の入力促し */}
       {profilePromptItems.length > 0 && (

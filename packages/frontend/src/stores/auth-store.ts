@@ -20,6 +20,9 @@ type AuthUser = {
   isPilot2?: boolean;
   personalTheme?: string | null;
   businessCommunityJoinedDate?: string | null;
+  /** 所在地（都道府県）と、その入力状態（'not_found' / 'error' は、自動では分からなかった）。メンバーのみ */
+  prefecture?: string | null;
+  prefectureStatus?: string | null;
   /** メンバーの承認状態（"pending" | "active" | "on_leave" | "deleted"）。管理者には設定されない。 */
   status?: string | null;
 };

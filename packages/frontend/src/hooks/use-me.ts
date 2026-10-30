@@ -21,6 +21,8 @@ type MeResponse = {
     isPilot2?: boolean;
     personalTheme?: string | null;
     businessCommunityJoinedDate?: string | null;
+    prefecture?: string | null;
+    prefectureStatus?: string | null;
   };
 };
 
@@ -51,6 +53,8 @@ export function useMe() {
         isPilot2: u.isPilot2 ?? false,
         personalTheme: u.personalTheme ?? null,
         businessCommunityJoinedDate: u.businessCommunityJoinedDate ?? null,
+        prefecture: u.prefecture ?? null,
+        prefectureStatus: u.prefectureStatus ?? null,
         status: u.status ?? null,
         timezone: u.timezone ?? null,
       });
