@@ -8,6 +8,7 @@ import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { findPrefecture } from "@shared/prefectures";
 import { schema, type Db } from "../db/index.ts";
 import type { Env } from "../types.ts";
+import { waitUpTo } from "./sweep-util.ts";
 
 export type PrefectureLookup =
   | { status: "done"; prefecture: string }
@@ -15,10 +16,13 @@ export type PrefectureLookup =
 
 /** 'processing' のまま、これだけ経っても終わらない行は、もう一度調べる */
 const STALE_PROCESSING_SECONDS = 90;
-/** 1回の呼び出しで調べる件数（waitUntilの実行時間制限に収めるため）。残りがあれば自己連鎖で続ける */
-const SWEEP_ROUND_SIZE = 6;
-const SWEEP_MAX_HOPS = 80;
-const CONCURRENCY = 3;
+/**
+ * 1回の呼び出しで調べる件数。Web検索は1件でも十数秒かかるため、全件を同時に調べて、waitUntilの実行時間制限
+ * （約30秒）に収める。残りがあれば自己連鎖で続ける
+ */
+const SWEEP_ROUND_SIZE = 4;
+const SWEEP_MAX_HOPS = 250;
+const CONCURRENCY = 4;
 
 const PROMPT = `あなたはビジネスネットワーキング団体のアシスタントです。
 Web検索を使って、指定された会社・屋号の「本社（主たる事務所）の所在地」の都道府県を調べてください。
@@ -159,16 +163,19 @@ async function sweepOnce(db: Db, env: Env): Promise<{ processed: number; more: b
     }
   }
 
+  const work: Promise<void>[] = [];
   for (let i = 0; i < targets.length; i += CONCURRENCY) {
-    await Promise.all(targets.slice(i, i + CONCURRENCY).map(async (t) => {
+    work.push(Promise.all(targets.slice(i, i + CONCURRENCY).map(async (t) => {
       try {
         await saveResult(db, t, await resolveTarget(env, t));
       } catch (err) {
         console.error("[prefecture] 所在地の保存に失敗", t.table, t.id, err);
         await saveResult(db, t, { status: "error", prefecture: null }).catch(() => {});
       }
-    }));
+    })).then(() => {}));
   }
+  // 時間内に終わらない分は待たずに次の連鎖へ進む（打ち切られた行は、しばらくしてから調べ直される）
+  await waitUpTo(Promise.all(work));
   return { processed: targets.length, more: mRows.length >= SWEEP_ROUND_SIZE || cMore };
 }
 

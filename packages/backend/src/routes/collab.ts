@@ -22,6 +22,7 @@ import { awardVisitorOneOnOnePoints } from "../services/oneonone-event.ts";
 import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../services/map-positions.ts";
 import { generateCompanySummary } from "../services/company-summary.ts";
 import { prefecturePatch, sweepPendingPrefectures } from "../services/prefecture.ts";
+import { waitUpTo } from "../services/sweep-util.ts";
 import { findPrefecture } from "@shared/prefectures";
 import type { Env, Variables } from "../types.ts";
 
@@ -36,11 +37,11 @@ const STALE_PROCESSING_SECONDS = 90;
 // 自分の人脈一覧からの一括AI生成の上限
 const BULK_SUMMARY_LIMIT = 20;
 // バックグラウンド一斉処理（sweep）1回あたりに処理する件数
-// （実測でCONCURRENCY=3のバッチが2つ分＝6件を超えると、waitUntilの実行時間制限内に
-// 完了しないケースが確認されたため、安全に収まる件数に抑えている）
-const BACKGROUND_SWEEP_ROUND_SIZE = 6;
+// （Web検索を伴うAI生成は1件で十数秒かかり、waitUntilの実行時間制限（約30秒）内に終わらせるため、
+// 同時並列で処理できる件数＝1バッチ分に抑えている。残りは自己連鎖で続ける）
+const BACKGROUND_SWEEP_ROUND_SIZE = 3;
 // sweepの自己連鎖の最大回数（無限ループ防止の安全弁。1回の起点からこれを超えて連鎖しない）
-const BACKGROUND_SWEEP_MAX_HOPS = 40;
+const BACKGROUND_SWEEP_MAX_HOPS = 300;
 
 export const collabRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 collabRoutes.use("*", authMiddleware);
@@ -1969,7 +1970,8 @@ export async function sweepPendingCompanySummaries(
     .all();
 
   if (claimed.length > 0) {
-    await generateCompanySummariesForContacts(db, env, claimed as { id: string; company: string; name: string }[]);
+    // 時間内に終わらない分は待たずに次の連鎖へ進む（打ち切られた行は、しばらくしてから生成し直される）
+    await waitUpTo(generateCompanySummariesForContacts(db, env, claimed as { id: string; company: string; name: string }[]));
   }
 
   // 今回の取得件数が上限いっぱいだった場合、まだ他に対象が残っている可能性が高いので連鎖する
@@ -2049,6 +2051,10 @@ collabRoutes.get("/contacts", async (c) => {
   // 所在地の調べ待ちが残っていれば（ゲストの回答から自動登録された人脈など）、いま調べる
   if (rows.some((r) => r.prefectureStatus === "pending" && r.company)) {
     c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, new URL(c.req.url).origin, 0));
+  }
+  // 会社の説明（AI生成）の待ちも同様。途中で止まっていた処理を、開いた人がきっかけで再開する
+  if (rows.some((r) => r.businessSummaryStatus === "pending" && r.company && r.visibility !== "private")) {
+    c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, new URL(c.req.url).origin, 0));
   }
 
   return c.json({ data: await attachRelationships(db, rows) });

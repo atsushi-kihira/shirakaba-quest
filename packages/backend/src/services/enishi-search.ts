@@ -419,7 +419,7 @@ async function collectForMeCandidates(db: Db, meId: string): Promise<ForMeCandid
   const ownerMap = new Map(owners.map((m) => [m.id, m]));
   const relMap = await attachRelationships(db, contactRows.map((c) => c.id));
 
-  return contactRows.map((c) => {
+  const candidates = contactRows.map((c) => {
     const isOwn = c.ownerMemberId === meId;
     const owner = isOwn ? null : ownerMap.get(c.ownerMemberId);
     // 自分自身の人脈は、公開範囲の設定に関わらず本人には常に詳細が見える
@@ -439,6 +439,11 @@ async function collectForMeCandidates(db: Db, meId: string): Promise<ForMeCandid
       isOwn,
     };
   });
+  // AIに渡して意味のある情報（氏名・会社名・専門分野・事業概要・関係性）が1つもない人脈は、候補から外す。
+  // 他のメンバーの人脈は、公開範囲が「存在のみ」だと氏名・会社名を伏せるため、説明の生成が終わるまでは
+  // 「所属メンバー名」しか残らず、見つけようがない。そのまま混ぜると、上限（候補数）を占めて、
+  // 説明のある人脈が候補から押し出されてしまう。
+  return candidates.filter((c) => c.name || c.company || c.specialty || c.businessSummary || c.relationships.length > 0);
 }
 
 // 人脈検索「すべて」で、メンバー本人として結果に並べる最大件数（外部人脈の結果も十分に表示されるよう、上限を設ける）
@@ -702,7 +707,8 @@ export async function runEnishiSearch(params: ForMeParams | GiverParams | Contac
     if (ownTruncated) ownCandidates = sampleContactsFairlyBySpecialty(ownCandidates, MAX_MY_CONTACTS);
     const nakamaBudget = Math.max(0, MAX_CANDIDATES - ownCandidates.length);
     const nakamaTruncated = nakamaCandidates.length > nakamaBudget;
-    if (nakamaTruncated) nakamaCandidates = nakamaCandidates.slice(0, nakamaBudget);
+    // 登録順に先頭から切ると、あとから登録された人脈が、まるごと候補から外れてしまうため、専門分野ごとに均等に抜粋する
+    if (nakamaTruncated) nakamaCandidates = sampleContactsFairlyBySpecialty(nakamaCandidates, nakamaBudget);
     const candidates = [...ownCandidates, ...nakamaCandidates];
     const truncated = ownTruncated || nakamaTruncated;
     if (candidates.length === 0) return { groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: [] })), truncated: false };

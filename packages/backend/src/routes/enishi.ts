@@ -9,7 +9,7 @@
 // GET  /api/enishi/contacts/specialties → 人脈検索の専門分野フィルタ候補（全メンバーの外部人脈から集計）
 // POST /api/enishi/search/contacts → 人脈検索（紹介の道筋ではなく、条件に合う人物の横断検索）
 // =============================================================
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { and, eq, desc, inArray, ne, or } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
@@ -18,6 +18,8 @@ import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { suggestSplit } from "../services/split-suggest.ts";
 import { generateCollabIdeas } from "../services/member-collab.ts";
 import { runMemberSearch } from "../services/member-search.ts";
+import { sweepPendingCompanySummaries } from "./collab.ts";
+import { sweepPendingPrefectures } from "../services/prefecture.ts";
 import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
 import { buildMemberCards } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
@@ -124,6 +126,25 @@ function buildMemberUspSearchTitle(usps: string[], freeText: string, createdAt: 
 function buildContactSearchTitle(freeText: string, createdAt: number, resultCount: number): string {
   const short = freeText.length > 20 ? `${freeText.slice(0, 20)}…` : freeText;
   return `${formatHistoryDate(createdAt)} 人脈検索：${short}（${resultCount}件ヒット）`;
+}
+
+/**
+ * 会社の説明（AI生成）や所在地の調べ待ちが残っていれば、バックグラウンドで再開する。
+ * 説明がまだない人脈は検索で見つけにくいため、検索を使う人がきっかけで、止まっていた処理を進める。
+ */
+function resumePendingContactSweeps(c: Context<{ Bindings: Env; Variables: Variables }>, db: ReturnType<typeof createDb>): void {
+  const origin = new URL(c.req.url).origin;
+  c.executionCtx.waitUntil((async () => {
+    const pending = await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
+      .where(and(eq(schema.externalContacts.businessSummaryStatus, "pending"), ne(schema.externalContacts.visibility, "private")))
+      .limit(1).get();
+    if (pending) await sweepPendingCompanySummaries(db, c.env, origin, 0);
+  })().catch((err) => console.error("[enishi] 会社の説明の生成の再開に失敗", err)));
+  c.executionCtx.waitUntil((async () => {
+    const pending = await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
+      .where(eq(schema.externalContacts.prefectureStatus, "pending")).limit(1).get();
+    if (pending) await sweepPendingPrefectures(db, c.env, origin, 0);
+  })().catch((err) => console.error("[enishi] 所在地の調べの再開に失敗", err)));
 }
 
 // 自分の過去の検索履歴から「良いご縁だった」とチェック済みのカードを集め、プロンプトに追記する
@@ -508,6 +529,7 @@ enishiRoutes.post("/search/for-me", async (c) => {
     return c.json({ error: { code: "invalid_input", message: "指定された金の卵・金のガチョウが見つかりません" } }, 400);
   }
 
+  resumePendingContactSweeps(c, db);
   const goodMatchContext = await buildGoodMatchContext(db, meId, "for-me");
   const result = await runEnishiSearch({
     db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
@@ -649,6 +671,7 @@ enishiRoutes.post("/search/contacts", async (c) => {
   }
   const count = MAX_RESULTS;
 
+  resumePendingContactSweeps(c, db);
   const [goodMatchContext, badMatchContext] = await Promise.all([
     buildGoodMatchContext(db, meId, "contact-search"),
     buildBadMatchContext(db, meId, "contact-search"),
