@@ -136,6 +136,22 @@ app.post("/api/internal/sweep-pending-prefectures", async (c) => {
   return c.json({ ok: true });
 });
 
+// ---- 内部専用: ご縁さがしの検索ジョブ（裏で実行する検索）の自己連鎖呼び出し（共有シークレットで保護） ----
+app.post("/api/internal/run-enishi-search-job", async (c) => {
+  const secret = c.req.header("x-internal-task-secret");
+  if (!secret || secret !== c.env.INTERNAL_TASK_SECRET) {
+    return c.json({ error: { code: "forbidden", message: "許可されていないリクエストです" } }, 403);
+  }
+  const { createDb } = await import("./db/index.ts");
+  const { runSearchJobStep } = await import("./services/enishi-search-job.ts");
+  const db = createDb(c.env.DB);
+  const { jobId, hop } = await c.req.json<{ jobId?: string; hop?: number }>().catch(() => ({} as { jobId?: string; hop?: number }));
+  if (!jobId) return c.json({ error: { code: "invalid_input", message: "jobId がありません" } }, 400);
+  const origin = new URL(c.req.url).origin;
+  c.executionCtx.waitUntil(runSearchJobStep(db, c.env, jobId, origin, hop ?? 0));
+  return c.json({ ok: true });
+});
+
 // ---- 内部専用: 既存チームの仮プロフィール生成の自己連鎖呼び出し（共有シークレットで保護） ----
 app.post("/api/internal/team-profile-backfill", async (c) => {
   const secret = c.req.header("x-internal-task-secret");

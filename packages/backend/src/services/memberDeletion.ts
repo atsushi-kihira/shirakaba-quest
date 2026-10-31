@@ -104,6 +104,12 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
   await db.delete(m.goldenEggs).where(eq(m.goldenEggs.memberId, memberId));
   await db.delete(m.goldenGeese).where(eq(m.goldenGeese.memberId, memberId));
   await db.delete(m.enishiSearchHistory).where(eq(m.enishiSearchHistory.memberId, memberId));
+  // 裏で実行する検索（ジョブ）と、その束ごとの結果
+  const jobIds = (await db.select({ id: m.enishiSearchJobs.id }).from(m.enishiSearchJobs).where(eq(m.enishiSearchJobs.memberId, memberId)).all()).map((j) => j.id);
+  for (let i = 0; i < jobIds.length; i += 50) {
+    await db.delete(m.enishiSearchJobBatches).where(inArray(m.enishiSearchJobBatches.jobId, jobIds.slice(i, i + 50)));
+  }
+  await db.delete(m.enishiSearchJobs).where(eq(m.enishiSearchJobs.memberId, memberId));
   await db.delete(m.enishiTransactedContacts).where(eq(m.enishiTransactedContacts.memberId, memberId));
   await db.delete(m.enishiHiddenContacts).where(eq(m.enishiHiddenContacts.memberId, memberId));
   await db.delete(m.enishiIntroducedContacts).where(eq(m.enishiIntroducedContacts.memberId, memberId));

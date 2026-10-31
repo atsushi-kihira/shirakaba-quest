@@ -8,6 +8,7 @@ import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { Loader2, Search, Gift, Users, ChevronRight, ChevronLeft, History, Star, Trash2, FileDown } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { SearchJobsBanner, SEARCH_JOBS_KEY, type StartSearchResponse } from "./_search-jobs-banner";
 import { MemberScoreBadge, MemberCollabPanel, type CollabIdeas } from "./_member-collab-panel";
 import { MemberCard, type MemberBackTarget } from "@/screens/members/members-screen";
 import type { PublicMember } from "@shared/types";
@@ -141,6 +142,8 @@ export function EnishiSearchScreen() {
           <span className="text-[10px] font-normal opacity-90">条件に合う人を全員の人脈からさがす</span>
         </button>
       </div>
+
+      <SearchJobsBanner />
 
       {mode === "for-me" ? <ForMePanel /> : mode === "giver" ? <GiverPanel /> : <ContactSearchPanel />}
     </div>
@@ -867,27 +870,15 @@ function ForMePanel() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [maxHop, setMaxHop] = useState<Hop>("2hop");
   const [includeOwnContacts, setIncludeOwnContacts] = useState(true);
-  const [pageSize, setPageSize] = useState(10);
   const [error, setError] = useState<string | null>(null);
-  const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
+  const queryClient = useQueryClient();
 
+  // 検索は裏で実行する。始めたらすぐに戻り、進み具合は画面上部の「検索中」に出る。終わったら通知とメールが届く
   const search = useMutation({
-    mutationFn: () => api.post<SearchResponse>("/enishi/search/for-me", { targetIds: [...selected], maxHop, includeOwnContacts }),
-    onSuccess: setSearchResponse,
-    onError: (e) => setError(e instanceof ApiError ? e.message : "検索に失敗しました"),
+    mutationFn: () => api.post<StartSearchResponse>("/enishi/search/for-me", { targetIds: [...selected], maxHop, includeOwnContacts }),
+    onSuccess: () => { setError(null); queryClient.invalidateQueries({ queryKey: SEARCH_JOBS_KEY }); },
+    onError: (e) => setError(e instanceof ApiError ? e.message : "検索を始められませんでした"),
   });
-
-  function toggleGoodMatch(cardId: string, goodMatch: boolean) {
-    setSearchResponse((prev) => prev && { ...prev, data: updateCardGoodMatch(prev.data, cardId, goodMatch) });
-  }
-
-  function removeTransacted(candidateId: string) {
-    setSearchResponse((prev) => prev && { ...prev, data: removeTransactedCandidate(prev.data, candidateId) });
-  }
-
-  function removeHidden(candidateId: string) {
-    setSearchResponse((prev) => prev && { ...prev, data: removeHiddenCandidate(prev.data, candidateId) });
-  }
 
   return (
     <div>
@@ -905,26 +896,19 @@ function ForMePanel() {
           eggs={eggs} geese={geese} selected={selected} setSelected={setSelected}
           maxHop={maxHop} setMaxHop={setMaxHop}
           includeOwnContacts={includeOwnContacts} setIncludeOwnContacts={setIncludeOwnContacts}
-          pageSize={pageSize} setPageSize={setPageSize}
           error={error} setError={setError} search={search}
         />
       )}
 
-      {searchResponse && (
-        <ResultGroups result={searchResponse.data} historyId={searchResponse.historyId} mode="for-me" pageSize={pageSize}
-          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={removeTransacted} onRemoveHidden={removeHidden} onRemoveIntroduced={() => {}}
-          onCardsRemoved={() => {}} />
-      )}
     </div>
   );
 }
 
-function ForMeSearchForm({ eggs, geese, selected, setSelected, maxHop, setMaxHop, includeOwnContacts, setIncludeOwnContacts, pageSize, setPageSize, error, setError, search }: {
+function ForMeSearchForm({ eggs, geese, selected, setSelected, maxHop, setMaxHop, includeOwnContacts, setIncludeOwnContacts, error, setError, search }: {
   eggs: GoldenEgg[]; geese: GoldenGoose[];
   selected: Set<string>; setSelected: (s: Set<string>) => void;
   maxHop: Hop; setMaxHop: (h: Hop) => void;
   includeOwnContacts: boolean; setIncludeOwnContacts: (v: boolean) => void;
-  pageSize: number; setPageSize: (n: number) => void;
   error: string | null; setError: (e: string | null) => void;
   search: { mutate: () => void; isPending: boolean };
 }) {
@@ -971,9 +955,6 @@ function ForMeSearchForm({ eggs, geese, selected, setSelected, maxHop, setMaxHop
         <input type="checkbox" checked={includeOwnContacts} onChange={(e) => setIncludeOwnContacts(e.target.checked)} />
         自分自身の人脈も検索対象に含める
       </label>
-
-      <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>④ 表示件数</h2>
-      <PageSizeSelect value={pageSize} onChange={setPageSize} />
 
       {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
 

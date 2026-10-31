@@ -1238,6 +1238,30 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     ],
   },
   {
+    emailKey: "enishi_search_notice",
+    label: "ご縁さがしの検索が終わったとき（結果のお知らせ）",
+    category: "collab",
+    triggerDescription: "「私のご縁」「人脈をさがす」の検索を裏で実行して、結果が出たとき（うまくいかなかったときも、このメールでお知らせします）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{subject}}",
+    bodyText: `{{memberName}}さん
+
+{{message}}
+
+こちらから、結果を開けます。
+{{resultUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "検索した人の名前", example: "山田 太郎" },
+      { key: "subject", label: "件名（結果が出た／うまくいかなかった）", example: "🔎 検索が終わりました" },
+      { key: "message", label: "お知らせの文面（検索の名前と件数）", example: "「人脈検索：社労士」の結果が出ました（12件）。" },
+      { key: "resultUrl", label: "結果を開くURL", example: "https://example.com/enishi/history/abc" },
+    ],
+  },
+  {
     emailKey: "admin_broadcast",
     label: "運営からのお知らせ（管理画面から配信）",
     category: "broadcast",

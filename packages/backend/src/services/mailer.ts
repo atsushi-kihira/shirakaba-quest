@@ -69,7 +69,8 @@ export class MailService {
     emailKey: string,
     to: string,
     vars: Record<string, string>,
-    options?: { skipEmailSend?: boolean }
+    // push: プッシュ通知の本文（短く）と、タップしたときに開くパス。指定がなければ、メールの本文をそのまま送る
+    options?: { skipEmailSend?: boolean; push?: { body?: string; url?: string } }
   ): Promise<void> {
     const defaults = EMAIL_DEFAULTS_MAP.get(emailKey);
     if (!defaults) {
@@ -130,7 +131,7 @@ export class MailService {
 
     // Web Push: メールと同じ件名・本文を、対象がBizQuest会員かつ購読していれば送る
     // （ゲスト等・会員が見つからない場合は sendPushForEmailRecipient 内で何もせず戻る）
-    await sendPushForEmailRecipient(this.db, this.env, to, { title: subject, body: bodyText })
+    await sendPushForEmailRecipient(this.db, this.env, to, { title: subject, body: options?.push?.body ?? bodyText, ...(options?.push?.url ? { url: options.push.url } : {}) })
       .catch((err) => console.error(`[push] ${emailKey} の通知送信に失敗`, err));
   }
 }

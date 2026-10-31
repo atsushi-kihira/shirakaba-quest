@@ -10,7 +10,7 @@
 // POST /api/enishi/search/contacts → 人脈検索（紹介の道筋ではなく、条件に合う人物の横断検索）
 // =============================================================
 import { Hono, type Context } from "hono";
-import { and, eq, desc, inArray, ne, or } from "drizzle-orm";
+import { and, eq, desc, gt, inArray, ne, or } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -19,8 +19,13 @@ import { suggestSplit } from "../services/split-suggest.ts";
 import { generateCollabIdeas } from "../services/member-collab.ts";
 import { runMemberSearch } from "../services/member-search.ts";
 import { sweepPendingCompanySummaries } from "./collab.ts";
+import { createSearchJob, runSearchJobStep, jobLabel, STALE_JOB_SECONDS } from "../services/enishi-search-job.ts";
 import { sweepPendingPrefectures } from "../services/prefecture.ts";
-import { runEnishiSearch, CONTACT_SEARCH_SCOPES } from "../services/enishi-search.ts";
+import {
+  augmentResultWithCards, formatHistoryDate, countResults, buildForMeTitle, buildContactSearchTitle, saveSearchHistory,
+  type HistoryCard, type HistoryResult,
+} from "../services/enishi-history.ts";
+import { runEnishiSearch, CONTACT_SEARCH_SCOPES, type JobParams } from "../services/enishi-search.ts";
 import { buildMemberCards } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
@@ -41,34 +46,6 @@ const BAD_MATCH_CONTEXT_LIMIT = 15;
 // 画面側の「表示件数」はこの結果を何件ずつページ分割して見せるかだけを制御する表示設定であり、
 // 表示件数を変えるたびに再検索が走らないようにするため、検索自体は常にこの固定値で行う）。
 const MAX_RESULTS = 30;
-
-type HistoryCard = EnishiResultCard & {
-  cardId: string; goodMatch: boolean; transacted: boolean; introduced: boolean;
-  // 利用者が「明らかに間違っている」と判断してリストから削除したカードの記録。
-  // removedAsAiMistakeがtrueのものは、後日の検索プロンプトに反面教師として渡し、同じ誤りを学習・回避させる。
-  removed: boolean; removedReason: string | null; removedAsAiMistake: boolean;
-};
-type HistoryResult = Omit<EnishiSearchResult, "groups"> & { groups: { hop: Hop; label: string; results: HistoryCard[] }[] };
-
-// 検索結果の各カードに、履歴保存用の識別子（cardId）・「良いご縁だった」フラグの初期値・
-// 「このご縁で繋がりました」「紹介しました」フラグの現在値を付与する（いずれもcandidateId等の
-// 組み合わせで判定するため、検索直後は既に除外済みのはずで常にfalseになる。履歴を後から見返す際は
-// 「良いご縁だった」と違いresultJsonに固定保存せず、表示のたびにこの関数で最新の状態を計算し直す）。
-function augmentResultWithCards(result: EnishiSearchResult, transactedIds: Set<string>, introducedKeys: Set<string>): HistoryResult {
-  let counter = 0;
-  return {
-    ...result,
-    groups: result.groups.map((g) => ({
-      ...g,
-      results: g.results.map((r) => ({
-        ...r, cardId: `c${counter++}`, goodMatch: false,
-        transacted: transactedIds.has(r.candidateId),
-        introduced: r.myContactId ? introducedKeys.has(`${r.myContactId}|${r.candidateId}`) : false,
-        removed: false, removedReason: null, removedAsAiMistake: false,
-      })),
-    })),
-  };
-}
 
 // 「削除済み（removed: true）」のカードを画面表示・PDF出力から取り除く（履歴データそのものからは
 // 削除しない。AIの判断ミス学習のため、後から buildBadMatchContext が過去の履歴を読み返せるように残す）。
@@ -92,24 +69,6 @@ async function fetchIntroducedKeys(db: ReturnType<typeof createDb>, meId: string
   return new Set(rows.map((r) => `${r.myContactId}|${r.candidateId}`));
 }
 
-function formatHistoryDate(ts: number): string {
-  return new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  }).format(new Date(ts * 1000));
-}
-
-// 検索結果として実際に見つかった件数（グループ横断の合計）。履歴タイトルに含めて一覧で見分けやすくする。
-function countResults(result: EnishiSearchResult): number {
-  return result.groups.reduce((sum, g) => sum + g.results.length, 0);
-}
-
-function buildForMeTitle(targets: EnishiTarget[], createdAt: number, resultCount: number): string {
-  const first = targets[0]?.description ?? "";
-  const firstShort = first.length > 18 ? `${first.slice(0, 18)}…` : first;
-  const suffix = targets.length > 1 ? ` ほか${targets.length - 1}件` : "";
-  return `${formatHistoryDate(createdAt)} 私のご縁：${firstShort}${suffix}（${resultCount}件ヒット）`;
-}
-
 function buildGiverTitle(targetMemberNames: string[], createdAt: number, resultCount: number): string {
   const shown = targetMemberNames.slice(0, 3).join("・");
   const suffix = targetMemberNames.length > 3 ? ` ほか${targetMemberNames.length - 3}名` : "";
@@ -121,11 +80,6 @@ function buildMemberUspSearchTitle(usps: string[], freeText: string, createdAt: 
   const short = freeText.length > 20 ? `${freeText.slice(0, 20)}…` : freeText;
   const uspPart = usps.length > 0 ? `［${usps.slice(0, 2).join("・")}${usps.length > 2 ? `ほか${usps.length - 2}件` : ""}］` : "";
   return `${formatHistoryDate(createdAt)} 人脈検索（メンバーのUSP）${uspPart}：${short}（${resultCount}件ヒット）`;
-}
-
-function buildContactSearchTitle(freeText: string, createdAt: number, resultCount: number): string {
-  const short = freeText.length > 20 ? `${freeText.slice(0, 20)}…` : freeText;
-  return `${formatHistoryDate(createdAt)} 人脈検索：${short}（${resultCount}件ヒット）`;
 }
 
 /**
@@ -146,6 +100,7 @@ function resumePendingContactSweeps(c: Context<{ Bindings: Env; Variables: Varia
     if (pending) await sweepPendingPrefectures(db, c.env, origin, 0);
   })().catch((err) => console.error("[enishi] 所在地の調べの再開に失敗", err)));
 }
+
 
 // 自分の過去の検索履歴から「良いご縁だった」とチェック済みのカードを集め、プロンプトに追記する
 // 参考情報を組み立てる（本人の履歴のみを対象にするため、他のユーザーには影響しない）。
@@ -219,28 +174,6 @@ async function buildBadMatchContext(
 
 # 参考：あなたが過去に「AIの判断ミス」として削除した組み合わせ（同じ理由で誤った判定を繰り返さないよう注意してください）
 ${lines.join("\n")}`;
-}
-
-async function saveSearchHistory(
-  db: ReturnType<typeof createDb>,
-  meId: string,
-  mode: "for-me" | "giver" | "contact-search",
-  title: string,
-  params: unknown,
-  result: EnishiSearchResult,
-  now: number
-): Promise<{ historyId: string; result: HistoryResult }> {
-  // 検索直後の時点では、「このご縁で繋がりました」「紹介しました」済みのものはすでに候補から
-  // 除外されているため常にfalseになる
-  const augmented = augmentResultWithCards(result, new Set(), new Set());
-  const historyId = newId();
-  await db.insert(schema.enishiSearchHistory).values({
-    id: historyId, memberId: meId, mode, title,
-    paramsJson: JSON.stringify(params),
-    resultJson: JSON.stringify(augmented),
-    createdAt: now,
-  });
-  return { historyId, result: augmented };
 }
 
 // D1のバインド変数上限（100）に収まるよう、IN句に渡すIDを分割する
@@ -501,6 +434,53 @@ enishiRoutes.get("/contributors", async (c) => {
   return c.json({ data });
 });
 
+// 同時に裏で動かせる検索の数（1人あたり）。AIの使いすぎを防ぐ
+const MAX_RUNNING_JOBS_PER_MEMBER = 3;
+
+/** 検索を裏で始める。すぐに jobId を返し、結果は履歴に保存され、終わったら通知する */
+async function startSearchJob(
+  c: Context<{ Bindings: Env; Variables: Variables }>, db: ReturnType<typeof createDb>, meId: string, params: JobParams,
+): Promise<Response> {
+  const running = await db.select({ id: schema.enishiSearchJobs.id }).from(schema.enishiSearchJobs)
+    .where(and(eq(schema.enishiSearchJobs.memberId, meId), eq(schema.enishiSearchJobs.status, "running"),
+      gt(schema.enishiSearchJobs.createdAt, Math.floor(Date.now() / 1000) - 60 * 60))).all();
+  if (running.length >= MAX_RUNNING_JOBS_PER_MEMBER) {
+    return c.json({ error: { code: "too_many_searches", message: `いま${running.length}件の検索を実行中です。どれかが終わってから、もう一度お試しください。` } }, 429);
+  }
+  const jobId = await createSearchJob(db, meId, params);
+  c.executionCtx.waitUntil(runSearchJobStep(db, c.env, jobId, new URL(c.req.url).origin, 0));
+  return c.json({ data: { jobId } }, 202);
+}
+
+// ---- GET /api/enishi/search-jobs/active ---- 実行中の検索と、最近終わった検索（画面の「検索中」表示用）
+// 実行中のまま進みが止まっている検索は、ここで再開する（裏の処理が途切れても、画面を開けば進む）
+const RECENT_JOB_SECONDS = 30 * 60;
+enishiRoutes.get("/search-jobs/active", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ data: [] });
+  const now = Math.floor(Date.now() / 1000);
+  const rows = await db.select().from(schema.enishiSearchJobs)
+    .where(and(eq(schema.enishiSearchJobs.memberId, meId), or(
+      eq(schema.enishiSearchJobs.status, "running"),
+      gt(schema.enishiSearchJobs.updatedAt, now - RECENT_JOB_SECONDS),
+    )))
+    .orderBy(desc(schema.enishiSearchJobs.createdAt)).limit(10).all();
+  const origin = new URL(c.req.url).origin;
+  for (const j of rows) {
+    if (j.status === "running" && j.updatedAt < now - STALE_JOB_SECONDS) {
+      c.executionCtx.waitUntil(runSearchJobStep(db, c.env, j.id, origin, 0));
+    }
+  }
+  return c.json({
+    data: rows.map((j) => ({
+      id: j.id, mode: j.mode, label: jobLabel(JSON.parse(j.paramsJson) as JobParams),
+      status: j.status, stage: j.stage, totalBatches: j.totalBatches, doneBatches: j.doneBatches + j.failedBatches,
+      historyId: j.historyId, resultCount: j.resultCount, errorMessage: j.errorMessage, createdAt: j.createdAt,
+    })),
+  });
+});
+
 // ---- POST /api/enishi/search/for-me ---- 私のご縁：自分の卵/ガチョウ × なかまの人脈
 enishiRoutes.post("/search/for-me", async (c) => {
   const db = createDb(c.env.DB);
@@ -531,17 +511,7 @@ enishiRoutes.post("/search/for-me", async (c) => {
 
   resumePendingContactSweeps(c, db);
   const goodMatchContext = await buildGoodMatchContext(db, meId, "for-me");
-  const result = await runEnishiSearch({
-    db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
-    mode: "for-me", meId, targets, maxHop: body.maxHop, count, includeOwnContacts, goodMatchContext,
-  });
-
-  const now = Math.floor(Date.now() / 1000);
-  const title = buildForMeTitle(targets, now, countResults(result));
-  const { historyId, result: augmented } = await saveSearchHistory(
-    db, meId, "for-me", title, { targetIds: body.targetIds, maxHop: body.maxHop, count, includeOwnContacts }, result, now
-  );
-  return c.json({ data: augmented, historyId });
+  return startSearchJob(c, db, meId, { mode: "for-me", targets, targetIds: body.targetIds, maxHop: body.maxHop, includeOwnContacts, count, goodMatchContext });
 });
 
 // ---- POST /api/enishi/search/giver ---- 貢献のご縁：自分の人脈 × なかまの卵/ガチョウ
@@ -676,18 +646,10 @@ enishiRoutes.post("/search/contacts", async (c) => {
     buildGoodMatchContext(db, meId, "contact-search"),
     buildBadMatchContext(db, meId, "contact-search"),
   ]);
-  const result = await runEnishiSearch({
-    db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
-    mode: "contact-search", meId, specialties, freeText, scope, memberIds,
-    maxHop: "direct", count, goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
+  return startSearchJob(c, db, meId, {
+    mode: "contact-search", specialties, freeText, scope, memberIds, count,
+    goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
   });
-
-  const now = Math.floor(Date.now() / 1000);
-  const title = buildContactSearchTitle(freeText, now, countResults(result));
-  const { historyId, result: augmented } = await saveSearchHistory(
-    db, meId, "contact-search", title, { specialties, freeText, scope, memberIds, count }, result, now
-  );
-  return c.json({ data: augmented, historyId });
 });
 
 // ---- POST /api/enishi/search/members ---- 人脈検索（メンバーのUSPから絞り込む）：条件に近いメンバーをAIでさがす

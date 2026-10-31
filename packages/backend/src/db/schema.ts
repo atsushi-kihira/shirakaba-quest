@@ -342,6 +342,38 @@ export const enishiSearchHistory = sqliteTable("enishi_search_history", {
   createdAt:  integer("created_at").notNull(),
 });
 
+// 「私のご縁」「人脈をさがす」を裏で実行するための検索ジョブ。終わったら履歴に保存し、通知する
+export const enishiSearchJobs = sqliteTable("enishi_search_jobs", {
+  id:            text("id").primaryKey(),
+  memberId:      text("member_id").notNull(),
+  mode:          text("mode").notNull(),            // 'for-me' | 'contact-search'
+  paramsJson:    text("params_json").notNull(),
+  stage:         text("stage").notNull().default("prepare"), // 'prepare' | 'match' | 'members' | 'collab' | 'finalize'
+  status:        text("status").notNull().default("running"), // 'running' | 'done' | 'error'
+  stageAttempts: integer("stage_attempts").notNull().default(0),
+  totalBatches:  integer("total_batches").notNull().default(0),
+  doneBatches:   integer("done_batches").notNull().default(0),
+  failedBatches: integer("failed_batches").notNull().default(0),
+  truncated:     integer("truncated").notNull().default(0),
+  membersJson:   text("members_json"),
+  collabJson:    text("collab_json"),
+  historyId:     text("history_id"),
+  resultCount:   integer("result_count"),
+  errorMessage:  text("error_message"),
+  claimedAt:     integer("claimed_at"),
+  createdAt:     integer("created_at").notNull(),
+  updatedAt:     integer("updated_at").notNull(),
+});
+
+export const enishiSearchJobBatches = sqliteTable("enishi_search_job_batches", {
+  jobId:            text("job_id").notNull(),
+  idx:              integer("idx").notNull(),
+  candidateIdsJson: text("candidate_ids_json").notNull(),
+  status:           text("status").notNull().default("pending"), // 'pending' | 'processing' | 'done' | 'failed'
+  attempts:         integer("attempts").notNull().default(0),
+  matchesJson:      text("matches_json"),
+}, (t) => [primaryKey({ columns: [t.jobId, t.idx] })]);
+
 // 「私のご縁」検索で「このご縁で繋がりました」とチェックされた人脈。立てた本人の今後の
 // 検索候補から除外するために使う（本人のみに有効・他ユーザーの検索結果には影響しない）。
 export const enishiTransactedContacts = sqliteTable("enishi_transacted_contacts", {
