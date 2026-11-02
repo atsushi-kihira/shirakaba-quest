@@ -103,17 +103,61 @@ async function stagePrepare(db: Db, job: Job, params: JobParams): Promise<void> 
   await advance(db, job.id, next, { totalBatches: batches.length, doneBatches: 0, failedBatches: 0, truncated: truncated ? 1 : 0 });
 }
 
-async function countBatches(db: Db, jobId: string): Promise<{ done: number; failed: number; open: number }> {
-  const rows = await db.select({ status: schema.enishiSearchJobBatches.status, attempts: schema.enishiSearchJobBatches.attempts, n: sql<number>`count(*)` })
-    .from(schema.enishiSearchJobBatches).where(eq(schema.enishiSearchJobBatches.jobId, jobId))
-    .groupBy(schema.enishiSearchJobBatches.status, schema.enishiSearchJobBatches.attempts).all();
-  let done = 0, failed = 0, open = 0;
+// ---- 束の数え方 ----
+// 1回目に失敗した束は、やり直しのときだけ、半分に分けた2つの束（半分の束）に置き換える。
+// 元の束の行は status='split' にして残し、半分の束には、HALF_BASE 以上の番号をつける（元の束の番号は、HALF_BASE 未満）。
+// 進み具合・失敗の数は、元の束の単位で数える（半分の束は、元の束にまとめる）。
+
+/** 半分の束の番号の始まり（元の束の番号は、これより小さい） */
+const HALF_BASE = 1000;
+const halfIdx = (parent: number, k: 0 | 1): number => HALF_BASE + parent * 2 + k;
+const parentIdx = (idx: number): number => (idx >= HALF_BASE ? (idx - HALF_BASE) >> 1 : idx);
+
+type BatchRowLite = { idx: number; status: string; attempts: number; lastError: string | null; candidateIdsJson: string };
+
+/** 元の束ごとの状態。done=すべて照合できた／failed=照合できなかった分がある／open=まだ途中 */
+export function summarizeOriginals(rows: BatchRowLite[]): {
+  total: number; done: number; failed: number; open: number; failedErrors: (string | null)[]; retriedOk: number;
+} {
+  const groups = new Map<number, BatchRowLite[]>();
   for (const r of rows) {
-    if (r.status === "done") done += r.n;
-    else if (r.status === "failed" || r.attempts >= BATCH_MAX_ATTEMPTS) failed += r.n;
-    else open += r.n;
+    if (r.status === "split") continue; // 半分に分けた元の束は、半分の束のほうで数える
+    groups.set(parentIdx(r.idx), [...(groups.get(parentIdx(r.idx)) ?? []), r]);
   }
+  const hasSplit = new Set(rows.filter((r) => r.status === "split").map((r) => r.idx));
+  let done = 0, failed = 0, open = 0, retriedOk = 0;
+  const failedErrors: (string | null)[] = [];
+  for (const [p, g] of groups) {
+    const isFailedRow = (r: BatchRowLite) => r.status === "failed" || (r.status !== "done" && r.attempts >= BATCH_MAX_ATTEMPTS);
+    if (g.some((r) => r.status !== "done" && !isFailedRow(r))) open++;
+    else if (g.some(isFailedRow)) { failed++; failedErrors.push(g.find((r) => isFailedRow(r) && r.lastError)?.lastError ?? null); }
+    else { done++; if (hasSplit.has(p) || g.some((r) => r.attempts >= 2)) retriedOk++; }
+  }
+  return { total: groups.size, done, failed, open, failedErrors, retriedOk };
+}
+
+async function countBatches(db: Db, jobId: string): Promise<{ done: number; failed: number; open: number }> {
+  const rows = await db.select().from(schema.enishiSearchJobBatches).where(eq(schema.enishiSearchJobBatches.jobId, jobId)).all();
+  const { done, failed, open } = summarizeOriginals(rows);
   return { done, failed, open };
+}
+
+/** 1回目に失敗した束を、半分に分けた2つの束に置き換える（やり直しは、この半分の束それぞれに1回ずつ）。2件未満なら、そのまま1回やり直す */
+async function splitForRetry(db: Db, b: typeof schema.enishiSearchJobBatches.$inferSelect, ids: string[], error: string): Promise<void> {
+  const key = and(eq(schema.enishiSearchJobBatches.jobId, b.jobId), eq(schema.enishiSearchJobBatches.idx, b.idx));
+  if (b.idx >= HALF_BASE || ids.length < 2) {
+    await db.update(schema.enishiSearchJobBatches).set({ status: "pending", lastError: error }).where(key).run();
+    return;
+  }
+  const mid = Math.ceil(ids.length / 2);
+  // 2つの半分の束を作るのと、元の束を「分けた」に変えるのは、一度に行う（途中で止まっても、二重に処理しない）
+  await db.batch([
+    db.insert(schema.enishiSearchJobBatches).values([
+      { jobId: b.jobId, idx: halfIdx(b.idx, 0), candidateIdsJson: JSON.stringify(ids.slice(0, mid)), status: "pending", attempts: 1 },
+      { jobId: b.jobId, idx: halfIdx(b.idx, 1), candidateIdsJson: JSON.stringify(ids.slice(mid)), status: "pending", attempts: 1 },
+    ]),
+    db.update(schema.enishiSearchJobBatches).set({ status: "split", lastError: error }).where(key),
+  ]);
 }
 
 async function stageMatch(db: Db, env: Env, job: Job, params: JobParams): Promise<void> {
@@ -141,10 +185,12 @@ async function stageMatch(db: Db, env: Env, job: Job, params: JobParams): Promis
       const key = and(eq(schema.enishiSearchJobBatches.jobId, b.jobId), eq(schema.enishiSearchJobBatches.idx, b.idx));
       if (outcome.ok) {
         await db.update(schema.enishiSearchJobBatches).set({ status: "done", matchesJson: JSON.stringify(outcome.matches), lastError: null }).where(key).run();
+      } else if (b.attempts + 1 >= BATCH_MAX_ATTEMPTS) {
+        // 2回目（やり直し）の失敗は、確定する
+        await db.update(schema.enishiSearchJobBatches).set({ status: "failed", lastError: outcome.error }).where(key).run();
       } else {
-        // 1回目の失敗は、1回だけやり直す。2回目の失敗は、確定する
-        await db.update(schema.enishiSearchJobBatches)
-          .set({ status: b.attempts + 1 >= BATCH_MAX_ATTEMPTS ? "failed" : "pending", lastError: outcome.error }).where(key).run();
+        // 1回目の失敗は、半分に分けて、1回だけやり直す
+        await splitForRetry(db, b, ids, outcome.error);
       }
     }));
   }
@@ -195,16 +241,18 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   }
   const batches = await db.select().from(schema.enishiSearchJobBatches)
     .where(eq(schema.enishiSearchJobBatches.jobId, job.id)).orderBy(asc(schema.enishiSearchJobBatches.idx)).all();
-  const failedBatches = batches.filter((b) => b.status === "failed").length;
+  const summary = summarizeOriginals(batches);
+  const failedBatches = summary.failed;
   const countIds = (b: { candidateIdsJson: string }) => (JSON.parse(b.candidateIdsJson) as string[]).length;
+  const countable = batches.filter((b) => b.status !== "split");
   const coverage: MatchCoverage = {
-    totalCandidates: batches.reduce((n, b) => n + countIds(b), 0),
-    unmatchedCandidates: batches.filter((b) => b.status === "failed").reduce((n, b) => n + countIds(b), 0),
-    totalBatches: batches.length, failedBatches,
-    retriedOkBatches: batches.filter((b) => b.status === "done" && b.attempts >= 2).length,
+    totalCandidates: countable.reduce((n, b) => n + countIds(b), 0),
+    unmatchedCandidates: countable.filter((b) => b.status === "failed").reduce((n, b) => n + countIds(b), 0),
+    totalBatches: summary.total, failedBatches,
+    retriedOkBatches: summary.retriedOk,
   };
-  if (batches.length > 0 && failedBatches === batches.length) {
-    await failJob(db, env, job, params, "AIの照合がうまくいきませんでした。時間をおいて、もう一度お試しください。");
+  if (summary.total > 0 && failedBatches === summary.total) {
+    await failJob(db, env, job, params, "AIの検索に時間がかかり、今回は結果を出せませんでした。時間をおいて、もう一度お試しください。");
     return;
   }
   const matches: JobMatch[] = interleaveMatches(
@@ -288,8 +336,8 @@ async function completeJob(db: Db, env: Env, job: Job, params: JobParams, histor
   let coverage: MatchCoverage | undefined;
   try { coverage = row ? (JSON.parse(row.resultJson) as { coverage?: MatchCoverage }).coverage : undefined; } catch { coverage = undefined; }
   const note = coverage && coverage.unmatchedCandidates > 0
-    ? `\n（候補${coverage.totalCandidates}人のうち、${coverage.unmatchedCandidates}人は、AIの照合が間に合わず、調べられていません。時間をおいて、もう一度さがしてみてください）`
-    : job.failedBatches > 0 || job.truncated ? "\n（一部の人脈は、うまく照合できなかった可能性があります。気になるときは、もう一度さがしてみてください）" : "";
+    ? `\n（候補${coverage.totalCandidates}人のうち、${coverage.unmatchedCandidates}人分は、AIの検索に時間がかかり、時間内に照合できませんでした。時間をおいて、もう一度さがすと、見つかることがあります）`
+    : job.failedBatches > 0 || job.truncated ? "\n（AIの検索に時間がかかり、一部の人脈は照合できていない可能性があります。気になるときは、時間をおいて、もう一度さがしてみてください）" : "";
   await notifyMember(db, env, job, {
     subject: "🔎 検索が終わりました",
     message: `「${jobLabel(params)}」の結果が出ました（${count}件）。${note}`,
@@ -332,10 +380,9 @@ export function summarizeCauses(errors: (string | null)[]): string {
  * 宛先は、システム管理者（super_admin）。いなければ、管理者全員。
  */
 async function alertAdminsIfManyFailures(db: Db, env: Env, job: Job, params: JobParams, outcome: string): Promise<void> {
-  const batches = await db.select({ status: schema.enishiSearchJobBatches.status, lastError: schema.enishiSearchJobBatches.lastError })
-    .from(schema.enishiSearchJobBatches).where(eq(schema.enishiSearchJobBatches.jobId, job.id)).all();
-  const failed = batches.filter((b) => b.status === "failed");
-  if (!isManyFailures(failed.length, batches.length)) return;
+  const rows = await db.select().from(schema.enishiSearchJobBatches).where(eq(schema.enishiSearchJobBatches.jobId, job.id)).all();
+  const summary = summarizeOriginals(rows);
+  if (!isManyFailures(summary.failed, summary.total)) return;
 
   const supers = await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).where(eq(schema.admins.role, "super_admin")).all();
   const admins = supers.length > 0 ? supers : await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).all();
@@ -349,8 +396,8 @@ async function alertAdminsIfManyFailures(db: Db, env: Env, job: Job, params: Job
     appTitle: design?.appTitle ?? "白樺クエスト",
     searchMode: params.mode === "for-me" ? "私のご縁" : "人脈をさがす",
     memberName: member?.name ?? "（不明）",
-    failedBatches: String(failed.length), totalBatches: String(batches.length),
-    outcome, causes: summarizeCauses(failed.map((b) => b.lastError)),
+    failedBatches: String(summary.failed), totalBatches: String(summary.total),
+    outcome, causes: summarizeCauses(summary.failedErrors),
     occurredAt: new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date()),
     jobId: job.id,
   };
@@ -388,7 +435,7 @@ export async function buildPartialJobView(db: Db, job: Job): Promise<PartialJobV
         db, params, candidates, matches, aiCallFailed: false, truncated,
         memberHits: JSON.parse(job.membersJson ?? "[]") as MemberHit[], memberCollab: null,
       });
-  return { ...base, doneBatches: batches.length, result: augmentResultWithCards(result, new Set(), new Set()) };
+  return { ...base, result: augmentResultWithCards(result, new Set(), new Set()) };
 }
 
 // ---- 1ステップの実行と、自己連鎖 ----

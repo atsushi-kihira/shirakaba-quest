@@ -206,7 +206,7 @@ export function ResultBodyView({ body, level }: { body: ResultBody; level: Viewe
             : "非公開の人脈は表示されていません。"}
         </p>
       )}
-      {body.aiCallFailed && <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>⚠️ 一部の人脈は、うまく照合できなかった可能性があります</p>}
+      {body.aiCallFailed && <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>AIの検索に時間がかかり、一部の人脈は照合できていない可能性があります</p>}
       {body.total === 0 && <div className="card-paper p-6 rounded-3xl text-center text-sm" style={{ color: "var(--color-ink-500)" }}>表示できる結果はありません</div>}
       {body.groups.filter((g) => g.results.length > 0).map((g) => (
         <section key={g.hop}>

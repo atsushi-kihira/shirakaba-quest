@@ -36,7 +36,7 @@ export function EnishiJobPartialScreen() {
   }, [data, navigate]);
 
   const running = data?.status === "running" ? data : null;
-  const progress = running && running.totalBatches > 0 ? `${running.doneBatches + running.failedBatches}/${running.totalBatches}` : null;
+  const progress = running && running.totalBatches > 0 ? `約${Math.min(99, Math.round(((running.doneBatches + running.failedBatches) / running.totalBatches) * 100))}%` : null;
 
   return (
     <div className="px-4 py-6 pb-24 lg:px-0 lg:pb-6 max-w-3xl mx-auto">
@@ -67,13 +67,13 @@ export function EnishiJobPartialScreen() {
         <>
           <div className="rounded-2xl p-3 mt-2 text-xs" role="status" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
             <p className="font-medium flex items-center gap-1.5">
-              <Loader2 size={13} className="animate-spin shrink-0" />🔄 検索の途中です{progress ? `（${progress}の照合が終わっています）` : ""}
+              <Loader2 size={13} className="animate-spin shrink-0" />🔄 検索の途中です{progress ? `（${progress}まで照合が進んでいます）` : ""}
             </p>
             <p className="mt-1">
               ここに出ているのは、照合が終わった分だけです。結果は増えたり、順番が変わったりします。この画面は、自動で新しくなります。
               終わったら、通知とメールでお知らせします。
             </p>
-            {running.failedBatches > 0 && <p className="mt-1">⚠️ 一部の照合がうまくいかず、やり直しても進まなかった分があります。</p>}
+            {running.failedBatches > 0 && <p className="mt-1">AIの検索に時間がかかっている分があり、その分は、今回の結果に含まれないことがあります。</p>}
           </div>
 
           {!running.result ? (

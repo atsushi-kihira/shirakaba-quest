@@ -186,7 +186,10 @@ export function PageSizeSelect({ value, onChange }: { value: number; onChange: (
   );
 }
 
-/** 照合できなかった候補がある（AIの照合が間に合わなかった束がある）ときに、人数をはっきり伝える */
+/**
+ * 照合できなかった候補がある（AIの検索に時間がかかり、時間内に照合できなかった分がある）ときに、人数で伝える。
+ * 不具合ではなく、AIの検索に時間がかかることによるもの。束の数など、内部の言葉は出さない。
+ */
 export function CoverageNotice({ result }: { result: SearchResult }) {
   const c = result.coverage;
   if (!c || c.totalCandidates === 0) return null;
@@ -194,17 +197,16 @@ export function CoverageNotice({ result }: { result: SearchResult }) {
   if (c.unmatchedCandidates === 0) {
     return (
       <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
-        ✅ 候補{c.totalCandidates}人を、すべて照合しました{c.retriedOkBatches > 0 ? `（うち${c.retriedOkBatches}か所は、1回目がうまくいかず、やり直して成功しました）` : ""}。
+        ✅ 候補{c.totalCandidates}人を、すべて照合しました。
       </p>
     );
   }
   return (
     <div className="rounded-2xl p-3 mb-3 text-xs" role="status" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
-      <p className="font-medium">⚠️ 候補{c.totalCandidates}人のうち、{c.unmatchedCandidates}人は、照合できていません</p>
+      <p className="font-medium">ℹ️ 候補{c.totalCandidates}人のうち、{c.unmatchedCandidates}人分は、時間内に照合できませんでした</p>
       <p className="mt-1">
-        AIの照合が間に合わなかった分です（{c.totalBatches}か所中{c.failedBatches}か所。1回やり直しても、うまくいきませんでした）。
-        照合できたのは{matched}人です。照合できなかった人の中に、さがしている人がいるかもしれません。時間をおいて、もう一度さがしてみてください。
-        {c.retriedOkBatches > 0 ? `（ほかの${c.retriedOkBatches}か所は、やり直して成功しました）` : ""}
+        AIによる検索は、候補が多いと時間がかかることがあります。今回は、{c.unmatchedCandidates}人分の照合が間に合いませんでした（不具合ではありません）。
+        照合できたのは{matched}人分です。間に合わなかった分の中に、さがしている人がいるかもしれません。時間をおいて、もう一度さがすと、見つかることがあります。
       </p>
     </div>
   );
@@ -313,7 +315,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, readOnly, onTo
         <div className="card-paper rounded-2xl p-6 text-center">
           {result.aiCallFailed ? (
             <p className="text-sm" style={{ color: "var(--color-brand)" }}>
-              ⚠️ AIによる検索が一時的にうまくいきませんでした。少し時間をおいてから、もう一度お試しください。
+              AIによる検索に時間がかかり、結果を出せませんでした。少し時間をおいてから、もう一度お試しください。
             </p>
           ) : (
             <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>今回の条件に合う{termEnishi}は見つかりませんでした。条件を変えて試してみてください。</p>

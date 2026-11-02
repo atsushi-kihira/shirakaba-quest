@@ -811,6 +811,8 @@ export async function matchJobBatch(apiKey: string | undefined, isDev: boolean, 
     //   [dev-fail]      : すべての束が失敗する ／ [dev-fail-half] : 束の先頭の候補IDの文字コードが奇数の束だけ失敗する
     const marker = JSON.stringify(params);
     if (marker.includes("[dev-fail]")) return { ok: false, error: "開発用の失敗の再現" };
+    if (marker.includes("[dev-fail-8]") && batch.length >= 8) return { ok: false, error: "開発用の失敗の再現（8件以上）" }; // 半分に分けたとき、大きいほうの半分だけが失敗する
+    if (marker.includes("[dev-fail-big]") && batch.length > 8) return { ok: false, error: "開発用の失敗の再現（大きい束）" }; // 半分に分けたやり直しで成功する
     if (marker.includes("[dev-fail-half]") && ((batch[0]?.candidateId.charCodeAt(0) ?? 0) % 2 === 1)) return { ok: false, error: "開発用の失敗の再現（半分）" };
     // 開発環境用: 各束の先頭2件を「合致」として返す（束の分割・合算・通知の流れを確かめるため）
     const matches = batch.slice(0, 2).map((c): JobMatch => {

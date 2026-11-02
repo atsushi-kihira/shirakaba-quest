@@ -26,10 +26,10 @@ function saveDismissed(ids: string[]): void {
   try { localStorage.setItem(DISMISSED_KEY, JSON.stringify(ids.slice(-50))); } catch { /* 覚えられなくても、表示には影響しない */ }
 }
 
-/** いま何をしているかを、やさしい言葉で（束の照合中は、何件中何件まで進んだか） */
+/** いま何をしているかを、やさしい言葉で（照合中は、どのくらい進んだかを「％」で。内部の単位は出さない） */
 function progressText(j: SearchJob): string {
   if (j.stage === "prepare") return "さがす人を集めています";
-  if (j.stage === "match") return j.totalBatches > 0 ? `照らし合わせています（${j.doneBatches}/${j.totalBatches}）` : "照らし合わせています";
+  if (j.stage === "match") return j.totalBatches > 0 ? `照らし合わせています（約${Math.min(99, Math.round((j.doneBatches / j.totalBatches) * 100))}%）` : "照らし合わせています";
   return "結果をまとめています";
 }
 
