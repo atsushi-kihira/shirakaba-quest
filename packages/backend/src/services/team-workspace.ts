@@ -675,3 +675,42 @@ export async function adoptLegacyDraftIdeas(db: Db, draftId: string, meId: strin
     firstStepsJson: JSON.stringify(ideas.firstSteps ?? []), rolesJson: JSON.stringify(roles), isProvisional: 0, confirmedAt: now,
   }, meId);
 }
+
+// ---- ルールにもとづく「次の一歩」の提案（AIの利用料なし） ----
+export type NextStep = { id: string; kind: "invite_candidate" | "find_talent" | "publish_talent" | "role" | "meeting" | "profile" | "first_step"; title: string; detail: string; refKey?: string; text?: string };
+
+export const FOURTEEN_DAYS = 14 * 86400;
+
+export function buildNextSteps(
+  subject: Subject, profile: ProfileRow | null, roster: Roster,
+  existingTasks: string[], hasMeeting: boolean, prospectAdded: Map<string, number>,
+): NextStep[] {
+  const steps: NextStep[] = [];
+  if (!isProfileComplete(profile) && subject.type === "team") {
+    steps.push({ id: "profile", kind: "profile", title: "チームプロフィールを入力する", detail: "事業・概要・お客様像の3つを埋めると、入力済みになります" });
+  }
+  for (const m of roster.members) {
+    if (m.status === "active" && !m.role) steps.push({ id: `role-${m.key}`, kind: "role", title: `${m.name}さんの役割を決める`, detail: "役割が未入力です", refKey: m.key });
+  }
+  for (const p of roster.prospects) {
+    if (p.kind === "member" && subject.type === "team") {
+      const added = prospectAdded.get(p.prospectId) ?? 0;
+      if (nowSec() - added >= FOURTEEN_DAYS) {
+        steps.push({ id: `invite-${p.prospectId}`, kind: "invite_candidate", title: `${p.name}さんに声をかける`, detail: "候補に入れて2週間たちました。事業のイメージを伝えて、参加の意向を聞いてみましょう", refKey: p.key });
+      }
+    } else if (p.kind === "talent" && !p.filled) {
+      steps.push({ id: `talent-${p.prospectId}`, kind: "find_talent", title: `「${p.title}」を人脈検索で探す`, detail: "人物像を入れた状態で、人脈検索を開きます", refKey: p.key, text: `${p.title} ${p.profile ?? ""}`.trim() });
+      if (subject.type === "team" && !p.published) {
+        steps.push({ id: `publish-${p.prospectId}`, kind: "publish_talent", title: `「${p.title}」を募集として公開する`, detail: "チャプターのメンバーから、興味ありの声が届くようになります", refKey: p.key });
+      }
+    }
+  }
+  if (subject.type === "team" && !hasMeeting) {
+    steps.push({ id: "meeting", kind: "meeting", title: "事業のたたき台を話し合う会議を開く", detail: "チームの会議として作成します" });
+  }
+  const steps0 = parseSteps(profile?.firstStepsJson);
+  for (const [i, text] of steps0.entries()) {
+    if (!existingTasks.includes(text)) steps.push({ id: `first-${i}`, kind: "first_step", title: `最初の一歩を、アクションに追加する：${text}`, detail: "プロフィールの「最初の一歩」から", text });
+  }
+  return steps.slice(0, 6);
+}

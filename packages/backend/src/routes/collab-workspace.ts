@@ -28,7 +28,7 @@ import {
   REGENERATE_NOTE_MAX, REGENERATE_PERSPECTIVES, generateTeamDraftIdeas, type RegeneratePerspective, type TeamDraftIdeas,
 } from "../services/team-draft-ideas.ts";
 import {
-  DAILY_AI_RUNS, MAX_PEOPLE, adoptLegacyDraftIdeas, MILESTONE_LABEL, PROPOSAL_HISTORY, addMilestone, applyProposal, buildAiPeople, computeHealth, getProfile,
+  DAILY_AI_RUNS, MAX_PEOPLE, adoptLegacyDraftIdeas, buildNextSteps, MILESTONE_LABEL, PROPOSAL_HISTORY, addMilestone, applyProposal, buildAiPeople, computeHealth, getProfile,
   hasProfileContent, isProfileComplete, loadRoster, loadSuggestionPool, parseApplied, parseRoles, parseSteps, profileAsPrevious,
   remainingItems, resolveSubject, saveProfile, setRole, type Access, type ApplySelection, type MilestoneType, type Subject, type SubjectType,
 } from "../services/team-workspace.ts";
@@ -76,45 +76,6 @@ async function memberNames(db: Db, ids: string[]): Promise<Map<string, string>> 
     for (const r of rows) map.set(r.id, r.name);
   }
   return map;
-}
-
-// ---- ルールにもとづく「次の一歩」の提案（AIの利用料なし） ----
-type NextStep = { id: string; kind: "invite_candidate" | "find_talent" | "publish_talent" | "role" | "meeting" | "profile" | "first_step"; title: string; detail: string; refKey?: string; text?: string };
-
-const FOURTEEN_DAYS = 14 * 86400;
-
-function buildNextSteps(
-  subject: Subject, profile: Awaited<ReturnType<typeof getProfile>>, roster: Awaited<ReturnType<typeof loadRoster>>,
-  existingTasks: string[], hasMeeting: boolean, prospectAdded: Map<string, number>,
-): NextStep[] {
-  const steps: NextStep[] = [];
-  if (!isProfileComplete(profile) && subject.type === "team") {
-    steps.push({ id: "profile", kind: "profile", title: "チームプロフィールを入力する", detail: "事業・概要・お客様像の3つを埋めると、入力済みになります" });
-  }
-  for (const m of roster.members) {
-    if (m.status === "active" && !m.role) steps.push({ id: `role-${m.key}`, kind: "role", title: `${m.name}さんの役割を決める`, detail: "役割が未入力です", refKey: m.key });
-  }
-  for (const p of roster.prospects) {
-    if (p.kind === "member" && subject.type === "team") {
-      const added = prospectAdded.get(p.prospectId) ?? 0;
-      if (nowSec() - added >= FOURTEEN_DAYS) {
-        steps.push({ id: `invite-${p.prospectId}`, kind: "invite_candidate", title: `${p.name}さんに声をかける`, detail: "候補に入れて2週間たちました。事業のイメージを伝えて、参加の意向を聞いてみましょう", refKey: p.key });
-      }
-    } else if (p.kind === "talent" && !p.filled) {
-      steps.push({ id: `talent-${p.prospectId}`, kind: "find_talent", title: `「${p.title}」を人脈検索で探す`, detail: "人物像を入れた状態で、人脈検索を開きます", refKey: p.key, text: `${p.title} ${p.profile ?? ""}`.trim() });
-      if (subject.type === "team" && !p.published) {
-        steps.push({ id: `publish-${p.prospectId}`, kind: "publish_talent", title: `「${p.title}」を募集として公開する`, detail: "チャプターのメンバーから、興味ありの声が届くようになります", refKey: p.key });
-      }
-    }
-  }
-  if (subject.type === "team" && !hasMeeting) {
-    steps.push({ id: "meeting", kind: "meeting", title: "事業のたたき台を話し合う会議を開く", detail: "チームの会議として作成します" });
-  }
-  const steps0 = parseSteps(profile?.firstStepsJson);
-  for (const [i, text] of steps0.entries()) {
-    if (!existingTasks.includes(text)) steps.push({ id: `first-${i}`, kind: "first_step", title: `最初の一歩を、アクションに追加する：${text}`, detail: "プロフィールの「最初の一歩」から", text });
-  }
-  return steps.slice(0, 6);
 }
 
 // ---- 詳細 ----

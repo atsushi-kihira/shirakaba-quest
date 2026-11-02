@@ -23,8 +23,15 @@ export type DraftBody = {
   goal: string;
   profile: { businessTitle: string; summary: string; targetCustomers: string; firstSteps: string[]; isProvisional: boolean } | null;
   proposer: { id: string; name: string; emoji: string; bgColor: string; headline: string; role: string | null };
-  talents: { title: string; profile: string; role: string | null }[];
+  candidates: DraftCandidate[];
+  nextSteps: { kind: string; title: string; detail: string }[];
+  actions: { task: string; assigneeName: string | null; dueDate: string | null; completed: boolean }[];
 };
+
+export type DraftCandidate =
+  | { kind: "member"; id: string; name: string; emoji: string; bgColor: string; headline: string; role: string | null }
+  | { kind: "contact"; name: string | null; company: string | null; specialty: string | null; summary: string | null; relationships: string[]; role: string | null; isSharersContact: boolean }
+  | { kind: "talent"; title: string; profile: string; role: string | null };
 
 export type SharedResultCard = {
   hop: string; type: "egg" | "goose"; matchedTargetLabel: string;
