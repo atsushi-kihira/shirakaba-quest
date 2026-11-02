@@ -618,11 +618,12 @@ adminCollabRoutes.post("/contacts/backfill-business-summary", async (c) => {
   const body = await c.req.json<{ batchSize?: number; retryErrors?: boolean }>().catch(() => ({ batchSize: undefined, retryErrors: undefined }));
   const batchSize = Math.min(Math.max(body.batchSize ?? 3, 1), 6);
 
-  // 会社名が無い行、または非公開の人脈は生成の対象外なので、まとめて skipped にしておく（対象カウントから外れる）
+  // 会社名が無い行は生成の対象外なので、まとめて skipped にしておく（対象カウントから外れる）。
+  // 非公開の人脈は、そのままにしておく（会社名を直して公開に戻したときに、作り直せるように）。作成待ちの件数にも含まれない
   await db.update(schema.externalContacts)
     .set({ businessSummaryStatus: "skipped" })
     .where(and(
-      or(isNull(schema.externalContacts.company), eq(schema.externalContacts.company, ""), eq(schema.externalContacts.visibility, "private")),
+      or(isNull(schema.externalContacts.company), eq(schema.externalContacts.company, "")),
       ne(schema.externalContacts.businessSummaryStatus, "skipped"),
       // 見つからなかった人脈は自動で非公開になるが、「見つからなかった」の記録は残す
       ne(schema.externalContacts.businessSummaryStatus, "not_found")

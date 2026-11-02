@@ -1948,6 +1948,29 @@ export function pendingSummaryFilter(nowSec: number, includeError = false) {
 }
 
 /**
+ * 非公開から公開に戻された人脈のうち、会社の説明を作らずに「対象外（skipped）」のままになっているものを、未生成に戻す。
+ * （非公開の間は、AIの費用をかけないため作らない。公開に戻したときに、作り始める）
+ * 「見つからなかった（not_found）」は、会社名を変えない限り、もう一度は調べないので、そのままにする。
+ * 作り直す対象があれば true を返す。
+ */
+async function requeueSkippedSummaries(db: ReturnType<typeof createDb>, ids: string[]): Promise<boolean> {
+  let any = false;
+  for (let i = 0; i < ids.length; i += 80) {
+    const res = await db.update(schema.externalContacts)
+      .set({ businessSummaryStatus: "pending" })
+      .where(and(
+        inArray(schema.externalContacts.id, ids.slice(i, i + 80)),
+        eq(schema.externalContacts.businessSummaryStatus, "skipped"),
+        isNotNull(schema.externalContacts.company),
+        ne(schema.externalContacts.company, ""),
+        ne(schema.externalContacts.visibility, "private"),
+      )).run();
+    if ((res.meta?.changes ?? 0) > 0) any = true;
+  }
+  return any;
+}
+
+/**
  * 管理画面の「いますぐ生成」用。対象から size 件を取って（ほかの処理と重ならないよう生成中にしてから）、
  * 生成が終わるまで待つ。呼び出し側が、remaining が 0 になるまで繰り返し呼ぶ。
  * 自動の連鎖（sweep）と違い、途中で打ち切らない。
@@ -2342,6 +2365,10 @@ collabRoutes.patch("/contacts/bulk", async (c) => {
         .run();
       updated += result.meta?.changes ?? idsChunk.length;
     }
+    // 非公開から公開に戻した人脈は、会社の説明の作成を始める
+    if (patch.visibility && patch.visibility !== "private" && await requeueSkippedSummaries(db, ownIds)) {
+      c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, new URL(c.req.url).origin, 0));
+    }
   } else {
     updated = ownIds.length;
   }
@@ -2466,6 +2493,14 @@ collabRoutes.patch("/contacts/:id", async (c) => {
 
   if (body.relationships !== undefined) {
     await replaceContactRelationships(db, contactId, normalizeRelationships(body.relationships));
+  }
+
+  // 非公開から公開に戻したとき、会社の説明を作り始める（会社名を直した場合も、ここで作り直しが始まる）
+  const nowPublic = body.visibility !== undefined && body.visibility !== "private" && ["existence", "full"].includes(body.visibility);
+  const requeued = nowPublic ? await requeueSkippedSummaries(db, [contactId]) : false;
+  const stillPending = (summaryPatch.businessSummaryStatus ?? contact.businessSummaryStatus) === "pending";
+  if (requeued || (nowPublic && stillPending)) {
+    c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, new URL(c.req.url).origin, 0));
   }
 
   return c.json({ ok: true });
