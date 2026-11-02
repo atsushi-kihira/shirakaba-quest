@@ -901,7 +901,8 @@ function ForMePanel() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [maxHop, setMaxHop] = useState<Hop>("2hop");
-  const [includeOwnContacts, setIncludeOwnContacts] = useState(true);
+  // 自分自身の人脈は、いつもは検索対象に含めない（含めたいときだけ、チェックを入れる）
+  const [includeOwnContacts, setIncludeOwnContacts] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -945,48 +946,91 @@ function ForMeSearchForm({ eggs, geese, selected, setSelected, maxHop, setMaxHop
   search: { mutate: () => void; isPending: boolean };
 }) {
   const { termEnishi } = useSettings();
+  const eggIds = eggs.map((e) => e.id);
+  const gooseIds = geese.map((g) => g.id);
+  const allIds = [...eggIds, ...gooseIds];
   const toggle = (id: string) => {
     const next = new Set(selected);
     next.has(id) ? next.delete(id) : next.add(id);
     setSelected(next);
   };
+  const sameAs = (ids: string[]) => ids.length > 0 && ids.length === selected.size && ids.every((id) => selected.has(id));
+  // グループ内のすべてが選ばれているときは、そのグループをはずす。そうでなければ、そのグループをすべて選ぶ（もう一方のグループの選択は、そのまま）
+  const toggleGroup = (ids: string[]) => {
+    const next = new Set(selected);
+    const allOn = ids.every((id) => next.has(id));
+    ids.forEach((id) => (allOn ? next.delete(id) : next.add(id)));
+    setSelected(next);
+  };
+  const quick = (label: string, ids: string[], active: boolean) => (
+    <button key={label} type="button" onClick={() => setSelected(new Set(ids))} aria-pressed={active}
+      className="text-xs font-medium px-3 py-2 rounded-full"
+      style={{
+        background: active ? "var(--color-brand)" : "white",
+        border: `1px solid ${active ? "var(--color-brand)" : "var(--color-paper-300)"}`,
+        color: active ? "white" : "var(--color-ink-700)",
+      }}>
+      {label}（{ids.length}件）
+    </button>
+  );
+  const group = (title: string, icon: string, items: { id: string; description: string }[], accent: string) => {
+    const ids = items.map((i) => i.id);
+    const count = ids.filter((id) => selected.has(id)).length;
+    return (
+      <div className="mb-3">
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <p className="text-xs font-bold" style={{ color: "var(--color-ink-700)" }}>{icon} {title}（{count}/{items.length}件を選択中）</p>
+          <button type="button" onClick={() => toggleGroup(ids)} className="text-[11px] font-medium px-2.5 py-1 rounded-full"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+            {count === items.length ? "この中をすべてはずす" : "この中をすべて選ぶ"}
+          </button>
+        </div>
+        <ul className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--color-paper-300)" }}>
+          {items.map((it, i) => {
+            const on = selected.has(it.id);
+            return (
+              <li key={it.id} style={{ borderTop: i === 0 ? "none" : "1px solid var(--color-paper-200)" }}>
+                <label className="flex items-start gap-2.5 px-3 py-2.5 cursor-pointer text-sm" style={{ background: on ? accent : "white", color: "var(--color-ink-800)" }}>
+                  <input type="checkbox" checked={on} onChange={() => toggle(it.id)} className="mt-1 shrink-0" />
+                  <span className="min-w-0 break-words">{it.description}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  };
 
   return (
     <div className="card-paper rounded-2xl p-4 mb-4">
       <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>① どの{termEnishi}をさがす？（対象の金の卵・金のガチョウ）</h2>
-      <div className="flex flex-wrap gap-2 mb-4">
-        {eggs.map((e) => (
-          <button key={e.id} onClick={() => toggle(e.id)}
-            className="text-xs font-medium px-3 py-1.5 rounded-full text-left"
-            style={{
-              background: selected.has(e.id) ? "var(--color-paper-200)" : "white",
-              border: `1px solid ${selected.has(e.id) ? "var(--color-accent)" : "var(--color-paper-300)"}`,
-              color: selected.has(e.id) ? "var(--color-accent)" : "var(--color-ink-600)",
-            }}>
-            🥚 {e.description.slice(0, 20)}{e.description.length > 20 ? "…" : ""}
+      <div className="flex flex-wrap gap-2 mb-3" role="group" aria-label="まとめて選ぶ">
+        {quick("すべて", allIds, sameAs(allIds))}
+        {eggs.length > 0 && quick("金の卵のすべて", eggIds, sameAs(eggIds))}
+        {geese.length > 0 && quick("金のガチョウのすべて", gooseIds, sameAs(gooseIds))}
+        {selected.size > 0 && (
+          <button type="button" onClick={() => setSelected(new Set())} className="text-xs font-medium px-3 py-2 rounded-full" style={{ color: "var(--color-ink-500)" }}>
+            選びなおす（すべてはずす）
           </button>
-        ))}
-        {geese.map((g) => (
-          <button key={g.id} onClick={() => toggle(g.id)}
-            className="text-xs font-medium px-3 py-1.5 rounded-full text-left"
-            style={{
-              background: selected.has(g.id) ? "#e7f0dc" : "white",
-              border: `1px solid ${selected.has(g.id) ? "var(--color-success)" : "var(--color-paper-300)"}`,
-              color: selected.has(g.id) ? "var(--color-success)" : "var(--color-ink-600)",
-            }}>
-            🪙 {g.description.slice(0, 20)}{g.description.length > 20 ? "…" : ""}
-          </button>
-        ))}
+        )}
       </div>
+      <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+        上のボタンでまとめて選べます。下の一覧では、1つずつ選んだり、はずしたりできます（いま{selected.size}件を選択中）。
+      </p>
+      {eggs.length > 0 && group("金の卵", "🥚", eggs, "var(--color-paper-100)")}
+      {geese.length > 0 && group("金のガチョウ", "🪙", geese, "#eef5e6")}
+      <div className="mb-4" />
 
       <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>② 金の卵への到達方法（次数）</h2>
       <HopRadio value={maxHop} onChange={setMaxHop} />
 
       <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>③ 検索対象</h2>
-      <label className="flex items-center gap-2 mb-4 text-sm cursor-pointer" style={{ color: "var(--color-ink-700)" }}>
+      <label className="flex items-center gap-2 mb-1 text-sm cursor-pointer" style={{ color: "var(--color-ink-700)" }}>
         <input type="checkbox" checked={includeOwnContacts} onChange={(e) => setIncludeOwnContacts(e.target.checked)} />
         自分自身の人脈も検索対象に含める
       </label>
+      <p className="text-xs mb-4 ml-6" style={{ color: "var(--color-ink-500)" }}>いつもは、なかまの人脈だけをさがします。自分の人脈も調べたいときだけ、チェックを入れてください。</p>
 
       {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
 

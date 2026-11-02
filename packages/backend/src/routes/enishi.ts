@@ -512,7 +512,7 @@ enishiRoutes.post("/search/for-me", async (c) => {
     return c.json({ error: { code: "invalid_input", message: "到達方法の指定が正しくありません" } }, 400);
   }
   const count = MAX_RESULTS;
-  const includeOwnContacts = body.includeOwnContacts ?? true;
+  const includeOwnContacts = body.includeOwnContacts ?? false; // いつもは、自分自身の人脈を検索対象に含めない
 
   const [myEggs, myGeese] = await Promise.all([
     db.select().from(schema.goldenEggs).where(eq(schema.goldenEggs.memberId, meId)).all(),

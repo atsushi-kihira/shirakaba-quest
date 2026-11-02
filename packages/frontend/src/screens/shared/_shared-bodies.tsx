@@ -67,19 +67,7 @@ export function TeamProfileBodyView({ body }: { body: TeamProfileBody }) {
         </ul>
       </Section>
 
-      {body.talents.length > 0 && (
-        <Section title="募集している人">
-          <ul className="space-y-3">
-            {body.talents.map((t, i) => (
-              <li key={i}>
-                <p className="text-sm font-medium break-words" style={{ color: "var(--color-ink-900)" }}>{t.title}</p>
-                {t.profile && <Text>{t.profile}</Text>}
-                {t.role && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>役割：{t.role}</p>}
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
+      <PlanSections body={body} />
     </div>
   );
 }
@@ -152,6 +140,15 @@ export function DraftBodyView({ body }: { body: DraftBody }) {
           </div>
         </div>
       </Section>
+      <PlanSections body={body} />
+    </div>
+  );
+}
+
+/** メンバー案（候補）・次の一歩の提案・アクション。チーム案と実チームで共通 */
+function PlanSections({ body }: { body: { candidates: DraftCandidate[]; nextSteps: { kind: string; title: string; detail: string }[]; actions: { task: string; assigneeName: string | null; dueDate: string | null; completed: boolean }[] } }) {
+  return (
+    <>
       <Section title={`メンバー案（${body.candidates.length}件）`}>
         {body.candidates.length === 0 && <p className="text-sm" style={{ color: "var(--color-ink-400)" }}>まだ候補は入っていません</p>}
         <ul className="space-y-3">
@@ -188,7 +185,7 @@ export function DraftBodyView({ body }: { body: DraftBody }) {
           </ul>
         </Section>
       )}
-    </div>
+    </>
   );
 }
 
@@ -198,7 +195,7 @@ function CandidateRow({ c }: { c: DraftCandidate }) {
       <li className="flex items-start gap-3">
         <span className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg shrink-0 ${c.bgColor}`}>{c.emoji}</span>
         <div className="min-w-0">
-          <p className="text-sm font-medium break-words" style={{ color: "var(--color-ink-900)" }}>{c.name}<span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--color-ink-400)" }}>メンバー</span></p>
+          <p className="text-sm font-medium break-words" style={{ color: "var(--color-ink-900)" }}>{c.name}<span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--color-ink-400)" }}>{c.invited ? "招待中" : "メンバー"}</span></p>
           {c.headline && <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{c.headline}</p>}
           {c.role && <p className="text-sm break-words" style={{ color: "var(--color-ink-700)" }}>役割：{c.role}</p>}
         </div>
@@ -210,7 +207,7 @@ function CandidateRow({ c }: { c: DraftCandidate }) {
       <li className="flex items-start gap-3">
         <span className="w-9 h-9 rounded-xl flex items-center justify-center text-lg shrink-0" style={{ background: "var(--color-paper-200)" }}>🔎</span>
         <div className="min-w-0">
-          <p className="text-sm font-medium break-words" style={{ color: "var(--color-ink-900)" }}>{c.title}<span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--color-ink-400)" }}>来てほしい人のイメージ</span></p>
+          <p className="text-sm font-medium break-words" style={{ color: "var(--color-ink-900)" }}>{c.title}<span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--color-ink-400)" }}>来てほしい人のイメージ{c.filled ? "（決まりました）" : ""}</span></p>
           {c.profile && <Text>{c.profile}</Text>}
           {c.role && <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>役割：{c.role}</p>}
         </div>

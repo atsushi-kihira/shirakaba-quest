@@ -11,7 +11,9 @@ export type TeamProfileBody = {
   archived: boolean;
   profile: { businessTitle: string; summary: string; targetCustomers: string; goal: string; firstSteps: string[]; isProvisional: boolean } | null;
   members: { id: string; name: string; emoji: string; bgColor: string; headline: string; isLeader: boolean; role: string | null }[];
-  talents: { title: string; profile: string; role: string | null; filled: boolean }[];
+  candidates: DraftCandidate[];
+  nextSteps: { kind: string; title: string; detail: string }[];
+  actions: { task: string; assigneeName: string | null; dueDate: string | null; completed: boolean }[];
 };
 
 export type ContactsBody = {
@@ -29,9 +31,9 @@ export type DraftBody = {
 };
 
 export type DraftCandidate =
-  | { kind: "member"; id: string; name: string; emoji: string; bgColor: string; headline: string; role: string | null }
+  | { kind: "member"; id: string; name: string; emoji: string; bgColor: string; headline: string; role: string | null; invited?: boolean }
   | { kind: "contact"; name: string | null; company: string | null; specialty: string | null; summary: string | null; relationships: string[]; role: string | null; isSharersContact: boolean }
-  | { kind: "talent"; title: string; profile: string; role: string | null };
+  | { kind: "talent"; title: string; profile: string; role: string | null; filled?: boolean };
 
 export type SharedResultCard = {
   hop: string; type: "egg" | "goose"; matchedTargetLabel: string;
