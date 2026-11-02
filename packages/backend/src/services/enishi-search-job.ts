@@ -19,7 +19,7 @@ import { waitUpTo } from "./sweep-util.ts";
 import {
   JOB_BATCH_SIZE, selectJobCandidates, matchJobBatch, interleaveMatches, searchMemberHits, buildMemberCollab,
   finalizeForMeResult, finalizeContactSearchResult,
-  type JobParams, type JobCandidate, type JobMatch, type MemberHit,
+  type JobParams, type JobCandidate, type JobMatch, type MemberHit, type MatchCoverage,
 } from "./enishi-search.ts";
 import type { CollabIdeas } from "./member-collab.ts";
 import { augmentResultWithCards, buildForMeTitle, buildContactSearchTitle, countResults, saveSearchHistory, type HistoryResult } from "./enishi-history.ts";
@@ -196,6 +196,13 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   const batches = await db.select().from(schema.enishiSearchJobBatches)
     .where(eq(schema.enishiSearchJobBatches.jobId, job.id)).orderBy(asc(schema.enishiSearchJobBatches.idx)).all();
   const failedBatches = batches.filter((b) => b.status === "failed").length;
+  const countIds = (b: { candidateIdsJson: string }) => (JSON.parse(b.candidateIdsJson) as string[]).length;
+  const coverage: MatchCoverage = {
+    totalCandidates: batches.reduce((n, b) => n + countIds(b), 0),
+    unmatchedCandidates: batches.filter((b) => b.status === "failed").reduce((n, b) => n + countIds(b), 0),
+    totalBatches: batches.length, failedBatches,
+    retriedOkBatches: batches.filter((b) => b.status === "done" && b.attempts >= 2).length,
+  };
   if (batches.length > 0 && failedBatches === batches.length) {
     await failJob(db, env, job, params, "AIの照合がうまくいきませんでした。時間をおいて、もう一度お試しください。");
     return;
@@ -226,6 +233,7 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
     title = buildContactSearchTitle(params.freeText, created, countResults(result));
     historyParams = { specialties: params.specialties, freeText: params.freeText, scope: params.scope, memberIds: params.memberIds, count: params.count };
   }
+  result = { ...result, coverage };
   // 履歴の保存は、1つのジョブにつき1回だけ（処理が重なっても、先に目印を取れた方だけが保存する）
   const historyId = newId();
   const won = await db.update(schema.enishiSearchJobs)
@@ -274,7 +282,14 @@ async function finishRunning(db: Db, id: string, patch: Partial<typeof schema.en
 
 async function completeJob(db: Db, env: Env, job: Job, params: JobParams, historyId: string, count: number): Promise<void> {
   if (!await finishRunning(db, job.id, { status: "done", stage: "finalize" })) return;
-  const note = job.failedBatches > 0 || job.truncated ? "\n（一部の人脈は、うまく照合できなかった可能性があります。気になるときは、もう一度さがしてみてください）" : "";
+  // 照合できなかった人数は、保存した結果の「照合のできた範囲」から読む（件数をはっきり伝える）
+  const row = await db.select({ resultJson: schema.enishiSearchHistory.resultJson }).from(schema.enishiSearchHistory)
+    .where(eq(schema.enishiSearchHistory.id, historyId)).get().catch(() => undefined);
+  let coverage: MatchCoverage | undefined;
+  try { coverage = row ? (JSON.parse(row.resultJson) as { coverage?: MatchCoverage }).coverage : undefined; } catch { coverage = undefined; }
+  const note = coverage && coverage.unmatchedCandidates > 0
+    ? `\n（候補${coverage.totalCandidates}人のうち、${coverage.unmatchedCandidates}人は、AIの照合が間に合わず、調べられていません。時間をおいて、もう一度さがしてみてください）`
+    : job.failedBatches > 0 || job.truncated ? "\n（一部の人脈は、うまく照合できなかった可能性があります。気になるときは、もう一度さがしてみてください）" : "";
   await notifyMember(db, env, job, {
     subject: "🔎 検索が終わりました",
     message: `「${jobLabel(params)}」の結果が出ました（${count}件）。${note}`,

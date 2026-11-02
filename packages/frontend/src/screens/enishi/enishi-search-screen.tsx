@@ -38,6 +38,8 @@ export type SearchResult = {
   truncated: boolean;
   usedContactsBreakdown?: { specialty: string; count: number }[];
   aiCallFailed?: boolean;
+  /** 裏で実行した検索の、照合のできた範囲（AIの照合が間に合わず、調べられなかった人数など） */
+  coverage?: { totalCandidates: number; unmatchedCandidates: number; totalBatches: number; failedBatches: number; retriedOkBatches: number };
   memberCollab?: CollabIdeas | null; // 人脈検索：合致度の上位メンバーの力を合わせた協業イメージ
 };
 type SearchResponse = { data: SearchResult; historyId: string };
@@ -184,6 +186,30 @@ export function PageSizeSelect({ value, onChange }: { value: number; onChange: (
   );
 }
 
+/** 照合できなかった候補がある（AIの照合が間に合わなかった束がある）ときに、人数をはっきり伝える */
+export function CoverageNotice({ result }: { result: SearchResult }) {
+  const c = result.coverage;
+  if (!c || c.totalCandidates === 0) return null;
+  const matched = c.totalCandidates - c.unmatchedCandidates;
+  if (c.unmatchedCandidates === 0) {
+    return (
+      <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
+        ✅ 候補{c.totalCandidates}人を、すべて照合しました{c.retriedOkBatches > 0 ? `（うち${c.retriedOkBatches}か所は、1回目がうまくいかず、やり直して成功しました）` : ""}。
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-2xl p-3 mb-3 text-xs" role="status" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
+      <p className="font-medium">⚠️ 候補{c.totalCandidates}人のうち、{c.unmatchedCandidates}人は、照合できていません</p>
+      <p className="mt-1">
+        AIの照合が間に合わなかった分です（{c.totalBatches}か所中{c.failedBatches}か所。1回やり直しても、うまくいきませんでした）。
+        照合できたのは{matched}人です。照合できなかった人の中に、さがしている人がいるかもしれません。時間をおいて、もう一度さがしてみてください。
+        {c.retriedOkBatches > 0 ? `（ほかの${c.retriedOkBatches}か所は、やり直して成功しました）` : ""}
+      </p>
+    </div>
+  );
+}
+
 function UsedContactsBreakdownNotice({ result }: { result: SearchResult }) {
   if (!result.usedContactsBreakdown) {
     return result.truncated ? (
@@ -283,6 +309,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, readOnly, onTo
     return (
       <div className="mt-4">
         <UsedContactsBreakdownNotice result={result} />
+        <CoverageNotice result={result} />
         <div className="card-paper rounded-2xl p-6 text-center">
           {result.aiCallFailed ? (
             <p className="text-sm" style={{ color: "var(--color-brand)" }}>
@@ -320,6 +347,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, readOnly, onTo
   return (
     <div className="mt-5">
       <UsedContactsBreakdownNotice result={result} />
+      <CoverageNotice result={result} />
       {mode === "contact-search" && result.memberCollab && <MemberCollabPanel collab={result.memberCollab} />}
       {!readOnly && (mode === "for-me" || mode === "contact-search") && (
         <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>

@@ -78,6 +78,14 @@ export type EnishiResultCard = {
   myContactId?: string; // giver限定：「あなたの人脈」の元ID（「紹介しました」フラグの対象指定に使う。candidateIdとの組み合わせで一意）
 };
 
+/** 候補のうち、どれだけ照合できたか（束に分けて照合した検索）。失敗した束は、1回やり直しても失敗した束 */
+export type MatchCoverage = {
+  totalCandidates: number; unmatchedCandidates: number;
+  totalBatches: number; failedBatches: number;
+  /** 1回目は失敗したが、やり直しで成功した束の数 */
+  retriedOkBatches: number;
+};
+
 export type EnishiSearchResult = {
   groups: { hop: Hop; label: string; results: EnishiResultCard[] }[];
   truncated: boolean;
@@ -86,6 +94,8 @@ export type EnishiSearchResult = {
   // AI呼び出しが（リトライしても）失敗し、0件という結果自体が信頼できない場合にtrue。
   // 「該当なし」と区別して、時間をおいて再実行を促すメッセージを出すために使う。
   aiCallFailed?: boolean;
+  // 裏で実行した検索の、照合のできた範囲。候補の人数と、AIの照合が間に合わず調べられなかった人数（失敗した束の分）
+  coverage?: MatchCoverage;
   // 人脈検索限定：合致度の高い上位メンバーの力を合わせた協業イメージ（全体のチーム活動と、2〜3名の組み合わせ）
   memberCollab?: CollabIdeas | null;
 };
