@@ -12,13 +12,13 @@
 // GET/PUT/DELETE /api/admin/collab/map-positions → 協働マップのアイコン配置（管理者ごと）
 // =============================================================
 import { Hono } from "hono";
-import { and, desc, eq, gte, inArray, isNull, ne, or, isNotNull } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
 import { addMilestone, deleteTeamWorkspaceData, hasProfileContent, isProfileComplete, onTeamCreated, parseRoles, parseSteps } from "../../services/team-workspace.ts";
 import { sweepTeamProfileBackfill } from "../../services/team-backfill.ts";
 import { deriveStage, computeStalled } from "../../services/collab-stage.ts";
-import { generateCompanySummary } from "../../services/company-summary.ts";
+import { pendingSummaryFilter, runCompanySummaryBatch } from "../collab.ts";
 import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INVALID_MESSAGE } from "../../services/map-positions.ts";
 import type { Env, Variables } from "../../types.ts";
 
@@ -570,18 +570,53 @@ adminCollabRoutes.delete("/stories/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// ---- GET /api/admin/collab/contacts/business-summary-status ----
+// 外部人脈の「会社の説明」（AI生成）の進み具合。全メンバー分の件数と、これからの分が多い人の一覧。
+adminCollabRoutes.get("/contacts/business-summary-status", async (c) => {
+  const db = createDb(c.env.DB);
+  const now = Math.floor(Date.now() / 1000);
+  const rows = await db.select({ status: schema.externalContacts.businessSummaryStatus, n: sql<number>`count(*)` })
+    .from(schema.externalContacts).groupBy(schema.externalContacts.businessSummaryStatus).all();
+  const byStatus = new Map(rows.map((r) => [r.status, Number(r.n)]));
+  const waiting = await db.select({ ownerId: schema.externalContacts.ownerMemberId, n: sql<number>`count(*)` })
+    .from(schema.externalContacts).where(pendingSummaryFilter(now)).groupBy(schema.externalContacts.ownerMemberId).all();
+  const ownerIds = waiting.map((w) => w.ownerId);
+  const names = new Map<string, string>();
+  for (let i = 0; i < ownerIds.length; i += 80) {
+    const ms = await db.select({ id: schema.members.id, name: schema.members.name }).from(schema.members)
+      .where(inArray(schema.members.id, ownerIds.slice(i, i + 80))).all();
+    for (const m of ms) names.set(m.id, m.name);
+  }
+  const remaining = waiting.reduce((sum, w) => sum + Number(w.n), 0);
+  const active = await db.select({ n: sql<number>`count(*)` }).from(schema.externalContacts)
+    .where(and(
+      eq(schema.externalContacts.businessSummaryStatus, "processing"),
+      sql`${schema.externalContacts.businessSummaryClaimedAt} >= ${now - 90}`,
+    )).get();
+  return c.json({
+    data: {
+      done: byStatus.get("done") ?? 0,
+      notFound: byStatus.get("not_found") ?? 0,
+      skipped: byStatus.get("skipped") ?? 0,
+      error: byStatus.get("error") ?? 0,
+      // 生成待ち（未生成と、生成中のまま止まっているものを含む）
+      remaining,
+      // 他の処理がいま生成している途中のもの（remaining には含めない）
+      inProgress: Number(active?.n ?? 0),
+      owners: waiting
+        .map((w) => ({ memberId: w.ownerId, name: names.get(w.ownerId) ?? "（退会したメンバー）", count: Number(w.n) }))
+        .sort((x, y) => y.count - x.count).slice(0, 10),
+    },
+  });
+});
+
 // ---- POST /api/admin/collab/contacts/backfill-business-summary ----
 // 既存の人脈データに会社概要（Web検索）を後付けで生成する。1回の呼び出しでbatchSize件だけ処理し、
 // 呼び出し側（管理画面 or スクリプト）が remaining が 0 になるまで繰り返し呼ぶ想定。
 adminCollabRoutes.post("/contacts/backfill-business-summary", async (c) => {
   const db = createDb(c.env.DB);
   const body = await c.req.json<{ batchSize?: number; retryErrors?: boolean }>().catch(() => ({ batchSize: undefined, retryErrors: undefined }));
-  const batchSize = Math.min(Math.max(body.batchSize ?? 20, 1), 50);
-  // 'not_found'（検索したが見つからなかった）は再検索しても結果が変わりにくいため既定では対象外にする。
-  // 'error'（一時的なAPI障害等）は retryErrors:true を指定したときだけ再試行対象に含める。
-  // これを分けないと、対象が尽きるたびに毎回同じ 'not_found'/'error' 行を再選択し続けてしまい、
-  // 未処理の 'pending' 行がいつまで経っても処理されない無限ループになる（実際に発生した不具合）。
-  const targetStatuses = body.retryErrors ? ["pending", "error"] : ["pending"];
+  const batchSize = Math.min(Math.max(body.batchSize ?? 3, 1), 6);
 
   // 会社名が無い行、または非公開の人脈は生成の対象外なので、まとめて skipped にしておく（対象カウントから外れる）
   await db.update(schema.externalContacts)
@@ -591,49 +626,11 @@ adminCollabRoutes.post("/contacts/backfill-business-summary", async (c) => {
       ne(schema.externalContacts.businessSummaryStatus, "skipped")
     ));
 
-  const targets = await db.select({ id: schema.externalContacts.id, company: schema.externalContacts.company })
-    .from(schema.externalContacts)
-    .where(and(
-      isNotNull(schema.externalContacts.company),
-      ne(schema.externalContacts.company, ""),
-      ne(schema.externalContacts.visibility, "private"),
-      inArray(schema.externalContacts.businessSummaryStatus, targetStatuses)
-    ))
-    .limit(batchSize)
-    .all();
-
-  const CONCURRENCY = 3;
-  let processed = 0;
-  for (let i = 0; i < targets.length; i += CONCURRENCY) {
-    const batch = targets.slice(i, i + CONCURRENCY);
-    await Promise.all(batch.map(async (t) => {
-      if (!t.company) return;
-      const result = await generateCompanySummary({
-        company: t.company,
-        apiKey: c.env.ANTHROPIC_API_KEY,
-        isDev: c.env.ENVIRONMENT === "development",
-      });
-      await db.update(schema.externalContacts).set({
-        businessSummary: result.summary,
-        businessSummaryDetail: result.detail,
-        businessSummaryStatus: result.status,
-        businessSummaryGeneratedAt: Math.floor(Date.now() / 1000),
-      }).where(eq(schema.externalContacts.id, t.id));
-      processed++;
-    }));
-  }
-
-  const remainingRows = await db.select({ id: schema.externalContacts.id })
-    .from(schema.externalContacts)
-    .where(and(
-      isNotNull(schema.externalContacts.company),
-      ne(schema.externalContacts.company, ""),
-      ne(schema.externalContacts.visibility, "private"),
-      inArray(schema.externalContacts.businessSummaryStatus, targetStatuses)
-    ))
-    .all();
-
-  return c.json({ data: { processed, remaining: remainingRows.length } });
+  // 'not_found'（検索したが見つからなかった）は再検索しても結果が変わりにくいため対象外。
+  // 'error'（一時的なAPI障害等）は retryErrors:true のときだけ対象に含める
+  // （含めないと、毎回同じ失敗行を選び直して、未処理の行がいつまでも進まなくなる）。
+  const result = await runCompanySummaryBatch(db, c.env, batchSize, body.retryErrors === true);
+  return c.json({ data: result });
 });
 
 // ---- 既存チームの「仮のプロフィール・役割」 ----

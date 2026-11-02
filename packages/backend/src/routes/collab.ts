@@ -1921,6 +1921,60 @@ async function generateCompanySummariesForContacts(
 }
 
 /**
+ * 会社の説明をこれから生成する対象（未生成、または生成中のまま止まっているもの）の条件。
+ * 会社名がない人脈・非公開の人脈は対象外。includeError を付けると、失敗（error）したものも対象にする。
+ */
+export function pendingSummaryFilter(nowSec: number, includeError = false) {
+  const staleBefore = nowSec - STALE_PROCESSING_SECONDS;
+  return and(
+    or(
+      eq(schema.externalContacts.businessSummaryStatus, "pending"),
+      ...(includeError ? [eq(schema.externalContacts.businessSummaryStatus, "error")] : []),
+      and(
+        eq(schema.externalContacts.businessSummaryStatus, "processing"),
+        or(
+          isNull(schema.externalContacts.businessSummaryClaimedAt),
+          lt(schema.externalContacts.businessSummaryClaimedAt, staleBefore)
+        )
+      )
+    ),
+    isNotNull(schema.externalContacts.company),
+    ne(schema.externalContacts.company, ""),
+    ne(schema.externalContacts.visibility, "private")
+  );
+}
+
+/**
+ * 管理画面の「いますぐ生成」用。対象から size 件を取って（ほかの処理と重ならないよう生成中にしてから）、
+ * 生成が終わるまで待つ。呼び出し側が、remaining が 0 になるまで繰り返し呼ぶ。
+ * 自動の連鎖（sweep）と違い、途中で打ち切らない。
+ */
+export async function runCompanySummaryBatch(
+  db: ReturnType<typeof createDb>,
+  env: Env,
+  size: number,
+  includeError = false
+): Promise<{ processed: number; remaining: number }> {
+  const now = Math.floor(Date.now() / 1000);
+  const filter = pendingSummaryFilter(now, includeError);
+  const candidates = await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
+    .where(filter).limit(size).all();
+  let processed = 0;
+  if (candidates.length > 0) {
+    const claimed = await db.update(schema.externalContacts)
+      .set({ businessSummaryStatus: "processing", businessSummaryClaimedAt: now })
+      .where(and(inArray(schema.externalContacts.id, candidates.map((c) => c.id)), filter))
+      .returning({ id: schema.externalContacts.id, company: schema.externalContacts.company, name: schema.externalContacts.name })
+      .all();
+    await generateCompanySummariesForContacts(db, env, claimed as { id: string; company: string; name: string }[]);
+    processed = claimed.length;
+  }
+  const remainingRows = await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
+    .where(pendingSummaryFilter(Math.floor(Date.now() / 1000), false)).all();
+  return { processed, remaining: remainingRows.length };
+}
+
+/**
  * システム全体の「未生成（pending）」「生成中のまま停滞（processing）」の会社概要を、
  * 誰の登録かに関わらずまとめて処理する。1回のWorker呼び出しではwaitUntilの実行時間制限
  * （応答後およそ30秒）内に収まる件数しか処理できないため、まだ対象が残っていれば
@@ -1937,23 +1991,7 @@ export async function sweepPendingCompanySummaries(
   hop: number
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
-  const staleBefore = now - STALE_PROCESSING_SECONDS;
-
-  const pendingFilter = and(
-    or(
-      eq(schema.externalContacts.businessSummaryStatus, "pending"),
-      and(
-        eq(schema.externalContacts.businessSummaryStatus, "processing"),
-        or(
-          isNull(schema.externalContacts.businessSummaryClaimedAt),
-          lt(schema.externalContacts.businessSummaryClaimedAt, staleBefore)
-        )
-      )
-    ),
-    isNotNull(schema.externalContacts.company),
-    ne(schema.externalContacts.company, ""),
-    ne(schema.externalContacts.visibility, "private")
-  );
+  const pendingFilter = pendingSummaryFilter(now);
 
   // まず対象IDを少数だけ確定させてから確認・claimを行う（一度に大量の行を抱え込まないため）
   const candidates = await db.select({ id: schema.externalContacts.id }).from(schema.externalContacts)
