@@ -586,6 +586,14 @@ export async function setRole(db: Db, subject: Subject, key: string, role: strin
 
 /** チームの解散・メンバーの全員脱退のときに、チーム育成のデータを片づける */
 export async function deleteTeamWorkspaceData(db: Db, type: SubjectType, id: string): Promise<void> {
+  // このチーム（案）の共有の設定も消す（共有の部品を読み込むと循環するため、ここでは直接消す）
+  const kind = type === "draft" ? "team_draft" : "team_profile";
+  const share = await db.select({ id: schema.contentShares.id }).from(schema.contentShares)
+    .where(and(eq(schema.contentShares.kind, kind), eq(schema.contentShares.subjectId, id))).get();
+  if (share) {
+    await db.delete(schema.contentShareTargets).where(eq(schema.contentShareTargets.shareId, share.id));
+    await db.delete(schema.contentShares).where(eq(schema.contentShares.id, share.id));
+  }
   await Promise.all([
     db.delete(schema.teamProfiles).where(and(eq(schema.teamProfiles.subjectType, type), eq(schema.teamProfiles.subjectId, id))),
     db.delete(schema.teamProfileProposals).where(and(eq(schema.teamProfileProposals.subjectType, type), eq(schema.teamProfileProposals.subjectId, id))),

@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Loader2, Pencil, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { DialogCloseButton } from "@/components/dialog-close-button";
+import { ShareButton } from "@/components/share-dialog";
 import { TeamActionItemsChecklist } from "./collab-screen";
 import { GoalCard, ProfileCard } from "./_ws-profile";
 import { AddProspectsModal, AddTalentModal, MembersCard, ProspectsCard, TalentsCard } from "./_ws-roster";
@@ -117,6 +118,8 @@ export function TeamWorkspaceScreen({ type }: { type: WsType }) {
         <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: "var(--color-paper-200)", color: stage.color }}>{stage.label}</span>
         {d.archived && <span className="text-[11px] px-2 py-0.5 rounded-full" style={{ background: "var(--color-paper-300)", color: "var(--color-ink-500)" }}>⏸休止中</span>}
         <HealthPill health={d.health} />
+        {type === "team" && d.access.isLeader && <ShareButton kind="team_profile" subjectId={d.id} />}
+        {type === "draft" && <ShareButton kind="team_draft" subjectId={d.id} />}
         {type === "draft" && <span className="text-xs" style={{ color: "var(--color-ink-500)" }}>🔒 このチーム案は、あなただけに見えます（誰の承諾も得ていません）</span>}
       </div>
 

@@ -9,6 +9,8 @@ import { memberRoutes } from "./routes/members.ts";
 import { rankingRoutes } from "./routes/ranking.ts";
 import { oneOnOneRoutes } from "./routes/oneonone.ts";
 import { oneOnOnePublicRoutes } from "./routes/oneonone-public.ts";
+import { shareRoutes } from "./routes/shares.ts";
+import { sharedPublicRoutes } from "./routes/shared-public.ts";
 import { scheduleSeriesRoutes } from "./routes/schedule-series.ts";
 import { guestContactProposalRoutes } from "./routes/guest-contact-proposals.ts";
 import { inviteReservationRoutes } from "./routes/invite-reservations.ts";
@@ -81,6 +83,8 @@ app.route("/api/email-change", emailChangeRoutes);
 app.route("/api/access", accessRoutes);
 app.route("/api/members", memberRoutes);
 app.route("/api/ranking", rankingRoutes);
+app.route("/api/shared", sharedPublicRoutes); // 認証なし（URLを知っている人に共有したものの閲覧用。読み取り専用）
+app.route("/api/shares", shareRoutes);
 app.route("/api/oneonone/public", oneOnOnePublicRoutes); // 認証なし（メール経由の承諾/辞退用）
 app.route("/api/oneonone/guest", oneOnOneGuestInvitePublicRoutes); // 認証なし（外部ゲスト招待リンク用）
 app.route("/api/oneonone/guest-invites", oneOnOneGuestInviteRoutes);

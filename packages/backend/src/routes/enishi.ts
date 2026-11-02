@@ -25,6 +25,7 @@ import {
   augmentResultWithCards, formatHistoryDate, countResults, buildForMeTitle, buildContactSearchTitle, saveSearchHistory,
   type HistoryCard, type HistoryResult,
 } from "../services/enishi-history.ts";
+import { deleteSharesFor } from "../services/content-share.ts";
 import { runEnishiSearch, CONTACT_SEARCH_SCOPES, type JobParams } from "../services/enishi-search.ts";
 import { buildMemberCards } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
@@ -1102,6 +1103,7 @@ enishiRoutes.delete("/history/bulk", async (c) => {
   const ownIds = ownRows.map((r) => r.id);
   if (ownIds.length > 0) {
     await db.delete(schema.enishiSearchHistory).where(inArray(schema.enishiSearchHistory.id, ownIds));
+    for (const id of ownIds) await deleteSharesFor(db, "enishi_result", id);
   }
 
   return c.json({ data: { deleted: ownIds.length } });
@@ -1119,6 +1121,7 @@ enishiRoutes.delete("/history/:id", async (c) => {
   if (!row || row.memberId !== meId) return c.json({ error: { code: "not_found", message: "指定された検索履歴が見つかりません" } }, 404);
 
   await db.delete(schema.enishiSearchHistory).where(eq(schema.enishiSearchHistory.id, historyId));
+  await deleteSharesFor(db, "enishi_result", historyId); // 共有していたときは、共有も終わる
   return c.json({ ok: true });
 });
 

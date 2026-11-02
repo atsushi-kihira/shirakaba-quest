@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { ShareButton } from "@/components/share-dialog";
 import { ResultGroups, PageSizeSelect, updateCardGoodMatch, removeTransactedCandidate, removeHiddenCandidate, removeIntroducedCandidate, removeCards } from "./enishi-search-screen";
 import type { SearchResult } from "./enishi-search-screen";
 
@@ -57,9 +58,12 @@ export function EnishiHistoryDetailScreen() {
         <h1 className="text-lg font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
           {detail?.title ?? "検索履歴"}
         </h1>
-        <Link to="/enishi/history" className="text-xs font-medium px-3 py-1.5 rounded-full shrink-0" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-          履歴一覧へ戻る
-        </Link>
+        <div className="flex items-center gap-2 shrink-0">
+          {detail && <ShareButton kind="enishi_result" subjectId={detail.id} />}
+          <Link to="/enishi/history" className="text-xs font-medium px-3 py-1.5 rounded-full" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+            履歴一覧へ戻る
+          </Link>
+        </div>
       </div>
 
       {isLoading ? (

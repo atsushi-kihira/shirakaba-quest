@@ -161,6 +161,10 @@ function CollabMap() {
         <p className="text-sm mb-4" style={{ color: "var(--color-ink-500)" }}>
           なかまとの1to1から育つ関係を、地図のように眺めてみましょう。
         </p>
+        <Link to="/shared" className="inline-flex items-center gap-1.5 text-xs mb-4 px-3 py-1.5 rounded-full border hover:opacity-80"
+          style={{ borderColor: "var(--color-paper-300)", color: "var(--color-ink-600)", background: "var(--color-paper-100)" }}>
+          📬 共有されたものを見る
+        </Link>
       </div>
 
       {isLoading ? (

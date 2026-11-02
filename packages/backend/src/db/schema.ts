@@ -375,6 +375,24 @@ export const enishiSearchJobBatches = sqliteTable("enishi_search_job_batches", {
   lastError:        text("last_error"), // 直近の失敗の理由（失敗が多いときの、管理者へのお知らせに使う）
 }, (t) => [primaryKey({ columns: [t.jobId, t.idx] })]);
 
+// 「共有」：自分だけ／チームだけのものを、読み取り専用で他の人に見せる。行がない状態が「自分だけ」
+export const contentShares = sqliteTable("content_shares", {
+  id:            text("id").primaryKey(),
+  kind:          text("kind").notNull(),        // 'team_profile' | 'contacts' | 'team_draft' | 'enishi_result'
+  subjectId:     text("subject_id").notNull(),
+  ownerMemberId: text("owner_member_id").notNull(),
+  scope:         text("scope").notNull(),       // 'selected' | 'members' | 'link'
+  linkToken:     text("link_token"),
+  createdAt:     integer("created_at").notNull(),
+  updatedAt:     integer("updated_at").notNull(),
+}, (t) => [uniqueIndex("uniq_content_share_subject").on(t.kind, t.subjectId), uniqueIndex("uniq_content_share_token").on(t.linkToken)]);
+
+export const contentShareTargets = sqliteTable("content_share_targets", {
+  shareId:    text("share_id").notNull(),
+  targetType: text("target_type").notNull(),    // 'member' | 'guild' | 'collab_team'
+  targetId:   text("target_id").notNull(),
+}, (t) => [primaryKey({ columns: [t.shareId, t.targetType, t.targetId] })]);
+
 // 「私のご縁」検索で「このご縁で繋がりました」とチェックされた人脈。立てた本人の今後の
 // 検索候補から除外するために使う（本人のみに有効・他ユーザーの検索結果には影響しない）。
 export const enishiTransactedContacts = sqliteTable("enishi_transacted_contacts", {

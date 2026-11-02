@@ -67,6 +67,8 @@ import { PublicBookingForm } from "@/screens/public-booking/public-booking-form"
 import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
 import { OneOnOneGuestInvitePage } from "@/screens/public-booking/oneonone-guest-invite-page";
 import { EnishiJobPartialScreen } from "@/screens/enishi/enishi-job-partial-screen";
+import { SharedViewScreen } from "@/screens/shared/shared-view-screen";
+import { SharedListScreen } from "@/screens/shared/shared-list-screen";
 import { NotificationsScreen } from "@/screens/notifications/notifications-screen";
 import { PrivacyPolicyScreen } from "@/screens/privacy-policy-screen";
 import { TermsOfUseScreen } from "@/screens/terms-of-use-screen";
@@ -124,6 +126,8 @@ export default function App() {
               <Route path="/book/:memberSlug" element={<PublicBookingPage />} />
               {/* 外部ゲスト招待（候補日提示方式）の公開ページ（認証不要） */}
               <Route path="/oneonone/guest/:token" element={<OneOnOneGuestInvitePage />} />
+              {/* 共有（URLを知っている人全員）の閲覧ページ（認証不要・読み取り専用） */}
+              <Route path="/shared/:token" element={<SharedViewScreen />} />
             </Route>
 
             {/* メンバー向け（要認証） */}
@@ -140,6 +144,8 @@ export default function App() {
                   <Route path="collab/teams/:id" element={<TeamWorkspaceScreen type="team" />} />
                   <Route path="enishi" element={<EnishiSearchScreen />} />
                   <Route path="enishi/jobs/:id" element={<EnishiJobPartialScreen />} />
+                  <Route path="shared" element={<SharedListScreen />} />
+                  <Route path="shared/:kind/:subjectId" element={<SharedViewScreen />} />
                   <Route path="enishi/register" element={<EnishiRegisterScreen />} />
                   <Route path="enishi/history" element={<EnishiHistoryScreen />} />
                   <Route path="enishi/history/:id" element={<EnishiHistoryDetailScreen />} />

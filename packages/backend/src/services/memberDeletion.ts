@@ -110,6 +110,13 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
     await db.delete(m.enishiSearchJobBatches).where(inArray(m.enishiSearchJobBatches.jobId, jobIds.slice(i, i + 50)));
   }
   await db.delete(m.enishiSearchJobs).where(eq(m.enishiSearchJobs.memberId, memberId));
+  // ---- 共有（本人が出している共有と、本人が共有先になっている設定）----
+  const shareIds = (await db.select({ id: m.contentShares.id }).from(m.contentShares).where(eq(m.contentShares.ownerMemberId, memberId)).all()).map((r) => r.id);
+  for (let i = 0; i < shareIds.length; i += 50) {
+    await db.delete(m.contentShareTargets).where(inArray(m.contentShareTargets.shareId, shareIds.slice(i, i + 50)));
+  }
+  await db.delete(m.contentShares).where(eq(m.contentShares.ownerMemberId, memberId));
+  await db.delete(m.contentShareTargets).where(and(eq(m.contentShareTargets.targetType, "member"), eq(m.contentShareTargets.targetId, memberId)));
   await db.delete(m.enishiTransactedContacts).where(eq(m.enishiTransactedContacts.memberId, memberId));
   await db.delete(m.enishiHiddenContacts).where(eq(m.enishiHiddenContacts.memberId, memberId));
   await db.delete(m.enishiIntroducedContacts).where(eq(m.enishiIntroducedContacts.memberId, memberId));

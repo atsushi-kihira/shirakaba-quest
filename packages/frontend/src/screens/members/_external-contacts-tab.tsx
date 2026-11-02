@@ -10,6 +10,8 @@ import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Trash2, Upload, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { ShareButton } from "@/components/share-dialog";
+import { useAuthStore } from "@/stores/auth-store";
 import { matchesSearchQuery } from "@/lib/contact-search";
 
 type Visibility = "private" | "existence" | "full";
@@ -334,6 +336,7 @@ function useRelationshipOptions(): string[] {
 import { GuestProposalsCard } from "./_guest-proposals-card";
 
 export function ExternalContactsTab() {
+  const me = useAuthStore((st) => st.user);
   const specialtyOptions = useSpecialtyOptions();
   const relationshipOptions = useRelationshipOptions();
 
@@ -351,6 +354,12 @@ export function ExternalContactsTab() {
       <p className="text-sm mb-4" style={{ color: "var(--color-ink-500)" }}>
         Eightなどで交換した名刺情報を取り込んで、協働マップの人脈レイヤーに表示します。メール・電話番号・住所・SNSなどの連絡先は保存されません。
       </p>
+      {me && (
+        <div className="flex items-center gap-2 mb-4">
+          <ShareButton kind="contacts" subjectId={me.id} label="外部人脈を共有する" />
+          <span className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>見るだけの形で、他の人に見せられます（公開の設定のとおり）</span>
+        </div>
+      )}
 
       <ManualAddSection />
       {/* 外部ゲストの回答からの自動登録が、登録件数の上限で保留になったものの確認 */}
