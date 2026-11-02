@@ -13,6 +13,7 @@ import { api } from "@/lib/api";
 import { ShareButton } from "@/components/share-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { matchesSearchQuery } from "@/lib/contact-search";
+import { NotFoundPrivateNote } from "@/components/not-found-private-note";
 
 type Visibility = "private" | "existence" | "full";
 type BusinessSummaryStatus = "pending" | "processing" | "done" | "not_found" | "skipped" | "error";
@@ -43,7 +44,7 @@ function summaryStatusBadge(ct: Contact): { label: string; bg: string; color: st
     case "processing":
       return { label: "⏳ 会社概要：生成中…", bg: "rgba(212,160,59,0.18)", color: "var(--color-accent)" };
     case "not_found":
-      return { label: "❓ 会社概要：見つからず（要手入力）", bg: "rgba(181,56,75,0.12)", color: "var(--color-brand)" };
+      return { label: ct.visibility === "private" ? "❓ 会社概要：見つからず（自動で非公開にしました）" : "❓ 会社概要：見つからず（要手入力）", bg: "rgba(181,56,75,0.12)", color: "var(--color-brand)" };
     case "error":
       return { label: "❗ 会社概要：生成エラー（要手入力）", bg: "rgba(181,56,75,0.12)", color: "var(--color-brand)" };
     default:
@@ -601,6 +602,7 @@ function ManualAddSection() {
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
             {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
           </select>
+          <NotFoundPrivateNote />
 
           {error && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
@@ -863,6 +865,7 @@ function ImportSection() {
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
             {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
           </select>
+          <NotFoundPrivateNote />
 
           {(() => {
             const currentCount = existingContactsData?.data.length ?? 0;

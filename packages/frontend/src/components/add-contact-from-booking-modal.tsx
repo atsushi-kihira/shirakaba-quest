@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X, Sparkles, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { NotFoundPrivateNote } from "@/components/not-found-private-note";
 
 type Visibility = "private" | "existence" | "full";
 const VISIBILITY_LABEL: Record<Visibility, string> = {
@@ -136,6 +137,7 @@ export function AddContactFromBookingModal({ bookingId, guestName, guestCompany,
           className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
           {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
         </select>
+        <NotFoundPrivateNote />
 
         {error && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{error}</p>}
 

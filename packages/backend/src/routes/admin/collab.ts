@@ -623,7 +623,9 @@ adminCollabRoutes.post("/contacts/backfill-business-summary", async (c) => {
     .set({ businessSummaryStatus: "skipped" })
     .where(and(
       or(isNull(schema.externalContacts.company), eq(schema.externalContacts.company, ""), eq(schema.externalContacts.visibility, "private")),
-      ne(schema.externalContacts.businessSummaryStatus, "skipped")
+      ne(schema.externalContacts.businessSummaryStatus, "skipped"),
+      // 見つからなかった人脈は自動で非公開になるが、「見つからなかった」の記録は残す
+      ne(schema.externalContacts.businessSummaryStatus, "not_found")
     ));
 
   // 'not_found'（検索したが見つからなかった）は再検索しても結果が変わりにくいため対象外。

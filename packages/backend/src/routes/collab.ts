@@ -1897,6 +1897,9 @@ async function generateAndSaveCompanySummary(
       businessSummaryStatus: result.status,
       businessSummaryGeneratedAt: Math.floor(Date.now() / 1000),
       ...(shouldFillSpecialty ? { specialty: result.specialty } : {}),
+      // 調べても見つからなかった人脈は、自動で非公開にする（検索の対象から外れ、AIの費用をむだに使わなくなる）。
+      // あとで本人が公開に戻しても、会社名を変えない限り、もう一度は調べない。
+      ...(result.status === "not_found" ? { visibility: "private" as const } : {}),
     }).where(eq(schema.externalContacts.id, contactId));
   } catch (err) {
     console.error("[collab] 会社概要の生成に失敗", contactId, err);

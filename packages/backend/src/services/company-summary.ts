@@ -138,6 +138,8 @@ export async function generateCompanySummary(opts: {
 
   if (isDev || !apiKey || apiKey === "dev-not-set") {
     await new Promise((r) => setTimeout(r, 500));
+    // 開発中の動作確認用：会社名に印があると「見つからなかった」扱いにする
+    if (company.includes("[dev-not-found]")) return { status: "not_found", summary: null, detail: null, specialty: null };
     return {
       status: "done",
       summary: `${company}（開発モックの事業概要）`,
