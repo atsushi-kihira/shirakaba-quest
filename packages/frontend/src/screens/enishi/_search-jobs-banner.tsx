@@ -66,6 +66,12 @@ export function SearchJobsBanner() {
               <p className="text-xs mt-2" style={{ color: "var(--color-ink-500)" }}>
                 {progressText(j)}。この画面を閉じても大丈夫です。終わったら、通知とメールでお知らせします。
               </p>
+              {j.totalBatches > 0 && j.doneBatches > 0 && (
+                <Link to={`/enishi/jobs/${j.id}`} className="inline-block text-xs font-medium px-3 py-1.5 rounded-full mt-2"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                  途中の結果を見る（まだ増えることがあります）
+                </Link>
+              )}
             </div>
           );
         }

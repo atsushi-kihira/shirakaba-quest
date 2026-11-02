@@ -66,6 +66,7 @@ import { PublicBookingPage } from "@/screens/public-booking/public-booking-page"
 import { PublicBookingForm } from "@/screens/public-booking/public-booking-form";
 import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
 import { OneOnOneGuestInvitePage } from "@/screens/public-booking/oneonone-guest-invite-page";
+import { EnishiJobPartialScreen } from "@/screens/enishi/enishi-job-partial-screen";
 import { NotificationsScreen } from "@/screens/notifications/notifications-screen";
 import { PrivacyPolicyScreen } from "@/screens/privacy-policy-screen";
 import { TermsOfUseScreen } from "@/screens/terms-of-use-screen";
@@ -138,6 +139,7 @@ export default function App() {
                   <Route path="collab/drafts/:id" element={<TeamWorkspaceScreen type="draft" />} />
                   <Route path="collab/teams/:id" element={<TeamWorkspaceScreen type="team" />} />
                   <Route path="enishi" element={<EnishiSearchScreen />} />
+                  <Route path="enishi/jobs/:id" element={<EnishiJobPartialScreen />} />
                   <Route path="enishi/register" element={<EnishiRegisterScreen />} />
                   <Route path="enishi/history" element={<EnishiHistoryScreen />} />
                   <Route path="enishi/history/:id" element={<EnishiHistoryDetailScreen />} />

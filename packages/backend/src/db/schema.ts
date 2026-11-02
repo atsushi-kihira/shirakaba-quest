@@ -372,6 +372,7 @@ export const enishiSearchJobBatches = sqliteTable("enishi_search_job_batches", {
   status:           text("status").notNull().default("pending"), // 'pending' | 'processing' | 'done' | 'failed'
   attempts:         integer("attempts").notNull().default(0),
   matchesJson:      text("matches_json"),
+  lastError:        text("last_error"), // 直近の失敗の理由（失敗が多いときの、管理者へのお知らせに使う）
 }, (t) => [primaryKey({ columns: [t.jobId, t.idx] })]);
 
 // 「私のご縁」検索で「このご縁で繋がりました」とチェックされた人脈。立てた本人の今後の

@@ -244,8 +244,10 @@ export function ContactCardPreview({ contactId }: { contactId: string }) {
   );
 }
 
-export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onCardsRemoved }: {
+export function ResultGroups({ result, historyId, mode, pageSize, readOnly, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onCardsRemoved }: {
   result: SearchResult; historyId: string; mode: "for-me" | "giver" | "contact-search"; pageSize: number;
+  /** 閲覧専用（途中の結果）。「良い候補」「繋がりました」「削除」などの操作ボタンを出さない */
+  readOnly?: boolean;
   onToggleGoodMatch: (cardId: string, goodMatch: boolean) => void;
   onRemoveTransacted: (candidateId: string) => void;
   onRemoveHidden: (candidateId: string) => void;
@@ -319,7 +321,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
     <div className="mt-5">
       <UsedContactsBreakdownNotice result={result} />
       {mode === "contact-search" && result.memberCollab && <MemberCollabPanel collab={result.memberCollab} />}
-      {(mode === "for-me" || mode === "contact-search") && (
+      {!readOnly && (mode === "for-me" || mode === "contact-search") && (
         <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
           ※ 「この{termEnishi}で繋がりました」「今後の表示は不要です」を押した人脈はこの検索結果には表示されません。
         </p>
@@ -372,7 +374,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
           </div>
           <div className="space-y-3">
             {g.results.map((r) => (
-              <ResultRow key={r.cardId} r={r} historyId={historyId} mode={mode}
+              <ResultRow key={r.cardId} r={r} historyId={historyId} mode={mode} readOnly={readOnly}
                 onToggleGoodMatch={onToggleGoodMatch} onRemoveTransacted={onRemoveTransacted} onRemoveHidden={onRemoveHidden} onRemoveIntroduced={onRemoveIntroduced}
                 onRemoveCard={(cardId) => onCardsRemoved([cardId])}
                 selectMode={selectMode} selected={selected.has(r.cardId)} onToggleSelect={() => toggleSelect(r.cardId)} />
@@ -399,8 +401,8 @@ export function ResultGroups({ result, historyId, mode, pageSize, onToggleGoodMa
   );
 }
 
-function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onRemoveCard, selectMode, selected, onToggleSelect }: {
-  r: ResultCard; historyId: string; mode: "for-me" | "giver" | "contact-search";
+function ResultRow({ r, historyId, mode, readOnly, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onRemoveCard, selectMode, selected, onToggleSelect }: {
+  r: ResultCard; historyId: string; mode: "for-me" | "giver" | "contact-search"; readOnly?: boolean;
   onToggleGoodMatch: (cardId: string, goodMatch: boolean) => void;
   onRemoveTransacted: (candidateId: string) => void;
   onRemoveHidden: (candidateId: string) => void;
@@ -473,7 +475,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
             {r.isSelfMember ? "👤 あなた自身" : "🌳 メンバー本人"}
           </span>
         )}
-        {(mode === "for-me" || mode === "contact-search") && (
+        {!readOnly && (mode === "for-me" || mode === "contact-search") && (
           <button onClick={() => toggleGoodMatch.mutate(!r.goodMatch)} disabled={toggleGoodMatch.isPending}
             className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1 disabled:opacity-50"
             style={{
@@ -536,7 +538,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
           style={{ background: "var(--color-brand)" }}>
           {r.actionLabel} <ChevronRight size={13} />
         </Link>
-        {(mode === "for-me" || mode === "contact-search") && !r.isMemberCandidate && (
+        {!readOnly && (mode === "for-me" || mode === "contact-search") && !r.isMemberCandidate && (
           r.candidateId ? (
             <>
               <button
@@ -563,7 +565,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
             </span>
           )
         )}
-        {mode === "giver" && (
+        {!readOnly && mode === "giver" && (
           r.myContactId ? (
             <button
               onClick={() => markIntroduced.mutate()}
@@ -581,7 +583,7 @@ function ResultRow({ r, historyId, mode, onToggleGoodMatch, onRemoveTransacted, 
             </span>
           )
         )}
-        {(mode === "giver" || mode === "contact-search") && !selectMode && (
+        {!readOnly && (mode === "giver" || mode === "contact-search") && !selectMode && (
           <button
             onClick={() => setShowRemoveModal(true)}
             className="ml-auto text-xs font-medium px-3 py-2 rounded-xl flex items-center gap-1.5"

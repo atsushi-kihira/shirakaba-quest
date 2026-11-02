@@ -19,7 +19,7 @@ import { suggestSplit } from "../services/split-suggest.ts";
 import { generateCollabIdeas } from "../services/member-collab.ts";
 import { runMemberSearch } from "../services/member-search.ts";
 import { sweepPendingCompanySummaries } from "./collab.ts";
-import { createSearchJob, runSearchJobStep, jobLabel, STALE_JOB_SECONDS } from "../services/enishi-search-job.ts";
+import { buildPartialJobView, createSearchJob, runSearchJobStep, jobLabel, STALE_JOB_SECONDS } from "../services/enishi-search-job.ts";
 import { sweepPendingPrefectures } from "../services/prefecture.ts";
 import {
   augmentResultWithCards, formatHistoryDate, countResults, buildForMeTitle, buildContactSearchTitle, saveSearchHistory,
@@ -479,6 +479,22 @@ enishiRoutes.get("/search-jobs/active", async (c) => {
       historyId: j.historyId, resultCount: j.resultCount, errorMessage: j.errorMessage, createdAt: j.createdAt,
     })),
   });
+});
+
+// ---- GET /api/enishi/search-jobs/:id/partial ---- 実行中の検索の「途中の結果」（照合が終わった束の分だけ。終わっていれば、履歴のIDを返す）
+enishiRoutes.get("/search-jobs/:id/partial", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const job = await db.select().from(schema.enishiSearchJobs)
+    .where(and(eq(schema.enishiSearchJobs.id, c.req.param("id")), eq(schema.enishiSearchJobs.memberId, meId))).get();
+  if (!job) return c.json({ error: { code: "not_found", message: "指定された検索が見つかりません" } }, 404);
+  const now = Math.floor(Date.now() / 1000);
+  // この画面を見ているあいだに、止まっていたら再開する（アクティブな検索の一覧と同じ）
+  if (job.status === "running" && job.updatedAt < now - STALE_JOB_SECONDS) {
+    c.executionCtx.waitUntil(runSearchJobStep(db, c.env, job.id, new URL(c.req.url).origin, 0));
+  }
+  return c.json({ data: await buildPartialJobView(db, job) });
 });
 
 // ---- POST /api/enishi/search/for-me ---- 私のご縁：自分の卵/ガチョウ × なかまの人脈

@@ -154,9 +154,11 @@ function computeSpecialtyBreakdown<T extends { specialty: string | null }>(conta
 }
 
 // ---- Claude API 呼び出し ----
-async function callClaude(apiKey: string, prompt: string): Promise<string> {
+async function callClaude(apiKey: string, prompt: string, opts?: { timeoutMs?: number }): Promise<string> {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
+    // 時間の上限を指定したときは、超えたところで中断する（裏の処理が打ち切られる前に、失敗として記録するため）
+    signal: opts?.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: "claude-sonnet-5",
@@ -728,7 +730,9 @@ ${formatGiverCandidates(memberCandidates)}${excludedPairsSection}${params.goodMa
 // =============================================================
 
 /** 1回のAI呼び出しで照合する候補の数。少ないほど1回が速く、確実に終わる */
-export const JOB_BATCH_SIZE = 40;
+export const JOB_BATCH_SIZE = 15;
+/** 1回のAI呼び出しに待つ時間（ミリ秒）。裏の処理の1回分（約22秒）より短くして、超えたら失敗として記録する */
+export const JOB_CALL_TIMEOUT_MS = 20_000;
 /** 費用の暴走を防ぐ安全弁（この件数を超えるときだけ、専門分野ごとに均等に抜粋する） */
 export const JOB_MAX_CANDIDATES = 3000;
 /** メンバー本人の検索結果の最大件数（人脈検索「すべて」） */
@@ -784,14 +788,22 @@ ${formatForMeCandidates(batch)}${params.goodMatchContext ?? ""}`;
 ${formatForMeCandidates(batch)}${params.goodMatchContext ?? ""}`;
 }
 
+/** 1つの束の照合の結果。失敗のときは、管理者へのお知らせに載せる理由（error）を返す */
+export type BatchOutcome = { ok: true; matches: JobMatch[] } | { ok: false; error: string };
+
 /**
- * 1つの束を、1回だけAIに照合させる。失敗（呼び出しの失敗・応答の形式不正）のときは null を返す
- * （やり直しは、呼び出し側が処理の単位で数えて行う）
+ * 1つの束を、1回だけAIに照合させる。失敗（呼び出しの失敗・時間切れ・応答の形式不正）のときは ok:false を返す
+ * （やり直しは、呼び出し側が束ごとに数えて、1回だけ行う）
  */
-export async function matchJobBatch(apiKey: string | undefined, isDev: boolean, params: JobParams, batch: JobCandidate[]): Promise<JobMatch[] | null> {
+export async function matchJobBatch(apiKey: string | undefined, isDev: boolean, params: JobParams, batch: JobCandidate[]): Promise<BatchOutcome> {
   if (isDev || !apiKey || apiKey === "dev-not-set") {
+    // 開発環境だけの失敗の再現（失敗の扱い・リトライ・管理者へのお知らせを確かめるため）。条件の文に印を入れると失敗する
+    //   [dev-fail]      : すべての束が失敗する ／ [dev-fail-half] : 束の先頭の候補IDの文字コードが奇数の束だけ失敗する
+    const marker = JSON.stringify(params);
+    if (marker.includes("[dev-fail]")) return { ok: false, error: "開発用の失敗の再現" };
+    if (marker.includes("[dev-fail-half]") && ((batch[0]?.candidateId.charCodeAt(0) ?? 0) % 2 === 1)) return { ok: false, error: "開発用の失敗の再現（半分）" };
     // 開発環境用: 各束の先頭2件を「合致」として返す（束の分割・合算・通知の流れを確かめるため）
-    return batch.slice(0, 2).map((c): JobMatch => {
+    const matches = batch.slice(0, 2).map((c): JobMatch => {
       if (params.mode === "contact-search") {
         return { candidateId: c.candidateId, matchedTargetId: "query", hop: "direct", type: "egg", dealDescription: "開発環境用のモックです。", why: "開発モックのため根拠は生成されていません。" };
       }
@@ -801,14 +813,26 @@ export async function matchJobBatch(apiKey: string | undefined, isDev: boolean, 
         type: target?.kind ?? "egg", dealDescription: "開発環境用のモックです。", why: "開発モックのため根拠は生成されていません。",
       };
     });
+    return { ok: true, matches };
   }
   try {
-    const parsed = parseLlmMatches(await callClaude(apiKey, buildBatchPrompt(params, batch)));
-    return parsed.ok ? parsed.matches : null;
+    const parsed = parseLlmMatches(await callClaude(apiKey, buildBatchPrompt(params, batch), { timeoutMs: JOB_CALL_TIMEOUT_MS }));
+    return parsed.ok ? { ok: true, matches: parsed.matches } : { ok: false, error: "応答の形式が不正" };
   } catch (err) {
     console.error("[enishi-search] 束の照合に失敗", err);
-    return null;
+    return { ok: false, error: describeBatchError(err) };
   }
+}
+
+/** 失敗の理由を、管理者へのお知らせに載せられる短い言葉にする（個人情報や、AIの応答の中身は含めない） */
+function describeBatchError(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === "TimeoutError" || err.name === "AbortError") return "時間切れ（AIの応答が遅い）";
+    const m = /Claude API error (\d{3})/.exec(err.message);
+    if (m) return m[1] === "429" ? "AIの利用回数の上限（429）" : m[1] === "529" ? "AIが混み合っている（529）" : `AIのエラー（${m[1]}）`;
+    if (err.message.includes("max_tokens")) return "AIの応答が長すぎて途中で切れた";
+  }
+  return "原因不明のエラー";
 }
 
 /** 束ごとの結果を、束をまたいで順番に1件ずつ取り出して並べる（特定の束の結果だけが上位を占めないようにする） */

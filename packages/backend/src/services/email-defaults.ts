@@ -1262,6 +1262,41 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     ],
   },
   {
+    emailKey: "enishi_search_admin_alert",
+    label: "ご縁さがしの検索の失敗が多いとき（システム管理者向け）",
+    category: "collab",
+    triggerDescription: "裏で実行した検索（私のご縁・人脈をさがす）で、AIの照合に失敗した束が多かったとき（システム管理者に送信。1回の検索につき1通）",
+    enabled: true,
+    subject: "【{{appTitle}}】ご縁さがしの検索で、AIの照合の失敗が多く出ています",
+    bodyText: `{{adminName}} さん
+
+裏で実行した検索で、AIの照合に失敗した束が多く出ました。AIの利用回数の上限や、応答の遅れなどが続いていないか、ご確認ください。
+
+▼ 状況
+・検索の種類：{{searchMode}}
+・検索した人：{{memberName}}さん
+・失敗した束：{{failedBatches}} / {{totalBatches}}（失敗した束は、1回だけ自動でやり直しています）
+・検索の結果：{{outcome}}
+・失敗の理由：{{causes}}
+・発生した時刻：{{occurredAt}}
+・検索ジョブのID：{{jobId}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "adminName", label: "管理者名", example: "山田 太郎" },
+      { key: "searchMode", label: "検索の種類", example: "私のご縁" },
+      { key: "memberName", label: "検索した人の名前", example: "佐藤 花子" },
+      { key: "failedBatches", label: "失敗した束の数", example: "3" },
+      { key: "totalBatches", label: "束の数（全体）", example: "14" },
+      { key: "outcome", label: "検索の結果（結果は出た／最後まで終えられなかった）", example: "一部の候補が照合されないまま、結果を出しました" },
+      { key: "causes", label: "失敗の理由（数つき）", example: "時間切れ（AIの応答が遅い）：3束" },
+      { key: "occurredAt", label: "発生した時刻", example: "2026年11月2日 10:30" },
+      { key: "jobId", label: "検索ジョブのID", example: "abc123" },
+    ],
+  },
+  {
     emailKey: "admin_broadcast",
     label: "運営からのお知らせ（管理画面から配信）",
     category: "broadcast",

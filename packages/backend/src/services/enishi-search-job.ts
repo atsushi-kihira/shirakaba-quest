@@ -6,7 +6,8 @@
 // （会社概要の自動生成・所在地の調べと同じ自己連鎖方式）。
 //   prepare → match（束ごと・3束ずつ並行）→ members（メンバー本人の検索）→ collab（協業イメージ）→ finalize
 // 終わったら、検索履歴に保存し、アプリ内の通知・プッシュ通知・メールで知らせる。
-// 途中で止まっても、ステップごとにやり直せる（束ごとに最大3回）。
+// 失敗した束は、1回だけ自動でやり直す（無限に繰り返さない）。それでも失敗した束が多いときは、システム管理者にメールで知らせる。
+// 途中の結果は、照合が終わった束の分だけで、いつでも組み立てて見られる（buildPartialResult）。
 // =============================================================
 import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
@@ -21,7 +22,7 @@ import {
   type JobParams, type JobCandidate, type JobMatch, type MemberHit,
 } from "./enishi-search.ts";
 import type { CollabIdeas } from "./member-collab.ts";
-import { buildForMeTitle, buildContactSearchTitle, countResults, saveSearchHistory } from "./enishi-history.ts";
+import { augmentResultWithCards, buildForMeTitle, buildContactSearchTitle, countResults, saveSearchHistory, type HistoryResult } from "./enishi-history.ts";
 import type { Env } from "../types.ts";
 
 type Db = ReturnType<typeof createDb>;
@@ -29,8 +30,13 @@ type Job = typeof schema.enishiSearchJobs.$inferSelect;
 
 /** 処理中の目印の有効時間（秒）。これを過ぎた目印は、止まった処理のものとみなして取り直せる */
 const LEASE_SECONDS = 60;
-/** 同じ処理のやり直しの上限（束は束ごと、それ以外はステップごと） */
+/** 同じ処理のやり直しの上限（束の照合以外のステップごと） */
 const MAX_ATTEMPTS = 3;
+/** 束の照合の試行の上限。最初の1回＋やり直し1回（失敗した束を、無限に繰り返さない） */
+const BATCH_MAX_ATTEMPTS = 2;
+/** 失敗した束が「多い」とみなして、システム管理者に知らせる目安 */
+const ALERT_MIN_FAILED = 3;
+const ALERT_FAILED_RATIO = 0.3;
 /** 一度に並行して照合する束の数 */
 const MATCH_PARALLEL = 4;
 /** 自己連鎖の安全弁 */
@@ -104,7 +110,7 @@ async function countBatches(db: Db, jobId: string): Promise<{ done: number; fail
   let done = 0, failed = 0, open = 0;
   for (const r of rows) {
     if (r.status === "done") done += r.n;
-    else if (r.status === "failed" || r.attempts >= MAX_ATTEMPTS) failed += r.n;
+    else if (r.status === "failed" || r.attempts >= BATCH_MAX_ATTEMPTS) failed += r.n;
     else open += r.n;
   }
   return { done, failed, open };
@@ -116,9 +122,10 @@ async function stageMatch(db: Db, env: Env, job: Job, params: JobParams): Promis
     .where(and(
       eq(schema.enishiSearchJobBatches.jobId, job.id),
       inArray(schema.enishiSearchJobBatches.status, ["pending", "processing"]),
-      lt(schema.enishiSearchJobBatches.attempts, MAX_ATTEMPTS),
+      lt(schema.enishiSearchJobBatches.attempts, BATCH_MAX_ATTEMPTS),
     ))
-    .orderBy(asc(schema.enishiSearchJobBatches.idx)).limit(MATCH_PARALLEL).all();
+    // まだ1回も試していない束を先に進め、やり直しの束は後回しにする（失敗の直後に、すぐ同じ条件で重ねて失敗するのを避ける）
+    .orderBy(asc(schema.enishiSearchJobBatches.attempts), asc(schema.enishiSearchJobBatches.idx)).limit(MATCH_PARALLEL).all();
 
   if (todo.length > 0) {
     const { candidates } = await selectJobCandidates(db, job.memberId, params);
@@ -130,12 +137,14 @@ async function stageMatch(db: Db, env: Env, job: Job, params: JobParams): Promis
     await Promise.all(todo.map(async (b) => {
       const ids = JSON.parse(b.candidateIdsJson) as string[];
       const batch = ids.map((id) => byId.get(id)).filter((c): c is JobCandidate => !!c);
-      const matches = batch.length === 0 ? [] : await matchJobBatch(env.ANTHROPIC_API_KEY, isDev, params, batch);
+      const outcome = batch.length === 0 ? { ok: true as const, matches: [] } : await matchJobBatch(env.ANTHROPIC_API_KEY, isDev, params, batch);
       const key = and(eq(schema.enishiSearchJobBatches.jobId, b.jobId), eq(schema.enishiSearchJobBatches.idx, b.idx));
-      if (matches) {
-        await db.update(schema.enishiSearchJobBatches).set({ status: "done", matchesJson: JSON.stringify(matches) }).where(key).run();
+      if (outcome.ok) {
+        await db.update(schema.enishiSearchJobBatches).set({ status: "done", matchesJson: JSON.stringify(outcome.matches), lastError: null }).where(key).run();
       } else {
-        await db.update(schema.enishiSearchJobBatches).set({ status: b.attempts + 1 >= MAX_ATTEMPTS ? "failed" : "pending" }).where(key).run();
+        // 1回目の失敗は、1回だけやり直す。2回目の失敗は、確定する
+        await db.update(schema.enishiSearchJobBatches)
+          .set({ status: b.attempts + 1 >= BATCH_MAX_ATTEMPTS ? "failed" : "pending", lastError: outcome.error }).where(key).run();
       }
     }));
   }
@@ -271,6 +280,10 @@ async function completeJob(db: Db, env: Env, job: Job, params: JobParams, histor
     message: `「${jobLabel(params)}」の結果が出ました（${count}件）。${note}`,
     path: `/enishi/history/${historyId}`,
   }).catch((err) => console.error("[enishi-job] 完了の通知に失敗", job.id, err));
+  if (job.failedBatches > 0) {
+    await alertAdminsIfManyFailures(db, env, job, params, "一部の候補が照合されないまま、結果を出しました")
+      .catch((err) => console.error("[enishi-job] 管理者への連絡に失敗", job.id, err));
+  }
 }
 
 async function failJob(db: Db, env: Env, job: Job, params: JobParams, reason: string): Promise<void> {
@@ -280,6 +293,87 @@ async function failJob(db: Db, env: Env, job: Job, params: JobParams, reason: st
     message: `「${jobLabel(params)}」の検索を最後まで終えられませんでした。${reason}`,
     path: "/enishi",
   }).catch((err) => console.error("[enishi-job] 失敗の通知に失敗", job.id, err));
+  await alertAdminsIfManyFailures(db, env, job, params, "最後まで終えられませんでした").catch((err) => console.error("[enishi-job] 管理者への連絡に失敗", job.id, err));
+}
+
+// ---- 失敗が多いときの、システム管理者へのお知らせ ----
+
+/** 失敗した束が「多い」か。全部が失敗したとき・3束以上・全体の3割以上（2束以上）のとき */
+export function isManyFailures(failed: number, total: number): boolean {
+  if (failed <= 0 || total <= 0) return false;
+  return failed === total || failed >= ALERT_MIN_FAILED || (failed >= 2 && failed / total >= ALERT_FAILED_RATIO);
+}
+
+/** 失敗の理由を、数つきでまとめる（例：時間切れ（AIの応答が遅い）：3束／AIの利用回数の上限（429）：1束） */
+export function summarizeCauses(errors: (string | null)[]): string {
+  const count = new Map<string, number>();
+  for (const e of errors) count.set(e ?? "処理が途中で打ち切られた", (count.get(e ?? "処理が途中で打ち切られた") ?? 0) + 1);
+  return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([e, n]) => `${e}：${n}束`).join("／");
+}
+
+/**
+ * 失敗した束（やり直しても失敗した束）が多いときに、システム管理者へメールで知らせる。
+ * 1回の検索につき1通（検索の終わりを確定できた処理だけが呼ぶので、重ならない）。
+ * 宛先は、システム管理者（super_admin）。いなければ、管理者全員。
+ */
+async function alertAdminsIfManyFailures(db: Db, env: Env, job: Job, params: JobParams, outcome: string): Promise<void> {
+  const batches = await db.select({ status: schema.enishiSearchJobBatches.status, lastError: schema.enishiSearchJobBatches.lastError })
+    .from(schema.enishiSearchJobBatches).where(eq(schema.enishiSearchJobBatches.jobId, job.id)).all();
+  const failed = batches.filter((b) => b.status === "failed");
+  if (!isManyFailures(failed.length, batches.length)) return;
+
+  const supers = await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).where(eq(schema.admins.role, "super_admin")).all();
+  const admins = supers.length > 0 ? supers : await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).all();
+  if (admins.length === 0) return;
+
+  const [member, design] = await Promise.all([
+    db.select({ name: schema.members.name }).from(schema.members).where(eq(schema.members.id, job.memberId)).get(),
+    db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get(),
+  ]);
+  const vars = {
+    appTitle: design?.appTitle ?? "白樺クエスト",
+    searchMode: params.mode === "for-me" ? "私のご縁" : "人脈をさがす",
+    memberName: member?.name ?? "（不明）",
+    failedBatches: String(failed.length), totalBatches: String(batches.length),
+    outcome, causes: summarizeCauses(failed.map((b) => b.lastError)),
+    occurredAt: new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date()),
+    jobId: job.id,
+  };
+  const mailer = new MailService(db, env);
+  await Promise.all(admins.map((a) => mailer.send("enishi_search_admin_alert", a.email, { ...vars, adminName: a.name })
+    .catch((err) => console.error("[enishi-job] 管理者へのメールに失敗", a.email, err))));
+}
+
+// ---- 途中の結果 ----
+
+export type PartialJobView =
+  | { status: "running"; mode: JobParams["mode"]; label: string; stage: Job["stage"]; totalBatches: number; doneBatches: number; failedBatches: number; result: HistoryResult | null }
+  | { status: "done"; historyId: string | null }
+  | { status: "error"; message: string };
+
+/**
+ * 実行中の検索の「途中の結果」を、照合が終わった束の分だけで組み立てる（AIは呼ばない）。
+ * 最終の結果とは、次の点が違う：直接の候補の二次チェック（AI）をしていない／協業イメージがない／まだ増える・順番が変わることがある。
+ */
+export async function buildPartialJobView(db: Db, job: Job): Promise<PartialJobView> {
+  if (job.status === "done") return { status: "done", historyId: job.historyId };
+  if (job.status === "error") return { status: "error", message: job.errorMessage ?? "検索を最後まで終えられませんでした" };
+  const params = parseParams(job);
+  const base = { status: "running" as const, mode: params.mode, label: jobLabel(params), stage: job.stage, totalBatches: job.totalBatches, doneBatches: job.doneBatches, failedBatches: job.failedBatches };
+  const batches = await db.select().from(schema.enishiSearchJobBatches)
+    .where(and(eq(schema.enishiSearchJobBatches.jobId, job.id), eq(schema.enishiSearchJobBatches.status, "done")))
+    .orderBy(asc(schema.enishiSearchJobBatches.idx)).all();
+  if (batches.length === 0 && !job.membersJson) return { ...base, result: null };
+
+  const matches: JobMatch[] = interleaveMatches(batches.map((b) => JSON.parse(b.matchesJson ?? "[]") as JobMatch[]));
+  const { candidates, truncated } = await selectJobCandidates(db, job.memberId, params);
+  const result = params.mode === "for-me"
+    ? await finalizeForMeResult({ apiKey: undefined, isDev: true, params, candidates, matches, aiCallFailed: false, truncated })
+    : await finalizeContactSearchResult({
+        db, params, candidates, matches, aiCallFailed: false, truncated,
+        memberHits: JSON.parse(job.membersJson ?? "[]") as MemberHit[], memberCollab: null,
+      });
+  return { ...base, doneBatches: batches.length, result: augmentResultWithCards(result, new Set(), new Set()) };
 }
 
 // ---- 1ステップの実行と、自己連鎖 ----
