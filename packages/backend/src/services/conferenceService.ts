@@ -6,6 +6,17 @@ import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 import { and, eq } from "drizzle-orm";
 
+/**
+ * 手入力された会議URLから、URLの部分だけを取り出す。
+ * ZoomやGoogle Meetの招待文をそのまま貼り付けられても、先頭のURLだけを使う
+ * （URLのあとに「ミーティング ID」「パスコード」などが続いていても、それは入れない）。
+ * http:// または https:// で始まるURLがなければ null。
+ */
+export function pickConferenceUrl(raw: string | null | undefined): string | null {
+  const m = raw?.trim().match(/^https?:\/\/\S+/);
+  return m ? m[0] : null;
+}
+
 export type BusyCalendar = { id: string; summary: string };
 
 /** busyCalendars 列（JSON文字列）をパースする。未設定・壊れている場合はプライマリカレンダーのみにフォールバックする */

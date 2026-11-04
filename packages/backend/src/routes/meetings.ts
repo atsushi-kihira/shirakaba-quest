@@ -26,7 +26,7 @@
 // DELETE /api/meetings/:id/external/:externalId  — 外部ゲスト招待を削除
 // =============================================================
 import { Hono } from "hono";
-import { eq, inArray, and, sql, isNull, isNotNull, desc } from "drizzle-orm";
+import { eq, inArray, and, or, sql, isNull, isNotNull, desc } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { candidateEndSeconds } from "../services/candidate-length.ts";
@@ -45,6 +45,7 @@ import {
   blockHostCalendarForDate,
   deleteHostCalendarEvent,
   createSharedSeriesConference,
+  pickConferenceUrl,
 } from "../services/conferenceService.ts";
 import { formatScheduleBlock } from "../services/schedule-text.ts";
 import { insertCalendarEvent } from "../services/googleClient.ts";
@@ -182,8 +183,8 @@ meetingRoutes.post("/", async (c) => {
   let manualConferenceUrl: string | undefined;
   if (confirmNow) {
     if (body.conferenceType === "manual") {
-      manualConferenceUrl = body.conferenceUrl?.trim();
-      if (!manualConferenceUrl || !/^https?:\/\//.test(manualConferenceUrl)) {
+      manualConferenceUrl = pickConferenceUrl(body.conferenceUrl) ?? undefined;
+      if (!manualConferenceUrl) {
         return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
       }
     } else if (body.conferenceType === "zoom" || body.conferenceType === "google_meet") {
@@ -2179,12 +2180,14 @@ meetingRoutes.post("/:id/confirm-bulk", async (c) => {
   const conf: BulkConference = body.conference ?? { mode: "none" };
   const urlByCandidate = new Map<string, string>();
   let sharedMeta: { conferenceUrl: string; conferenceMetaJson: string | null; calendarEventId: string | null } | null = null;
-  const isHttp = (u: string | undefined) => !!u && /^https?:\/\//.test(u.trim());
+  // 招待文ごと貼り付けられても、URLの部分だけを使う
+  const cleanUrl = (u: string | undefined): string | null => pickConferenceUrl(u);
 
   if (conf.mode === "same") {
     if (conf.type === "manual") {
-      if (!isHttp(conf.url)) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
-      for (const cd of selected) urlByCandidate.set(cd.id, conf.url!.trim());
+      const sharedUrl = cleanUrl(conf.url);
+      if (!sharedUrl) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
+      for (const cd of selected) urlByCandidate.set(cd.id, sharedUrl);
     } else if (conf.type === "zoom" || conf.type === "google_meet") {
       const available = await getAvailableConferenceTypes(db, memberId);
       if (!available.includes(conf.type)) return c.json({ error: { code: "not_connected", message: conf.type === "zoom" ? "Zoomと連携してください" : "Googleカレンダーと連携してください" } }, 400);
@@ -2197,9 +2200,9 @@ meetingRoutes.post("/:id/confirm-bulk", async (c) => {
   } else if (conf.mode === "per_day") {
     if (conf.type === "manual") {
       for (const cd of selected) {
-        const u = conf.urls?.[cd.id];
-        if (!isHttp(u)) return c.json({ error: { code: "invalid_input", message: "すべての日程の会議URLを、http:// または https:// で始めて入力してください" } }, 400);
-        urlByCandidate.set(cd.id, u!.trim());
+        const u = cleanUrl(conf.urls?.[cd.id]);
+        if (!u) return c.json({ error: { code: "invalid_input", message: "すべての日程の会議URLを、http:// または https:// で始めて入力してください" } }, 400);
+        urlByCandidate.set(cd.id, u);
       }
     } else if (conf.type === "google_meet") {
       const googleCred = await getValidGoogleAccessToken(db, memberId, c.env.SCHEDULER_TOKEN_KEY, c.env.GOOGLE_OAUTH_CLIENT_ID, c.env.GOOGLE_OAUTH_CLIENT_SECRET);
@@ -2715,16 +2718,27 @@ meetingRoutes.patch("/:id/conference", async (c) => {
   };
 
   if (body.type === "manual") {
-    const url = body.url?.trim();
-    if (!url) {
+    if (!body.url?.trim()) {
       return c.json({ error: { code: "invalid_input", message: "会議URLを入力してください" } }, 400);
     }
-    if (!/^https?:\/\//.test(url)) {
+    // 招待文ごと貼り付けられても、URLの部分だけを使う
+    const url = pickConferenceUrl(body.url);
+    if (!url) {
       return c.json({ error: { code: "invalid_input", message: "URLは http:// または https:// で始めてください" } }, 400);
     }
     await db.update(schema.meetings)
       .set({ conferenceType: "manual", conferenceUrl: url, conferenceMetaJson: null, calendarEventId: null, updatedAt: now })
       .where(eq(schema.meetings.id, id));
+    // 画面には、確定した日程ごとの会議URLが表示される。meetings だけに保存すると、メールには届くのに画面に出なくなる
+    const confirmedForUrl = await db.select({ id: schema.meetingDateCandidates.id }).from(schema.meetingDateCandidates)
+      .where(and(
+        eq(schema.meetingDateCandidates.meetingId, id),
+        or(eq(schema.meetingDateCandidates.isConfirmed, 1), eq(schema.meetingDateCandidates.id, meeting.confirmedCandidateId ?? "")),
+      )).all();
+    if (confirmedForUrl.length > 0) {
+      await db.update(schema.meetingDateCandidates).set({ conferenceUrl: url })
+        .where(inArray(schema.meetingDateCandidates.id, confirmedForUrl.map((cd) => cd.id)));
+    }
     c.executionCtx.waitUntil(sendConferenceNotifications(url, "manual").catch(console.error));
     return c.json({ data: { conferenceType: "manual", conferenceUrl: url } });
   }
