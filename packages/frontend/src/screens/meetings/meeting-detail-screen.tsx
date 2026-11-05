@@ -1,7 +1,7 @@
 // =============================================================
 // ミーティング詳細画面（レスポンスグリッド）
 // =============================================================
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, ChevronLeft, Check, Link as LinkIcon, Copy, CheckCircle, Edit2, UserPlus, Trash2, Video, X, Plus } from "lucide-react";
@@ -14,6 +14,7 @@ import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { ConfirmDatesModal, type ConfirmBulkPayload } from "./_confirm-dates-modal";
 import { ScheduleTextModal } from "@/components/schedule-text-modal";
 import { EventReminderSetting } from "@/components/reminder-settings";
+import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
 import { DEFAULT_START_TIME, defaultEndTime, addMinutesToTime } from "@/lib/meeting-time";
 
 type Availability = "yes" | "maybe" | "no";
@@ -26,6 +27,8 @@ type Respondent = {
   emoji: string;
   bgColor: string;
   answers: Record<string, Availability>;
+  /** 回答に添えた一言コメント（全員に見える） */
+  comment: string | null;
   hasResponded: boolean;
 };
 type ExternalInvitee = { id: string; name: string; email: string | null; token: string; createdAt: number; invitedAt?: number | null; company?: string | null };
@@ -57,6 +60,7 @@ type DetailResponse = {
     respondents: Respondent[];
     externalInvitees: ExternalInvitee[];
     myAnswers: Record<string, Availability>;
+    myComment: string;
     isHost: boolean;
     declinedMemberIds: string[];
     myDeclined: boolean;
@@ -183,6 +187,9 @@ export function MeetingDetailScreen() {
 
   const [myAnswers, setMyAnswers] = useState<Record<string, Availability>>({});
   const [hasEdited, setHasEdited] = useState(false);
+  // 回答に添える一言コメント（commentDirty: まだ送っていない書き換えがあるか）
+  const [myComment, setMyComment] = useState("");
+  const [commentDirty, setCommentDirty] = useState(false);
   const [copiedToken, setCopiedToken] = useState("");
   const [editingDesc, setEditingDesc] = useState(false);
   const [descText, setDescText] = useState("");
@@ -260,6 +267,9 @@ export function MeetingDetailScreen() {
       setMyAnswers(data.data.myAnswers ?? {});
     }
   }, [data, hasEdited]);
+  useEffect(() => {
+    if (data && !commentDirty) setMyComment(data.data.myComment ?? "");
+  }, [data, commentDirty]);
 
   // inviteToken が既に発行済みの場合は共有URLを初期化
   useEffect(() => {
@@ -270,10 +280,11 @@ export function MeetingDetailScreen() {
   }, [data]);
 
   const respondMutation = useMutation({
-    mutationFn: (answers: Record<string, Availability>) =>
-      api.post(`/meetings/${id}/respond`, { answers }),
+    mutationFn: ({ answers, comment }: { answers: Record<string, Availability>; comment: string }) =>
+      api.post(`/meetings/${id}/respond`, { answers, comment }),
     onSuccess: () => {
       setHasEdited(false);
+      setCommentDirty(false);
       qc.invalidateQueries({ queryKey: ["meetings", id] });
       qc.invalidateQueries({ queryKey: ["meetings"] });
     },
@@ -324,9 +335,24 @@ export function MeetingDetailScreen() {
     },
   });
 
+  // 確定後に、一言コメントだけを書き足す・直す（出欠は変えない）
+  const commentMutation = useMutation({
+    mutationFn: (comment: string) => api.put(`/meetings/${id}/comment`, { comment }),
+    onSuccess: () => {
+      setCommentDirty(false);
+      qc.invalidateQueries({ queryKey: ["meetings", id] });
+    },
+    onError: (err: unknown) => {
+      window.alert(err instanceof Error ? err.message : "コメントを保存できませんでした。もう一度お試しください");
+    },
+  });
+
   const declineMutation = useMutation({
     mutationFn: () => api.post(`/meetings/${id}/decline`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["meetings", id] }),
+    onSuccess: () => {
+      setCommentDirty(false);
+      qc.invalidateQueries({ queryKey: ["meetings", id] });
+    },
   });
 
   const undeclineMutation = useMutation({
@@ -445,8 +471,10 @@ export function MeetingDetailScreen() {
 
   const attendanceMutation = useMutation({
     mutationFn: ({ status, candidateId }: { status: "attended" | "absent"; candidateId?: string | null }) =>
-      api.post<{ ok: boolean; pointsAwarded: number }>(`/meetings/${id}/attendance`, { status, candidateId }),
+      // 書き換えた一言コメントがあれば、出欠といっしょに送る
+      api.post<{ ok: boolean; pointsAwarded: number }>(`/meetings/${id}/attendance`, { status, candidateId, ...(commentDirty && { comment: myComment }) }),
     onSuccess: (_res, variables) => {
+      setCommentDirty(false);
       qc.invalidateQueries({ queryKey: ["meetings", id] });
       qc.invalidateQueries({ queryKey: ["meetings", "pending-attendance"] });
       qc.invalidateQueries({ queryKey: ["ranking", "me"] });
@@ -951,7 +979,8 @@ export function MeetingDetailScreen() {
               {respondents.map((r) => {
                 const isMe = r.type === "member" && r.id === user?.id;
                 return (
-                  <tr key={`${r.type}-${r.id}`}>
+                  <Fragment key={`${r.type}-${r.id}`}>
+                  <tr>
                     <td className="pr-2">
                       <div className="flex items-center gap-1.5">
                         <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-sm ${r.bgColor}`}>
@@ -975,6 +1004,17 @@ export function MeetingDetailScreen() {
                       );
                     })}
                   </tr>
+                  {/* 回答に添えられた一言コメント（主催者も、ほかの回答者も、この画面で読める） */}
+                  {r.comment && (
+                    <tr>
+                      <td colSpan={candidates.length + 1} className="pb-1.5">
+                        <div className="ml-7" style={{ width: "16rem" }}>
+                          <CommentBubble text={r.comment} />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -1050,9 +1090,14 @@ export function MeetingDetailScreen() {
               <span key={o.value} style={{ color: o.color }}>{o.label}={o.value === "yes" ? "参加可" : o.value === "maybe" ? "未定" : "不参加"}</span>
             ))}
           </div>
+          <ResponseCommentField
+            value={myComment}
+            onChange={(v) => { setMyComment(v); setCommentDirty(true); }}
+            className="mb-3"
+          />
           <button
-            onClick={() => respondMutation.mutate(myAnswers)}
-            disabled={!hasEdited || respondMutation.isPending}
+            onClick={() => respondMutation.mutate({ answers: myAnswers, comment: myComment })}
+            disabled={(!hasEdited && !commentDirty) || respondMutation.isPending}
             className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50 transition"
             style={{ background: "var(--color-brand)" }}
           >
@@ -1403,6 +1448,29 @@ export function MeetingDetailScreen() {
               </button>
             </>
           )}
+
+          {/* 出欠に添える一言コメント（「参加する」「欠席する」を押すと、いっしょに送られる） */}
+          <div className="mt-4 pt-3" style={{ borderTop: "1px solid var(--color-paper-300)" }}>
+            <ResponseCommentField
+              value={myComment}
+              onChange={(v) => { setMyComment(v); setCommentDirty(true); }}
+              placeholder="例：少し遅れて参加します"
+            />
+            <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
+              コメントは、このミーティングの回答状況の一覧で、ほかの参加者にも見えます。
+            </p>
+            {commentDirty && (
+              <button
+                onClick={() => commentMutation.mutate(myComment)}
+                disabled={commentMutation.isPending}
+                className="mt-2 w-full py-2 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 disabled:opacity-50"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+              >
+                {commentMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                コメントだけ保存する
+              </button>
+            )}
+          </div>
         </div>
       )}
 

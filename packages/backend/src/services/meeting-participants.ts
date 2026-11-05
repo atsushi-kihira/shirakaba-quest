@@ -15,6 +15,7 @@ import type { Env } from "../types.ts";
 import { newId, generateRawToken } from "./auth.ts";
 import { MailService } from "./mailer.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
+import { deleteExternalComments, deleteMemberComments } from "./response-comments.ts";
 import { formatScheduleBlock } from "./schedule-text.ts";
 import { queueMeetingCalendarSync, queueMemberCalendarSync, reconcileMembersCalendar } from "./memberCalendarSync.ts";
 
@@ -367,6 +368,7 @@ async function removeMembersFromMeeting(db: Db, meetingId: string, memberIds: st
   await db.delete(schema.meetingInvitees).where(and(eq(schema.meetingInvitees.meetingId, meetingId), inArray(schema.meetingInvitees.memberId, memberIds)));
   await db.delete(schema.meetingResponses).where(and(eq(schema.meetingResponses.meetingId, meetingId), inArray(schema.meetingResponses.memberId, memberIds)));
   await db.delete(schema.meetingDeclines).where(and(eq(schema.meetingDeclines.meetingId, meetingId), inArray(schema.meetingDeclines.memberId, memberIds)));
+  await deleteMemberComments(db, "meeting", meetingId, memberIds);
 }
 
 async function removeGuestsFromMeeting(db: Db, meetingId: string, emails: string[]): Promise<number> {
@@ -375,6 +377,7 @@ async function removeGuestsFromMeeting(db: Db, meetingId: string, emails: string
   if (rows.length === 0) return 0;
   const ids = rows.map((r) => r.id);
   await db.delete(schema.meetingResponses).where(and(eq(schema.meetingResponses.meetingId, meetingId), inArray(schema.meetingResponses.externalInviteeId, ids)));
+  await deleteExternalComments(db, "meeting", meetingId, ids);
   await db.delete(schema.meetingExternalInvitees).where(inArray(schema.meetingExternalInvitees.id, ids));
   return rows.length;
 }
@@ -386,6 +389,7 @@ export async function removeMembersFromSeries(ctx: ParticipantsCtx, series: Seri
   if (ids.length === 0) return;
   await db.delete(schema.meetingSeriesInvitees).where(and(eq(schema.meetingSeriesInvitees.seriesId, series.id), inArray(schema.meetingSeriesInvitees.memberId, ids)));
   await db.delete(schema.meetingSeriesResponses).where(and(eq(schema.meetingSeriesResponses.seriesId, series.id), inArray(schema.meetingSeriesResponses.memberId, ids)));
+  await deleteMemberComments(db, "series", series.id, ids);
   for (const o of await upcomingSeriesOccurrences(db, series.id)) await removeMembersFromMeeting(db, o.meetingId, ids);
   ctx.waitUntil(reconcileMembersCalendar(db, env, ids).catch((e) => console.error("[series remove members] calendar sync failed", e)));
 }
@@ -421,6 +425,7 @@ export async function propagateGroupRemovals(
       if (rows.length > 0) {
         const ids = rows.map((r) => r.id);
         await db.delete(schema.meetingSeriesExternalResponses).where(inArray(schema.meetingSeriesExternalResponses.externalInviteeId, ids));
+        await deleteExternalComments(db, "series", series.id, ids);
         await db.delete(schema.meetingSeriesExternalInvitees).where(inArray(schema.meetingSeriesExternalInvitees.id, ids));
       }
     }

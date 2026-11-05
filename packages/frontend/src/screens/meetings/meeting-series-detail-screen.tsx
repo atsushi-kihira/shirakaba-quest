@@ -3,7 +3,7 @@
 // voting中: 候補パターンへの投票（通常ミーティングと同じ回答グリッドUI）・主催者による確定
 // confirmed以降: 開催回の一覧（各回は既存のミーティング詳細画面にリンク）
 // =============================================================
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Loader2, CheckCircle, XCircle, Trash2, Check } from "lucide-react";
@@ -18,6 +18,7 @@ import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-e
 import { EventReminderSetting } from "@/components/reminder-settings";
 import { SeriesGuestPanel, type SeriesExternalInvitee } from "./_series-guest-panel";
 import { SeriesParticipantsPanel } from "./_series-participants-panel";
+import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -42,6 +43,10 @@ type SeriesDetail = {
   conferenceUrl: string | null;
   candidates: Candidate[];
   myResponses: Record<string, Availability>;
+  /** 自分が添えた一言コメント */
+  myComment: string;
+  /** 回答に添えられた一言コメント。キーはメンバーID（外部ゲストは "ext:ゲストID"） */
+  comments: Record<string, string>;
   targetMembers: TargetMember[];
   externalInvitees?: SeriesExternalInvitee[];
   inviteToken?: string | null;
@@ -92,6 +97,8 @@ export function MeetingSeriesDetailScreen() {
   const user = useAuthStore((s) => s.user);
   const [myAnswers, setMyAnswers] = useState<Record<string, Availability>>({});
   const [hasEdited, setHasEdited] = useState(false);
+  // 一言コメントの書きかけ（null: まだ書き換えていない＝サーバーの内容を表示）
+  const [commentDraft, setCommentDraft] = useState<string | null>(null);
   const [confirmCandidateId, setConfirmCandidateId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -110,9 +117,11 @@ export function MeetingSeriesDetailScreen() {
   });
 
   const respondMutation = useMutation({
-    mutationFn: (responses: Record<string, Availability>) => api.post(`/meeting-series/${id}/respond`, { responses }),
+    mutationFn: ({ responses, comment }: { responses: Record<string, Availability>; comment: string }) =>
+      api.post(`/meeting-series/${id}/respond`, { responses, comment }),
     onSuccess: () => {
       setHasEdited(false);
+      setCommentDraft(null);
       qc.invalidateQueries({ queryKey: ["meeting-series", id] });
       qc.invalidateQueries({ queryKey: ["meeting-series"] });
     },
@@ -326,7 +335,8 @@ export function MeetingSeriesDetailScreen() {
                   {series.targetMembers.map((m) => {
                     const isMe = m.id === user?.id;
                     return (
-                      <tr key={m.id}>
+                      <Fragment key={m.id}>
+                      <tr>
                         <td className="pr-2">
                           <div className="flex items-center gap-1.5">
                             <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-sm ${m.bgColor}`}>
@@ -344,6 +354,17 @@ export function MeetingSeriesDetailScreen() {
                           </td>
                         ))}
                       </tr>
+                      {/* 回答に添えられた一言コメント（主催者も、ほかの回答者も読める） */}
+                      {series.comments?.[m.id] && (
+                        <tr>
+                          <td colSpan={series.candidates.length + 1} className="pb-1.5">
+                            <div className="ml-7" style={{ width: "16rem" }}>
+                              <CommentBubble text={series.comments[m.id]} />
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -387,8 +408,13 @@ export function MeetingSeriesDetailScreen() {
                 <span key={o.value} style={{ color: o.color }}>{o.label}={o.value === "yes" ? "参加可" : o.value === "maybe" ? "未定" : "不参加"}</span>
               ))}
             </div>
-            <button onClick={() => respondMutation.mutate(myAnswers)}
-              disabled={!hasEdited || respondMutation.isPending}
+            <ResponseCommentField
+              value={commentDraft ?? series.myComment ?? ""}
+              onChange={setCommentDraft}
+              className="mb-3"
+            />
+            <button onClick={() => respondMutation.mutate({ responses: myAnswers, comment: commentDraft ?? series.myComment ?? "" })}
+              disabled={(!hasEdited && commentDraft === null) || respondMutation.isPending}
               className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50 transition"
               style={{ background: "var(--color-brand)" }}>
               {respondMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}

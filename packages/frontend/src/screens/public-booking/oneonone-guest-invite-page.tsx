@@ -5,6 +5,7 @@
 // =============================================================
 import { useEffect, useState } from "react";
 import { GuestCompanyField } from "@/components/guest-company-field";
+import { ResponseCommentField } from "@/components/response-comment";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, User, Mail } from "lucide-react";
@@ -55,6 +56,7 @@ export function OneOnOneGuestInvitePage() {
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [guestCompany, setGuestCompany] = useState("");
+  const [guestMessage, setGuestMessage] = useState("");
   const [conferenceType, setConferenceType] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -88,6 +90,7 @@ export function OneOnOneGuestInvitePage() {
           guestName: guestName.trim(),
           guestEmail: guestEmail.trim(),
           guestCompany: guestCompany.trim(),
+          guestMessage: guestMessage.trim() || undefined,
           conferenceType: availTypes.length >= 2 ? (conferenceType ?? defaultConferenceType) : undefined,
         }),
       });
@@ -244,6 +247,15 @@ export function OneOnOneGuestInvitePage() {
               <p className="text-xs" style={{ color: "var(--color-ink-600)" }}>📞 会議URLは主催者から別途ご連絡します</p>
             </div>
           )}
+
+          {/* 一言コメント（招待した方に伝わります） */}
+          <ResponseCommentField
+            value={guestMessage}
+            onChange={setGuestMessage}
+            label="💬 ひとことメッセージ（任意）"
+            placeholder="例：当日はよろしくお願いします"
+            className="mb-4"
+          />
 
           {error && (
             <p className="text-xs mb-3 px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>{error}</p>

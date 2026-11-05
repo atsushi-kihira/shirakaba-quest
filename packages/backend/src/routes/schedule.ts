@@ -11,13 +11,14 @@ import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { PREPARING_MESSAGE, isReserved } from "../services/invite-reservations.ts";
 import { isEmailLike, normalizeEmail, registerGuestAsContact } from "../services/guest-contacts.ts";
+import { loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
 
 export const scheduleRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-type CandidateRespondent = { name: string; availability: Availability };
+type CandidateRespondent = { name: string; availability: Availability; comment: string | null };
 
 // 候補日ごとに「誰が○/△/×と回答したか」を返す（会員・外部ゲストを問わず全員分）。
 // 外部ゲスト・未ログインの回答者にも「他の人の回答状況を見て選ぶ」を可能にするため、
@@ -49,13 +50,14 @@ async function computeCandidateRespondents(
       : Promise.resolve([]),
   ]);
   const nameMap = new Map([...members, ...externals].map((p) => [p.id, p.name || "ゲスト"]));
+  const commentByPerson = await loadResponseComments(db, "meeting", meetingId);
 
   const respondentsByCandidateId = new Map<string, CandidateRespondent[]>();
   for (const r of allResponses) {
     const personId = r.memberId ?? r.externalInviteeId;
     if (!personId) continue;
     const list = respondentsByCandidateId.get(r.candidateId) ?? [];
-    list.push({ name: nameMap.get(personId) ?? "不明なゲスト", availability: r.availability as Availability });
+    list.push({ name: nameMap.get(personId) ?? "不明なゲスト", availability: r.availability as Availability, comment: commentByPerson.get(personId) ?? null });
     respondentsByCandidateId.set(r.candidateId, list);
   }
   return respondentsByCandidateId;
@@ -113,6 +115,7 @@ scheduleRoutes.get("/:token", async (c) => {
     .get();
 
   const respondentsByCandidateId = await computeCandidateRespondents(db, meeting.id);
+  const myComment = (await loadResponseComments(db, "meeting", meeting.id)).get(extInvitee.id) ?? "";
 
   return c.json({
     data: {
@@ -133,6 +136,7 @@ scheduleRoutes.get("/:token", async (c) => {
         respondents: respondentsByCandidateId.get(c.id) ?? [],
       })),
       myAnswers,
+      myComment,
     },
   });
 });
@@ -167,7 +171,7 @@ scheduleRoutes.post("/:token/respond", async (c) => {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
-  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers: Record<string, Availability> }>();
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; comment?: string; answers: Record<string, Availability> }>();
   if (meeting.status === "confirmed" && meeting.confirmedCandidateId) {
     body.answers = Object.fromEntries(
       Object.entries(body.answers).filter(([candidateId]) => candidateId === meeting.confirmedCandidateId)
@@ -223,6 +227,8 @@ scheduleRoutes.post("/:token/respond", async (c) => {
       respondedAt: now,
     });
   }
+  // 一言コメント（送られてきたときだけ更新。空欄なら消す）
+  await saveResponseComment(db, "meeting", meeting.id, { externalInviteeId: extInvitee.id }, normalizeComment(body.comment), now);
 
   // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）
   await registerGuestAsContact(db, meeting.hostMemberId, { name: finalName, email: emailInput, company: companyInput, contactId: extInvitee.contactId, context: `ミーティング「${meeting.title}」への回答` })
@@ -335,7 +341,7 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
   }
 
-  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers: Record<string, "yes" | "maybe" | "no"> }>();
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; comment?: string; answers: Record<string, "yes" | "maybe" | "no"> }>();
   const emailInput = normalizeEmail(body.email ?? "");
   if (!emailInput || !isEmailLike(emailInput)) {
     return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
@@ -399,6 +405,8 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
       respondedAt: now,
     });
   }
+  // 一言コメント（送られてきたときだけ更新。空欄なら消す）
+  await saveResponseComment(db, "meeting", meeting.id, { externalInviteeId: invitee.id }, normalizeComment(body.comment), now);
 
   // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）
   await registerGuestAsContact(db, meeting.hostMemberId, { name: nameInput, email: emailInput, company: companyInput, contactId: invitee.contactId, context: `ミーティング「${meeting.title}」への回答` })

@@ -11,6 +11,7 @@ import { queueOneOnOneCalendarSync } from "../services/memberCalendarSync.ts";
 import { getAvailableConferenceTypes } from "../services/conferenceService.ts";
 import { createConferenceForOneOnOneSession } from "../services/oneOnOneConference.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
+import { normalizeComment } from "../services/response-comments.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOnePublicRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -139,7 +140,7 @@ oneOnOnePublicRoutes.post("/:token/select-candidate", async (c) => {
     return c.json({ error: { code: "already_selected", message: "既に日時を選択済みです" } }, 400);
   }
 
-  const body = await c.req.json<{ candidateSlotId?: string; conferenceType?: "google_meet" | "zoom" }>();
+  const body = await c.req.json<{ candidateSlotId?: string; conferenceType?: "google_meet" | "zoom"; comment?: string }>();
   if (!body.candidateSlotId) {
     return c.json({ error: { code: "bad_request", message: "候補日を指定してください" } }, 400);
   }
@@ -162,8 +163,10 @@ oneOnOnePublicRoutes.post("/:token/select-candidate", async (c) => {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const update: { selectedCandidateSlotId: string; scheduledFor: number; status: "accepted"; respondedAt: number; conferenceUrlStatus?: string | null } = {
+  const update: { selectedCandidateSlotId: string; scheduledFor: number; status: "accepted"; respondedAt: number; conferenceUrlStatus?: string | null; selectedComment: string | null } = {
     selectedCandidateSlotId: slot.id, scheduledFor: slot.startsAt, status: "accepted", respondedAt: now,
+    // 日時を選んだときに添えた一言コメント（申込者に表示する。空欄なら、なし）
+    selectedComment: normalizeComment(body.comment) ?? null,
   };
 
   let conferenceUrl: string | null = null;

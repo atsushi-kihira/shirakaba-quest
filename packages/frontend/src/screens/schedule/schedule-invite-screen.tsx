@@ -10,9 +10,10 @@ import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
 import { GuestCompanyField } from "@/components/guest-company-field";
+import { ResponseCommentField, RespondentComments } from "@/components/response-comment";
 
 type Availability = "yes" | "maybe" | "no";
-type CandidateRespondent = { name: string; availability: Availability };
+type CandidateRespondent = { name: string; availability: Availability; comment?: string | null };
 type Candidate = { id: string; startsAt: number; endsAt: number | null; note: string | null; respondents: CandidateRespondent[] };
 type ApiResponse = {
   data: {
@@ -66,6 +67,7 @@ export function ScheduleInviteScreen() {
   const [email, setEmail] = useState("");
   const [company, setCompany] = useState("");
   const [answers, setAnswers] = useState<Record<string, Availability>>({});
+  const [comment, setComment] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -106,7 +108,7 @@ export function ScheduleInviteScreen() {
       const r = await fetch(`${API_BASE_URL}/schedule/invite/${inviteToken}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), company: company.trim(), answers }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), company: company.trim(), comment, answers }),
       });
       const json = await r.json();
       if (!r.ok) { setSubmitError(json.error?.message ?? "送信に失敗しました"); return; }
@@ -308,6 +310,15 @@ export function ScheduleInviteScreen() {
               })}
             </div>
           </div>
+
+          {/* 一言コメント（回答した方みんなに見えます） */}
+          <div>
+            <ResponseCommentField value={comment} onChange={setComment} />
+            <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
+              主催者と、ほかの回答者に見えます。
+            </p>
+          </div>
+          <RespondentComments respondents={displayCandidates.flatMap((c) => c.respondents)} />
 
           {submitError && (
             <p className="text-sm text-center px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>

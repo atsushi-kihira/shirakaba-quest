@@ -186,6 +186,9 @@ app.post("/api/internal/send-reminders", async (c) => {
   // 1回だけの整理: 複数日確定のミーティングで、参加しない日まで登録されていたGoogleカレンダーの予定を、メンバー全員分、順に直す（完了したら何もしない）
   const { runCalendarCleanupBatch } = await import("./services/memberCalendarSync.ts");
   c.executionCtx.waitUntil(runCalendarCleanupBatch(db, c.env).catch((e) => console.error("[calendar cleanup] failed", e)));
+  // 1回だけの整理: 会議URLが入っていなかった、主催者のGoogleカレンダーの予定を、順に直す（完了したら何もしない）
+  const { runHostCalendarUrlRepairBatch } = await import("./services/conferenceService.ts");
+  c.executionCtx.waitUntil(runHostCalendarUrlRepairBatch(db, c.env).catch((e) => console.error("[calendar url repair] failed", e)));
   return c.json({ ok: true, ...result, purgedReservations });
 });
 

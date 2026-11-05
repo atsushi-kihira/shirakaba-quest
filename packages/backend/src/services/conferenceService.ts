@@ -1,10 +1,10 @@
 // 会議 URL の発行を担うサービス（Google Meet / Zoom 対応）
 
-import { insertCalendarEvent, deleteCalendarEvent, updateCalendarEvent, refreshGoogleToken, TokenRefreshError } from "./googleClient.ts";
+import { insertCalendarEvent, deleteCalendarEvent, updateCalendarEvent, patchCalendarEventFields, refreshGoogleToken, TokenRefreshError } from "./googleClient.ts";
 import { decryptToken, encryptToken } from "./tokenCrypto.ts";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte, isNotNull } from "drizzle-orm";
 
 /**
  * 手入力された会議URLから、URLの部分だけを取り出す。
@@ -15,6 +15,17 @@ import { and, eq } from "drizzle-orm";
 export function pickConferenceUrl(raw: string | null | undefined): string | null {
   const m = raw?.trim().match(/^https?:\/\/\S+/);
   return m ? m[0] : null;
+}
+
+/**
+ * Googleカレンダーの予定の「説明」欄の文面を作る。会議URLがあれば、説明の下に入れる。
+ * 主催者のカレンダーに入れる予定は、すべてこの形にそろえる（URLが予定に入らない取りこぼしを防ぐため）。
+ */
+export function calendarDescription(base: string | null | undefined, conferenceUrl: string | null | undefined, label = "会議URL"): string {
+  const parts: string[] = [];
+  if (base?.trim()) parts.push(base.trim());
+  if (conferenceUrl?.trim()) parts.push(`${label}: ${conferenceUrl.trim()}`);
+  return parts.join("\n\n");
 }
 
 export type BusyCalendar = { id: string; summary: string };
@@ -673,4 +684,97 @@ export async function renameHostCalendarEvent(
   } catch (e) {
     console.error("renameHostCalendarEvent failed:", e);
   }
+}
+
+/**
+ * 主催者のGoogleカレンダーにすでにある予定の、説明（会議URL）・件名・日時を更新する。
+ * 失敗しても処理は止めない（Google未連携・連携切れ・予定がすでに消えている場合も含む）。
+ */
+export async function updateHostCalendarEventFields(
+  db: Db,
+  env: CalendarBlockEnv,
+  hostMemberId: string,
+  calendarEventId: string,
+  fields: { summary?: string; description?: string; startAtUtc?: string; endAtUtc?: string }
+): Promise<void> {
+  try {
+    if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET) return;
+    const cred = await getValidGoogleAccessToken(db, hostMemberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
+    if (cred.status !== "ok") return;
+    await patchCalendarEventFields({ accessToken: cred.accessToken, calendarId: cred.calendarId, eventId: calendarEventId, ...fields });
+  } catch (e) {
+    console.error("updateHostCalendarEventFields failed:", e);
+  }
+}
+
+/**
+ * ミーティング（定例会の開催回を含む）の確定済みの日程ごとに、主催者のGoogleカレンダーの予定へ、
+ * 最新の件名・説明・会議URLを反映する。会議URLを後から設定・変更したとき、詳細を編集したときに呼ぶ。
+ *   ・予定がすでにある日 → 件名・説明（会議URL）を更新
+ *   ・予定がまだない日（会議ツールの切り替えで消えた・確定と同時に作成した場合など）→ 新しく入れる（これから始まる日のみ）
+ * Google Meetを自動発行した予定は、Googleが会議リンクを持っているので対象外にする。
+ */
+export async function refreshHostMeetingCalendarEvents(db: Db, env: CalendarBlockEnv, meetingId: string, opts?: { createMissing?: boolean }): Promise<void> {
+  try {
+    const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, meetingId)).get();
+    if (!meeting || meeting.status !== "confirmed" || meeting.conferenceType === "google_meet") return;
+    const now = Math.floor(Date.now() / 1000);
+    const cands = await db.select().from(schema.meetingDateCandidates).where(eq(schema.meetingDateCandidates.meetingId, meetingId)).all();
+    for (const cd of cands) {
+      if (cd.isConfirmed !== 1 && meeting.confirmedCandidateId !== cd.id) continue;
+      const endsAt = cd.endsAt ?? cd.startsAt + 3600;
+      if (endsAt < now) continue; // 終わった日は触らない
+      const description = calendarDescription(meeting.description, cd.conferenceUrl ?? meeting.conferenceUrl);
+      if (cd.calendarEventId) {
+        await updateHostCalendarEventFields(db, env, meeting.hostMemberId, cd.calendarEventId, { summary: meeting.title, description });
+      } else if (opts?.createMissing !== false) {
+        const blocked = await blockHostCalendarForDate({
+          db, env, hostMemberId: meeting.hostMemberId, summary: meeting.title, description,
+          startAtUtc: new Date(cd.startsAt * 1000).toISOString(), endAtUtc: new Date(endsAt * 1000).toISOString(),
+          requestId: `${meetingId}-${cd.id}-block`,
+        });
+        if (blocked.eventId) await db.update(schema.meetingDateCandidates).set({ calendarEventId: blocked.eventId }).where(eq(schema.meetingDateCandidates.id, cd.id));
+      }
+    }
+  } catch (e) {
+    console.error("refreshHostMeetingCalendarEvents failed:", e);
+  }
+}
+
+// ---- 1回だけの整理（会議URLが入っていなかった、主催者のGoogleカレンダーの予定を、まとめて直す） ----
+// 毎時の定期実行から呼ぶ。これから始まる確定済みの予定で、会議URLがあるものを順に更新する（予定がない日は新しく作らない）。
+// 進み具合は KV に記録し、すべて済んだら、以後は何もしない
+const URL_REPAIR_KEY = "maint:host-calendar-url-repair-v1";
+const URL_REPAIR_TIME_BUDGET_MS = 15_000;
+
+export async function runHostCalendarUrlRepairBatch(db: Db, env: CalendarBlockEnv & { KV: KVNamespace }): Promise<{ done: boolean; processed: number }> {
+  const raw = await env.KV.get(URL_REPAIR_KEY);
+  const state: { offset: number; done: boolean } = raw ? JSON.parse(raw) : { offset: 0, done: false };
+  if (state.done) return { done: true, processed: 0 };
+
+  const now = Math.floor(Date.now() / 1000);
+  // Googleカレンダーに予定があり、これから始まる確定済みの日程を持つ、会議URL付きのミーティング
+  const rows = await db
+    .select({ id: schema.meetings.id })
+    .from(schema.meetings)
+    .innerJoin(schema.meetingDateCandidates, eq(schema.meetingDateCandidates.meetingId, schema.meetings.id))
+    .where(and(
+      eq(schema.meetings.status, "confirmed"),
+      isNotNull(schema.meetingDateCandidates.calendarEventId),
+      gte(schema.meetingDateCandidates.startsAt, now - 3600),
+    ))
+    .all();
+  const ids = [...new Set(rows.map((r) => r.id))].sort();
+  const started = Date.now();
+  let offset = state.offset;
+  let processed = 0;
+  while (offset < ids.length && Date.now() - started < URL_REPAIR_TIME_BUDGET_MS) {
+    await refreshHostMeetingCalendarEvents(db, env, ids[offset], { createMissing: false });
+    offset++;
+    processed++;
+    await env.KV.put(URL_REPAIR_KEY, JSON.stringify({ offset, done: false }));
+  }
+  const done = offset >= ids.length;
+  await env.KV.put(URL_REPAIR_KEY, JSON.stringify({ offset, done }));
+  return { done, processed };
 }

@@ -10,6 +10,7 @@ import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateTimeFull, fmtTime } from "@/lib/date";
 import { AvailabilityNotice, SlotAvailabilityNote, useAvailabilityForSlots } from "@/components/candidate-availability";
 import { CandidateCalendarView } from "@/components/candidate-calendar-view";
+import { ResponseCommentField } from "@/components/response-comment";
 
 export type CandidateSlot = { id: string; startAt: number; endAt: number };
 export type ConferenceType = "google_meet" | "zoom";
@@ -31,6 +32,7 @@ export function CandidateSelectionPanel({
   const [selectedId, setSelectedId] = useState<string>(candidates[0]?.id ?? "");
   const [error, setError] = useState("");
   const [showCalendar, setShowCalendar] = useState(false);
+  const [comment, setComment] = useState("");
   // 2種類連携されている場合、何も選ばずに送信すると先頭固定の候補が黙って選ばれてしまうため、
   // 明示的にZoomを優先した既定値を使う（表示上も選択済みにする）
   const defaultConferenceType = availableConferenceTypes.includes("zoom") ? "zoom" : availableConferenceTypes[0];
@@ -40,6 +42,7 @@ export function CandidateSelectionPanel({
     mutationFn: () => api.patch(`/oneonone/${sessionId}/select-candidate`, {
       candidateSlotId: selectedId,
       conferenceType: availableConferenceTypes.length >= 2 ? (conferenceType ?? defaultConferenceType) : undefined,
+      comment,
     }),
     onSuccess: onConfirmed,
     onError: (e) => setError(e instanceof ApiError ? e.message : "エラーが発生しました"),
@@ -121,6 +124,14 @@ export function CandidateSelectionPanel({
           📞 会議URLは主催者から別途ご連絡します
         </p>
       )}
+
+      {/* 一言コメント（申込者に伝わります） */}
+      <ResponseCommentField
+        value={comment}
+        onChange={setComment}
+        placeholder="例：来週は予定が詰まっていて、この日しか難しいです"
+        className="mb-2.5"
+      />
 
       {error && (
         <p className="text-xs mb-2 px-2.5 py-1.5 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>

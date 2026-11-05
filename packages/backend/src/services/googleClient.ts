@@ -249,6 +249,41 @@ export async function updateCalendarEvent(args: UpdateEventArgs): Promise<void> 
   }
 }
 
+/**
+ * 予定の説明（会議URLなど）・件名・日時のうち、指定したものだけを更新する。
+ * 参加者などの未指定の項目はそのまま保持される（PATCH の部分更新）。
+ * 会議URLを後から設定・変更したときに、すでにカレンダーにある予定へ反映するために使う。
+ */
+export async function patchCalendarEventFields(args: {
+  accessToken: string;
+  calendarId: string;
+  eventId: string;
+  summary?: string;
+  description?: string;
+  startAtUtc?: string;
+  endAtUtc?: string;
+}): Promise<void> {
+  const { accessToken, calendarId, eventId, summary, description, startAtUtc, endAtUtc } = args;
+  const res = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=all`,
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...(summary !== undefined && { summary }),
+        ...(description !== undefined && { description }),
+        ...(startAtUtc !== undefined && { start: { dateTime: startAtUtc, timeZone: "UTC" } }),
+        ...(endAtUtc !== undefined && { end: { dateTime: endAtUtc, timeZone: "UTC" } }),
+      }),
+    }
+  );
+  // 予定が（Google側で）すでに消されているときは、何もしない
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    const body = await res.text();
+    throw new Error(`Google Calendar patchEvent failed: ${res.status} ${body}`);
+  }
+}
+
 export type TokenResponse = {
   access_token: string;
   expires_in: number;

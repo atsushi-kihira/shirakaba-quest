@@ -14,6 +14,7 @@ import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { PREPARING_MESSAGE, isReserved } from "../services/invite-reservations.ts";
 import { isEmailLike, normalizeEmail, registerGuestAsContact } from "../services/guest-contacts.ts";
 import { parseExtraSlots } from "../services/recurrence.ts";
+import { loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
 import { patternLabel, upcomingDatesFor } from "./meeting-series.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -43,10 +44,11 @@ async function buildView(db: Db, series: Series, invitee: Invitee | null) {
     ? await db.select({ id: schema.members.id, name: schema.members.name }).from(schema.members).where(inArray(schema.members.id, memberIds)).all()
     : [];
   const nameOf = new Map<string, string>([...members.map((m) => [m.id, m.name] as const), ...externals.map((e) => [e.id, e.name || "ゲスト"] as const)]);
+  const commentByPerson = await loadResponseComments(db, "series", series.id);
 
   const respondentsOf = (candidateId: string) => [
-    ...memberResponses.filter((r) => r.candidateId === candidateId).map((r) => ({ name: nameOf.get(r.memberId) ?? "メンバー", availability: r.availability as Availability })),
-    ...externalResponses.filter((r) => r.candidateId === candidateId).map((r) => ({ name: nameOf.get(r.externalInviteeId) ?? "ゲスト", availability: r.availability as Availability })),
+    ...memberResponses.filter((r) => r.candidateId === candidateId).map((r) => ({ name: nameOf.get(r.memberId) ?? "メンバー", availability: r.availability as Availability, comment: commentByPerson.get(r.memberId) ?? null })),
+    ...externalResponses.filter((r) => r.candidateId === candidateId).map((r) => ({ name: nameOf.get(r.externalInviteeId) ?? "ゲスト", availability: r.availability as Availability, comment: commentByPerson.get(r.externalInviteeId) ?? null })),
   ];
   const myAnswers: Record<string, Availability> = {};
   if (invitee) for (const r of externalResponses) if (r.externalInviteeId === invitee.id) myAnswers[r.candidateId] = r.availability as Availability;
@@ -80,12 +82,13 @@ async function buildView(db: Db, series: Series, invitee: Invitee | null) {
       respondents: respondentsOf(cand.id),
     })),
     myAnswers,
+    myComment: invitee ? commentByPerson.get(invitee.id) ?? "" : "",
     occurrences,
   };
 }
 
 /** 回答を保存（投票中のみ）。送られた候補パターンIDは、この定例会のものだけを受け付ける */
-async function saveAnswers(db: Db, series: Series, inviteeId: string, answers: Record<string, unknown>, now: number): Promise<void> {
+async function saveAnswers(db: Db, series: Series, inviteeId: string, answers: Record<string, unknown>, comment: unknown, now: number): Promise<void> {
   const candidates = await db.select({ id: schema.meetingSeriesPatternCandidates.id }).from(schema.meetingSeriesPatternCandidates)
     .where(eq(schema.meetingSeriesPatternCandidates.seriesId, series.id)).all();
   const valid = new Set(candidates.map((c) => c.id));
@@ -97,6 +100,8 @@ async function saveAnswers(db: Db, series: Series, inviteeId: string, answers: R
       id: newId(), seriesId: series.id, candidateId, externalInviteeId: inviteeId, availability: availability as Availability, respondedAt: now,
     });
   }
+  // 一言コメント（送られてきたときだけ更新。空欄なら消す）
+  await saveResponseComment(db, "series", series.id, { externalInviteeId: inviteeId }, normalizeComment(comment), now);
 }
 
 async function sendBookmarkMail(c: { env: Env; executionCtx: ExecutionContext }, db: Db, series: Series, invitee: { name: string; token: string }, email: string) {
@@ -134,7 +139,7 @@ scheduleSeriesRoutes.post("/series/:token/respond", async (c) => {
   const { series, invitee } = found;
   if (series.status !== "voting") return c.json(closed, 400);
 
-  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; company?: string; answers?: Record<string, unknown> }));
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; comment?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; company?: string; comment?: string; answers?: Record<string, unknown> }));
   // ゲストは、メールアドレスで特定する。招待時にメールアドレスが分かっているゲストは、メールアドレスを変えられない
   const hadEmail = !!invitee.email;
   const email = invitee.email ?? normalizeEmail(body.email ?? "");
@@ -149,7 +154,7 @@ scheduleSeriesRoutes.post("/series/:token/respond", async (c) => {
   const company = body.company?.trim() ?? invitee.company?.trim() ?? "";
 
   await db.update(schema.meetingSeriesExternalInvitees).set({ name, email, company }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
-  await saveAnswers(db, series, invitee.id, body.answers ?? {}, now);
+  await saveAnswers(db, series, invitee.id, body.answers ?? {}, body.comment, now);
   await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId, context: `定例会「${series.title}」への回答` }).catch((e) => console.error("[guest contact] failed", e));
   // メールアドレスがなかった旧方式のゲストには、初回の回答時に専用URLをメールでお知らせする
   if (!hadEmail) await sendBookmarkMail(c, db, series, { name, token: invitee.token }, email);
@@ -180,7 +185,7 @@ scheduleSeriesRoutes.post("/series-invite/:inviteToken/respond", async (c) => {
   }
   if (series.status !== "voting") return c.json(closed, 400);
 
-  const body = await c.req.json<{ name?: string; email?: string; company?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; company?: string; answers?: Record<string, unknown> }));
+  const body = await c.req.json<{ name?: string; email?: string; company?: string; comment?: string; answers?: Record<string, unknown> }>().catch(() => ({} as { name?: string; email?: string; company?: string; comment?: string; answers?: Record<string, unknown> }));
   const email = normalizeEmail(body.email ?? "");
   if (!email || !isEmailLike(email)) return c.json({ error: { code: "invalid_input", message: "メールアドレスを正しく入力してください" } }, 400);
   const name = body.name?.trim() ?? "";
@@ -200,7 +205,7 @@ scheduleSeriesRoutes.post("/series-invite/:inviteToken/respond", async (c) => {
     await db.update(schema.meetingSeriesExternalInvitees).set({ name, company }).where(eq(schema.meetingSeriesExternalInvitees.id, invitee.id));
   }
   await registerGuestAsContact(db, series.hostMemberId, { name, email, company, contactId: invitee.contactId, context: `定例会「${series.title}」への回答` }).catch((e) => console.error("[guest contact] failed", e));
-  await saveAnswers(db, series, invitee.id, body.answers ?? {}, now);
+  await saveAnswers(db, series, invitee.id, body.answers ?? {}, body.comment, now);
   if (isNew) await sendBookmarkMail(c, db, series, { name, token: invitee.token }, email);
   return c.json({ ok: true, scheduleUrl: `${getFrontendUrl(c.env)}/schedule/series/${invitee.token}` });
 });

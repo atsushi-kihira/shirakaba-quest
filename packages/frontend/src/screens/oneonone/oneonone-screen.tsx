@@ -17,6 +17,7 @@ import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candid
 import { ResponseUrlCopyRow } from "../meetings/_oneonone-sections";
 import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
 import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
+import { SelectedCommentNote } from "@/components/response-comment";
 
 type Session = {
   id: string;
@@ -45,6 +46,7 @@ type Session = {
   autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null;
   arrangementMethod?: "public_url" | "candidates";
   selectedCandidateSlotId?: string | null;
+  selectedComment?: string | null;
   candidates?: CandidateSlot[];
   availableConferenceTypes?: ("google_meet" | "zoom")[];
 };
@@ -499,6 +501,9 @@ function ScheduledInfo({ session, tz, onEdit }: { session: Session; tz?: string;
           <Link2 size={13} className="shrink-0" />
           {label} URL: {session.conferenceUrl}
         </a>
+      )}
+      {session.selectedComment && (
+        <SelectedCommentNote comment={session.selectedComment} fromName={session.myRole === "requester" ? session.partner?.name ?? "相手" : null} />
       )}
       {onEdit && (
         <button onClick={onEdit} className="text-xs mt-1.5 flex items-center gap-1" style={{ color: "var(--color-ink-400)" }}>

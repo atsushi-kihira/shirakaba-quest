@@ -617,6 +617,8 @@ export const oneOnOneSessions = sqliteTable("one_on_one_sessions", {
   // 日程の決め方: 'public_url'（申込者の公開予約URLから相手が選ぶ・従来方式） | 'candidates'（申込者が2〜5件の候補日を提示し、相手が選ぶ）
   arrangementMethod:       text("arrangement_method").notNull().default("public_url"),
   selectedCandidateSlotId: text("selected_candidate_slot_id"), // one_on_one_candidate_slots.id
+  // 相手が候補日から日時を選んだときに添えた一言コメント（申込者に表示する）
+  selectedComment:         text("selected_comment"),
   // 会議URLの状態: null（従来通り・URL未確認）| 'none'（あえて「URLなし」を選んだ） | 'unresolved'（自動発行を試みたが失敗した）
   conferenceUrlStatus:     text("conference_url_status"),
   // 申込時に選んだ1to1イベント（ポイントはイベントに設定）。null は従来どおり（シーズン設定のポイント）
@@ -952,6 +954,17 @@ export const meetingResponses = sqliteTable("meeting_responses", {
   availability:       text("availability").notNull().default("yes"), // 'yes' | 'maybe' | 'no'
   comment:            text("comment"),
   respondedAt:        integer("responded_at").notNull(),
+});
+
+// 日程の回答に添える一言コメント（ミーティング／定例会の投票1件につき、1人1つ）。マイグレーション 0107
+export const responseComments = sqliteTable("response_comments", {
+  id:                 text("id").primaryKey(),
+  kind:               text("kind").notNull(), // 'meeting' | 'series'
+  targetId:           text("target_id").notNull(), // meetings.id | meeting_series.id
+  memberId:           text("member_id"),
+  externalInviteeId:  text("external_invitee_id"),
+  comment:            text("comment").notNull(),
+  updatedAt:          integer("updated_at").notNull(),
 });
 
 export const meetingNotifications = sqliteTable("meeting_notifications", {

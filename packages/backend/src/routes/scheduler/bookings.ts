@@ -14,7 +14,7 @@ import { eq, and, gte, lte, desc, or, inArray, isNull } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { resolveEffectiveMemberId } from "../../services/resolve-member.ts";
 import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
-import { createConference, getAvailableConferenceTypes, cancelAutoConference } from "../../services/conferenceService.ts";
+import { createConference, getAvailableConferenceTypes, cancelAutoConference, calendarDescription, updateHostCalendarEventFields } from "../../services/conferenceService.ts";
 import { newId } from "../../services/auth.ts";
 import { awardVisitorOneOnOnePoints } from "../../services/oneonone-event.ts";
 import type { Env, Variables } from "../../types.ts";
@@ -253,7 +253,7 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
     .select({
       id: schema.bookings.id, hostMemberId: schema.bookings.hostMemberId,
       startAtUtc: schema.bookings.startAtUtc, endAtUtc: schema.bookings.endAtUtc,
-      guestName: schema.bookings.guestName, guestEmail: schema.bookings.guestEmail,
+      guestName: schema.bookings.guestName, guestEmail: schema.bookings.guestEmail, guestMessage: schema.bookings.guestMessage,
       conferenceType: schema.bookings.conferenceType, conferenceMetaJson: schema.bookings.conferenceMetaJson,
       hostCalendarEventId: schema.bookings.hostCalendarEventId,
     })
@@ -326,20 +326,32 @@ schedulerBookingsRoutes.patch("/:id/reschedule", async (c) => {
   } else {
     // "none": ホストが明示的に「会議URLなし」を選んだ。空の手入力URLも同じ意味として扱う
     const isNoneChoice = body.conferenceType === "none" || (body.conferenceUrl !== undefined && !body.conferenceUrl?.trim());
+    const replacingUrl = body.conferenceType === "none" || body.conferenceUrl !== undefined;
+    const newUrl = body.conferenceType === "none" ? null : (body.conferenceUrl?.trim() || null);
+    // Googleカレンダーに通常の予定（Zoom用・URLなしの予定）がすでにあれば、消さずに残して説明の会議URLを差し替える
+    // （Google Meetの予定は、上でMeetごと取り消されている）。手入力URLが予定に入らない・古いURLが残るのを防ぐ
+    const keepEventId = replacingUrl && booking.conferenceType === "google_meet" ? null : booking.hostCalendarEventId;
     await db.update(schema.bookings)
       .set({
         ...(body.startUtc !== undefined && { startAtUtc: body.startUtc }),
         ...(body.endUtc !== undefined && { endAtUtc: body.endUtc }),
-        ...((body.conferenceType === "none" || body.conferenceUrl !== undefined) && {
-          conferenceUrl: body.conferenceType === "none" ? null : (body.conferenceUrl?.trim() || null),
+        ...(replacingUrl && {
+          conferenceUrl: newUrl,
           conferenceType: "manual" as const,
           conferenceMetaJson: null,
-          hostCalendarEventId: null,
+          hostCalendarEventId: keepEventId,
           conferenceUrlStatus: isNoneChoice ? "none" : null,
         }),
         updatedAt: new Date().toISOString(),
       })
       .where(eq(schema.bookings.id, bookingId));
+    if (keepEventId && (replacingUrl || body.startUtc !== undefined || body.endUtc !== undefined)) {
+      c.executionCtx.waitUntil(updateHostCalendarEventFields(db, c.env, booking.hostMemberId, keepEventId, {
+        ...(replacingUrl && { description: calendarDescription(booking.guestMessage, newUrl) }),
+        ...(body.startUtc !== undefined && { startAtUtc: body.startUtc }),
+        ...(body.endUtc !== undefined && { endAtUtc: body.endUtc }),
+      }));
+    }
   }
 
   return c.json({ data: { updated: true, conferenceUrl: generatedConferenceUrl } });

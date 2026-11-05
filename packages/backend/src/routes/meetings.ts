@@ -33,6 +33,10 @@ import { candidateEndSeconds } from "../services/candidate-length.ts";
 import { queueMeetingCalendarSync, queueMemberCalendarSync, queueSelfCalendarSync } from "../services/memberCalendarSync.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId, generateRawToken } from "../services/auth.ts";
+import {
+  deleteExternalComments, deleteMemberComments, deleteResponseCommentsForTargets,
+  loadResponseComments, normalizeComment, saveResponseComment,
+} from "../services/response-comments.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import {
@@ -46,6 +50,8 @@ import {
   deleteHostCalendarEvent,
   createSharedSeriesConference,
   pickConferenceUrl,
+  calendarDescription,
+  refreshHostMeetingCalendarEvents,
 } from "../services/conferenceService.ts";
 import { formatScheduleBlock } from "../services/schedule-text.ts";
 import { insertCalendarEvent } from "../services/googleClient.ts";
@@ -363,7 +369,8 @@ meetingRoutes.post("/", async (c) => {
           cd.startsAt, cd.endsAt ?? cd.startsAt + 3600
         );
         if (conf?.conferenceUrl) {
-          await db.update(schema.meetingDateCandidates).set({ conferenceUrl: conf.conferenceUrl }).where(eq(schema.meetingDateCandidates.id, cd.id));
+          // 日ごとに作ったMeet付きの予定は、後で日程を変えたり消したりできるよう、日程ごとにも記録しておく
+          await db.update(schema.meetingDateCandidates).set({ conferenceUrl: conf.conferenceUrl, calendarEventId: conf.calendarEventId ?? null }).where(eq(schema.meetingDateCandidates.id, cd.id));
           if (!finalConferenceUrl) {
             finalConferenceUrl = conf.conferenceUrl;
             finalConferenceType = "google_meet";
@@ -379,6 +386,8 @@ meetingRoutes.post("/", async (c) => {
         conferenceMetaJson: finalConferenceMetaJson, calendarEventId: finalCalendarEventId, updatedAt: now,
       }).where(eq(schema.meetings.id, meetingId));
     }
+    // 主催者のGoogleカレンダーにも、確定した日の予定を会議URL付きで入れる（Meetを自動発行した日は、すでに予定がある）
+    c.executionCtx.waitUntil(refreshHostMeetingCalendarEvents(db, c.env, meetingId));
 
     const systemTz = (await db.select({ timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get())?.timezone ?? "Asia/Tokyo";
     const confirmedDateText = confirmedCandidates.length > 0
@@ -1145,6 +1154,9 @@ meetingRoutes.get("/:id", async (c) => {
     .where(eq(schema.meetingResponses.meetingId, id))
     .all();
 
+  // 回答に添えられた一言コメント（メンバー・外部ゲストごと）
+  const commentByPerson = await loadResponseComments(db, "meeting", id);
+
   // 回答したメンバーのID一覧
   const respondingMemberIds = [...new Set(allResponses.map((r) => r.memberId).filter(Boolean) as string[])];
 
@@ -1273,6 +1285,7 @@ meetingRoutes.get("/:id", async (c) => {
       emoji: m.emoji,
       bgColor: m.bgColor,
       answers,
+      comment: commentByPerson.get(m.id) ?? null,
       hasResponded: Object.keys(answers).length > 0,
     };
   });
@@ -1291,6 +1304,7 @@ meetingRoutes.get("/:id", async (c) => {
       emoji: "👤",
       bgColor: "bg-gray-100",
       answers,
+      comment: commentByPerson.get(ext.id) ?? null,
       hasResponded: Object.keys(answers).length > 0,
     };
   });
@@ -1412,6 +1426,7 @@ meetingRoutes.get("/:id", async (c) => {
         invitedAt: isHost ? e.invitedAt ?? null : null, company: isHost ? e.company ?? null : null,
       })),
       myAnswers,
+      myComment: commentByPerson.get(memberId) ?? "",
       isHost,
       declinedMemberIds,
       myDeclined: declinedMemberIds.includes(memberId),
@@ -1446,7 +1461,7 @@ meetingRoutes.post("/:id/respond", async (c) => {
     return c.json({ error: { code: "deadline_passed", message: "回答受付は終了しています" } }, 400);
   }
 
-  const body = await c.req.json<{ answers: Record<string, Availability> }>();
+  const body = await c.req.json<{ answers: Record<string, Availability>; comment?: string }>();
 
   for (const [candidateId, availability] of Object.entries(body.answers)) {
     // 既存の回答を削除して再挿入（upsert代わり）
@@ -1469,6 +1484,8 @@ meetingRoutes.post("/:id/respond", async (c) => {
       respondedAt: now,
     });
   }
+  // 一言コメント（送られてきたときだけ更新。空欄なら消す）
+  await saveResponseComment(db, "meeting", id, { memberId }, normalizeComment(body.comment), now);
 
   // 回答確認メールを送信
   const respondingMember = await db.select({ name: schema.members.name, email: schema.members.email })
@@ -1912,9 +1929,10 @@ meetingRoutes.post("/:id/decline", async (c) => {
   if (!existing) {
     await db.insert(schema.meetingDeclines).values({ id: newId(), meetingId: id, memberId, declinedAt: now });
   }
-  // 既存の回答は辞退により意味を持たなくなるため削除
+  // 既存の回答は辞退により意味を持たなくなるため削除（添えていた一言コメントも）
   await db.delete(schema.meetingResponses)
     .where(and(eq(schema.meetingResponses.meetingId, id), eq(schema.meetingResponses.memberId, memberId)));
+  await deleteMemberComments(db, "meeting", id, [memberId]);
 
   const requester = await db.select({ name: schema.members.name }).from(schema.members)
     .where(eq(schema.members.id, memberId)).get();
@@ -2246,7 +2264,9 @@ meetingRoutes.post("/:id/confirm-bulk", async (c) => {
   for (const cd of newlyConfirmed) {
     if (cd.calendarEventId) continue;
     const blocked = await blockHostCalendarForDate({
-      db, env: c.env, hostMemberId: meeting.hostMemberId, summary: meeting.title, description: meeting.description ?? "",
+      db, env: c.env, hostMemberId: meeting.hostMemberId, summary: meeting.title,
+      // 会議URLが決まっていれば、カレンダーの予定にも入れる（今回の設定 → 日程ごとの既存URL → ミーティングの会議URL の順）
+      description: calendarDescription(meeting.description, urlByCandidate.get(cd.id) ?? cd.conferenceUrl ?? meeting.conferenceUrl),
       startAtUtc: new Date(cd.startsAt * 1000).toISOString(), endAtUtc: new Date(endOf(cd) * 1000).toISOString(),
       requestId: `${id}-${cd.id}`,
     });
@@ -2267,6 +2287,8 @@ meetingRoutes.post("/:id/confirm-bulk", async (c) => {
     meetingUpdate.calendarEventId = sharedMeta?.calendarEventId ?? (conf.mode === "per_day" && conf.type === "google_meet" ? selected[0].calendarEventId ?? null : null);
   }
   await db.update(schema.meetings).set(meetingUpdate).where(eq(schema.meetings.id, id));
+  // すでに確定済みだった日（カレンダーに予定がある日）にも、今回設定した会議URLを反映する
+  if (conf.mode !== "none") c.executionCtx.waitUntil(refreshHostMeetingCalendarEvents(db, c.env, id));
 
   // ---- 通知：確定した全日程と会議URLを1通にまとめる ----
   const wasAlreadyConfirmed = meeting.status === "confirmed";
@@ -2359,7 +2381,7 @@ meetingRoutes.patch("/:id/confirm", async (c) => {
   if (newValue === 1 && !candidate.calendarEventId) {
     const blocked = await blockHostCalendarForDate({
       db, env: c.env, hostMemberId: meeting.hostMemberId,
-      summary: meeting.title, description: meeting.description ?? "",
+      summary: meeting.title, description: calendarDescription(meeting.description, candidate.conferenceUrl ?? meeting.conferenceUrl),
       startAtUtc: new Date(candidate.startsAt * 1000).toISOString(),
       endAtUtc: new Date((candidate.endsAt ?? candidate.startsAt + 3600) * 1000).toISOString(),
       requestId: `${id}-${candidateId}`,
@@ -2520,21 +2542,6 @@ meetingRoutes.patch("/:id/reschedule", async (c) => {
       .set({ calendarEventId: null })
       .where(eq(schema.meetingDateCandidates.id, meeting.confirmedCandidateId));
   }
-  if (meeting.conferenceType !== "google_meet") {
-    const rescheduledBlock = await blockHostCalendarForDate({
-      db, env: c.env, hostMemberId: meeting.hostMemberId,
-      summary: meeting.title, description: meeting.description ?? "",
-      startAtUtc: new Date(body.startsAt * 1000).toISOString(),
-      endAtUtc: new Date((body.endsAt ?? body.startsAt + 3600) * 1000).toISOString(),
-      requestId: `${id}-${meeting.confirmedCandidateId}-${now}`,
-    });
-    if (rescheduledBlock.eventId) {
-      await db.update(schema.meetingDateCandidates)
-        .set({ calendarEventId: rescheduledBlock.eventId })
-        .where(eq(schema.meetingDateCandidates.id, meeting.confirmedCandidateId));
-    }
-  }
-
   // 会議URLが自動発行済みだった場合、古いURLをキャンセルして新しい日時で発行し直す
   let regeneratedConferenceUrl: string | null = null;
   if (meeting.conferenceType === "zoom" || meeting.conferenceType === "google_meet") {
@@ -2556,6 +2563,27 @@ meetingRoutes.patch("/:id/reschedule", async (c) => {
     regeneratedConferenceUrl = conf?.conferenceUrl ?? null;
   } else {
     await db.update(schema.meetings).set({ updatedAt: now }).where(eq(schema.meetings.id, id));
+  }
+
+  // カレンダーのブロック予定を、新しい日時で作り直す。会議URL（手入力・再発行したZoom）も予定に入れるため、URLが決まった後に作る
+  // （Google Meetの場合は、上の再発行処理が会議の予定として作り直しているので対象外＝二重に予定が入るのを防ぐ）
+  if (meeting.conferenceType !== "google_meet") {
+    // Zoomは再発行した新しいURLだけを使う（発行に失敗したときに、取り消した古いURLを予定へ入れない）
+    const urlForBlock = meeting.conferenceType === "zoom"
+      ? regeneratedConferenceUrl
+      : (confirmedCandidateBefore?.conferenceUrl ?? meeting.conferenceUrl);
+    const rescheduledBlock = await blockHostCalendarForDate({
+      db, env: c.env, hostMemberId: meeting.hostMemberId,
+      summary: meeting.title, description: calendarDescription(meeting.description, urlForBlock),
+      startAtUtc: new Date(body.startsAt * 1000).toISOString(),
+      endAtUtc: new Date((body.endsAt ?? body.startsAt + 3600) * 1000).toISOString(),
+      requestId: `${id}-${meeting.confirmedCandidateId}-${now}`,
+    });
+    if (rescheduledBlock.eventId) {
+      await db.update(schema.meetingDateCandidates)
+        .set({ calendarEventId: rescheduledBlock.eventId })
+        .where(eq(schema.meetingDateCandidates.id, meeting.confirmedCandidateId));
+    }
   }
 
   // 日時変更を通知
@@ -2740,6 +2768,9 @@ meetingRoutes.patch("/:id/conference", async (c) => {
         .where(inArray(schema.meetingDateCandidates.id, confirmedForUrl.map((cd) => cd.id)));
     }
     c.executionCtx.waitUntil(sendConferenceNotifications(url, "manual").catch(console.error));
+    // 主催者のカレンダーにある予定と、招待された人のカレンダーの予定にも、会議URLを入れる
+    c.executionCtx.waitUntil(refreshHostMeetingCalendarEvents(db, c.env, id));
+    queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
     return c.json({ data: { conferenceType: "manual", conferenceUrl: url } });
   }
 
@@ -2784,6 +2815,8 @@ meetingRoutes.patch("/:id/conference", async (c) => {
       })
       .where(eq(schema.meetings.id, id));
     c.executionCtx.waitUntil(sendConferenceNotifications(result.joinUrl, "zoom").catch(console.error));
+    c.executionCtx.waitUntil(refreshHostMeetingCalendarEvents(db, c.env, id));
+    queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
     return c.json({ data: { conferenceType: "zoom", conferenceUrl: result.joinUrl } });
   }
 
@@ -2842,6 +2875,7 @@ meetingRoutes.patch("/:id/conference", async (c) => {
       })
       .where(eq(schema.meetings.id, id));
     c.executionCtx.waitUntil(sendConferenceNotifications(firstMeetUrl, "google_meet").catch(console.error));
+    queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
     return c.json({ data: { conferenceType: "google_meet", conferenceUrl: firstMeetUrl } });
   }
 
@@ -2929,6 +2963,7 @@ meetingRoutes.delete("/:id/delete", async (c) => {
   }
 
   await db.delete(schema.meetingResponses).where(eq(schema.meetingResponses.meetingId, id));
+  await deleteResponseCommentsForTargets(db, "meeting", [id]);
   await db.delete(schema.meetingAttendances).where(eq(schema.meetingAttendances.meetingId, id));
   await db.delete(schema.meetingNotifications).where(eq(schema.meetingNotifications.meetingId, id));
   await db.delete(schema.meetingDateCandidates).where(eq(schema.meetingDateCandidates.meetingId, id));
@@ -3094,6 +3129,10 @@ meetingRoutes.patch("/:id/description", async (c) => {
   // waitUntil でレスポンス後もメール送信を完走させる
   c.executionCtx.waitUntil(Promise.all(descMailPromises));
 
+  // カレンダーの予定の説明にも、更新した詳細を反映する（主催者・招待された人）
+  c.executionCtx.waitUntil(refreshHostMeetingCalendarEvents(db, c.env, id));
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
+
   return c.json({ ok: true });
 });
 
@@ -3182,9 +3221,10 @@ meetingRoutes.delete("/:id/invitees/:memberId", async (c) => {
   await db.delete(schema.meetingInvitees)
     .where(and(eq(schema.meetingInvitees.meetingId, id), eq(schema.meetingInvitees.memberId, memberId)));
 
-  // 回答も削除
+  // 回答も削除（一言コメントも）
   await db.delete(schema.meetingResponses)
     .where(and(eq(schema.meetingResponses.meetingId, id), eq(schema.meetingResponses.memberId, memberId)));
+  await deleteMemberComments(db, "meeting", id, [memberId]);
 
   queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
@@ -3205,9 +3245,10 @@ meetingRoutes.delete("/:id/external/:externalId", async (c) => {
     return c.json({ error: { code: "forbidden", message: "主催者のみ招待を削除できます" } }, 403);
   }
 
-  // 回答を先に削除
+  // 回答を先に削除（一言コメントも）
   await db.delete(schema.meetingResponses)
     .where(and(eq(schema.meetingResponses.meetingId, id), eq(schema.meetingResponses.externalInviteeId, externalId)));
+  await deleteExternalComments(db, "meeting", id, [externalId]);
 
   // 外部招待者を削除
   await db.delete(schema.meetingExternalInvitees)
@@ -3268,7 +3309,7 @@ meetingRoutes.post("/:id/attendance", async (c) => {
     return c.json({ error: { code: "not_confirmed", message: "確定済みミーティングのみ回答できます" } }, 400);
   }
 
-  const { status, candidateId } = await c.req.json<{ status: "attended" | "absent"; candidateId?: string | null }>();
+  const { status, candidateId, comment } = await c.req.json<{ status: "attended" | "absent"; candidateId?: string | null; comment?: string }>();
 
   // 確定済み候補日を取得
   let confirmedCandidates = await db.select().from(schema.meetingDateCandidates)
@@ -3357,9 +3398,36 @@ meetingRoutes.post("/:id/attendance", async (c) => {
     }
   }
 
+  // 出欠に添えた一言コメント（送られてきたときだけ更新。空欄なら消す）
+  await saveResponseComment(db, "meeting", id, { memberId }, normalizeComment(comment), now);
+
   // 不参加の回答はカレンダーから外し、参加に変えたら登録し直す（回答した本人の分）
   queueMemberCalendarSync(c.executionCtx, db, c.env, memberId);
   return c.json({ ok: true, pointsAwarded: totalPointsAwarded });
+});
+
+// ----------------------------------------------------------------
+// PUT /api/meetings/:id/comment — 回答に添える一言コメントだけを更新する（出欠は変えない）
+//   確定後の「参加予定の確認」で、あとからコメントだけ書き足す・直すときに使う。空欄で送ると消える。
+// ----------------------------------------------------------------
+meetingRoutes.put("/:id/comment", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const meeting = await db.select({ id: schema.meetings.id, status: schema.meetings.status }).from(schema.meetings)
+    .where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.status === "cancelled") {
+    return c.json({ error: { code: "meeting_closed", message: "このミーティングは中止されました" } }, 400);
+  }
+
+  const body = await c.req.json<{ comment?: string }>().catch(() => ({} as { comment?: string }));
+  const normalized = normalizeComment(body.comment ?? "");
+  await saveResponseComment(db, "meeting", id, { memberId }, normalized, now);
+  return c.json({ ok: true, data: { comment: normalized ?? "" } });
 });
 
 // ----------------------------------------------------------------

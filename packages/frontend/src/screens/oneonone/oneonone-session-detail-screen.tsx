@@ -14,6 +14,7 @@ import { CompleteOneOnOneModal } from "../meetings/_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-modal";
 import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candidate-selection-panel";
 import { EventReminderSetting } from "@/components/reminder-settings";
+import { SelectedCommentNote } from "@/components/response-comment";
 
 type Session = {
   id: string;
@@ -33,6 +34,7 @@ type Session = {
   autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null;
   arrangementMethod?: "public_url" | "candidates";
   selectedCandidateSlotId?: string | null;
+  selectedComment?: string | null;
   candidates?: CandidateSlot[];
   availableConferenceTypes?: ("google_meet" | "zoom")[];
 };
@@ -163,6 +165,9 @@ export function OneOnOneSessionDetailScreen() {
                 <Link2 size={13} className="shrink-0" />
                 {conferenceLabel} URL: {session.conferenceUrl}
               </a>
+            )}
+            {session.selectedComment && (
+              <SelectedCommentNote comment={session.selectedComment} fromName={session.myRole === "requester" ? partner?.name ?? "相手" : null} />
             )}
             {(session.status === "pending" || session.status === "accepted") && (
               <button onClick={() => setShowEditSchedule(true)} className="text-xs mt-1.5 flex items-center gap-1" style={{ color: "var(--color-ink-400)" }}>

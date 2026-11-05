@@ -10,9 +10,10 @@ import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime } from "@/lib/date";
 import { GuestCompanyField } from "@/components/guest-company-field";
+import { ResponseCommentField, RespondentComments } from "@/components/response-comment";
 
 type Availability = "yes" | "maybe" | "no";
-type Respondent = { name: string; availability: Availability };
+type Respondent = { name: string; availability: Availability; comment?: string | null };
 type Candidate = {
   id: string; note: string | null; isConfirmed: boolean; label: string;
   upcomingDates: { startsAt: number; endsAt: number }[]; respondents: Respondent[];
@@ -22,6 +23,7 @@ type View = {
   series: { id: string; title: string; description: string | null; status: string; host: { id: string; name: string; emoji: string } | null };
   candidates: Candidate[];
   myAnswers: Record<string, Availability>;
+  myComment?: string;
   occurrences: { startsAt: number; endsAt: number | null; conferenceUrl: string | null }[];
 };
 
@@ -56,6 +58,7 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
   const [email, setEmail] = useState("");
   const [company, setCompany] = useState("");
   const [answers, setAnswers] = useState<Record<string, Availability>>({});
+  const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [done, setDone] = useState<{ url: string } | null>(null);
@@ -73,6 +76,7 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
         setEmail(v.inviteeEmail ?? "");
         setCompany(v.inviteeCompany ?? "");
         setAnswers(v.myAnswers);
+        setComment(v.myComment ?? "");
       })
       .catch(() => setProblem({ code: "load_failed", message: "読み込みに失敗しました" }))
       .finally(() => setLoading(false));
@@ -87,7 +91,7 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
     try {
       const r = await fetch(`${base}/respond`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), company: company.trim(), answers }),
+        body: JSON.stringify({ name: name.trim(), email: email.trim(), company: company.trim(), comment, answers }),
       });
       const json = await r.json();
       if (!r.ok) { setSubmitError(json.error?.message ?? "送信に失敗しました"); return; }
@@ -236,6 +240,13 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
                 ))}
               </div>
             </div>
+
+            {/* 一言コメント（回答した方みんなに見えます） */}
+            <div>
+              <ResponseCommentField value={comment} onChange={setComment} />
+              <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>主催者と、ほかの回答者に見えます。</p>
+            </div>
+            <RespondentComments respondents={view.candidates.flatMap((c) => c.respondents)} />
 
             {submitError && <p className="text-sm text-center px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>{submitError}</p>}
             <button onClick={submit} disabled={submitting}

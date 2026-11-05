@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { eq, desc, and, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { cancelAutoConference, deleteHostCalendarEvent } from "../../services/conferenceService.ts";
+import { deleteResponseCommentsForTargets } from "../../services/response-comments.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminMeetingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -126,6 +127,7 @@ adminMeetingRoutes.delete("/:id", async (c) => {
 
   // 関連データを削除
   await db.delete(schema.meetingResponses).where(eq(schema.meetingResponses.meetingId, id));
+  await deleteResponseCommentsForTargets(db, "meeting", [id]);
   await db.delete(schema.meetingExternalInvitees).where(eq(schema.meetingExternalInvitees.meetingId, id));
   await db.delete(schema.meetingInvitees).where(eq(schema.meetingInvitees.meetingId, id));
   await db.delete(schema.meetingDateCandidates).where(eq(schema.meetingDateCandidates.meetingId, id));

@@ -24,9 +24,10 @@ import { getActiveShareLink, ensureActiveShareLink } from "../services/scheduler
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { touchCollaborationLink } from "../services/collab-link.ts";
 import { generateRawToken } from "../services/auth.ts";
-import { createConference, getAvailableConferenceTypes, cancelAutoConference, isGoogleCalendarConnected } from "../services/conferenceService.ts";
+import { createConference, getAvailableConferenceTypes, cancelAutoConference, isGoogleCalendarConnected, calendarDescription, updateHostCalendarEventFields } from "../services/conferenceService.ts";
 import { createConferenceForOneOnOneSession } from "../services/oneOnOneConference.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
+import { normalizeComment } from "../services/response-comments.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -521,14 +522,22 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
           existingBooking.conferenceType, existingBooking.conferenceMetaJson, existingBooking.hostCalendarEventId
         );
       }
+      // Googleカレンダーに通常の予定（Zoom用・URLなしの予定）がすでにあれば、消さずに残して説明の会議URLを新しいものに差し替える
+      // （Google Meetの予定は、上でMeetごと取り消されている）。手入力URLが予定に入らない・古いURLが残るのを防ぐ
+      const keepEventId = existingBooking.conferenceType === "google_meet" ? null : existingBooking.hostCalendarEventId;
       await db.update(schema.bookings).set({
         conferenceType: "manual",
         conferenceUrl: update.manualConferenceUrl,
         conferenceMetaJson: null,
-        hostCalendarEventId: null,
+        hostCalendarEventId: keepEventId,
         conferenceUrlStatus: update.conferenceUrlStatus,
         updatedAt: new Date().toISOString(),
       }).where(eq(schema.bookings.id, existingBooking.id));
+      if (keepEventId) {
+        c.executionCtx.waitUntil(updateHostCalendarEventFields(db, c.env, session.requesterId, keepEventId, {
+          description: calendarDescription(session.customNote, update.manualConferenceUrl),
+        }));
+      }
     }
   }
 
@@ -574,7 +583,7 @@ oneOnOneRoutes.patch("/:id/select-candidate", async (c) => {
     return c.json({ error: { code: "already_selected", message: "既に日時を選択済みです" } }, 400);
   }
 
-  const body = await c.req.json<{ candidateSlotId?: string; conferenceType?: "google_meet" | "zoom" }>();
+  const body = await c.req.json<{ candidateSlotId?: string; conferenceType?: "google_meet" | "zoom"; comment?: string }>();
   if (!body.candidateSlotId) {
     return c.json({ error: { code: "bad_request", message: "候補日を指定してください" } }, 400);
   }
@@ -597,9 +606,11 @@ oneOnOneRoutes.patch("/:id/select-candidate", async (c) => {
   }
 
   const now = Math.floor(Date.now() / 1000);
-  const update: { selectedCandidateSlotId: string; scheduledFor: number; status?: "accepted"; respondedAt?: number; conferenceUrlStatus?: string | null } = {
+  const update: { selectedCandidateSlotId: string; scheduledFor: number; status?: "accepted"; respondedAt?: number; conferenceUrlStatus?: string | null; selectedComment?: string | null } = {
     selectedCandidateSlotId: slot.id,
     scheduledFor: slot.startsAt,
+    // 日時を選んだときに添えた一言コメント（申込者に表示する。空欄なら、なし）
+    selectedComment: normalizeComment(body.comment) ?? null,
   };
   // 候補から選ぶ行為自体が「承諾」を意味する（公開予約URL経由の確定と同様の扱い）
   if (session.status === "pending") {

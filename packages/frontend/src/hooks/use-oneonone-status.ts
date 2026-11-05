@@ -26,6 +26,8 @@ export type OneOnOneSession = {
   autoTransitionReason?: "pending_timeout" | "candidates_expired" | "date_passed" | null;
   arrangementMethod?: "public_url" | "candidates";
   selectedCandidateSlotId?: string | null;
+  /** 相手が候補日から日時を選んだときに添えた、一言コメント */
+  selectedComment?: string | null;
   candidates?: { id: string; startAt: number; endAt: number }[];
   // 候補日未選択の間のみ、申込者(requester)が連携済みの会議ツール一覧（相手が選ぶ際に使う）
   availableConferenceTypes?: ("google_meet" | "zoom")[];

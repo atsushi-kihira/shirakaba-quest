@@ -13,6 +13,7 @@ import { fmtDateTime, fmtDateTimeFull, fmtTime } from "@/lib/date";
 import { useAuthStore } from "@/stores/auth-store";
 import { AvailabilityNotice, SlotAvailabilityNote, useAvailabilityForSlots } from "@/components/candidate-availability";
 import { CandidateCalendarView } from "@/components/candidate-calendar-view";
+import { ResponseCommentField } from "@/components/response-comment";
 
 type CandidateSlot = { id: string; startAt: number; endAt: number };
 
@@ -54,6 +55,7 @@ export function OneOnOneRespondScreen() {
   const [resultConference, setResultConference] = useState<{ type: string | null; url: string | null } | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>("");
   const [showCalendar, setShowCalendar] = useState(false);
+  const [comment, setComment] = useState("");
   const [conferenceType, setConferenceType] = useState<"google_meet" | "zoom" | undefined>(undefined);
 
   // 自分のカレンダーで候補日時が空いているかの確認。ログイン中のアカウントが、この申込の宛先本人の場合だけ行う
@@ -99,6 +101,7 @@ export function OneOnOneRespondScreen() {
         body: JSON.stringify({
           candidateSlotId: selectedCandidateId,
           conferenceType: (data?.availableConferenceTypes.length ?? 0) >= 2 ? (conferenceType ?? defaultConferenceType) : undefined,
+          comment,
         }),
       });
       const json = await r.json();
@@ -323,6 +326,13 @@ export function OneOnOneRespondScreen() {
                   📞 会議URLは{d.requesterName}さんから別途ご連絡します
                 </p>
               )}
+
+              {/* 一言コメント（申込者に伝わります） */}
+              <ResponseCommentField
+                value={comment}
+                onChange={setComment}
+                placeholder="例：来週は予定が詰まっていて、この日しか難しいです"
+              />
 
               <button
                 onClick={selectCandidate}

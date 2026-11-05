@@ -25,8 +25,9 @@ import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
 import { resolveSeriesMemberIds, addMembersToSeries, addGuestsToSeries, removeMembersFromSeries, seriesIsOpenForAdditions } from "../services/meeting-participants.ts";
 import { generateRawToken } from "../services/auth.ts";
+import { deleteExternalComments, deleteResponseCommentsForTargets, loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
 import { computeOccurrences, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
-import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent } from "../services/conferenceService.ts";
+import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent, refreshHostMeetingCalendarEvents, pickConferenceUrl } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -222,8 +223,8 @@ meetingSeriesRoutes.post("/", async (c) => {
 
   let manualConferenceUrl: string | undefined;
   if (body.conferenceType === "manual") {
-    manualConferenceUrl = body.conferenceUrl?.trim();
-    if (!manualConferenceUrl || !/^https?:\/\//.test(manualConferenceUrl)) {
+    manualConferenceUrl = pickConferenceUrl(body.conferenceUrl) ?? undefined; // 招待文ごと貼り付けられても、URLの部分だけを使う
+    if (!manualConferenceUrl) {
       return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
     }
   } else if (body.conferenceType === "google_meet" || body.conferenceType === "zoom") {
@@ -702,6 +703,13 @@ meetingSeriesRoutes.get("/:id", async (c) => {
   }
   const respondedExternalIds = new Set(externalResponseRows.map((r) => r.externalInviteeId));
 
+  // 回答に添えられた一言コメント。{ メンバーID（外部ゲストは "ext:ゲストID"）→ コメント }
+  const commentByPerson = await loadResponseComments(db, "series", id);
+  const comments: Record<string, string> = {};
+  for (const [personId, text] of commentByPerson) {
+    comments[externalById.has(personId) ? `ext:${personId}` : personId] = text;
+  }
+
   const myResponses: Record<string, Availability> = {};
   for (const r of responses) if (r.memberId === memberId) myResponses[r.candidateId] = r.availability as Availability;
 
@@ -768,6 +776,8 @@ meetingSeriesRoutes.get("/:id", async (c) => {
         respondents: respondentsByCandidate[cand.id] ?? [],
       })),
       myResponses,
+      myComment: commentByPerson.get(memberId) ?? "",
+      comments,
       targetMembers: [...targets, ...externalTargets],
       externalInvitees: externalRows.map((e) => ({
         id: e.id, name: e.name || "ゲスト",
@@ -884,6 +894,7 @@ meetingSeriesRoutes.delete("/:id/external/:externalId", async (c) => {
   if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ削除できます" } }, 403);
   await db.delete(schema.meetingSeriesExternalResponses).where(and(
     eq(schema.meetingSeriesExternalResponses.seriesId, id), eq(schema.meetingSeriesExternalResponses.externalInviteeId, externalId)));
+  await deleteExternalComments(db, "series", id, [externalId]);
   await db.delete(schema.meetingSeriesExternalInvitees).where(and(
     eq(schema.meetingSeriesExternalInvitees.seriesId, id), eq(schema.meetingSeriesExternalInvitees.id, externalId)));
   return c.json({ ok: true });
@@ -905,7 +916,7 @@ meetingSeriesRoutes.post("/:id/respond", async (c) => {
     return c.json({ error: { code: "invalid_status", message: "投票を受け付けていません" } }, 400);
   }
 
-  const { responses } = await c.req.json<{ responses: Record<string, Availability> }>();
+  const { responses, comment } = await c.req.json<{ responses: Record<string, Availability>; comment?: string }>();
   for (const [candidateId, availability] of Object.entries(responses ?? {})) {
     await db.delete(schema.meetingSeriesResponses)
       .where(and(eq(schema.meetingSeriesResponses.candidateId, candidateId), eq(schema.meetingSeriesResponses.memberId, memberId)));
@@ -913,6 +924,8 @@ meetingSeriesRoutes.post("/:id/respond", async (c) => {
       id: newId(), seriesId: id, candidateId, memberId, availability, comment: null, respondedAt: now,
     });
   }
+  // 一言コメント（送られてきたときだけ更新。空欄なら消す）
+  await saveResponseComment(db, "series", id, { memberId }, normalizeComment(comment), now);
 
   return c.json({ ok: true });
 });
@@ -1235,7 +1248,8 @@ meetingSeriesRoutes.patch("/:id/conference-urls", async (c) => {
   if (series.status !== "confirmed") return c.json({ error: { code: "invalid_status", message: "開催日が確定している定例会でのみ設定できます" } }, 400);
 
   const body = await c.req.json<{ mode?: "same" | "per_day"; url?: string; urls?: Record<string, string> }>().catch(() => ({} as { mode?: "same" | "per_day"; url?: string; urls?: Record<string, string> }));
-  const isHttp = (u: string | undefined) => !!u && /^https?:\/\//.test(u.trim());
+  // 招待文ごと貼り付けられても、URLの部分だけを使う（http:// または https:// で始まらなければ null）
+  const cleanUrl = (u: string | undefined): string | null => pickConferenceUrl(u);
 
   const meetingsRows = await db.select().from(schema.meetings).where(eq(schema.meetings.seriesId, id)).all();
   const candidateIds = meetingsRows.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
@@ -1253,14 +1267,16 @@ meetingSeriesRoutes.patch("/:id/conference-urls", async (c) => {
 
   const changes = new Map<string, string>(); // meetingId -> url
   if (body.mode === "same") {
-    if (!isHttp(body.url)) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
-    for (const x of upcoming) changes.set(x.m.id, body.url!.trim());
+    const sharedUrl = cleanUrl(body.url);
+    if (!sharedUrl) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
+    for (const x of upcoming) changes.set(x.m.id, sharedUrl);
   } else if (body.mode === "per_day") {
     for (const [mid, url] of Object.entries(body.urls ?? {})) {
       if (!url?.trim()) continue;
       if (!upcoming.some((x) => x.m.id === mid)) return c.json({ error: { code: "invalid_input", message: "この定例会の今後の開催回ではないものが含まれています" } }, 400);
-      if (!isHttp(url)) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
-      changes.set(mid, url.trim());
+      const picked = cleanUrl(url);
+      if (!picked) return c.json({ error: { code: "invalid_input", message: "会議URLは http:// または https:// で始めて入力してください" } }, 400);
+      changes.set(mid, picked);
     }
     if (changes.size === 0) return c.json({ error: { code: "invalid_input", message: "設定する会議URLを入力してください" } }, 400);
   } else {
@@ -1273,7 +1289,7 @@ meetingSeriesRoutes.patch("/:id/conference-urls", async (c) => {
   }
   if (body.mode === "same") {
     await db.update(schema.meetingSeries).set({
-      conferenceType: "manual", conferenceUrl: body.url!.trim(), conferenceMetaJson: null, conferenceCalendarEventId: null, updatedAt: now,
+      conferenceType: "manual", conferenceUrl: cleanUrl(body.url), conferenceMetaJson: null, conferenceCalendarEventId: null, updatedAt: now,
     }).where(eq(schema.meetingSeries.id, id));
   }
   for (const x of upcoming) {
@@ -1315,6 +1331,10 @@ meetingSeriesRoutes.patch("/:id/conference-urls", async (c) => {
   }
   c.executionCtx.waitUntil(Promise.all(mails));
 
+  // 主催者のカレンダーにある各回の予定にも、設定した会議URLを入れる
+  c.executionCtx.waitUntil((async () => {
+    for (const x of changed) await refreshHostMeetingCalendarEvents(db, c.env, x.m.id);
+  })());
   queueSeriesCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true, updated: changed.length });
 });
@@ -1379,6 +1399,7 @@ meetingSeriesRoutes.post("/:id/occurrences/delete", async (c) => {
 
   for (const chunk of chunkOf(targetIds, DELETE_CHUNK)) {
     await db.delete(schema.meetingResponses).where(inArray(schema.meetingResponses.meetingId, chunk));
+    await deleteResponseCommentsForTargets(db, "meeting", chunk);
     await db.delete(schema.meetingDeclines).where(inArray(schema.meetingDeclines.meetingId, chunk));
     await db.delete(schema.meetingAttendances).where(inArray(schema.meetingAttendances.meetingId, chunk));
     await db.delete(schema.meetingNotifications).where(inArray(schema.meetingNotifications.meetingId, chunk));
