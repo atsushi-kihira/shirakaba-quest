@@ -59,7 +59,8 @@ export async function cancelConfirmedBooking(
   const displayTitle = settings?.displayTitle ?? "1on1 ミーティング";
 
   await Promise.allSettled([
-    sendCancellationMail({
+    // メールアドレスを登録していないゲスト（日程確定済みで登録した方）には、送らない
+    !booking.guestEmail ? Promise.resolve() : sendCancellationMail({
       to: booking.guestEmail,
       recipientName: booking.guestName,
       otherPartyName: host?.name ?? "",

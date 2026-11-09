@@ -27,6 +27,7 @@ export function formatBookingDateRange(startUtc: string, endUtc: string, tz = "A
 }
 
 export function buildConferenceText(conferenceType: string, conferenceUrl: string | null): string {
+  if (conferenceType === "manual" && conferenceUrl) return `📹 会議URL: ${conferenceUrl}`;
   if (conferenceType === "google_meet" && conferenceUrl) return `📹 Google Meet: ${conferenceUrl}`;
   if (conferenceType === "zoom" && conferenceUrl) return `📹 Zoom: ${conferenceUrl}`;
   return "📹 会議URLは主催者から別途ご連絡します。";
@@ -51,7 +52,17 @@ export type CreateBookingForConfirmedSlotArgs = {
   displayTitle: string;
   oneOnOneSessionId?: string | null;
   guestInviteId?: string | null;
-  source: "public" | "guest_invite";
+  source: "public" | "guest_invite" | "prearranged";
+  /** 手入力の会議URL（requestedConferenceType が manual のときだけ使う。日程確定済みで登録するとき） */
+  manualConferenceUrl?: string | null;
+  /** manual で、会議URLを入れないことを、あえて選んだ（「URLなし」） */
+  conferenceUrlNone?: boolean;
+  /** 確認メールをゲストに送るか（既定は送る。メールアドレスが空のときは、送れない） */
+  notifyGuest?: boolean;
+  /** 予約が入ったことを、主催者にもメールで知らせるか（既定は知らせる。主催者が自分で登録するときは不要） */
+  notifyHost?: boolean;
+  /** 予約を作った人（記録用）。既定は guest（ゲスト自身が日時を選んだ） */
+  actor?: "guest" | "host";
 };
 
 export type CreateBookingForConfirmedSlotResult = {
@@ -76,8 +87,9 @@ export async function createBookingForConfirmedSlot(args: CreateBookingForConfir
     requestedType: args.requestedConferenceType,
     summary: args.conferenceSummary,
     description: [
-      `ゲスト: ${args.guestName} <${args.guestEmail}>`,
+      `ゲスト: ${args.guestName}${args.guestEmail ? ` <${args.guestEmail}>` : ""}`,
       args.guestMessage ? `メッセージ: ${args.guestMessage}` : "",
+      args.requestedConferenceType === "manual" && args.manualConferenceUrl ? `会議URL: ${args.manualConferenceUrl}` : "",
     ].filter(Boolean).join("\n"),
     startAtUtc: args.startAtUtc,
     endAtUtc: args.endAtUtc,
@@ -88,6 +100,13 @@ export async function createBookingForConfirmedSlot(args: CreateBookingForConfir
     zoomClientId: env.ZOOM_CLIENT_ID,
     zoomClientSecret: env.ZOOM_CLIENT_SECRET,
   });
+
+  // 手入力の会議URLは、そのまま記録する（自動発行はしない）
+  const manualUrl = args.requestedConferenceType === "manual" ? (args.manualConferenceUrl?.trim() || null) : null;
+  const finalConferenceUrl = manualUrl ?? conferenceResult.conferenceUrl;
+  const finalUrlStatus = conferenceResult.urlStatus === "unresolved"
+    ? "unresolved"
+    : (args.requestedConferenceType === "manual" && !finalConferenceUrl && args.conferenceUrlNone ? "none" : null);
 
   await db.insert(schema.bookings).values({
     id: bookingId,
@@ -106,9 +125,9 @@ export async function createBookingForConfirmedSlot(args: CreateBookingForConfir
     rescheduleToken,
     hostCalendarEventId: conferenceResult.calendarEventId,
     conferenceType: conferenceResult.conferenceType,
-    conferenceUrl: conferenceResult.conferenceUrl,
+    conferenceUrl: finalConferenceUrl,
     conferenceMetaJson: conferenceResult.conferenceMetaJson,
-    conferenceUrlStatus: conferenceResult.urlStatus === "unresolved" ? "unresolved" : null,
+    conferenceUrlStatus: finalUrlStatus,
     oneOnOneSessionId: args.oneOnOneSessionId ?? null,
     guestInviteId: args.guestInviteId ?? null,
     source: args.source,
@@ -120,23 +139,25 @@ export async function createBookingForConfirmedSlot(args: CreateBookingForConfir
     id: newId(),
     bookingId,
     eventType: "created",
-    actorKind: "guest",
-    actorId: null,
-    payloadJson: JSON.stringify({ guestEmail: args.guestEmail }),
+    actorKind: args.actor ?? "guest",
+    actorId: args.actor === "host" ? args.hostMemberId : null,
+    payloadJson: JSON.stringify({ guestEmail: args.guestEmail, source: args.source }),
     occurredAt: now,
   });
 
   const appTitle = (await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get())?.appTitle ?? "白樺クエスト";
   const dateRange = formatBookingDateRange(args.startAtUtc, args.endAtUtc, args.timezone);
-  const conferenceInfo = buildConferenceText(conferenceResult.conferenceType, conferenceResult.conferenceUrl);
+  const conferenceInfo = buildConferenceText(conferenceResult.conferenceType, finalConferenceUrl);
   const frontendUrl = getFrontendUrl(env);
   const cancellationUrl = `${frontendUrl}/book/confirmation/${cancellationToken}`;
   const bookingUrl = `${frontendUrl}/scheduler/bookings/${bookingId}`;
   const guestMessageBlock = args.guestMessage ? `💬 メッセージ：${args.guestMessage}` : "";
 
   const mailer = new MailService(db, env);
+  const sendToGuest = args.notifyGuest !== false && !!args.guestEmail;
+  const sendToHost = args.notifyHost !== false && !!args.hostEmail;
   await Promise.allSettled([
-    mailer.send("scheduler_booking_guest", args.guestEmail, {
+    !sendToGuest ? Promise.resolve() : mailer.send("scheduler_booking_guest", args.guestEmail, {
       appTitle,
       guestName: args.guestName,
       hostName: args.hostName,
@@ -145,7 +166,7 @@ export async function createBookingForConfirmedSlot(args: CreateBookingForConfir
       conferenceInfo,
       cancellationUrl,
     }),
-    args.hostEmail ? mailer.send("scheduler_booking_host", args.hostEmail, {
+    sendToHost ? mailer.send("scheduler_booking_host", args.hostEmail, {
       appTitle,
       hostName: args.hostName,
       guestName: args.guestName,
@@ -162,6 +183,6 @@ export async function createBookingForConfirmedSlot(args: CreateBookingForConfir
     bookingId,
     cancellationToken,
     conferenceType: conferenceResult.conferenceType,
-    conferenceUrl: conferenceResult.conferenceUrl,
+    conferenceUrl: finalConferenceUrl,
   };
 }

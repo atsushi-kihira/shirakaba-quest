@@ -18,6 +18,7 @@ import { SchedulingMethodSelector, type SchedulingMethod } from "./_scheduling-m
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 import { DurationSelect } from "@/components/duration-select";
+import { GuestPrearrangedModal } from "./_guest-prearranged-modal";
 import { CandidateDateEntry, isValidCandidateSet, candidateRowsToPayload, emptyCandidateRow, type CandidateRow } from "./_candidate-date-entry";
 
 type GuestInviteResult = {
@@ -87,6 +88,8 @@ export function GuestInvitePanel() {
   const [duration, setDuration] = useState(60);
   const [submitResult, setSubmitResult] = useState<GuestInviteResult | null>(null);
   const [copied, setCopied] = useState(false);
+  // 「すでに日程調整済み」の相手を、日時を指定して登録するモーダル
+  const [showPrearranged, setShowPrearranged] = useState(false);
 
   const submitMutation = useMutation({
     mutationFn: () => api.post<{ data: GuestInviteResult }>("/oneonone/guest-invites", {
@@ -304,7 +307,30 @@ export function GuestInvitePanel() {
             ? `この${candidatesFilledCount}件の候補で申し込む`
             : "この内容で申し込む"}
         </button>
+
+        <div className="pt-1 space-y-1.5">
+          <button
+            type="button"
+            onClick={() => setShowPrearranged(true)}
+            className="w-full flex items-center justify-center gap-1.5 rounded-2xl py-2.5 text-xs font-medium transition"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
+          >
+            📅 すでに日程調整済み？日時を指定して登録する
+          </button>
+          <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-600)" }}>
+            💡 相手の回答を待たずに、日時が決まっている1to1を、その場で確定済みとして登録したい場合は、こちらをご利用ください。
+          </p>
+        </div>
       </div>
+
+      {showPrearranged && (
+        <GuestPrearrangedModal
+          initialName={guestName}
+          initialEmail={guestEmail}
+          initialNotify={notifyByEmail}
+          onClose={() => setShowPrearranged(false)}
+        />
+      )}
     </div>
   );
 }

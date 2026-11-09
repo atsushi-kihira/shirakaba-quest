@@ -14,7 +14,8 @@ import { newId, generateUrlSafeToken } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { getSchedulerLinkValidityHours } from "../services/schedulerShareToken.ts";
-import { isGoogleCalendarConnected } from "../services/conferenceService.ts";
+import { isGoogleCalendarConnected, getAvailableConferenceTypes } from "../services/conferenceService.ts";
+import { createBookingForConfirmedSlot } from "../services/bookingCreation.ts";
 import { listOneOnOneEvents, resolveOneOnOneEvent } from "../services/oneonone-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import type { Env, Variables } from "../types.ts";
@@ -188,6 +189,143 @@ oneOnOneGuestInviteRoutes.post("/", async (c) => {
   }
 
   return c.json({ data: { id, status: "pending", arrangementMethod: body.arrangementMethod, inviteUrl, expiresAt, guestName, emailSent: notifyByEmail && !!guestEmail } }, 201);
+});
+
+// ---- POST /api/oneonone/guest-invites/prearranged ----
+// 「すでに日程調整済み」の外部ゲストとの1to1を、日時を指定して、その場で確定済みとして登録する
+// （メンバー向けの POST /api/oneonone/prearranged に相当）。相手の回答（候補日の選択）は待たない。
+//   ・メールで案内する場合は、確定のお知らせ（日時・会議URL・キャンセル用リンク）をゲストにメールする（名前・メールアドレスが必須）
+//   ・案内しない場合は、メールアドレスは不要。メールは送らず、日時や会議URLをDM等で伝えてもらう
+// 1to1イベントのポイントが、あとから付くように、確定済みの招待（status: selected）も記録する。
+oneOnOneGuestInviteRoutes.post("/prearranged", async (c) => {
+  const db = createDb(c.env.DB);
+  const hostMemberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!hostMemberId) {
+    return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないため1to1を登録できません" } }, 403);
+  }
+  if (!(await isMemberApproved(db, hostMemberId))) {
+    return c.json({ error: { code: "not_approved", message: "承認されるまでは外部ゲストへの1to1はご利用いただけません" } }, 403);
+  }
+
+  const body = await c.req.json<{
+    guestName?: string;
+    guestEmail?: string;
+    startAtUtc: string;
+    endAtUtc: string;
+    conferenceType: "zoom" | "google_meet" | "manual";
+    conferenceUrl?: string;
+    title?: string;
+    note?: string;
+    notifyByEmail?: boolean;
+    eventCampaignId?: string;
+  }>();
+
+  const guestName = body.guestName?.trim() ?? "";
+  const guestEmail = body.guestEmail?.trim() ?? "";
+  const notifyByEmail = body.notifyByEmail === true;
+  if (!guestName) {
+    return c.json({ error: { code: "bad_request", message: "相手の名前を入力してください" } }, 400);
+  }
+  if (notifyByEmail && !guestEmail) {
+    return c.json({ error: { code: "bad_request", message: "メールで案内する場合は、相手のメールアドレスを入力してください" } }, 400);
+  }
+  if (guestEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guestEmail)) {
+    return c.json({ error: { code: "bad_request", message: "メールアドレスの形式が正しくありません" } }, 400);
+  }
+  const startMs = new Date(body.startAtUtc).getTime();
+  const endMs = new Date(body.endAtUtc).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) {
+    return c.json({ error: { code: "bad_request", message: "日時の指定が正しくありません" } }, 400);
+  }
+  if (startMs <= Date.now()) {
+    return c.json({ error: { code: "past_datetime", message: "過去の日時は指定できません。これから実施する1to1の日時を入力してください。" } }, 400);
+  }
+  if (!["zoom", "google_meet", "manual"].includes(body.conferenceType)) {
+    return c.json({ error: { code: "bad_request", message: "会議ツールの指定が正しくありません" } }, 400);
+  }
+  if (body.conferenceType !== "manual") {
+    const available = await getAvailableConferenceTypes(db, hostMemberId);
+    if (!available.includes(body.conferenceType)) {
+      const label = body.conferenceType === "zoom" ? "Zoom" : "Google Meet";
+      return c.json({
+        error: { code: "not_connected", message: `${label}との連携が完了していません。先に「マイページ→日程調整設定→外部サービス連携」で連携してください。` },
+      }, 400);
+    }
+  }
+
+  // 結びつける1to1イベント（ビジターとの1to1向け）。未指定なら先頭のイベント（なければなし）
+  let eventCampaignId: string | null = null;
+  if (body.eventCampaignId) {
+    eventCampaignId = await resolveOneOnOneEvent(db, body.eventCampaignId, "visitor");
+    if (!eventCampaignId) {
+      return c.json({ error: { code: "bad_request", message: "選んだイベントは、現在は使えません（終了または削除されています）。選び直してください" } }, 400);
+    }
+  } else {
+    eventCampaignId = (await listOneOnOneEvents(db, "visitor"))[0]?.id ?? null;
+  }
+
+  const host = await db.select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
+    .from(schema.members).where(eq(schema.members.id, hostMemberId)).get();
+  if (!host) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないため1to1を登録できません" } }, 403);
+
+  const now = Math.floor(Date.now() / 1000);
+  const inviteId = newId();
+  const title = body.title?.trim() || "";
+  const note = body.note?.trim() || "";
+
+  const result = await createBookingForConfirmedSlot({
+    db,
+    env: c.env,
+    hostMemberId,
+    hostName: host.name,
+    hostEmail: host.email,
+    guestName,
+    guestEmail,
+    guestMessage: note || null,
+    startAtUtc: new Date(startMs).toISOString(),
+    endAtUtc: new Date(endMs).toISOString(),
+    timezone: "Asia/Tokyo",
+    requestedConferenceType: body.conferenceType,
+    manualConferenceUrl: body.conferenceUrl,
+    conferenceUrlNone: true,
+    conferenceSummary: title || `${host.name}さんと${guestName}さんの1to1`,
+    displayTitle: title || "1to1 ミーティング",
+    guestInviteId: inviteId,
+    source: "prearranged",
+    notifyGuest: notifyByEmail,
+    notifyHost: false,
+    actor: "host",
+  });
+
+  // 確定済みの招待として記録する（1to1イベントとの結びつき用。招待URLは使わない）
+  await db.insert(schema.oneOnOneGuestInvites).values({
+    id: inviteId,
+    hostMemberId,
+    guestName,
+    guestEmail,
+    token: generateUrlSafeToken(),
+    arrangementMethod: "candidates",
+    status: "selected",
+    expiresAt: now,
+    customTitle: title || null,
+    customDurationMinutes: Math.round((endMs - startMs) / 60_000),
+    customNote: note || null,
+    resultingBookingId: result.bookingId,
+    eventCampaignId,
+    createdAt: now,
+  });
+
+  return c.json({
+    data: {
+      bookingId: result.bookingId,
+      startAtUtc: new Date(startMs).toISOString(),
+      endAtUtc: new Date(endMs).toISOString(),
+      conferenceType: result.conferenceType,
+      conferenceUrl: result.conferenceUrl,
+      emailSent: notifyByEmail && !!guestEmail,
+      guestName,
+    },
+  }, 201);
 });
 
 // ---- GET /api/oneonone/guest-invites ----
