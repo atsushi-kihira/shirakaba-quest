@@ -63,12 +63,14 @@ type PickerProps = {
   mailNote?: (mailCount: number, missingCount: number) => string | null;
   /** 「名前（とメール）だけで招待」で、「招待メールを送る」のオン・オフを選べるようにする（作成画面のみ。専用URLをその場で見せられる画面だけ） */
   allowNoEmail?: boolean;
+  /** 「追加のしかた」の見出し。未指定なら、単独で使う画面向けの見出し。null なら出さない */
+  heading?: string | null;
 };
 
 const defaultMailNote = (mailCount: number, missing: number): string =>
   `${mailCount}人には、作成と同時に招待メールを送ります。${missing > 0 ? `（メールアドレスが未入力の方が${missing}人います）` : ""}`;
 
-export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote, allowNoEmail = false }: PickerProps) {
+export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote, allowNoEmail = false, heading }: PickerProps) {
   const qc = useQueryClient();
   // 「招待メールを送る」の初期状態は、管理設定「外部の方との連絡」に従う（メール主体ならオン、DM主体ならオフ）。
   // 設定の読み込みが終わるまではメール主体として扱い、読み込み後に1度だけ反映する。先に自分で切り替えていたら、その選択を優先する
@@ -186,9 +188,11 @@ export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>
-        👤 ゲストを個別に指定{allowNoEmail ? "" : "（メールアドレスが必要です）"}。やりやすいほうを選んでください
-      </p>
+      {heading !== null && (
+        <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>
+          {heading ?? `👤 ゲストを個別に指定${allowNoEmail ? "" : "（メールアドレスが必要です）"}。やりやすいほうを選んでください`}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="tablist" aria-label="ゲストの招待のしかた">
         {([
