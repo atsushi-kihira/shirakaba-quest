@@ -15,7 +15,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
-import { MAX_GUESTS, resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
+import { MAX_GUESTS, resolveGuests, withEmail, type GuestInput } from "../services/meeting-guests.ts";
 import { MAX_GROUPS_PER_MEMBER, MAX_GROUP_NAME_LENGTH } from "../services/meeting-groups.ts";
 import { propagateGroupAdditions, propagateGroupRemovals, type GuestToAdd } from "../services/meeting-participants.ts";
 import type { Env, Variables } from "../types.ts";
@@ -65,7 +65,7 @@ async function insertGuests(
   if (!resolved.ok) return resolved;
   const existing = await db.select().from(schema.meetingGroupGuests).where(eq(schema.meetingGroupGuests.groupId, groupId)).all();
   const emails = new Set(existing.map((g) => g.email));
-  const fresh = resolved.guests.filter((g) => !emails.has(g.email));
+  const fresh = withEmail(resolved.guests).filter((g) => !emails.has(g.email));
   if (existing.length + fresh.length > MAX_GUESTS) {
     return { ok: false, message: `1つのグループに入れられる外部ゲストは${MAX_GUESTS}人までです（現在${existing.length}人）` };
   }
@@ -149,7 +149,7 @@ meetingGroupRoutes.post("/", async (c) => {
 
   await db.insert(schema.meetingGroups).values({ id: groupId, ownerMemberId: ownerId, name: name.name, createdAt: now, updatedAt: now });
   await insertMembers(db, groupId, memberIds, now);
-  for (const g of resolved.guests) {
+  for (const g of withEmail(resolved.guests)) {
     await db.insert(schema.meetingGroupGuests).values({ id: newId(), groupId, name: g.name, email: g.email, contactId: g.contactId, createdAt: now });
   }
   return c.json({ data: { id: groupId } }, 201);

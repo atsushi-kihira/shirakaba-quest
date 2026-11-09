@@ -493,16 +493,18 @@ export function AdminSettingsScreen() {
         </div>
       </div>
 
-      {/* ---- 日程調整の公開URL設定 ---- */}
+      {/* ---- 日程調整のURL設定 ---- */}
       <div className="card-paper p-6 space-y-4 mb-5">
         <div>
           <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
-            🔗 日程調整の公開URLの有効期間
+            🔗 日程調整のURLの有効期間
           </h2>
           <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
-            メンバーが外部の方と共有する日程調整の公開URLは、恒久的なものではなく期限付きで発行されます。
+            メンバーが外部の方と共有する日程調整のURLは、恒久的なものではなく期限付きで発行されます。
             発行してからここで設定した時間が経つと自動的に無効になり、共有した相手はページを開けなくなります
             （既に確定した予約自体には影響しません）。
+            1to1の公開予約URLに使われるほか、ミーティング・定例会の作成画面で{form.termExternalGuest}用の共有URLを先に発行するときの、有効期間の初期値になります
+            （作成画面では、そのつど変えることもできます）。
           </p>
         </div>
         <div>

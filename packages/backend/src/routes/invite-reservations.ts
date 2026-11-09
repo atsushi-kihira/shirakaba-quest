@@ -1,7 +1,8 @@
 // =============================================================
 // 外部ゲスト用の共有URLの予約（ミーティング・定例会の作成画面で、作成前にURLを発行する）
-// GET    /api/invite-reservations?kind=meeting|series         → 有効な予約（なければ null）
-// POST   /api/invite-reservations  { kind, days? }            → URLを発行（有効な予約があれば再利用し、有効期限を更新）
+// GET    /api/invite-reservations?kind=meeting|series         → 有効な予約（なければ null）と、有効期間の初期値 defaultHours（管理設定「日程調整のURLの有効期間」）
+// POST   /api/invite-reservations  { kind, hours? }           → URLを発行（有効な予約があれば再利用し、有効期限を更新）。hours を省くと、管理設定の有効期間
+//                                                                （古い画面との互換のため、days も受け付ける）
 // DELETE /api/invite-reservations?kind=meeting|series         → URLを無効にする
 // =============================================================
 import { Hono } from "hono";
@@ -9,9 +10,10 @@ import { createDb } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import {
-  DEFAULT_RESERVATION_DAYS, clampDays, discardReservation, getActiveReservation, issueReservation, reservationUrl,
+  clampHours, discardReservation, getActiveReservation, issueReservation, reservationUrl,
   type ReservationKind,
 } from "../services/invite-reservations.ts";
+import { getSchedulerLinkValidityHours } from "../services/schedulerShareToken.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const inviteReservationRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -29,21 +31,25 @@ inviteReservationRoutes.get("/", async (c) => {
   const db = createDb(c.env.DB);
   const kind = asKind(c.req.query("kind"));
   if (!kind) return c.json(badKind, 400);
+  const defaultHours = await getSchedulerLinkValidityHours(db);
   const me = await approvedMemberId(c, db);
-  if (!me) return c.json({ data: null });
+  if (!me) return c.json({ data: null, defaultHours });
   const r = await getActiveReservation(db, me, kind, Math.floor(Date.now() / 1000));
-  return c.json({ data: r ? { ...r, url: reservationUrl(c.env, kind, r.token) } : null });
+  return c.json({ data: r ? { ...r, url: reservationUrl(c.env, kind, r.token) } : null, defaultHours });
 });
 
 inviteReservationRoutes.post("/", async (c) => {
   const db = createDb(c.env.DB);
-  const body = await c.req.json<{ kind?: unknown; days?: unknown }>().catch(() => ({} as { kind?: unknown; days?: unknown }));
+  const body = await c.req.json<{ kind?: unknown; hours?: unknown; days?: unknown }>().catch(() => ({} as { kind?: unknown; hours?: unknown; days?: unknown }));
   const kind = asKind(body.kind);
   if (!kind) return c.json(badKind, 400);
   const me = await approvedMemberId(c, db);
   if (!me) return c.json({ error: { code: "not_approved", message: "承認されるまでは、ゲスト用のURLは発行できません" } }, 403);
-  const days = body.days === undefined ? DEFAULT_RESERVATION_DAYS : clampDays(body.days);
-  const r = await issueReservation(db, me, kind, days, Math.floor(Date.now() / 1000));
+  const defaultHours = await getSchedulerLinkValidityHours(db);
+  const hours = body.hours !== undefined ? clampHours(body.hours, defaultHours)
+    : body.days !== undefined ? clampHours(Number(body.days) * 24, defaultHours)
+    : defaultHours;
+  const r = await issueReservation(db, me, kind, hours, Math.floor(Date.now() / 1000));
   return c.json({ data: { ...r, url: reservationUrl(c.env, kind, r.token) } });
 });
 

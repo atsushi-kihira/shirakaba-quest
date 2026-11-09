@@ -1,13 +1,16 @@
 // =============================================================
 // ミーティング・定例会の作成画面で、外部ゲスト（ビジター）を招待する部分
-//   ・ゲスト用の共有URL: 作成する前に、URLだけ先に発行できる（有効期間は発行時に選べる。初期は7日）。
+//   ・ゲスト用の共有URL: 作成する前に、URLだけ先に発行できる（有効期間は発行時に選べる。初期値は、管理設定の「日程調整のURLの有効期間」）。
 //     作成すると、同じURLがそのままミーティング・定例会のゲスト用URLになる。作成せずにやめたものは、期限が来たら自動で削除される。
 //     作成前にURLを開いた人には、「準備中」と表示される。
-//   ・ゲストを個別に指定（メールアドレスは必須。回答を、メールアドレスで対応づけるため）。次の2つの流れから選べる。
-//       - 名前とメールアドレスだけで招待（かんたん）: 外部人脈には登録しない。ゲストが回答で会社名を入力したときだけ、人脈に自動登録される。
+//   ・ゲストを個別に指定（メールで案内する方は、メールアドレスが必須。回答を、メールアドレスで対応づけるため）。次の2つの流れから選べる。
+//       - 名前（とメール）だけで招待（かんたん）: 外部人脈には登録しない。ゲストが回答で会社名を入力したときだけ、人脈に自動登録される。
+//         「招待メールを送る」をオフにすると、名前だけで加えられる（メールは送らず、作成の直後に、専用URLとDM用の文面を見せる）。
+//         オン・オフの初期値は、管理設定「外部の方との連絡」に従う。
 //       - 外部人脈から選ぶ・登録して招待: 登録済みの人脈から選ぶ。いない場合は、その場で人脈に登録（名前・会社名・メールアドレス・公開範囲）して招待する。
+//         この方々には、設定に関わらず、いつも招待メールを送る。
 //     作成と同時に、全員に招待メールを送る。人脈にメールアドレスがない場合は、ここで入力して人脈に保存することもできる。
-//   ・メールアドレスのわからない方には、共有URLを何らかの方法でお伝えする（回答時に、名前・メールアドレス・会社名を入力してもらう）。
+//   ・DMなどで連絡する方には、共有URL（複数人にまとめて送れる）か、専用URLをお伝えする（回答時に、名前・メールアドレス・会社名を入力してもらう）。
 // =============================================================
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,10 +21,19 @@ import { fmtDateTimeFull } from "@/lib/date";
 import { useTimezone } from "@/hooks/use-timezone";
 import { GuestPicker, type GuestDraft } from "./guest-picker";
 
-export { guestsToPayload, guestMissingEmail, type GuestDraft } from "./guest-picker";
+export { guestsToPayload, guestMissingEmail, hasDmGuest, type GuestDraft } from "./guest-picker";
 type Reservation = { token: string; expiresAt: number; url: string };
 
-const DAY_OPTIONS = [1, 3, 7, 14, 30, 60];
+// 有効期間の選択肢（時間）。管理設定の選択肢（6時間・12時間・1日・3日・1週間・2週間）に、30日・60日を加えたもの
+const HOUR_OPTIONS = [6, 12, 24, 72, 168, 336, 720, 1440];
+const FALLBACK_HOURS = 72;
+function hoursLabel(h: number): string {
+  if (h < 24) return `${h}時間`;
+  if (h === 24) return "1日";
+  if (h === 168) return "1週間";
+  if (h === 336) return "2週間";
+  return h % 24 === 0 ? `${h / 24}日間` : `${h}時間`;
+}
 const inputStyle = { background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" } as const;
 
 type Props = {
@@ -36,18 +48,22 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
   const { termExternalGuest } = useSettings();
   const tz = useTimezone();
   const qc = useQueryClient();
-  const [days, setDays] = useState(7);
+  // 有効期間は、選ぶまでは管理設定の値（初期設定）。選んだあとは、その選択を優先する
+  const [pickedHours, setPickedHours] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const reservationKey = ["invite-reservation", kind];
   const { data: reservationData } = useQuery({
     queryKey: reservationKey,
-    queryFn: () => api.get<{ data: Reservation | null }>(`/invite-reservations?kind=${kind}`),
+    queryFn: () => api.get<{ data: Reservation | null; defaultHours?: number }>(`/invite-reservations?kind=${kind}`),
   });
   const reservation = reservationData?.data ?? null;
+  const defaultHours = reservationData?.defaultHours ?? FALLBACK_HOURS;
+  const hours = pickedHours ?? defaultHours;
+  const hourOptions = HOUR_OPTIONS.includes(hours) ? HOUR_OPTIONS : [...HOUR_OPTIONS, hours].sort((a, b) => a - b);
   useEffect(() => { onReservationChange(reservation?.token ?? null); }, [reservation?.token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const issue = useMutation({
-    mutationFn: () => api.post<{ data: Reservation }>("/invite-reservations", { kind, days }),
+    mutationFn: () => api.post<{ data: Reservation }>("/invite-reservations", { kind, hours }),
     onSuccess: () => qc.invalidateQueries({ queryKey: reservationKey }),
   });
   const discard = useMutation({
@@ -65,13 +81,13 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
       <div>
         <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>🌐 {termExternalGuest}を招待（任意）</p>
         <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-          チャプター外の方を、作成と同時に招待できます。メールアドレスがわかる方は、「名前とメールだけで招待」か「外部人脈に登録して招待」のどちらかで指定すると、招待メールが届きます。わからない方には、共有URLをお伝えください（回答のときに、名前・メールアドレス・会社名を入力してもらいます）。
+          チャプター外の方を、作成と同時に招待できます。メールで案内する方は、メールアドレスを入れてください。DMなどで連絡する方は、メールアドレスなしで追加でき、作成後に専用のURLをお渡しできます（回答のときに、名前・メールアドレス・会社名を入力してもらいます）。
         </p>
       </div>
 
       {/* ゲスト用の共有URL（作成前に発行） */}
       <div className="space-y-2">
-        <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>🔗 ゲスト用の共有URL（メールアドレスのわからない方に。先に発行して、送っておけます）</p>
+        <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>🔗 ゲスト用の共有URL（DMなどで連絡する方に。複数人にまとめて送れます。先に発行して、送っておけます）</p>
         {reservation ? (
           <>
             <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "var(--color-paper-200)" }}>
@@ -85,12 +101,12 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
               {fmtDateTimeFull(reservation.expiresAt, tz)} まで有効です。作成するまでは、開いた方に「準備中」と表示されます。作成すると、そのまま日程の回答ができるようになります。作成せずにやめた場合は、期限が来ると自動で無効になります。
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="px-3 py-1.5 rounded-xl border text-xs" style={inputStyle} aria-label="有効期間">
-                {DAY_OPTIONS.map((d) => <option key={d} value={d}>{d}日間</option>)}
+              <select value={hours} onChange={(e) => setPickedHours(Number(e.target.value))} className="px-3 py-1.5 rounded-xl border text-xs" style={inputStyle} aria-label="有効期間">
+                {hourOptions.map((h) => <option key={h} value={h}>{hoursLabel(h)}{h === defaultHours ? "（初期設定）" : ""}</option>)}
               </select>
               <button type="button" onClick={() => issue.mutate()} disabled={issue.isPending}
                 className="px-3 py-1.5 rounded-xl text-xs font-medium disabled:opacity-60" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-                {issue.isPending ? "更新中…" : "有効期間を、今日からこの日数に変える"}
+                {issue.isPending ? "更新中…" : "有効期間を、今からこの期間に変える"}
               </button>
               <button type="button" onClick={() => { if (window.confirm("このURLを無効にしますか？すでに送ったURLは、開けなくなります。")) discard.mutate(); }}
                 disabled={discard.isPending} className="px-3 py-1.5 rounded-xl text-xs disabled:opacity-60" style={{ color: "var(--color-ink-500)" }}>
@@ -100,8 +116,8 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
           </>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
-            <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="px-3 py-2 rounded-xl border text-sm" style={inputStyle} aria-label="有効期間">
-              {DAY_OPTIONS.map((d) => <option key={d} value={d}>{d}日間有効{d === 7 ? "（おすすめ）" : ""}</option>)}
+            <select value={hours} onChange={(e) => setPickedHours(Number(e.target.value))} className="px-3 py-2 rounded-xl border text-sm" style={inputStyle} aria-label="有効期間">
+              {hourOptions.map((h) => <option key={h} value={h}>{hoursLabel(h)}有効{h === defaultHours ? "（初期設定）" : ""}</option>)}
             </select>
             <button type="button" onClick={() => issue.mutate()} disabled={issue.isPending}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-60" style={{ background: "var(--color-brand)", color: "white" }}>
@@ -117,7 +133,7 @@ export function MeetingGuestSection({ kind, guests, onGuestsChange, onReservatio
       </div>
 
       {/* ゲストを個別に指定 */}
-      <GuestPicker guests={guests} onGuestsChange={onGuestsChange} />
+      <GuestPicker guests={guests} onGuestsChange={onGuestsChange} allowNoEmail />
     </div>
   );
 }

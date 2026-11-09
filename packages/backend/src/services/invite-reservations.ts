@@ -3,7 +3,7 @@
 //   ・ミーティング本体は作らず、URLの元になるトークンだけを別テーブルに予約する（作成途中でやめても、ミーティングの一覧や集計には何も残らない）
 //   ・作成時に、予約のトークンがミーティング・定例会のゲスト用URLとして引き継がれる（発行したURLは、そのまま使える）
 //   ・同じ主催者・同じ種類では、有効な予約を1つだけ持つ（作成画面を開き直したら、同じURLを再表示する）
-//   ・作成されなかった予約は、期限（既定7日。発行時に変えられる）を過ぎたら削除する（毎時の定期実行で削除）
+//   ・作成されなかった予約は、期限を過ぎたら削除する（毎時の定期実行で削除）。期限の初期値は、管理設定の「日程調整のURLの有効期間」に従い、発行時に変えられる
 //   ・作成前にURLを開いたゲストには「準備中」と表示する
 // =============================================================
 import { and, eq, lt } from "drizzle-orm";
@@ -13,13 +13,13 @@ import { generateRawToken } from "./auth.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
 
 export type ReservationKind = "meeting" | "series";
-export const DEFAULT_RESERVATION_DAYS = 7;
-export const MAX_RESERVATION_DAYS = 60;
+export const MAX_RESERVATION_HOURS = 60 * 24; // 60日
 
-export function clampDays(days: unknown): number {
-  const n = Math.floor(Number(days));
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_RESERVATION_DAYS;
-  return Math.min(n, MAX_RESERVATION_DAYS);
+/** 有効期間（時間）を、1時間〜60日の範囲に収める。数として読めなければ fallback（管理設定の既定）を使う */
+export function clampHours(hours: unknown, fallback: number): number {
+  const n = Math.floor(Number(hours));
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.min(n, MAX_RESERVATION_HOURS);
 }
 
 export function reservationUrl(env: { FRONTEND_URL?: string }, kind: ReservationKind, token: string): string {
@@ -36,9 +36,9 @@ export async function getActiveReservation(db: Db, hostMemberId: string, kind: R
   return active ? { token: active.token, expiresAt: active.expiresAt } : null;
 }
 
-/** 有効な予約があれば再利用し、なければ新しく作る。days が渡されたら、有効期限をその日数後に更新する */
-export async function issueReservation(db: Db, hostMemberId: string, kind: ReservationKind, days: number, now: number): Promise<ActiveReservation> {
-  const expiresAt = now + days * 86400;
+/** 有効な予約があれば再利用し、なければ新しく作る。有効期限は、今からその時間後に更新する */
+export async function issueReservation(db: Db, hostMemberId: string, kind: ReservationKind, hours: number, now: number): Promise<ActiveReservation> {
+  const expiresAt = now + hours * 3600;
   const existing = await getActiveReservation(db, hostMemberId, kind, now);
   if (existing) {
     await db.update(schema.inviteReservations).set({ expiresAt }).where(eq(schema.inviteReservations.token, existing.token));

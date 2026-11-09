@@ -1,7 +1,11 @@
 // =============================================================
 // ミーティング・定例会の作成時に指定する、外部ゲストの検証
 //   ・あらかじめ指定するゲストは、名前とメールアドレスが必須（回答を、メールアドレスで対応づけるため）。
-//     メールアドレスのわからない方には、共有URLを何らかの方法でお伝えし、回答時に名前・メールアドレス・会社名を入力してもらう
+//     ただし、「名前（とメール）だけで招待」するゲストは、notifyByEmail=false を指定すると、名前だけで加えられる
+//     （招待メールは送らず、主催者が専用URLをDMなどでお渡しする。メールアドレスは、ゲストが回答のときに入力する）。
+//     この指定は、ミーティング・定例会の作成のように、専用URLをその場で主催者に返せる呼び出し（allowNoEmail）だけで有効
+//   ・外部人脈から選んだゲストは、notifyByEmail に関わらず、いつもメールで招待する（メールアドレスが必須）
+//   ・メールアドレスのわからない方には、共有URLを何らかの方法でお伝えし、回答時に名前・メールアドレス・会社名を入力してもらう
 //   ・外部人脈から選んだゲストは、人脈の名前・メールアドレスを使う。人脈にメールアドレスがなければ、作成時に入力してもらい、
 //     その人脈に保存する（保存しない指定もできる）
 //   ・名前とメールアドレスを直接入力したゲストも指定できる
@@ -12,13 +16,20 @@ import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 
 export const MAX_GUESTS = 30;
-export type GuestInput = { name?: string; email?: string; contactId?: string; saveToContact?: boolean };
-export type ResolvedGuest = { name: string; email: string; contactId: string | null };
+export type GuestInput = { name?: string; email?: string; contactId?: string; saveToContact?: boolean; notifyByEmail?: boolean };
+/** email が null のゲストは、招待メールを送らない（専用URLをDMなどでお渡しする） */
+export type ResolvedGuest = { name: string; email: string | null; contactId: string | null };
+export type ResolvedGuestWithEmail = ResolvedGuest & { email: string };
+
+/** メールアドレスのあるゲストだけにする（グループなど、メールアドレスが必須の呼び出し向け） */
+export function withEmail(guests: ResolvedGuest[]): ResolvedGuestWithEmail[] {
+  return guests.filter((g): g is ResolvedGuestWithEmail => !!g.email);
+}
 
 export const isEmail = (s: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
 export async function resolveGuests(
-  db: Db, hostMemberId: string, inputs: GuestInput[] | undefined,
+  db: Db, hostMemberId: string, inputs: GuestInput[] | undefined, opts: { allowNoEmail?: boolean } = {},
 ): Promise<{ ok: true; guests: ResolvedGuest[] } | { ok: false; message: string }> {
   const list = inputs ?? [];
   if (list.length === 0) return { ok: true, guests: [] };
@@ -33,6 +44,7 @@ export async function resolveGuests(
 
   const guests: ResolvedGuest[] = [];
   const seenEmails = new Set<string>();
+  const seenNoEmailNames = new Set<string>();
   const seenContacts = new Set<string>();
   const saves: Array<{ contactId: string; email: string }> = [];
   for (const g of list) {
@@ -43,6 +55,14 @@ export async function resolveGuests(
 
     const name = (g.name?.trim() || contact?.name || "").trim();
     if (!name) return { ok: false, message: "ゲストの名前を入力してください" };
+    // メールで案内しないゲスト（名前だけで招待）。外部人脈から選んだゲストには、この指定は効かない
+    if (opts.allowNoEmail && g.notifyByEmail === false && !contact) {
+      const key = name.toLowerCase();
+      if (seenNoEmailNames.has(key)) return { ok: false, message: `「${name}」が重複しています。別の方は、お名前を区別できるようにしてください` };
+      seenNoEmailNames.add(key);
+      guests.push({ name, email: null, contactId: null });
+      continue;
+    }
     const typed = g.email?.trim() || "";
     if (typed && !isEmail(typed)) return { ok: false, message: `「${name}」のメールアドレスの形式が正しくありません` };
     const email = (typed || contact?.email || "").toLowerCase();

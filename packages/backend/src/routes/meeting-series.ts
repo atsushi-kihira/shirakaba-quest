@@ -21,7 +21,7 @@ import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
-import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
+import { resolveGuests, withEmail, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
 import { resolveSeriesMemberIds, addMembersToSeries, addGuestsToSeries, removeMembersFromSeries, seriesIsOpenForAdditions } from "../services/meeting-participants.ts";
 import { generateRawToken } from "../services/auth.ts";
@@ -347,7 +347,7 @@ meetingSeriesRoutes.post("/", async (c) => {
   }
 
   // 外部ゲストと、ゲスト用の共有URLの予約（ここまでに問題があれば、何も作らずに戻す）
-  const guestResult = await resolveGuests(db, memberId, body.guests);
+  const guestResult = await resolveGuests(db, memberId, body.guests, { allowNoEmail: true });
   if (!guestResult.ok) return c.json({ error: { code: "invalid_input", message: guestResult.message } }, 400);
   let reservedInviteToken: string | null = null;
   if (body.inviteReservationToken) {
@@ -877,7 +877,7 @@ meetingSeriesRoutes.post("/:id/guests", async (c) => {
   if (!body.guests?.length) return c.json({ error: { code: "invalid_input", message: "追加するゲストを入力してください" } }, 400);
   const resolved = await resolveGuests(db, memberId, body.guests);
   if (!resolved.ok) return c.json({ error: { code: "invalid_input", message: resolved.message } }, 400);
-  const added = await addGuestsToSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, series, resolved.guests);
+  const added = await addGuestsToSeries({ db, env: c.env, waitUntil: (p) => c.executionCtx.waitUntil(p) }, series, withEmail(resolved.guests));
   return c.json({ data: { added, skipped: resolved.guests.length - added } });
 });
 

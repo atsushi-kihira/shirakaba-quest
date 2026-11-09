@@ -18,6 +18,7 @@ import { MemberSelectList } from "@/components/member-select-list";
 import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components/group-scope-picker";
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
+import { GuestInviteResult, dmGuestsOf, type CreatedGuest } from "@/components/guest-invite-result";
 
 type Team = { id: string; name: string; emblemEmoji: string };
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
@@ -90,6 +91,8 @@ export function MeetingNewScreen() {
   // 外部ゲスト（作成と同時に招待）と、作成前に発行したゲスト用の共有URLの予約
   const [guests, setGuests] = useState<GuestDraft[]>([]);
   const [reservationToken, setReservationToken] = useState<string | null>(null);
+  // 作成した直後に、ゲストへの案内（専用URL・DM用の文面）を見せるための結果
+  const [created, setCreated] = useState<{ id: string; guests: CreatedGuest[] } | null>(null);
 
   const { data: zoomStatus } = useQuery({
     queryKey: ["scheduler", "zoom-status"],
@@ -128,10 +131,12 @@ export function MeetingNewScreen() {
   const selectedGroup = groups.find((g) => g.id === groupId);
 
   const createMutation = useMutation({
-    mutationFn: (body: object) => api.post<{ data: { id: string } }>("/meetings", body),
+    mutationFn: (body: object) => api.post<{ data: { id: string; guests?: CreatedGuest[] } }>("/meetings", body),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["meetings"] });
       qc.invalidateQueries({ queryKey: ["invite-reservation"] });
+      // メールで案内しないゲストがいるときは、専用URLとDM用の文面を見せる画面を先に出す
+      if (dmGuestsOf(res.data.guests).length > 0) { setCreated({ id: res.data.id, guests: res.data.guests ?? [] }); window.scrollTo(0, 0); return; }
       navigate(`/meetings/${res.data.id}`);
     },
     onError: (e: Error) => setError(e.message),
@@ -226,7 +231,7 @@ export function MeetingNewScreen() {
     const validCandidates = candidates.filter((c) => c.date);
     if (validCandidates.length === 0) { setError(meetingMode === "confirmed" ? "確定日を1つ以上設定してください" : "候補日を1つ以上設定してください"); return; }
     const noEmailGuest = guestMissingEmail(guests);
-    if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（わからない方は、一覧から外して、共有URLをお伝えください）`); return; }
+    if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（メールで案内しない方は、一覧から外して、「招待メールを送る」のチェックを外して追加し直してください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
     if (scope === "collab_team" && !collabTeamId) { setError("対象チームを選択してください"); return; }
     if (scope === "group" && !selectedGroup) { setError("グループを選択してください"); return; }
@@ -270,6 +275,13 @@ export function MeetingNewScreen() {
   const teams = teamsData?.data ?? [];
   const collabTeams = collabTeamsData?.data ?? [];
   const members = (membersData?.data ?? []) as Member[];
+
+  if (created) {
+    return (
+      <GuestInviteResult kind="meeting" title={title.trim()} confirmed={meetingMode === "confirmed"} guests={created.guests}
+        onOpenDetail={() => navigate(`/meetings/${created.id}`)} />
+    );
+  }
 
   return (
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto">

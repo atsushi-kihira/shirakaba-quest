@@ -4,11 +4,16 @@
 //   ・名前とメールアドレスだけで招待（かんたん）: 外部人脈には登録しない
 //   ・外部人脈から選ぶ・登録して招待: 登録済みの人脈から選ぶ。いない場合は、その場で人脈に登録（名前・会社名・メールアドレス・公開範囲）して加える
 // ミーティング・定例会の作成画面、定例会への参加者の追加、グループの編集で使う。
+// 作成画面（allowNoEmail）だけは、「名前（とメール）だけで招待」で追加する方について、「招待メールを送る」のオン・オフを選べる。
+//   ・オフ（名前だけ）の方には、招待メールを送らない。作成の直後に、専用URLとDM用の文面を主催者に見せる
+//   ・オン・オフの初期値は、管理設定「外部の方との連絡」に従う（メール主体ならオン、DM主体ならオフ）
+//   ・外部人脈から選ぶ・登録して招待する方には、設定に関わらず、いつも招待メールを送る（メールアドレスが必須）
 // =============================================================
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Mail, Plus, Search, X } from "lucide-react";
 import { api } from "@/lib/api";
+import { useSettings } from "@/hooks/use-settings";
 
 export type GuestDraft = {
   key: string;
@@ -19,24 +24,34 @@ export type GuestDraft = {
   contactHadEmail: boolean;
   /** 入力したメールアドレスを、人脈にも保存するか（人脈にメールアドレスがない場合のみ） */
   saveToContact: boolean;
+  /** 招待メールを送るか。外部人脈の方は、いつも true。名前だけで招待する方（allowNoEmail の画面のみ）は false にできる */
+  notify: boolean;
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** メールアドレスが未入力・形式が正しくないゲストの名前（なければ null）。作成の前に確認する */
+/** 招待メールを送る（＝メールアドレスが必要な）ゲストか */
+const needsEmail = (g: GuestDraft): boolean => !!g.contactId || g.notify;
+
+/** メールアドレスが未入力・形式が正しくないゲストの名前（なければ null）。作成の前に確認する。メールで案内しない方は、対象外 */
 export function guestMissingEmail(guests: GuestDraft[]): string | null {
-  const bad = guests.find((g) => !g.contactHadEmail && !EMAIL_RE.test(g.email.trim()));
+  const bad = guests.find((g) => needsEmail(g) && !g.contactHadEmail && !EMAIL_RE.test(g.email.trim()));
   return bad ? bad.name : null;
 }
 
 export function guestsToPayload(guests: GuestDraft[]) {
   return guests.map((g) => ({
     name: g.name.trim(),
-    email: g.contactHadEmail ? undefined : g.email.trim() || undefined,
+    email: g.contactHadEmail || !needsEmail(g) ? undefined : g.email.trim() || undefined,
     contactId: g.contactId,
     saveToContact: g.contactId && !g.contactHadEmail ? g.saveToContact : undefined,
+    // メールで案内しない方だけ、明示する（それ以外は、今までどおりメールで招待）
+    notifyByEmail: !g.contactId && !g.notify ? false : undefined,
   }));
 }
+
+/** メールで案内しない（専用URLをDMなどでお渡しする）ゲストがいるか */
+export const hasDmGuest = (guests: GuestDraft[]): boolean => guests.some((g) => !needsEmail(g));
 
 type Contact = { id: string; name: string; company: string | null; email: string | null };
 const inputStyle = { background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" } as const;
@@ -46,13 +61,29 @@ type PickerProps = {
   onGuestsChange: (g: GuestDraft[]) => void;
   /** 一覧の下に出す、メールについての説明。未指定なら、作成画面向けの説明 */
   mailNote?: (mailCount: number, missingCount: number) => string | null;
+  /** 「名前（とメール）だけで招待」で、「招待メールを送る」のオン・オフを選べるようにする（作成画面のみ。専用URLをその場で見せられる画面だけ） */
+  allowNoEmail?: boolean;
 };
 
 const defaultMailNote = (mailCount: number, missing: number): string =>
   `${mailCount}人には、作成と同時に招待メールを送ります。${missing > 0 ? `（メールアドレスが未入力の方が${missing}人います）` : ""}`;
 
-export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote }: PickerProps) {
+export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote, allowNoEmail = false }: PickerProps) {
   const qc = useQueryClient();
+  // 「招待メールを送る」の初期状態は、管理設定「外部の方との連絡」に従う（メール主体ならオン、DM主体ならオフ）。
+  // 設定の読み込みが終わるまではメール主体として扱い、読み込み後に1度だけ反映する。先に自分で切り替えていたら、その選択を優先する
+  const { externalContactMode, isLoading: settingsLoading } = useSettings();
+  const [notify, setNotifyState] = useState(true);
+  const notifyTouched = useRef(false);
+  const didApplyMode = useRef(false);
+  useEffect(() => {
+    if (didApplyMode.current || settingsLoading) return;
+    didApplyMode.current = true;
+    if (!notifyTouched.current) setNotifyState(externalContactMode === "email");
+  }, [settingsLoading, externalContactMode]);
+  const setNotify = (v: boolean) => { notifyTouched.current = true; setNotifyState(v); };
+  // 作成画面以外では、いつもメールで招待する
+  const notifyNow = allowNoEmail ? notify : true;
   const [search, setSearch] = useState("");
   const [manualName, setManualName] = useState("");
   const [manualEmail, setManualEmail] = useState("");
@@ -76,7 +107,7 @@ export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote
     onSuccess: (res) => {
       onGuestsChange([...guests, {
         key: crypto.randomUUID(), contactId: res.data.id, name: ncName.trim(), email: ncEmail.trim(),
-        contactHadEmail: true, saveToContact: false,
+        contactHadEmail: true, saveToContact: false, notify: true,
       }]);
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
       qc.invalidateQueries({ queryKey: ["collab", "graph"] });
@@ -122,7 +153,7 @@ export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote
   function addContact(ct: Contact) {
     onGuestsChange([...guests, {
       key: crypto.randomUUID(), contactId: ct.id, name: ct.name, email: ct.email ?? "",
-      contactHadEmail: !!ct.email, saveToContact: true,
+      contactHadEmail: !!ct.email, saveToContact: true, notify: true,
     }]);
     setSearch("");
   }
@@ -130,26 +161,39 @@ export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote
     const name = manualName.trim();
     const email = manualEmail.trim();
     if (!name) { setManualError("名前を入力してください"); return; }
-    if (!email) { setManualError("メールアドレスを入力してください（わからない方には、共有URLをお伝えください）"); return; }
+    if (!notifyNow) {
+      // メールで案内しない方は、名前だけで加える（専用URLは、作成の直後にお見せする）
+      if (guests.some((g) => !g.email.trim() && !g.contactId && g.name.trim().toLowerCase() === name.toLowerCase())) { setManualError("同じ名前の方が、すでに追加されています"); return; }
+      onGuestsChange([...guests, { key: crypto.randomUUID(), name, email: "", contactHadEmail: false, saveToContact: false, notify: false }]);
+      setManualName(""); setManualEmail(""); setManualError("");
+      return;
+    }
+    if (!email) { setManualError(allowNoEmail ? "メールで案内する場合は、メールアドレスを入力してください（メールで案内しない方は、チェックを外してください）" : "メールアドレスを入力してください（わからない方には、共有URLをお伝えください）"); return; }
     if (!EMAIL_RE.test(email)) { setManualError("メールアドレスの形式が正しくありません"); return; }
     if (guests.some((g) => g.email.trim().toLowerCase() === email.toLowerCase())) { setManualError("同じメールアドレスの方が、すでに追加されています"); return; }
-    onGuestsChange([...guests, { key: crypto.randomUUID(), name, email, contactHadEmail: false, saveToContact: false }]);
+    onGuestsChange([...guests, { key: crypto.randomUUID(), name, email, contactHadEmail: false, saveToContact: false, notify: true }]);
     setManualName(""); setManualEmail(""); setManualError("");
   }
   const update = (key: string, patch: Partial<GuestDraft>) => onGuestsChange(guests.map((g) => (g.key === key ? { ...g, ...patch } : g)));
   const remove = (key: string) => onGuestsChange(guests.filter((g) => g.key !== key));
 
-  const mailCount = guests.filter((g) => (g.contactHadEmail ? true : !!g.email.trim())).length;
-  const note = guests.length > 0 ? mailNote(mailCount, guests.length - mailCount) : null;
+  const mailGuests = guests.filter(needsEmail);
+  const dmCount = guests.length - mailGuests.length;
+  const mailCount = mailGuests.filter((g) => (g.contactHadEmail ? true : !!g.email.trim())).length;
+  const mailPart = mailGuests.length > 0 ? mailNote(mailCount, mailGuests.length - mailCount) : null;
+  const dmPart = dmCount > 0 ? `${dmCount}人は、メールを送らず、作成の直後に専用URLとDM用の文面をお見せします。` : null;
+  const note = guests.length > 0 ? [mailPart, dmPart].filter(Boolean).join(" ") || null : null;
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>👤 ゲストを個別に指定（メールアドレスが必要です）。やりやすいほうを選んでください</p>
+      <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>
+        👤 ゲストを個別に指定{allowNoEmail ? "" : "（メールアドレスが必要です）"}。やりやすいほうを選んでください
+      </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="tablist" aria-label="ゲストの招待のしかた">
         {([
-          { key: "quick" as const, icon: "✉️", title: "名前とメールだけで招待", desc: "かんたん。外部人脈には登録しません" },
-          { key: "contact" as const, icon: "📇", title: "外部人脈から選ぶ・登録して招待", desc: "人脈に残しておきたい方に" },
+          { key: "quick" as const, icon: "✉️", title: allowNoEmail ? "名前（とメール）だけで招待" : "名前とメールだけで招待", desc: "かんたん。外部人脈には登録しません" },
+          { key: "contact" as const, icon: "📇", title: "外部人脈から選ぶ・登録して招待", desc: allowNoEmail ? "人脈に残しておきたい方に。招待メールを送ります" : "人脈に残しておきたい方に" },
         ]).map((m) => (
           <button key={m.key} type="button" role="tab" aria-selected={mode === m.key} onClick={() => setMode(m.key)}
             className="text-left rounded-2xl px-3 py-2.5 transition"
@@ -164,23 +208,40 @@ export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote
       </div>
 
       {mode === "quick" ? (
-        <div className="space-y-2">
+        <div className={allowNoEmail ? "rounded-xl p-3 space-y-2.5 border" : "space-y-2"}
+          style={allowNoEmail ? { background: "var(--color-paper-100)", borderColor: "var(--color-paper-300)" } : undefined}>
+          {allowNoEmail && (
+            <label className="flex items-center gap-2 text-sm font-medium cursor-pointer" style={{ color: "var(--color-ink-700)" }}>
+              <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="w-4 h-4 rounded" />
+              📧 この方に招待メールを送る
+            </label>
+          )}
           <div className="flex flex-wrap gap-2">
             <input value={manualName} onChange={(e) => setManualName(e.target.value)} placeholder="名前"
               className="flex-1 min-w-[8rem] px-3 py-2 rounded-xl text-sm outline-none border" style={inputStyle} />
-            <input value={manualEmail} onChange={(e) => setManualEmail(e.target.value)} placeholder="メールアドレス（必須）" type="email"
-              className="flex-[2] min-w-[10rem] px-3 py-2 rounded-xl text-sm outline-none border" style={inputStyle} />
+            <input value={manualEmail} onChange={(e) => setManualEmail(e.target.value)} type="email"
+              disabled={!notifyNow}
+              placeholder={notifyNow ? "メールアドレス（必須）" : "メールで通知しないので入力は不要です"}
+              className="flex-[2] min-w-[10rem] px-3 py-2 rounded-xl text-sm outline-none border disabled:cursor-not-allowed disabled:opacity-60"
+              style={notifyNow ? inputStyle : { ...inputStyle, background: "var(--color-paper-200)" }} />
             <button type="button" onClick={addManual} className="px-3 py-2 rounded-xl text-sm font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
               追加
             </button>
           </div>
           {manualError && <p className="text-xs" style={{ color: "var(--color-brand)" }}>{manualError}</p>}
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-            名前とメールアドレスだけで、招待メールを送れます。外部人脈には登録されません（ゲストが回答のときに会社名・屋号を入力すると、あなたの外部人脈に「存在のみ公開」で登録されます）。
+            {notifyNow
+              ? "名前とメールアドレスだけで、招待メールを送れます。外部人脈には登録されません（ゲストが回答のときに会社名・屋号を入力すると、あなたの外部人脈に「存在のみ公開」で登録されます）。"
+              : "メールで案内しない設定です。作成した直後に、この方の専用URLと、DMで送る文面が表示されます。メールアドレスは、相手がURLを開いたときに入力してもらいます。"}
           </p>
         </div>
       ) : (
         <div className="space-y-2">
+          {allowNoEmail && (
+            <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+              外部人脈から選んだ方・登録した方には、いつも招待メールを送ります（メールアドレスが必須のため）。
+            </p>
+          )}
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--color-ink-400)" }} />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="自分の外部人脈から探す（名前・会社名）"
@@ -258,7 +319,7 @@ export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote
                 <span className="text-sm shrink-0">👤</span>
                 <span className="flex-1 min-w-0 text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{g.name}</span>
                 <span className="text-[11px] shrink-0 px-2 py-0.5 rounded-full" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-500)" }}>
-                  {g.contactId ? "📇 外部人脈" : "✉️ メールのみ"}
+                  {g.contactId ? "📇 外部人脈" : needsEmail(g) ? "✉️ メールで案内" : "💬 DMで案内（専用URL）"}
                 </span>
                 {g.contactHadEmail && (
                   <span className="text-xs shrink-0 flex items-center gap-0.5" style={{ color: "var(--color-success)" }}><Mail size={11} />登録のメールに送ります</span>
@@ -267,7 +328,7 @@ export function GuestPicker({ guests, onGuestsChange, mailNote = defaultMailNote
                   <X size={14} />
                 </button>
               </div>
-              {!g.contactHadEmail && (
+              {!g.contactHadEmail && needsEmail(g) && (
                 <div className="space-y-1">
                   <input value={g.email} onChange={(e) => update(g.key, { email: e.target.value })} type="email"
                     placeholder="メールアドレス（必須。招待メールを送ります）"

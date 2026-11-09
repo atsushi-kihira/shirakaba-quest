@@ -218,7 +218,7 @@ meetingRoutes.post("/", async (c) => {
   }
 
   // 外部ゲストと、ゲスト用の共有URLの予約。ここまでに問題があれば、何も作らずに戻す
-  const guestResult = await resolveGuests(db, memberId, body.guests);
+  const guestResult = await resolveGuests(db, memberId, body.guests, { allowNoEmail: true });
   if (!guestResult.ok) return c.json({ error: { code: "invalid_input", message: guestResult.message } }, 400);
   let reservedInviteToken: string | null = null;
   if (body.inviteReservationToken) {

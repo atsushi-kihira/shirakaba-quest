@@ -17,6 +17,7 @@ import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
+import { GuestInviteResult, dmGuestsOf, type CreatedGuest } from "@/components/guest-invite-result";
 
 type CollabTeam = { id: string; name: string; type: "loose" | "power"; memberCount: number };
 type Team = { id: string; name: string; emblemEmoji: string };
@@ -105,6 +106,8 @@ export function MeetingSeriesNewScreen() {
   const [fixedDates, setFixedDates] = useState<FixedDateRow[]>([emptyFixedDateRow()]);
   const [showCalendarPicker, setShowCalendarPicker] = useState(false);
   const [error, setError] = useState("");
+  // 作成した直後に、ゲストへの案内（専用URL・DM用の文面）を見せるための結果
+  const [created, setCreated] = useState<{ id: string; guests: CreatedGuest[] } | null>(null);
 
   const { data: collabTeamsData } = useQuery({
     queryKey: ["collab", "my-teams"],
@@ -133,10 +136,12 @@ export function MeetingSeriesNewScreen() {
   const googleConnected = availableConferenceTypes.includes("google_meet");
 
   const createMutation = useMutation({
-    mutationFn: (body: object) => api.post<{ data: { id: string } }>("/meeting-series", body),
+    mutationFn: (body: object) => api.post<{ data: { id: string; guests?: CreatedGuest[] } }>("/meeting-series", body),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["meeting-series"] });
       qc.invalidateQueries({ queryKey: ["invite-reservation"] });
+      // メールで案内しないゲストがいるときは、専用URLとDM用の文面を見せる画面を先に出す
+      if (dmGuestsOf(res.data.guests).length > 0) { setCreated({ id: res.data.id, guests: res.data.guests ?? [] }); window.scrollTo(0, 0); return; }
       navigate(`/meetings/series/${res.data.id}`);
     },
     onError: (e: Error) => setError(e.message),
@@ -218,7 +223,7 @@ export function MeetingSeriesNewScreen() {
     if (!eventSelection) { setError("イベント種別を選んでください"); return; }
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
     const noEmailGuest = guestMissingEmail(guests);
-    if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（わからない方は、一覧から外して、共有URLをお伝えください）`); return; }
+    if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（メールで案内しない方は、一覧から外して、「招待メールを送る」のチェックを外して追加し直してください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
     if (scope === "collab_team" && !collabTeamId) { setError("対象チームを選択してください"); return; }
     if (scope === "group" && !selectedGroup) { setError("グループを選択してください"); return; }
@@ -295,6 +300,13 @@ export function MeetingSeriesNewScreen() {
   const collabTeams = collabTeamsData?.data ?? [];
   const teams = teamsData?.data ?? [];
   const members = membersData?.data ?? [];
+
+  if (created) {
+    return (
+      <GuestInviteResult kind="series" title={title.trim()} confirmed={seriesMode === "confirmed"} guests={created.guests}
+        onOpenDetail={() => navigate(`/meetings/series/${created.id}`)} />
+    );
+  }
 
   return (
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto">
