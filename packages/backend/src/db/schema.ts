@@ -1234,6 +1234,7 @@ export const cardDesigns = sqliteTable("card_designs", {
   characterImageKey:    text("character_image_key"),
   timezone:             text("timezone").notNull().default("Asia/Tokyo"),
   theme:                text("theme").notNull().default("playful"), // VALID_THEMES (services/theme.ts) を参照
+  externalContactMode:  text("external_contact_mode").notNull().default("email"), // 外部の方との連絡: 'email'（メール主体）| 'dm'（DM主体）
   // カード作成設定
   cardPrintEnabled:       integer("card_print_enabled").notNull().default(0),
   cardPrintCompanyName:   text("card_print_company_name").notNull().default(""),

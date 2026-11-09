@@ -34,7 +34,11 @@ export type AppSettings = {
   characterImageUrl: string | null;
   timezone: string;
   theme: AppTheme;
+  /** 外部の方との連絡の主な手段。"email"=メール主体（初期設定）／"dm"=DM主体 */
+  externalContactMode: ExternalContactMode;
 };
+
+export type ExternalContactMode = "email" | "dm";
 
 type SettingsResponse = {
   data: Omit<AppSettings, "characterImageUrl">;
@@ -57,6 +61,7 @@ const DEFAULTS: AppSettings = {
   characterImageUrl: null,
   timezone: "Asia/Tokyo",
   theme: "playful",
+  externalContactMode: "email",
 };
 
 export function useSettings(): AppSettings & { isLoading: boolean } {
@@ -70,6 +75,7 @@ export function useSettings(): AppSettings & { isLoading: boolean } {
     ...data.data,
     timezone: data.data.timezone ?? "Asia/Tokyo",
     theme: (data.data.theme as AppTheme) ?? "playful",
+    externalContactMode: data.data.externalContactMode === "dm" ? "dm" : "email",
     characterImageUrl: data.data.characterImageKey ? CUSTOM_CHARACTER_URL : null,
     isLoading,
   };

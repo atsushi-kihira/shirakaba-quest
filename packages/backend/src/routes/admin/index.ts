@@ -252,6 +252,7 @@ adminRoutes.patch("/app-settings", async (c) => {
     appTitle: string; appLogo: string; appPointName: string;
     termQuest: string; termUsp: string; termOneOnOne: string; termExternalGuest: string; termEnishi: string; termBusinessCommunity: string;
     timezone: string; theme: string;
+    externalContactMode: string;
     schedulerLinkValidityHours: number;
   }>>();
 
@@ -259,6 +260,9 @@ adminRoutes.patch("/app-settings", async (c) => {
 
   if (body.theme !== undefined && !VALID_THEMES.includes(body.theme as (typeof VALID_THEMES)[number])) {
     return c.json({ error: { code: "invalid_theme", message: "不正なテーマが指定されました" } }, 400);
+  }
+  if (body.externalContactMode !== undefined && body.externalContactMode !== "email" && body.externalContactMode !== "dm") {
+    return c.json({ error: { code: "invalid_input", message: "外部の方との連絡は、「メール主体」か「DM主体」から選んでください" } }, 400);
   }
   if (body.schedulerLinkValidityHours !== undefined && (body.schedulerLinkValidityHours < 6 || body.schedulerLinkValidityHours > 336)) {
     return c.json({ error: { code: "invalid_input", message: "公開URLの有効期間は6時間〜336時間（2週間）で指定してください" } }, 400);
@@ -276,6 +280,7 @@ adminRoutes.patch("/app-settings", async (c) => {
     ...(body.termBusinessCommunity !== undefined && { termBusinessCommunity: body.termBusinessCommunity }),
     ...(body.timezone     !== undefined && { timezone: body.timezone }),
     ...(body.theme        !== undefined && { theme: body.theme }),
+    ...(body.externalContactMode !== undefined && { externalContactMode: body.externalContactMode }),
     ...(body.schedulerLinkValidityHours !== undefined && { schedulerLinkValidityHours: body.schedulerLinkValidityHours }),
     updatedAt: now,
     updatedBy: adminId,

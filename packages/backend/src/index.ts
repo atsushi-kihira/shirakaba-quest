@@ -211,6 +211,7 @@ app.get("/api/settings", async (c) => {
       characterImageKey: design?.characterImageKey ?? null,
       timezone:          design?.timezone          ?? "Asia/Tokyo",
       theme:             design?.theme             ?? "playful",
+      externalContactMode: design?.externalContactMode === "dm" ? "dm" : "email",
     },
   });
 });

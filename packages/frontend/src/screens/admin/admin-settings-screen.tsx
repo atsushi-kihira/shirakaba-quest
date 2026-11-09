@@ -22,6 +22,7 @@ type AppSettings = {
   timezone: string;
   characterImageKey: string | null;
   theme: AppTheme;
+  externalContactMode?: "email" | "dm";
   schedulerLinkValidityHours: number;
 };
 
@@ -37,6 +38,7 @@ type FormState = {
   termBusinessCommunity: string;
   timezone: string;
   theme: AppTheme;
+  externalContactMode: "email" | "dm";
   schedulerLinkValidityHours: number;
 };
 
@@ -73,6 +75,7 @@ const DEFAULTS: FormState = {
   termBusinessCommunity: "ビジネスコミュニティ",
   timezone: "Asia/Tokyo",
   theme: "playful",
+  externalContactMode: "email",
   schedulerLinkValidityHours: 72,
 };
 
@@ -151,6 +154,7 @@ export function AdminSettingsScreen() {
         termBusinessCommunity: data.data.termBusinessCommunity ?? DEFAULTS.termBusinessCommunity,
         timezone:     data.data.timezone     ?? DEFAULTS.timezone,
         theme:        data.data.theme        ?? DEFAULTS.theme,
+        externalContactMode: data.data.externalContactMode === "dm" ? "dm" : "email",
         schedulerLinkValidityHours: data.data.schedulerLinkValidityHours ?? DEFAULTS.schedulerLinkValidityHours,
       });
     }
@@ -421,6 +425,41 @@ export function AdminSettingsScreen() {
                 </div>
                 <p className="text-xs font-medium" style={{ color: "var(--color-ink-700)" }}>{t.label}</p>
                 <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-400)" }}>{t.description}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ---- 外部の方との連絡 ---- */}
+      <div className="card-paper p-6 space-y-4 mb-5">
+        <div>
+          <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+            💬 {form.termExternalGuest}との連絡
+          </h2>
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            {form.termExternalGuest}への案内を、メールで送るか、LINE・MessengerなどのDMでメンバーが直接送るか、主な手段を選びます。
+            1to1の招待画面で、「相手にメールで案内する」が最初からオンかオフかが変わります（招待のたびに、メンバーが変えることもできます）。
+          </p>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" role="radiogroup" aria-label={`${form.termExternalGuest}との連絡`}>
+          {([
+            { value: "email" as const, icon: "📧", label: "メール主体（初期設定）", desc: "招待のときに、相手のメールアドレスを入れて、メールで案内します" },
+            { value: "dm" as const, icon: "💬", label: "DM主体", desc: "招待URLを、メンバーがLINE・Messengerなどで直接送ります。メールアドレスは入れません" },
+          ]).map((o) => {
+            const active = form.externalContactMode === o.value;
+            return (
+              <button key={o.value} type="button" role="radio" aria-checked={active} onClick={() => set("externalContactMode", o.value)}
+                className="rounded-2xl p-3 text-left border transition"
+                style={{
+                  borderColor: active ? "var(--color-brand)" : "var(--color-paper-300)",
+                  background: active ? "rgba(181,56,75,0.06)" : "var(--color-paper-50)",
+                }}>
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-sm font-medium" style={{ color: "var(--color-ink-700)" }}>{o.icon} {o.label}</span>
+                  {active && <Check size={14} className="ml-auto" style={{ color: "var(--color-brand)" }} />}
+                </div>
+                <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{o.desc}</p>
               </button>
             );
           })}

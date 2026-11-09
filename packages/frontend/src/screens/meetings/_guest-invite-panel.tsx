@@ -12,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, UserPlus, Copy, Check, ExternalLink, Mail } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useTimezone } from "@/hooks/use-timezone";
+import { useSettings } from "@/hooks/use-settings";
 import { fmtDateTime } from "@/lib/date";
 import { SchedulingMethodSelector, type SchedulingMethod } from "./_scheduling-method-selector";
 import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
@@ -60,7 +61,19 @@ export function GuestInvitePanel() {
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [note, setNote] = useState("");
-  const [notifyByEmail, setNotifyByEmail] = useState(true);
+  // 「相手にメールで案内する」の初期状態は、管理者の「外部の方との連絡」設定に従う（メール主体ならオン、DM主体ならオフ）。
+  // 設定の読み込みが終わるまでは、メール主体（初期設定）として扱い、読み込み後に1度だけ反映する。
+  // 読み込み前にメンバーが自分で切り替えていた場合は、その選択を優先する。
+  const { externalContactMode, isLoading: settingsLoading } = useSettings();
+  const [notifyByEmail, setNotifyByEmailState] = useState(true);
+  const notifyTouched = useRef(false);
+  const didApplyContactMode = useRef(false);
+  useEffect(() => {
+    if (didApplyContactMode.current || settingsLoading) return;
+    didApplyContactMode.current = true;
+    if (!notifyTouched.current) setNotifyByEmailState(externalContactMode === "email");
+  }, [settingsLoading, externalContactMode]);
+  const setNotifyByEmail = (v: boolean) => { notifyTouched.current = true; setNotifyByEmailState(v); };
   const [schedulingMethod, setSchedulingMethod] = useState<SchedulingMethod>("candidates");
   const didSetDefaultMethod = useRef(false);
   useEffect(() => {
@@ -78,7 +91,8 @@ export function GuestInvitePanel() {
   const submitMutation = useMutation({
     mutationFn: () => api.post<{ data: GuestInviteResult }>("/oneonone/guest-invites", {
       guestName: guestName.trim() || undefined,
-      guestEmail: guestEmail.trim() || undefined,
+      // メールで案内しないときは、入力欄が使えないので、入っていたメールアドレスは送らない
+      guestEmail: notifyByEmail ? guestEmail.trim() || undefined : undefined,
       note: note.trim() || undefined,
       notifyByEmail,
       arrangementMethod: schedulingMethod,
@@ -216,20 +230,22 @@ export function GuestInvitePanel() {
           />
         </div>
         <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+          <label htmlFor="guest-invite-email" className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
             メールアドレス{emailRequired && <span style={{ color: "var(--color-brand)" }}>　※必須</span>}
           </label>
           <input
+            id="guest-invite-email"
             type="email"
             value={guestEmail}
             onChange={(e) => setGuestEmail(e.target.value)}
-            placeholder="例：tanaka@example.com"
-            className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
-            style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
+            disabled={!notifyByEmail}
+            placeholder={notifyByEmail ? "例：tanaka@example.com" : "メールで案内しないため、入力できません"}
+            className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border disabled:cursor-not-allowed disabled:opacity-60"
+            style={{ background: notifyByEmail ? "var(--color-paper-50)" : "var(--color-paper-200)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
           />
-          {!emailRequired && (
+          {!notifyByEmail && (
             <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
-              未入力でも申し込めます（相手がリンクを開いた際に入力してもらいます）
+              メールで案内しない設定です。申込み後に表示される招待URLを、LINE・Messengerなどで相手に送ってください（メールアドレスは、相手がリンクを開いたときに入力してもらいます）。メールで案内する場合は、下の「📧 相手にメールで案内する」をオンにしてください。
             </p>
           )}
         </div>
