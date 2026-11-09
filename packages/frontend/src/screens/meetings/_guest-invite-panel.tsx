@@ -229,25 +229,32 @@ export function GuestInvitePanel() {
             style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
           />
         </div>
-        <div>
-          <label htmlFor="guest-invite-email" className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
-            メールアドレス{emailRequired && <span style={{ color: "var(--color-brand)" }}>　※必須</span>}
+        {/* 「メールで案内する」のチェックと、メールアドレスの入力欄は、ひとまとまりで表示する */}
+        <div className="rounded-xl p-3 space-y-2.5 border" style={{ background: "var(--color-paper-100)", borderColor: "var(--color-paper-300)" }}>
+          <label className="flex items-center gap-2 text-sm font-medium cursor-pointer" style={{ color: "var(--color-ink-700)" }}>
+            <input type="checkbox" checked={notifyByEmail} onChange={(e) => setNotifyByEmail(e.target.checked)} className="w-4 h-4 rounded" />
+            📧 相手にメールで案内する
           </label>
-          <input
-            id="guest-invite-email"
-            type="email"
-            value={guestEmail}
-            onChange={(e) => setGuestEmail(e.target.value)}
-            disabled={!notifyByEmail}
-            placeholder={notifyByEmail ? "例：tanaka@example.com" : "メールで案内しないため、入力できません"}
-            className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border disabled:cursor-not-allowed disabled:opacity-60"
-            style={{ background: notifyByEmail ? "var(--color-paper-50)" : "var(--color-paper-200)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
-          />
-          {!notifyByEmail && (
-            <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
-              メールで案内しない設定です。申込み後に表示される招待URLを、LINE・Messengerなどで相手に送ってください（メールアドレスは、相手がリンクを開いたときに入力してもらいます）。メールで案内する場合は、下の「📧 相手にメールで案内する」をオンにしてください。
-            </p>
-          )}
+          <div>
+            <label htmlFor="guest-invite-email" className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+              メールアドレス{emailRequired && <span style={{ color: "var(--color-brand)" }}>　※必須</span>}
+            </label>
+            <input
+              id="guest-invite-email"
+              type="email"
+              value={guestEmail}
+              onChange={(e) => setGuestEmail(e.target.value)}
+              disabled={!notifyByEmail}
+              placeholder={notifyByEmail ? "例：tanaka@example.com" : "メールで通知しないので入力は不要です"}
+              className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border disabled:cursor-not-allowed disabled:opacity-60"
+              style={{ background: notifyByEmail ? "var(--color-paper-50)" : "var(--color-paper-200)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
+            />
+            {!notifyByEmail && (
+              <p className="text-[11px] mt-1.5 leading-relaxed" style={{ color: "var(--color-ink-400)" }}>
+                メールで案内しない設定です。申込み後に表示される招待URLを、LINE・Messengerなどで相手に送ってください（メールアドレスは、相手がリンクを開いたときに入力してもらいます）。メールで案内する場合は、上のチェックをオンにしてください。
+              </p>
+            )}
+          </div>
         </div>
 
         <OneOnOneEventSelector target="visitor" value={eventCampaignId} onChange={setEventCampaignId} />
@@ -279,11 +286,6 @@ export function GuestInvitePanel() {
             style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
           />
         </div>
-
-        <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
-          <input type="checkbox" checked={notifyByEmail} onChange={(e) => setNotifyByEmail(e.target.checked)} className="w-4 h-4 rounded" />
-          📧 相手にメールで案内する
-        </label>
 
         {error && (
           <p className="text-sm text-center px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>
