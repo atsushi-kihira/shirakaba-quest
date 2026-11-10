@@ -225,7 +225,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(0,0,0,0.5)" }} onClick={onClose}>
       <div className="card-paper w-full max-w-sm rounded-t-3xl sm:rounded-3xl p-6 pb-10 sm:pb-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
-          <h3 className="font-semibold text-lg" style={{ fontFamily: "var(--font-klee)" }}>📅 何を立てますか？</h3>
+          <h3 className="font-semibold text-lg" style={{ fontFamily: "var(--font-klee)" }}>📅 何を主催しますか？</h3>
           <button onClick={onClose} className="p-2 rounded-full" style={{ background: "var(--color-paper-200)" }}>
             <X size={18} style={{ color: "var(--color-ink-500)" }} />
           </button>
@@ -256,7 +256,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                   📅
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>複数人のミーティングを作成する</p>
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>複数人でのミーティングを主催する</p>
                   <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>候補日を出して複数人で日程調整する</p>
                 </div>
                 <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
@@ -270,7 +270,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                   🔁
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>定例会を立てる</p>
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>定例会を主催する</p>
                   <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>毎週・隔週・毎月の繰り返し予定をまとめて調整する</p>
                 </div>
                 <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
@@ -298,7 +298,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                   📅
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>複数人のミーティングを作成する</p>
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>複数人でのミーティングを主催する</p>
                   <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>候補日を出して複数人で日程調整する</p>
                 </div>
                 <Lock size={16} style={{ color: "var(--color-ink-400)" }} />
@@ -309,7 +309,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                   🔁
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>定例会を立てる</p>
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>定例会を主催する</p>
                   <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>毎週・隔週・毎月の繰り返し予定をまとめて調整する</p>
                 </div>
                 <Lock size={16} style={{ color: "var(--color-ink-400)" }} />
