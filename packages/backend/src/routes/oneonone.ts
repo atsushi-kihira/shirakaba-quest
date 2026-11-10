@@ -396,6 +396,37 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
     }
   }
 
+  // 日時だけを変更する場合（会議URLを発行し直さない場合）、予約(booking)が紐づいていれば、その開始・終了も一緒にずらす。
+  // 終了時刻は、もとの予約の長さ（例: 60分枠）を保ったまま、新しい開始時刻から計算する。
+  // これをしないと、開始だけが動いて終了がそのままになり、「12:00〜12:00」のような枠ができてしまう。
+  let shiftedTimes: { startAtUtc: string; endAtUtc: string; hostCalendarEventId: string | null } | null = null;
+  if (typeof body.scheduledForUtc === "string" && body.conferenceType !== "zoom" && body.conferenceType !== "google_meet") {
+    const newStartMs = new Date(body.scheduledForUtc).getTime();
+    const linkedBooking = await db
+      .select({ id: schema.bookings.id, startAtUtc: schema.bookings.startAtUtc, endAtUtc: schema.bookings.endAtUtc, hostCalendarEventId: schema.bookings.hostCalendarEventId })
+      .from(schema.bookings)
+      .where(and(eq(schema.bookings.oneOnOneSessionId, sessionId), eq(schema.bookings.status, "confirmed")))
+      .get();
+    if (linkedBooking && !Number.isNaN(newStartMs)) {
+      const oldDurationMs = new Date(linkedBooking.endAtUtc).getTime() - new Date(linkedBooking.startAtUtc).getTime();
+      const requestedEndMs = body.endAtUtc ? new Date(body.endAtUtc).getTime() : NaN;
+      const sessionDurationMs = (session.customDurationMinutes ?? 30) * 60_000;
+      const durationMs = !Number.isNaN(requestedEndMs) && requestedEndMs > newStartMs
+        ? requestedEndMs - newStartMs
+        : oldDurationMs > 0 ? oldDurationMs : sessionDurationMs;
+      shiftedTimes = {
+        startAtUtc: new Date(newStartMs).toISOString(),
+        endAtUtc: new Date(newStartMs + durationMs).toISOString(),
+        hostCalendarEventId: linkedBooking.hostCalendarEventId,
+      };
+      await db.update(schema.bookings).set({
+        startAtUtc: shiftedTimes.startAtUtc,
+        endAtUtc: shiftedTimes.endAtUtc,
+        updatedAt: new Date().toISOString(),
+      }).where(eq(schema.bookings.id, linkedBooking.id));
+    }
+  }
+
   let generatedConferenceUrl: string | null | undefined;
 
   if (body.conferenceType === "zoom" || body.conferenceType === "google_meet") {
@@ -534,11 +565,22 @@ oneOnOneRoutes.patch("/:id/schedule", async (c) => {
         updatedAt: new Date().toISOString(),
       }).where(eq(schema.bookings.id, existingBooking.id));
       if (keepEventId) {
+        // 日時も変更されていれば、Googleカレンダーの予定の日時も新しい時刻にそろえる
         c.executionCtx.waitUntil(updateHostCalendarEventFields(db, c.env, session.requesterId, keepEventId, {
           description: calendarDescription(session.customNote, update.manualConferenceUrl),
+          ...(shiftedTimes && { startAtUtc: shiftedTimes.startAtUtc, endAtUtc: shiftedTimes.endAtUtc }),
         }));
+        shiftedTimes = null; // 反映済み
       }
     }
+  }
+
+  // 会議URLに触れずに日時だけ変更した場合も、主催者のGoogleカレンダーの予定（Meet・Zoom付きを含む）を新しい日時に更新する
+  if (shiftedTimes?.hostCalendarEventId) {
+    c.executionCtx.waitUntil(updateHostCalendarEventFields(db, c.env, session.requesterId, shiftedTimes.hostCalendarEventId, {
+      startAtUtc: shiftedTimes.startAtUtc,
+      endAtUtc: shiftedTimes.endAtUtc,
+    }));
   }
 
   // 承諾側（responder）が自ら日時・会議URLを記録した場合、その行為自体が「承諾」を意味するため、
