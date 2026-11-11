@@ -3,6 +3,7 @@
 // /schedule/invite/:inviteToken
 // 1つのURLを複数人で共有できる方式。回答時に新規ゲストを作成する。
 // =============================================================
+import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { Loader2, Check, AlertCircle, Clock, Link } from "lucide-react";
@@ -20,6 +21,7 @@ type ApiResponse = {
     meeting: {
       id: string; title: string; description: string | null; status: string;
       confirmedCandidateId: string | null;
+      noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null; feeNote?: string | null;
       host: { id: string; name: string; emoji: string } | null;
     };
     candidates: Candidate[];
@@ -102,6 +104,8 @@ export function ScheduleInviteScreen() {
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
     const unanswered = displayCandidates.filter((c) => !answers[c.id]);
     if (unanswered.length > 0) { setSubmitError("すべての候補日に回答してください"); return; }
+    if (meeting.isPaid && Object.values(answers).some((v) => v === "yes" || v === "maybe")
+      && !confirmPaidParticipation(meeting.feeAmount, meeting.feeNote)) return;
     setSubmitError("");
     setSubmitting(true);
     try {
@@ -195,6 +199,31 @@ export function ScheduleInviteScreen() {
     );
   }
 
+  // 出欠を確認しない（お知らせのみの）会は、回答欄を出さず、開催日時だけを案内する
+  if (meeting.noAttendanceCheck) {
+    return (
+      <div className="min-h-screen" style={{ background: "var(--color-paper-100)" }}>
+        <div className="px-4 py-6 pb-24 max-w-lg mx-auto text-center">
+          <div className="text-3xl mb-1">📢</div>
+          <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>{appTitle} · ミーティングのお知らせ</p>
+          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>{meeting.title}</h1>
+          {meeting.host && (
+            <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>{meeting.host.emoji} {meeting.host.name}さんからのお知らせです</p>
+          )}
+          {meeting.description && <p className="text-sm mt-2 px-2" style={{ color: "var(--color-ink-600)" }}>{meeting.description}</p>}
+          <div className="mt-4 space-y-1.5">
+            {displayCandidates.map((cand) => (
+              <div key={cand.id} className="card-paper rounded-2xl px-4 py-2.5">
+                <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>{formatDate(cand.startsAt, cand.endsAt, timezone)}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-sm mt-4" style={{ color: "var(--color-ink-500)" }}>出欠のご返事は不要です。当日をお楽しみに！</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen" style={{ background: "var(--color-paper-100)" }}>
       <div className="px-4 py-6 pb-24 max-w-lg mx-auto">
@@ -212,6 +241,17 @@ export function ScheduleInviteScreen() {
           )}
           {meeting.description && (
             <p className="text-sm mt-2 px-2" style={{ color: "var(--color-ink-600)" }}>{meeting.description}</p>
+          )}
+          {meeting.isPaid && (
+            <p className="text-sm mt-3 mx-2 px-3 py-2 rounded-xl text-left" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-700)" }}>
+              💴 <span className="font-medium">有料のミーティングです。参加費：{meeting.feeAmount != null ? `${meeting.feeAmount.toLocaleString("ja-JP")}円` : "—"}</span>
+              {meeting.feeNote && <span className="block text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>{meeting.feeNote}</span>}
+            </p>
+          )}
+          {meeting.noAttendanceCheck && (
+            <p className="text-sm mt-3 mx-2 px-3 py-2 rounded-xl text-left" style={{ background: "rgba(90,140,92,0.10)", color: "var(--color-ink-700)" }}>
+              📢 <span className="font-medium">お知らせのミーティングです。</span>出欠のご返事は不要です。
+            </p>
           )}
         </div>
 

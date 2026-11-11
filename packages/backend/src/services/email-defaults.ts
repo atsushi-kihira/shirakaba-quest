@@ -265,7 +265,7 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     emailKey: "meeting_invitation_guest",
     label: "ミーティング招待（外部ゲスト向け）",
     category: "meeting",
-    triggerDescription: "ミーティング・定例会の作成時に、主催者が外部ゲストとして招待した人（メールアドレスが分かっている人）へ送信",
+    triggerDescription: "ミーティング・定例会の主催時に、主催者が外部ゲストとして招待した人（メールアドレスが分かっている人）へ送信",
     enabled: true,
     subject: "【{{appTitle}}】📅 「{{meetingTitle}}」の日程調整に招待されました",
     bodyText: `{{guestName}} さん

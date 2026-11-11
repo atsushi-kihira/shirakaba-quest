@@ -126,7 +126,8 @@ export async function buildDesired(db: Db, env: Env, memberId: string, googleEma
       if (!isTarget || declined.has(m.id) || absentAll.has(m.id) || absent.has(`${m.id}|${cand.id}`)) continue;
       const answer = answerOf.get(`${m.id}|${cand.id}`);
       if (answer === "no" && !attendedKeys.has(`${m.id}|${cand.id}`)) continue;
-      if ((confirmedCountByMeeting.get(m.id) ?? 1) > 1) {
+      // 出欠を確認しない（お知らせのみの）会は、回答がないので、確定した日をすべて登録する
+      if (m.noAttendanceCheck !== 1 && (confirmedCountByMeeting.get(m.id) ?? 1) > 1) {
         const joining = answer === "yes" || answer === "maybe" || attendedKeys.has(`${m.id}|${cand.id}`);
         if (!joining) continue;
       }

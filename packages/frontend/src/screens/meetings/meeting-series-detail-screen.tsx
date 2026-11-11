@@ -19,6 +19,7 @@ import { EventReminderSetting } from "@/components/reminder-settings";
 import { SeriesGuestPanel, type SeriesExternalInvitee } from "./_series-guest-panel";
 import { SeriesParticipantsPanel } from "./_series-participants-panel";
 import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
+import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -38,6 +39,8 @@ type SeriesDetail = {
   scope: string; collabTeamId: string | null;
   status: "voting" | "confirmed" | "ended" | "cancelled";
   deadline: number | null;
+  /** 出欠を確認しない（お知らせのみ）／有料（参加費・補足） */
+  noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null; feeNote?: string | null;
   endCondition: "date" | "count" | null; endDate: number | null; occurrenceCount: number | null;
   conferenceType: "manual" | "google_meet" | "zoom" | null;
   conferenceUrl: string | null;
@@ -278,6 +281,17 @@ export function MeetingSeriesDetailScreen() {
           </div>
         )}
         {series.description && <p className="text-sm mb-1" style={{ color: "var(--color-ink-700)" }}>{series.description}</p>}
+        {series.noAttendanceCheck && (
+          <p className="text-sm my-2 px-3 py-2 rounded-xl" style={{ background: "rgba(90,140,92,0.10)", color: "var(--color-ink-700)" }}>
+            📢 <span className="font-medium">お知らせの定例会です。</span>出欠のご返事は不要です。直前にはリマインドが届きます。
+          </p>
+        )}
+        {series.isPaid && (
+          <p className="text-sm my-2 px-3 py-2 rounded-xl" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-700)" }}>
+            💴 <span className="font-medium">有料の定例会です。参加費：{series.feeAmount != null ? `${series.feeAmount.toLocaleString("ja-JP")}円` : "—"}</span>
+            {series.feeNote && <span className="block text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>{series.feeNote}</span>}
+          </p>
+        )}
         <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
           対象: {series.targetMembers.map((m) => `${m.emoji} ${m.name}`).join("、") || "（対象者なし）"}
         </p>
@@ -413,7 +427,11 @@ export function MeetingSeriesDetailScreen() {
               onChange={setCommentDraft}
               className="mb-3"
             />
-            <button onClick={() => respondMutation.mutate({ responses: myAnswers, comment: commentDraft ?? series.myComment ?? "" })}
+            <button onClick={() => {
+                const joining = Object.values(myAnswers).some((v) => v === "yes" || v === "maybe");
+                if (joining && series.isPaid && !confirmPaidParticipation(series.feeAmount, series.feeNote)) return;
+                respondMutation.mutate({ responses: myAnswers, comment: commentDraft ?? series.myComment ?? "" });
+              }}
               disabled={(!hasEdited && commentDraft === null) || respondMutation.isPending}
               className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50 transition"
               style={{ background: "var(--color-brand)" }}>

@@ -10,6 +10,7 @@ import { useSettings } from "@/hooks/use-settings";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
+import { MeetingOptionsPicker, DEFAULT_MEETING_OPTIONS, optionsToPayload, validateMeetingOptions, type MeetingOptionsValue } from "@/components/meeting-options-picker";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
 import { ConferenceModeSelector, type ConferenceMode } from "./_conference-mode-selector";
 import { AiSlotSearchPanel } from "./_ai-slot-search-panel";
@@ -85,6 +86,7 @@ export function MeetingNewScreen() {
   const [eventSelection, setEventSelection] = useState<string>(""); // "type:<ID>"（ポイントなしの種別）または "event:<ID>"（イベント）
   const [registrationDeadline, setRegistrationDeadline] = useState("");
   const [meetingMode, setMeetingMode] = useState<"vote" | "confirmed">("vote");
+  const [meetingOptions, setMeetingOptions] = useState<MeetingOptionsValue>(DEFAULT_MEETING_OPTIONS); // 出欠を確認しない・有料
   const [conferenceMode, setConferenceMode] = useState<ConferenceMode>("none");
   const [conferenceUrl, setConferenceUrl] = useState("");
   const [error, setError] = useState("");
@@ -230,6 +232,8 @@ export function MeetingNewScreen() {
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
     const validCandidates = candidates.filter((c) => c.date);
     if (validCandidates.length === 0) { setError(meetingMode === "confirmed" ? "確定日を1つ以上設定してください" : "候補日を1つ以上設定してください"); return; }
+    const optionsError = validateMeetingOptions(meetingOptions);
+    if (optionsError) { setError(optionsError); return; }
     const noEmailGuest = guestMissingEmail(guests);
     if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（メールで案内しない方は、一覧から外して、「招待メールを送る」のチェックを外して追加し直してください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
@@ -256,6 +260,7 @@ export function MeetingNewScreen() {
       inviteeIds: scope === "selected" ? inviteeIds : undefined,
       groupId: scope === "group" ? groupId : undefined,
       ...selectionToPayload(eventSelection),
+      ...optionsToPayload(meetingOptions),
       registrationDeadline: registrationDeadline
         ? Math.floor(new Date(registrationDeadline).getTime() / 1000)
         : undefined,
@@ -291,7 +296,7 @@ export function MeetingNewScreen() {
           <ChevronLeft size={18} style={{ color: "var(--color-ink-600)" }} />
         </button>
         <h1 className="text-xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-          ミーティングを立てる
+          📅 ミーティングを主催する
         </h1>
       </div>
 
@@ -329,6 +334,9 @@ export function MeetingNewScreen() {
         {/* 紐づけるイベント（先頭）。ポイントはイベントに設定されている */}
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、出席者にポイントが付与されます" />
+
+        {/* 開催のしかた（出欠を確認しない・有料） */}
+        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={meetingMode === "confirmed"} />
 
         {/* タイトル */}
         <div>
@@ -664,7 +672,7 @@ export function MeetingNewScreen() {
           ) : meetingMode === "confirmed" ? (
             "✅ 確定して案内する"
           ) : (
-            "📅 ミーティングを作成する"
+            "📅 ミーティングを主催する"
           )}
         </button>
       </div>

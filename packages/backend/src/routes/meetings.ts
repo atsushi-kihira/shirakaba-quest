@@ -56,6 +56,7 @@ import {
 import { formatScheduleBlock } from "../services/schedule-text.ts";
 import { insertCalendarEvent } from "../services/googleClient.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
+import { parseMeetingOptions, withFeeLine, feeLine, type MeetingOptionsInput } from "../services/meeting-options.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
@@ -123,7 +124,7 @@ meetingRoutes.post("/", async (c) => {
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   if (!(await isMemberApproved(db, memberId))) {
-    return c.json({ error: { code: "not_approved", message: "承認されるまでは複数人のミーティング作成はご利用いただけません" } }, 403);
+    return c.json({ error: { code: "not_approved", message: "承認されるまでは複数人でのミーティングの主催はご利用いただけません" } }, 403);
   }
   const now = Math.floor(Date.now() / 1000);
 
@@ -150,7 +151,7 @@ meetingRoutes.post("/", async (c) => {
     inviteReservationToken?: string;
     /** 外部ゲスト（人脈から選んだ人、名前・メールアドレスを入力した人）。メールアドレスのある人には、作成と同時に招待メールを送る */
     guests?: GuestInput[];
-  }>();
+  } & MeetingOptionsInput>();
 
   if (!body.title?.trim()) {
     return c.json({ error: { code: "invalid_input", message: "タイトルを入力してください" } }, 400);
@@ -186,6 +187,10 @@ meetingRoutes.post("/", async (c) => {
   }
 
   const confirmNow = body.confirmNow === true;
+  // 開催のしかた（出欠を確認しない・有料）
+  const optionsResult = parseMeetingOptions(body, confirmNow);
+  if (!optionsResult.ok) return c.json({ error: { code: "invalid_input", message: optionsResult.message } }, 400);
+  const meetingOptions = optionsResult.value;
   let manualConferenceUrl: string | undefined;
   if (confirmNow) {
     if (body.conferenceType === "manual") {
@@ -246,6 +251,10 @@ meetingRoutes.post("/", async (c) => {
     eventCampaignId: eventLink.eventCampaignId,
     eventTypeDefId: eventLink.eventTypeDefId,
     registrationDeadline: body.registrationDeadline ?? null,
+    noAttendanceCheck: meetingOptions.noAttendanceCheck,
+    isPaid: meetingOptions.isPaid,
+    feeAmount: meetingOptions.feeAmount,
+    feeNote: meetingOptions.feeNote,
     createdAt: now,
     updatedAt: now,
   });
@@ -327,7 +336,7 @@ meetingRoutes.post("/", async (c) => {
           memberName: m.name,
           hostName,
           meetingTitle: body.title.trim(),
-          meetingDescription: body.description?.trim() ?? "",
+          meetingDescription: withFeeLine(body.description, meetingOptions),
           deadlineStr,
           meetingUrl: `${appUrl}/meetings/${meetingId}`,
         }).catch(console.error)
@@ -394,10 +403,16 @@ meetingRoutes.post("/", async (c) => {
       ? formatCandidateDateText(confirmedCandidates[0].startsAt, confirmedCandidates[0].endsAt, systemTz)
       : "";
     const typeLabel = finalConferenceType === "google_meet" ? "Google Meet" : finalConferenceType === "zoom" ? "Zoom" : "オンライン会議";
-    const subjectAction = "ミーティングが確定しました — ";
-    const confirmHeading = "確定済みミーティングへのご案内";
-    const confirmIntro = `「${body.title.trim()}」の日程が確定しました。ご参加をお願いします！`;
-    const notifyMsg = `「${body.title.trim()}」が${confirmedDateText}に確定し、招待されました`;
+    const announceOnly = meetingOptions.noAttendanceCheck === 1;
+    const feeText = feeLine(meetingOptions);
+    const subjectAction = announceOnly ? "ミーティングのお知らせ — " : "ミーティングが確定しました — ";
+    const confirmHeading = announceOnly ? "ミーティングのお知らせ" : "確定済みミーティングへのご案内";
+    const confirmIntro = announceOnly
+      ? `「${body.title.trim()}」を開催します。出欠のご返事は不要です。当日をお楽しみに！`
+      : `「${body.title.trim()}」の日程が確定しました。ご参加をお願いします！${feeText ? `\n\n${feeText}` : ""}`;
+    const notifyMsg = announceOnly
+      ? `「${body.title.trim()}」が${confirmedDateText}に開催されます（お知らせ）`
+      : `「${body.title.trim()}」が${confirmedDateText}に確定し、招待されました`;
 
     for (const m of inviteTargets) {
       if (m.id === memberId) continue;
@@ -418,7 +433,7 @@ meetingRoutes.post("/", async (c) => {
         mailPromises.push(
           mailer.send("meeting_confirmed_member", m.email, {
             appTitle, memberName: m.name, meetingTitle: body.title.trim(),
-            hostName, confirmedDate: confirmedDateText, urlPendingNote: "",
+            hostName, confirmedDate: confirmedDateText, urlPendingNote: feeText,
             meetingUrl: `${appUrl}/meetings/${meetingId}`,
           }).catch(console.error)
         );
@@ -439,7 +454,7 @@ meetingRoutes.post("/", async (c) => {
         mailPromises.push(
           mailer.send("meeting_confirmed_member", host.email, {
             appTitle, memberName: hostName, meetingTitle: body.title.trim(),
-            hostName, confirmedDate: confirmedDateText, urlPendingNote: "",
+            hostName, confirmedDate: confirmedDateText, urlPendingNote: feeText,
             meetingUrl: `${appUrl}/meetings/${meetingId}`,
           }).catch(console.error)
         );
@@ -460,12 +475,12 @@ meetingRoutes.post("/", async (c) => {
         ? mailer.send("meeting_confirmed_guest", g.email as string, {
             appTitle, guestName: g.name, hostName, meetingTitle: body.title.trim(),
             confirmedDate: guestCandidates.length > 0 ? formatCandidateDateText(guestCandidates[0].startsAt, guestCandidates[0].endsAt, guestTz) : "",
-            urlPendingNote: confirmedConfUrl ? `📹 会議URL\n${confirmedConfUrl}` : "📹 会議URLは別途お知らせします",
+            urlPendingNote: `${confirmedConfUrl ? `📹 会議URL\n${confirmedConfUrl}` : "📹 会議URLは別途お知らせします"}${feeLine(meetingOptions) ? `\n\n${feeLine(meetingOptions)}` : ""}`,
             scheduleUrl,
           })
         : mailer.send("meeting_invitation_guest", g.email as string, {
             appTitle, guestName: g.name, hostName, meetingTitle: body.title.trim(),
-            meetingDescription: body.description?.trim() ?? "",
+            meetingDescription: withFeeLine(body.description, meetingOptions),
             deadlineStr: body.deadline
               ? `（回答期限: ${new Intl.DateTimeFormat("ja-JP", { timeZone: guestTz, year: "numeric", month: "numeric", day: "numeric" }).format(new Date(body.deadline * 1000))}）`
               : "",
@@ -993,6 +1008,9 @@ meetingRoutes.get("/", async (c) => {
         hasResponded: respondedSet.has(m.id),
         seriesId: m.seriesId,
         seriesOccurrenceIndex: m.seriesOccurrenceIndex,
+        noAttendanceCheck: m.noAttendanceCheck === 1,
+        isPaid: m.isPaid === 1,
+        feeAmount: m.isPaid === 1 ? m.feeAmount : null,
         createdAt: m.createdAt,
       };
     });
@@ -1097,6 +1115,8 @@ meetingRoutes.get("/pending-attendance", async (c) => {
   const result = [];
   for (const meeting of confirmedMeetings) {
     if (attendedIds.has(meeting.id)) continue;
+    // 出欠を確認しない（お知らせのみの）会は、出席の記録を求めない
+    if (meeting.noAttendanceCheck === 1) continue;
 
     // 確定済み候補日のうち最も早い日時が過去か確認
     const confirmedCands = await db
@@ -1402,6 +1422,10 @@ meetingRoutes.get("/:id", async (c) => {
         conferenceUrl: meeting.conferenceUrl,
         seriesId: meeting.seriesId,
         seriesOccurrenceIndex: meeting.seriesOccurrenceIndex,
+        noAttendanceCheck: meeting.noAttendanceCheck === 1,
+        isPaid: meeting.isPaid === 1,
+        feeAmount: meeting.isPaid === 1 ? meeting.feeAmount : null,
+        feeNote: meeting.isPaid === 1 ? meeting.feeNote : null,
         inviteToken: isHost ? (meeting.inviteToken ?? null) : null,
         groupName,
         createdAt: meeting.createdAt,
@@ -3029,7 +3053,8 @@ meetingRoutes.post("/:id/external", async (c) => {
 });
 
 // ----------------------------------------------------------------
-// PATCH /api/meetings/:id/description — 詳細情報更新（主催者のみ）＋メール通知
+// PATCH /api/meetings/:id/description — 詳細情報更新（主催者のみ）
+//   notify=true のときだけ、対象メンバー・外部ゲストへアプリ内通知とメールを送る（既定は通知しない）
 // ----------------------------------------------------------------
 meetingRoutes.patch("/:id/description", async (c) => {
   const db = createDb(c.env.DB);
@@ -3044,11 +3069,19 @@ meetingRoutes.patch("/:id/description", async (c) => {
     return c.json({ error: { code: "forbidden", message: "主催者のみ詳細を更新できます" } }, 403);
   }
 
-  const { description } = await c.req.json<{ description: string }>();
+  const { description, notify } = await c.req.json<{ description: string; notify?: boolean }>();
+  const shouldNotify = notify === true;
 
   await db.update(schema.meetings)
     .set({ description, updatedAt: now })
     .where(eq(schema.meetings.id, id));
+
+  // 通知しない場合は、説明を保存して、カレンダーの予定の説明だけ更新する
+  if (!shouldNotify) {
+    c.executionCtx.waitUntil(refreshHostMeetingCalendarEvents(db, c.env, id));
+    queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
+    return c.json({ ok: true, notified: false });
+  }
 
   const host = await db.select({ name: schema.members.name }).from(schema.members)
     .where(eq(schema.members.id, meeting.hostMemberId)).get();
@@ -3133,7 +3166,7 @@ meetingRoutes.patch("/:id/description", async (c) => {
   c.executionCtx.waitUntil(refreshHostMeetingCalendarEvents(db, c.env, id));
   queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, notified: true });
 });
 
 // ----------------------------------------------------------------
@@ -3307,6 +3340,9 @@ meetingRoutes.post("/:id/attendance", async (c) => {
   if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
   if (meeting.status !== "confirmed") {
     return c.json({ error: { code: "not_confirmed", message: "確定済みミーティングのみ回答できます" } }, 400);
+  }
+  if (meeting.noAttendanceCheck === 1) {
+    return c.json({ error: { code: "no_attendance_check", message: "このミーティングは、出欠のご返事は不要です（お知らせのみ）" } }, 400);
   }
 
   const { status, candidateId, comment } = await c.req.json<{ status: "attended" | "absent"; candidateId?: string | null; comment?: string }>();

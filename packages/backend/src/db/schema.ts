@@ -908,6 +908,11 @@ export const meetings = sqliteTable("meetings", {
   seriesId:              text("series_id"), // 定例会（meeting_series）から生成された回の場合に設定
   seriesOccurrenceIndex: integer("series_occurrence_index"), // シリーズ内の何回目か（1始まり）
   groupId:               text("group_id"), // 対象者を「グループ」で指定して作成した場合のグループID（series由来の回には設定しない）
+  // 開催のしかた（マイグレーション 0109）。定例会由来の回は、定例会の設定を引き継ぐ
+  noAttendanceCheck:     integer("no_attendance_check").notNull().default(0), // 1 = あらかじめ出欠を確認しない（お知らせのみ）
+  isPaid:                integer("is_paid").notNull().default(0),             // 1 = 有料
+  feeAmount:             integer("fee_amount"),                                // 参加費（円）。有料のときのみ
+  feeNote:               text("fee_note"),                                     // 支払い方法などの補足（任意）
   createdAt:             integer("created_at").notNull(),
   updatedAt:             integer("updated_at").notNull(),
 });
@@ -1018,6 +1023,10 @@ export const meetingSeries = sqliteTable("meeting_series", {
   eventTypeDefId:      text("event_type_def_id"),
   eventCampaignId:     text("event_campaign_id"), // 紐づけたイベント（インスタンス）。ポイントはここに設定する
   groupId:             text("group_id"),          // 対象者を「グループ」で指定して作成した場合のグループID
+  noAttendanceCheck:   integer("no_attendance_check").notNull().default(0), // 1 = あらかじめ出欠を確認しない（お知らせのみ）。各開催回に引き継ぐ
+  isPaid:              integer("is_paid").notNull().default(0),
+  feeAmount:           integer("fee_amount"),
+  feeNote:             text("fee_note"),
   createdAt:           integer("created_at").notNull(),
   updatedAt:           integer("updated_at").notNull(),
 });

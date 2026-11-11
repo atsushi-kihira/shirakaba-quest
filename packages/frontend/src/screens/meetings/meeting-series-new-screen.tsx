@@ -16,6 +16,7 @@ import { MemberSelectList } from "@/components/member-select-list";
 import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components/group-scope-picker";
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
+import { MeetingOptionsPicker, DEFAULT_MEETING_OPTIONS, optionsToPayload, validateMeetingOptions, type MeetingOptionsValue } from "@/components/meeting-options-picker";
 import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
 import { GuestInviteResult, dmGuestsOf, type CreatedGuest } from "@/components/guest-invite-result";
 
@@ -102,6 +103,7 @@ export function MeetingSeriesNewScreen() {
   const [duration, setDuration] = useState(60);
   const [eventSelection, setEventSelection] = useState(""); // "type:<ID>"（ポイントなしの種別）または "event:<ID>"（イベント）
   const [seriesMode, setSeriesMode] = useState<"vote" | "confirmed">("vote");
+  const [meetingOptions, setMeetingOptions] = useState<MeetingOptionsValue>(DEFAULT_MEETING_OPTIONS); // 出欠を確認しない・有料
   const [dateMode, setDateMode] = useState<"recurring" | "fixed">("recurring");
   const [fixedDates, setFixedDates] = useState<FixedDateRow[]>([emptyFixedDateRow()]);
   const [showCalendarPicker, setShowCalendarPicker] = useState(false);
@@ -222,6 +224,8 @@ export function MeetingSeriesNewScreen() {
     setError("");
     if (!eventSelection) { setError("イベント種別を選んでください"); return; }
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
+    const optionsError = validateMeetingOptions(meetingOptions);
+    if (optionsError) { setError(optionsError); return; }
     const noEmailGuest = guestMissingEmail(guests);
     if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（メールで案内しない方は、一覧から外して、「招待メールを送る」のチェックを外して追加し直してください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
@@ -234,6 +238,7 @@ export function MeetingSeriesNewScreen() {
     const body: Record<string, unknown> = {
       title: title.trim(),
       ...selectionToPayload(eventSelection),
+      ...optionsToPayload(meetingOptions),
       description: description.trim() || undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
@@ -316,7 +321,7 @@ export function MeetingSeriesNewScreen() {
           <ChevronLeft size={18} style={{ color: "var(--color-ink-600)" }} />
         </button>
         <h1 className="text-xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-          🔁 定例会を立てる
+          🔁 定例会を主催する
         </h1>
       </div>
       <p className="text-xs mb-5" style={{ color: "var(--color-ink-500)" }}>
@@ -330,6 +335,9 @@ export function MeetingSeriesNewScreen() {
 
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、定例会1回の参加ごとにポイントが付与されます" />
+
+        {/* 開催のしかた（出欠を確認しない・有料） */}
+        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={seriesMode === "confirmed"} />
 
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
@@ -739,7 +747,7 @@ export function MeetingSeriesNewScreen() {
         <button onClick={handleSubmit} disabled={createMutation.isPending}
           className="w-full py-4 rounded-2xl text-base font-medium text-white flex items-center justify-center gap-2 transition disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}>
-          {createMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : seriesMode === "confirmed" ? "✅ 確定して案内する" : "🔁 定例会を作成する"}
+          {createMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : seriesMode === "confirmed" ? "✅ 確定して案内する" : "🔁 定例会を主催する"}
         </button>
       </div>
     </div>

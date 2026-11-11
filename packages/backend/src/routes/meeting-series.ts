@@ -20,6 +20,7 @@ import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { MailService } from "../services/mailer.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
+import { parseMeetingOptions, withFeeLine, feeLine, type MeetingOptionsInput } from "../services/meeting-options.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { resolveGuests, withEmail, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
@@ -135,7 +136,7 @@ meetingSeriesRoutes.post("/", async (c) => {
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
   if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
   if (!(await isMemberApproved(db, memberId))) {
-    return c.json({ error: { code: "not_approved", message: "承認されるまでは定例会の作成はご利用いただけません" } }, 403);
+    return c.json({ error: { code: "not_approved", message: "承認されるまでは定例会の主催はご利用いただけません" } }, 403);
   }
   const now = Math.floor(Date.now() / 1000);
 
@@ -175,12 +176,16 @@ meetingSeriesRoutes.post("/", async (c) => {
     inviteReservationToken?: string;
     /** 外部ゲスト。メールアドレスのある人には、作成と同時に招待メールを送る */
     guests?: GuestInput[];
-  }>();
+  } & MeetingOptionsInput>();
 
   const mode: "vote" | "confirmed" = body.mode === "confirmed" ? "confirmed" : "vote";
   const dateMode: "recurring" | "fixed" = mode === "confirmed" && body.dateMode === "fixed" ? "fixed" : "recurring";
 
   if (!body.title?.trim()) return c.json({ error: { code: "invalid_input", message: "タイトルを入力してください" } }, 400);
+  // 開催のしかた（出欠を確認しない・有料）。出欠を確認しない定例会は、日程が決まっている作り方（確定日）のときだけ
+  const optionsResult = parseMeetingOptions(body, mode === "confirmed");
+  if (!optionsResult.ok) return c.json({ error: { code: "invalid_input", message: optionsResult.message } }, 400);
+  const meetingOptions = optionsResult.value;
   // 対象者を「グループ」で指定した場合は、グループのメンバーを招待メンバー（scope=selected）に、外部ゲストをゲストにする。
   // 作成した定例会にグループIDを残し、グループに後から人が加わったときに、この定例会にも招待できるようにする
   let groupId: string | null = null;
@@ -378,6 +383,10 @@ meetingSeriesRoutes.post("/", async (c) => {
     dateMode,
     eventTypeDefId: eventLink.eventTypeDefId,
     eventCampaignId: eventLink.eventCampaignId,
+    noAttendanceCheck: meetingOptions.noAttendanceCheck,
+    isPaid: meetingOptions.isPaid,
+    feeAmount: meetingOptions.feeAmount,
+    feeNote: meetingOptions.feeNote,
     createdAt: now,
     updatedAt: now,
   });
@@ -436,7 +445,7 @@ meetingSeriesRoutes.post("/", async (c) => {
           memberName: m.name,
           hostName: host?.name ?? "主催者",
           meetingTitle: `【定例会】${body.title.trim()}`,
-          meetingDescription: body.description?.trim() ?? "",
+          meetingDescription: withFeeLine(body.description, meetingOptions),
           deadlineStr: "",
           meetingUrl: `${appUrl}/meetings/series/${seriesId}`,
         }).catch(console.error)
@@ -449,7 +458,7 @@ meetingSeriesRoutes.post("/", async (c) => {
           guestName: g.name,
           hostName: host?.name ?? "主催者",
           meetingTitle: `【定例会】${body.title.trim()}`,
-          meetingDescription: body.description?.trim() ?? "",
+          meetingDescription: withFeeLine(body.description, meetingOptions),
           deadlineStr: "",
           scheduleUrl: `${appUrl}/schedule/series/${g.token}`,
         }).catch(console.error)
@@ -642,6 +651,9 @@ meetingSeriesRoutes.get("/", async (c) => {
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((s) => ({
       id: s.id, title: s.title, status: s.status,
+      noAttendanceCheck: s.noAttendanceCheck === 1,
+      isPaid: s.isPaid === 1,
+      feeAmount: s.isPaid === 1 ? s.feeAmount : null,
       isHost: s.hostMemberId === memberId,
       hasResponded: myRespondedSeriesIds.has(s.id),
       host: hostMap.get(s.hostMemberId) ?? null,
@@ -763,6 +775,10 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       hostName: targets.find((t) => t.id === series.hostMemberId)?.name ?? null,
       scope: series.scope, teamId: series.teamId, collabTeamId: series.collabTeamId,
       status: series.status, deadline: series.deadline,
+      noAttendanceCheck: series.noAttendanceCheck === 1,
+      isPaid: series.isPaid === 1,
+      feeAmount: series.isPaid === 1 ? series.feeAmount : null,
+      feeNote: series.isPaid === 1 ? series.feeNote : null,
       endCondition: series.endCondition, endDate: series.endDate, occurrenceCount: series.occurrenceCount,
       conferenceType: series.conferenceType,
       conferenceUrl: series.conferenceUrl,
@@ -1008,6 +1024,10 @@ async function generateSeriesOccurrences(
       status: "confirmed",
       eventTypeDefId: series.eventTypeDefId,
       eventCampaignId: series.eventCampaignId,
+      noAttendanceCheck: series.noAttendanceCheck,
+      isPaid: series.isPaid,
+      feeAmount: series.feeAmount,
+      feeNote: series.feeNote,
       seriesId: series.id,
       seriesOccurrenceIndex: i + 1,
       conferenceType: conf?.conferenceType ?? "manual",
@@ -1049,7 +1069,8 @@ async function generateSeriesOccurrences(
   );
   const urlNote = sharedUrl ? `\n${block.urlText}\n` : "";
   const notifyMsg = `「${series.title}」が「${scheduleLabel}」で確定しました（全${occurrences.length}回、初回：${firstDate}〜）${confNote}`;
-  const confirmedDateText = `${scheduleLabel}\n${block.dateText}`;
+  const seriesFeeText = feeLine(series);
+  const confirmedDateText = `${scheduleLabel}\n${block.dateText}${seriesFeeText ? `\n\n${seriesFeeText}` : ""}`;
   const mailPromises: Promise<void>[] = [];
   for (const m of targets) {
     await db.insert(schema.meetingNotifications).values({

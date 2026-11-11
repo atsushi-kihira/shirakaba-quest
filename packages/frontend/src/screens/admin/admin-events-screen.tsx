@@ -337,7 +337,7 @@ function TypeDefSection({
           {isMeetingLinked ? (
             <p className="text-xs py-2 px-3 rounded-xl"
               style={{ background: "rgba(212,160,59,0.1)", color: "var(--color-ink-600)" }}>
-              ☕ インスタンスはミーティング作成時に種別を選択することで紐づきます。<br />
+              ☕ インスタンスはミーティングを主催するときに種別を選択することで紐づきます。<br />
               ミーティング管理画面で確認・編集できます。
             </p>
           ) : (

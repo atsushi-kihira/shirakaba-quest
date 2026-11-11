@@ -491,3 +491,26 @@ export const AVATAR_BG_OPTIONS = [
 ] as const;
 
 export type AvatarBgColor = (typeof AVATAR_BG_OPTIONS)[number];
+
+// -------------------------------------------------------
+// ホーム画面の「ミーティング/イベントカレンダー」
+// GET /api/calendar/events の1件分
+// -------------------------------------------------------
+
+export type CalendarEventKind = "oneonone" | "meeting" | "series";
+/** 自分の出欠。attending=参加予定 / absent=欠席 / declined=辞退 / none=未回答 */
+export type CalendarEventMyStatus = "attending" | "absent" | "declined" | "none";
+
+export type CalendarEvent = {
+  key: string;              // 画面上の重複しない識別子
+  kind: CalendarEventKind;  // oneonone=1to1 / meeting=通常ミーティング / series=定例会の開催回
+  id: string;               // 種別ごとの識別子（1to1=セッションID or 予約ID、ミーティング/定例会=meetingId）
+  title: string;
+  startsAt: number;         // unix秒
+  endsAt: number;           // unix秒
+  isHost: boolean;          // 自分が主催者か（1to1では予約の主催側か）
+  myStatus: CalendarEventMyStatus;
+  partnerName: string | null; // 1to1の相手の名前
+  isExternalGuest: boolean;   // 1to1の相手がビジター（チャプター外）か
+  linkPath: string;         // タップしたときに開く画面のパス
+};

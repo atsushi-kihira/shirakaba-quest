@@ -28,6 +28,7 @@
   --color-accent-dk: #a87a22;
   --color-success: #5a8c5c;
   --color-success-dk: #3f6b41;
+  --color-saturday: #3f6fa6; /* カレンダーの土曜日（日曜・祝日は --color-brand） */
 
   --font-klee: "Klee One", cursive;
   --font-zen: "Zen Maru Gothic", sans-serif;

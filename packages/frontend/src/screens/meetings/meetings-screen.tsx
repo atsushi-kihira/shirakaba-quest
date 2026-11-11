@@ -32,6 +32,10 @@ type MeetingItem = {
   /** 定例会から作られた開催回の場合、その定例会のID・何回目か（直近の開催回だけが一覧に出る） */
   seriesId?: string | null;
   seriesOccurrenceIndex?: number | null;
+  /** 出欠を確認しない（お知らせのみの）会か・有料の会か（有料のときは参加費） */
+  noAttendanceCheck?: boolean;
+  isPaid?: boolean;
+  feeAmount?: number | null;
   createdAt: number;
 };
 
@@ -58,6 +62,7 @@ const STATUS_ICON: Record<EffectiveStatus, typeof Clock> = {
   responded_pending_confirm: FileCheck,
   new: Bell,
   seen_unresponded: Clock,
+  announce: Bell,
 };
 
 /** 主催者向けの簡易ステータス表示 */
@@ -330,6 +335,7 @@ type SeriesItem = {
   isHost: boolean; host: { id: string; name: string; emoji: string } | null;
   // 生成済みの開催回のうち最も遅い日程（unix秒）。開催回が1つも生成されていない場合は null
   lastOccurrenceAt: number | null;
+  noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null;
   createdAt: number;
 };
 
@@ -420,6 +426,14 @@ function RegularMeetingsTab() {
           {s.isHost && (
             <span className="text-xs px-1.5 py-0.5 rounded-md font-medium" style={{ background: "var(--color-accent)", color: "white" }}>主催</span>
           )}
+          {s.isPaid && (
+            <span className="text-xs px-1.5 py-0.5 rounded-md font-medium" style={{ background: "rgba(212,160,59,0.18)", color: "var(--color-accent)" }}>
+              💴 有料{s.feeAmount ? ` ${s.feeAmount.toLocaleString("ja-JP")}円` : ""}
+            </span>
+          )}
+          {s.noAttendanceCheck && (
+            <span className="text-xs px-1.5 py-0.5 rounded-md font-medium" style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-success)" }}>📢 お知らせ</span>
+          )}
         </div>
         <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ background: meta.bg, color: meta.color }}>
           {meta.label}
@@ -451,6 +465,18 @@ function RegularMeetingsTab() {
                 <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
                   style={{ background: "var(--color-accent)", color: "white" }}>
                   主催
+                </span>
+              )}
+              {m.isPaid && (
+                <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
+                  style={{ background: "rgba(212,160,59,0.18)", color: "var(--color-accent)" }}>
+                  💴 有料{m.feeAmount ? ` ${m.feeAmount.toLocaleString("ja-JP")}円` : ""}
+                </span>
+              )}
+              {m.noAttendanceCheck && (
+                <span className="text-xs px-1.5 py-0.5 rounded-md font-medium"
+                  style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-success)" }}>
+                  📢 お知らせ
                 </span>
               )}
             </div>

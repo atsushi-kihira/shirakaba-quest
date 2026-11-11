@@ -17,6 +17,7 @@ import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { AddContactFromBookingModal } from "@/components/add-contact-from-booking-modal";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { EditOneOnOneScheduleModal } from "@/screens/meetings/_edit-oneonone-schedule-modal";
+import { HomeCalendar } from "./_home-calendar";
 import { useAuthStore, isApprovedMember } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
@@ -1282,6 +1283,9 @@ export function HomeScreen() {
           </div>
         </section>
       )}
+
+      {/* ミーティング/イベントカレンダー（確定した1to1・ミーティング・定例会。上の直近の予定の案内は、そのまま残す） */}
+      {approved && !isGuest && <HomeCalendar tz={tz} />}
 
       {/* ポイント（ゲストユーザーには、シーズンに関する表示を出さない） */}
       {isGuest ? null : !approved ? (

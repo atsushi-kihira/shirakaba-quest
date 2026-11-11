@@ -2,6 +2,7 @@
 // 外部ゲスト向け日程回答画面（認証不要・公開ページ）
 // /schedule/:token
 // =============================================================
+import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { Loader2, Check, AlertCircle, Link } from "lucide-react";
@@ -23,6 +24,7 @@ type ApiResponse = {
     meeting: {
       id: string; title: string; description: string | null; status: string;
       confirmedCandidateId: string | null;
+      noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null; feeNote?: string | null;
       host: { id: string; name: string; emoji: string } | null;
     };
     candidates: Candidate[];
@@ -111,6 +113,8 @@ export function ScheduleScreen() {
     if (!email.trim()) { setSubmitError("メールアドレスを入力してください"); return; }
     const unanswered = displayCandidates.filter((c) => !answers[c.id]);
     if (unanswered.length > 0) { setSubmitError("すべての候補日に回答してください"); return; }
+    if (meeting.isPaid && Object.values(answers).some((v) => v === "yes" || v === "maybe")
+      && !confirmPaidParticipation(meeting.feeAmount, meeting.feeNote)) return;
     setSubmitError("");
     setSubmitting(true);
     try {
@@ -158,7 +162,8 @@ export function ScheduleScreen() {
 
   const meeting = apiData!.meeting;
   // open（調整中）または confirmed（確定済み・確定日時のみ回答可）なら回答できる。cancelled は不可
-  const respondable = meeting.status === "open" || (meeting.status === "confirmed" && !!meeting.confirmedCandidateId);
+  // 出欠を確認しない（お知らせのみの）会は、ゲストにも回答を求めない
+  const respondable = !meeting.noAttendanceCheck && (meeting.status === "open" || (meeting.status === "confirmed" && !!meeting.confirmedCandidateId));
 
   if (submitted) {
     const url = scheduleUrl || window.location.href;
@@ -225,18 +230,29 @@ export function ScheduleScreen() {
           {meeting.description && (
             <p className="text-sm mt-2 px-2" style={{ color: "var(--color-ink-600)" }}>{meeting.description}</p>
           )}
+          {meeting.isPaid && (
+            <p className="text-sm mt-3 mx-2 px-3 py-2 rounded-xl text-left" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-700)" }}>
+              💴 <span className="font-medium">有料のミーティングです。参加費：{meeting.feeAmount != null ? `${meeting.feeAmount.toLocaleString("ja-JP")}円` : "—"}</span>
+              {meeting.feeNote && <span className="block text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>{meeting.feeNote}</span>}
+            </p>
+          )}
+          {meeting.noAttendanceCheck && (
+            <p className="text-sm mt-3 mx-2 px-3 py-2 rounded-xl text-left" style={{ background: "rgba(90,140,92,0.10)", color: "var(--color-ink-700)" }}>
+              📢 <span className="font-medium">お知らせのミーティングです。</span>出欠のご返事は不要です。
+            </p>
+          )}
         </div>
 
         {meeting.status === "confirmed" && (
           <div className="mb-4 p-3 rounded-2xl text-center text-sm"
             style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-success)" }}>
-            ✅ 日程は確定しています。確定した日時への参加可否は引き続き回答できます
+            {meeting.noAttendanceCheck ? "✅ 日程が決まりました。当日をお楽しみに！" : "✅ 日程は確定しています。確定した日時への参加可否は引き続き回答できます"}
           </div>
         )}
         {!respondable && (
           <div className="mb-4 p-3 rounded-2xl text-center text-sm"
             style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
-            このミーティングの回答受付は終了しています
+            {meeting.noAttendanceCheck ? "このミーティングは、出欠のご返事は不要です" : "このミーティングの回答受付は終了しています"}
           </div>
         )}
 

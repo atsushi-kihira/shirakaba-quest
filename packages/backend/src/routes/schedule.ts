@@ -127,6 +127,10 @@ scheduleRoutes.get("/:token", async (c) => {
         id: meeting.id,
         title: meeting.title,
         description: meeting.description,
+        noAttendanceCheck: meeting.noAttendanceCheck === 1,
+        isPaid: meeting.isPaid === 1,
+        feeAmount: meeting.isPaid === 1 ? meeting.feeAmount : null,
+        feeNote: meeting.isPaid === 1 ? meeting.feeNote : null,
         status: meeting.status,
         confirmedCandidateId: meeting.confirmedCandidateId,
         host: host ?? null,
@@ -169,6 +173,9 @@ scheduleRoutes.post("/:token/respond", async (c) => {
   // open 以外は基本的に締め切りだが、confirmed の場合のみ「確定した日時」に限って回答を受け付ける
   if (meeting.status !== "open" && !(meeting.status === "confirmed" && meeting.confirmedCandidateId)) {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
+  }
+  if (meeting.noAttendanceCheck === 1) {
+    return c.json({ error: { code: "no_attendance_check", message: "このミーティングは、出欠のご返事は不要です（お知らせのみ）" } }, 400);
   }
 
   const body = await c.req.json<{ name?: string; email?: string; company?: string; comment?: string; answers: Record<string, Availability> }>();
@@ -309,6 +316,10 @@ scheduleRoutes.get("/invite/:inviteToken", async (c) => {
         id: meeting.id,
         title: meeting.title,
         description: meeting.description,
+        noAttendanceCheck: meeting.noAttendanceCheck === 1,
+        isPaid: meeting.isPaid === 1,
+        feeAmount: meeting.isPaid === 1 ? meeting.feeAmount : null,
+        feeNote: meeting.isPaid === 1 ? meeting.feeNote : null,
         status: meeting.status,
         confirmedCandidateId: meeting.confirmedCandidateId,
         host: host ?? null,
@@ -339,6 +350,9 @@ scheduleRoutes.post("/invite/:inviteToken/respond", async (c) => {
   // open 以外は基本的に締め切りだが、confirmed の場合のみ「確定した日時」に限って回答を受け付ける
   if (meeting.status !== "open" && !(meeting.status === "confirmed" && meeting.confirmedCandidateId)) {
     return c.json({ error: { code: "meeting_closed", message: "このミーティングは既に締め切られています" } }, 400);
+  }
+  if (meeting.noAttendanceCheck === 1) {
+    return c.json({ error: { code: "no_attendance_check", message: "このミーティングは、出欠のご返事は不要です（お知らせのみ）" } }, 400);
   }
 
   const body = await c.req.json<{ name?: string; email?: string; company?: string; comment?: string; answers: Record<string, "yes" | "maybe" | "no"> }>();

@@ -687,7 +687,7 @@ function TypeDefSection({
           {isMeetingLinked && (
             <p className="text-xs py-2 px-3 rounded-xl"
               style={{ background: "rgba(212,160,59,0.1)", color: "var(--color-ink-600)" }}>
-              ☕ ここで作成したイベントは、ミーティング・定例会の作成時に「イベント」として選べます。
+              ☕ ここで作成したイベントは、ミーティング・定例会を主催するときに「イベント」として選べます。
               ポイントは、イベントの「加算ポイント」に設定してください（出席1回ごとにそのポイントが付きます）。
             </p>
           )}

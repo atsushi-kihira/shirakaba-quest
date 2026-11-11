@@ -74,7 +74,13 @@ async function buildView(db: Db, series: Series, invitee: Invitee | null) {
     inviteeName: invitee?.name ?? "",
     inviteeEmail: invitee?.email ?? null,
     inviteeCompany: invitee?.company ?? "",
-    series: { id: series.id, title: series.title, description: series.description, status: series.status, host: host ?? null },
+    series: {
+      id: series.id, title: series.title, description: series.description, status: series.status, host: host ?? null,
+      noAttendanceCheck: series.noAttendanceCheck === 1,
+      isPaid: series.isPaid === 1,
+      feeAmount: series.isPaid === 1 ? series.feeAmount : null,
+      feeNote: series.isPaid === 1 ? series.feeNote : null,
+    },
     candidates: candidates.map((cand) => ({
       id: cand.id, note: cand.note, isConfirmed: cand.isConfirmed === 1,
       label: patternLabel({ ...cand, extraSlots: parseExtraSlots(cand.extraSlotsJson) }),

@@ -42,6 +42,7 @@ import { scheduleRoutes } from "./routes/schedule.ts";
 import { schedulerRoutes } from "./routes/scheduler/index.ts";
 import { pushRoutes } from "./routes/push.ts";
 import { cardOrderRoutes } from "./routes/card-orders.ts";
+import { calendarRoutes } from "./routes/calendar.ts";
 import { authMiddleware } from "./middleware/auth.ts";
 import { adminMiddleware } from "./middleware/auth.ts";
 import type { Env, Variables } from "./types.ts";
@@ -100,6 +101,7 @@ app.route("/api/collab/workspace", collabWorkspaceRoutes); // チーム育成（
 app.route("/api/collab", collabRoutes);
 app.route("/api/share-stories", shareStoryRoutes);
 app.route("/api/enishi", enishiRoutes);
+app.route("/api/calendar", calendarRoutes);
 app.route("/api/meetings", meetingRoutes);
 app.route("/api/meeting-series", meetingSeriesRoutes);
 app.route("/api/meeting-groups", meetingGroupRoutes);

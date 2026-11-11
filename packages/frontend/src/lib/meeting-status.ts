@@ -10,6 +10,8 @@ export type MeetingForStatus = {
   hasResponded: boolean;
   deadline?: number | null;
   confirmedDate: { startsAt: number; endsAt: number | null } | null;
+  /** 出欠を確認しない（お知らせのみの）会か */
+  noAttendanceCheck?: boolean;
 };
 
 export type EffectiveStatus =
@@ -19,7 +21,8 @@ export type EffectiveStatus =
   | "response_closed"            // 回答受付終了（募集中・回答期限超過）
   | "responded_pending_confirm"  // 回答済み・確定待ち（募集中・回答済み）
   | "new"                        // 新着・未回答（未読のお知らせあり）
-  | "seen_unresponded";          // 既読・未回答
+  | "seen_unresponded"           // 既読・未回答
+  | "announce";                  // お知らせのみ（出欠の回答は不要）
 
 /** 招待された側（自分が主催者でない）の実効ステータスを判定する */
 export function getMeetingEffectiveStatus(
@@ -35,6 +38,8 @@ export function getMeetingEffectiveStatus(
     const startsAt = m.confirmedDate?.startsAt ?? null;
     const endsAt = m.confirmedDate ? (m.confirmedDate.endsAt ?? m.confirmedDate.startsAt + 3600) : null;
     if (startsAt !== null && endsAt !== null && endsAt < nowSec) return "past";
+    // 出欠を確認しない会は、回答をお願いする対象にしない
+    if (m.noAttendanceCheck) return "announce";
     if (m.hasResponded) return "attending";
     return hasUnreadNotification ? "new" : "seen_unresponded";
   }
@@ -58,4 +63,5 @@ export const STATUS_META: Record<EffectiveStatus, { label: string; bg: string; c
   responded_pending_confirm:{ label: "回答済み・確定待ち",   bg: "var(--color-paper-200)",        color: "var(--color-ink-500)" },
   new:                       { label: "新着・回答をお願いします", bg: "rgba(181,56,75,0.1)",       color: "var(--color-brand)" },
   seen_unresponded:          { label: "回答をお願いします",   bg: "rgba(212,160,59,0.15)",         color: "var(--color-accent)" },
+  announce:                  { label: "お知らせ（出欠は不要）", bg: "rgba(90,140,92,0.12)",         color: "var(--color-success)" },
 };
