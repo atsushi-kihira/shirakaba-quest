@@ -393,6 +393,7 @@ export type EventTypeDefinition = {
   creatorRole: EventTypeCreatorRole;
   linksToMeeting: number;
   linksToOneOnOne: number;
+  titleColor?: string | null; // この種別のミーティング・定例会のタイトル文字の色（"#rrggbb"）。null = ふつうの色
   isSystem: number;
   isActive: number;
   sortOrder: number;
@@ -506,6 +507,7 @@ export type CalendarEvent = {
   kind: CalendarEventKind;  // oneonone=1to1 / meeting=通常ミーティング / series=定例会の開催回
   id: string;               // 種別ごとの識別子（1to1=セッションID or 予約ID、ミーティング/定例会=meetingId）
   title: string;
+  titleColor?: string | null; // イベント種別で指定された、タイトル文字の色（"#rrggbb"。セミナーなどの強調表示）
   startsAt: number;         // unix秒
   endsAt: number;           // unix秒
   isHost: boolean;          // 自分が主催者か（1to1では予約の主催側か）

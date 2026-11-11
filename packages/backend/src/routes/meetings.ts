@@ -60,6 +60,8 @@ import { parseMeetingOptions, withFeeLine, feeLine, type MeetingOptionsInput } f
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { deleteOwnerAttachments, listAttachments, pruneInlineAttachments, syncOwnerAttachments } from "../services/meeting-attachments.ts";
 import { parseStoredDoc, resolveDescriptionInput } from "../services/rich-doc.ts";
+import { loadTitleColors, titleColorOfType } from "../services/meeting-event.ts";
+import { parseCustomFields, parseStoredCustomFields, withCustomFieldLines } from "../services/custom-fields.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
 import { searchCommonFreeSlots } from "../services/meetingSlotSearch.ts";
@@ -144,6 +146,8 @@ meetingRoutes.post("/", async (c) => {
     description?: string;
     /** 書式つきの説明（見たまま編集の内容。JSON） */
     descriptionDoc?: unknown;
+    /** 主催者が追加した入力項目（最大10個。テキスト・数値・日付） */
+    customFields?: unknown;
     /** 説明に添付する画像・ファイル（アップロード済みの添付ID） */
     attachmentIds?: string[];
     scope: "all" | "team" | "collab_team" | "selected" | "group";
@@ -175,6 +179,8 @@ meetingRoutes.post("/", async (c) => {
   const descResolved = resolveDescriptionInput(body);
   if (!descResolved.ok) return c.json({ error: { code: "invalid_input", message: descResolved.message } }, 400);
   body.description = descResolved.plain ?? undefined;
+  const fieldsResolved = parseCustomFields(body.customFields);
+  if (!fieldsResolved.ok) return c.json({ error: { code: "invalid_input", message: fieldsResolved.message } }, 400);
   if (!body.candidates || body.candidates.length === 0) {
     return c.json({ error: { code: "invalid_input", message: "候補日を1つ以上設定してください" } }, 400);
   }
@@ -260,6 +266,7 @@ meetingRoutes.post("/", async (c) => {
     title: body.title.trim(),
     description: body.description?.trim() || null,
     descriptionDoc: descResolved.docJson,
+    customFieldsJson: fieldsResolved.json,
     hostMemberId: memberId,
     scope: body.scope ?? "all",
     teamId: body.scope === "team" ? body.teamId ?? null : null,
@@ -357,7 +364,7 @@ meetingRoutes.post("/", async (c) => {
           memberName: m.name,
           hostName,
           meetingTitle: body.title.trim(),
-          meetingDescription: withFeeLine(body.description, meetingOptions),
+          meetingDescription: withFeeLine(withCustomFieldLines(body.description, fieldsResolved.value), meetingOptions),
           deadlineStr,
           meetingUrl: `${appUrl}/meetings/${meetingId}`,
         }).catch(console.error)
@@ -501,7 +508,7 @@ meetingRoutes.post("/", async (c) => {
           })
         : mailer.send("meeting_invitation_guest", g.email as string, {
             appTitle, guestName: g.name, hostName, meetingTitle: body.title.trim(),
-            meetingDescription: withFeeLine(body.description, meetingOptions),
+            meetingDescription: withFeeLine(withCustomFieldLines(body.description, fieldsResolved.value), meetingOptions),
             deadlineStr: body.deadline
               ? `（回答期限: ${new Intl.DateTimeFormat("ja-JP", { timeZone: guestTz, year: "numeric", month: "numeric", day: "numeric" }).format(new Date(body.deadline * 1000))}）`
               : "",
@@ -733,12 +740,14 @@ meetingRoutes.get("/upcoming", async (c) => {
     : [];
   const hostMap = new Map(hosts.map((h) => [h.id, h]));
 
+  const titleColors = await loadTitleColors(db, relevant.map((m) => m.eventTypeDefId));
   return c.json({
     data: relevant.map((m) => {
       const cand = repMap.get(m.id);
       return {
         id: m.id,
         title: m.title,
+        titleColor: titleColors.get(m.eventTypeDefId ?? "") ?? null,
         description: m.description,
         host: hostMap.get(m.hostMemberId) ?? null,
         isHost: m.hostMemberId === memberId,
@@ -812,6 +821,7 @@ meetingRoutes.get("/hosting-open-summary", async (c) => {
     externalByMeeting.set(e.meetingId, list);
   }
 
+  const hostingTitleColors = await loadTitleColors(db, hosting.map((m) => m.eventTypeDefId));
   const data = await Promise.all(hosting.map(async (m) => {
     // 主催者自身は回答対象から除く（対象者リストを取得するのはここでは候補日提示方式の集計のためだけ）
     const targetMembers = (await getTargetMembers(db, m)).filter((tm) => tm.id !== memberId);
@@ -825,6 +835,7 @@ meetingRoutes.get("/hosting-open-summary", async (c) => {
     return {
       id: m.id,
       title: m.title,
+      titleColor: hostingTitleColors.get(m.eventTypeDefId ?? "") ?? null,
       candidateCount: candidateCountMap.get(m.id) ?? 0,
       targetCount: targetMembers.length + externalIds.length,
       respondedCount: respondedMemberCount + respondedExternalCount,
@@ -1011,6 +1022,7 @@ meetingRoutes.get("/", async (c) => {
   ]);
 
   const unnumberedSeriesIds = await loadUnnumberedSeriesIds(db, all.map((m) => m.seriesId));
+  const listTitleColors = await loadTitleColors(db, all.map((m) => m.eventTypeDefId));
   const result = all
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((m) => {
@@ -1018,6 +1030,7 @@ meetingRoutes.get("/", async (c) => {
       return {
         id: m.id,
         title: m.title,
+        titleColor: listTitleColors.get(m.eventTypeDefId ?? "") ?? null,
         description: m.description,
         host: hostMap.get(m.hostMemberId) ?? null,
         isHost: m.hostMemberId === memberId,
@@ -1185,7 +1198,7 @@ meetingRoutes.get("/pending-attendance", async (c) => {
     const isTarget = targets.some((m) => m.id === memberId) || meeting.hostMemberId === memberId;
     if (!isTarget) continue;
 
-    result.push({ id: meeting.id, title: meeting.title, confirmedStartsAt: earliest.startsAt });
+    result.push({ id: meeting.id, title: meeting.title, titleColor: await titleColorOfType(db, meeting.eventTypeDefId), confirmedStartsAt: earliest.startsAt });
   }
 
   return c.json({ data: result });
@@ -1459,8 +1472,10 @@ meetingRoutes.get("/:id", async (c) => {
       meeting: {
         id: meeting.id,
         title: meeting.title,
+        titleColor: await titleColorOfType(db, meeting.eventTypeDefId),
         description: meeting.description,
         descriptionDoc: parseStoredDoc(meeting.descriptionDoc),
+        customFields: parseStoredCustomFields(meeting.customFieldsJson),
         // 説明に添付したファイル（この回のものと、定例会全体のもの）
         attachments: meetingAttachments,
         seriesAttachments,
@@ -3232,6 +3247,24 @@ meetingRoutes.patch("/:id/description", async (c) => {
   queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
 
   return c.json({ ok: true, notified: true });
+});
+
+// ----------------------------------------------------------------
+// PATCH /api/meetings/:id/custom-fields — 追加した入力項目の変更（主催者のみ。お知らせ（メール・通知）は送らない）
+// ----------------------------------------------------------------
+meetingRoutes.patch("/:id/custom-fields", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const meeting = await db.select({ hostMemberId: schema.meetings.hostMemberId }).from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ変更できます" } }, 403);
+  const body = await c.req.json<{ customFields?: unknown }>().catch(() => ({} as { customFields?: unknown }));
+  const parsed = parseCustomFields(body.customFields);
+  if (!parsed.ok) return c.json({ error: { code: "invalid_input", message: parsed.message } }, 400);
+  await db.update(schema.meetings).set({ customFieldsJson: parsed.json, updatedAt: Math.floor(Date.now() / 1000) }).where(eq(schema.meetings.id, id));
+  return c.json({ ok: true });
 });
 
 // ----------------------------------------------------------------

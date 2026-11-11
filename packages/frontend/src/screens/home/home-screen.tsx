@@ -39,21 +39,21 @@ type OnoListResponse  = { data: OnoSession[] };
 type ConferenceReminder = { id: string; kind: "one_on_one" | "booking"; partnerName: string; scheduledFor: number };
 type ConferenceRemindersResponse = { data: ConferenceReminder[] };
 type QuestsResponse   = { data: Array<{ id: string; title: string; emoji: string; reward: number; skillCount: number; isSolved: boolean; isThisWeek: boolean }> };
-type UpcomingMeeting  = { id: string; title: string; host: { name: string; emoji: string } | null; isHost: boolean; confirmedDate: { startsAt: number; endsAt: number | null } | null };
+type UpcomingMeeting  = { id: string; title: string; titleColor?: string | null; host: { name: string; emoji: string } | null; isHost: boolean; confirmedDate: { startsAt: number; endsAt: number | null } | null };
 type UpcomingMeetingsResponse = { data: UpcomingMeeting[] };
-type MeetingListItem  = { id: string; title: string; host: { id: string; name: string; emoji: string } | null; isHost: boolean; status: string; hasResponded: boolean; registrationDeadline?: number | null };
+type MeetingListItem  = { id: string; title: string; titleColor?: string | null; host: { id: string; name: string; emoji: string } | null; isHost: boolean; status: string; hasResponded: boolean; registrationDeadline?: number | null };
 type MeetingsResponse = { data: MeetingListItem[] };
 type MeetingNotification = { id: string; meetingId: string; type: string; message: string | null; createdAt: number };
 type MeetingNotificationsResponse = { data: MeetingNotification[] };
 type MeetingSeriesListItem = {
-  id: string; title: string; status: "voting" | "confirmed" | "ended" | "cancelled";
+  id: string; title: string; titleColor?: string | null; status: "voting" | "confirmed" | "ended" | "cancelled";
   isHost: boolean; hasResponded: boolean;
   host: { id: string; name: string; emoji: string } | null;
 };
-type PendingAttendance = { id: string; title: string; confirmedStartsAt: number };
+type PendingAttendance = { id: string; title: string; titleColor?: string | null; confirmedStartsAt: number };
 type PendingAttendanceResponse = { data: PendingAttendance[] };
 type HostingOpenSummaryItem = {
-  id: string; title: string; candidateCount: number;
+  id: string; title: string; titleColor?: string | null; candidateCount: number;
   targetCount: number; respondedCount: number;
   deadline: number | null; createdAt: number;
 };
@@ -773,7 +773,7 @@ export function HomeScreen() {
                     📋
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>{m.title}</p>
+                    <p className="text-sm font-semibold truncate" style={{ color: m.titleColor ?? "var(--color-ink-800)" }}>{m.title}</p>
                     <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>{dateStr} 開催 · 出席状況を記録してください</p>
                   </div>
                   <ChevronRight size={16} style={{ color: "var(--color-accent)" }} />
@@ -1078,7 +1078,7 @@ export function HomeScreen() {
                   📅
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                  <p className="text-sm font-semibold truncate" style={{ color: m.titleColor ?? "var(--color-ink-800)" }}>
                     {m.title}
                   </p>
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
@@ -1111,7 +1111,7 @@ export function HomeScreen() {
                   🔁
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                  <p className="text-sm font-semibold truncate" style={{ color: s.titleColor ?? "var(--color-ink-800)" }}>
                     {s.title}
                   </p>
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
@@ -1145,7 +1145,7 @@ export function HomeScreen() {
                   📅
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                  <p className="text-sm font-semibold truncate" style={{ color: m.titleColor ?? "var(--color-ink-800)" }}>
                     {m.title}
                   </p>
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
@@ -1167,7 +1167,7 @@ export function HomeScreen() {
                   🔁
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>
+                  <p className="text-sm font-semibold truncate" style={{ color: s.titleColor ?? "var(--color-ink-800)" }}>
                     {s.title}
                   </p>
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
@@ -1207,7 +1207,7 @@ export function HomeScreen() {
                     {todayFlag ? "🔔" : "📅"}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{m.title}</p>
+                    <p className="text-sm font-medium truncate" style={{ color: m.titleColor ?? "var(--color-ink-800)" }}>{m.title}</p>
                     <p className="text-xs" style={{ color: todayFlag ? "var(--color-accent)" : "var(--color-ink-400)" }}>
                       {todayFlag ? "🔔 本日！" : ""}{dateStr}
                     </p>

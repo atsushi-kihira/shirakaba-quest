@@ -360,7 +360,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
                             <span
                               key={ev.key}
                               className={`${i === 2 ? "hidden sm:flex" : "flex"} items-center gap-px min-w-0 text-[9px] leading-tight text-left`}
-                              style={{ opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55, color: "var(--color-ink-700)" }}
+                              style={{ opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55, color: ev.titleColor ?? "var(--color-ink-700)", fontWeight: ev.titleColor ? 700 : undefined }}
                             >
                               <span className="shrink-0 text-[10px] leading-none">{KIND_INFO[ev.kind].icon}</span>
                               <span className="truncate">{ev.title}</span>
@@ -482,7 +482,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
                     {KIND_INFO[ev.kind].icon}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{ev.title}</p>
+                    <p className="text-sm font-medium truncate" style={{ color: ev.titleColor ?? "var(--color-ink-800)", fontWeight: ev.titleColor ? 700 : undefined }}>{ev.title}</p>
                     <p className="text-xs tabular-nums" style={{ color: "var(--color-ink-500)" }}>
                       {fmtTime(ev.startsAt, tz)}〜{fmtTime(ev.endsAt, tz)}
                       <span className="ml-1.5">{KIND_INFO[ev.kind].label}{ev.kind === "oneonone" && ev.isExternalGuest ? "（ビジター）" : ""}</span>

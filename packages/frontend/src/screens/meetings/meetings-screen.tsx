@@ -20,6 +20,8 @@ import { getMeetingEffectiveStatus, STATUS_META, type EffectiveStatus } from "@/
 type MeetingItem = {
   id: string;
   title: string;
+  /** イベント種別で指定された、タイトル文字の色（セミナーなどの強調表示） */
+  titleColor?: string | null;
   description: string | null;
   host: { id: string; name: string; emoji: string } | null;
   isHost: boolean;
@@ -331,6 +333,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
 // 通常ミーティングタブ
 // ================================================================
 type SeriesItem = {
+  titleColor?: string | null;
   id: string; title: string; status: "voting" | "confirmed" | "ended" | "cancelled";
   isHost: boolean; host: { id: string; name: string; emoji: string } | null;
   // 生成済みの開催回のうち最も遅い日程（unix秒）。開催回が1つも生成されていない場合は null
@@ -422,7 +425,7 @@ function RegularMeetingsTab() {
       <Link key={s.id} to={`/meetings/series/${s.id}`}
         className="block card-paper rounded-2xl px-4 py-3 transition active:opacity-75">
         <div className="flex items-center gap-2 flex-wrap mb-1">
-          <span className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>🔁 {s.title}</span>
+          <span className="font-semibold text-sm" style={{ color: s.titleColor ?? "var(--color-ink-900)" }}>🔁 {s.title}</span>
           {s.isHost && (
             <span className="text-xs px-1.5 py-0.5 rounded-md font-medium" style={{ background: "var(--color-accent)", color: "white" }}>主催</span>
           )}
@@ -452,7 +455,7 @@ function RegularMeetingsTab() {
         <div className="flex items-start gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <span className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>
+              <span className="font-semibold text-sm" style={{ color: m.titleColor ?? "var(--color-ink-900)" }}>
                 {m.title}
               </span>
               {m.seriesId && (
@@ -522,7 +525,7 @@ function RegularMeetingsTab() {
                 style={{ borderLeft: "3px solid var(--color-accent)" }}
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>{m.title}</p>
+                  <p className="text-sm font-semibold truncate" style={{ color: m.titleColor ?? "var(--color-ink-800)" }}>{m.title}</p>
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
                     {fmtDateShort(m.confirmedStartsAt, tz)} 開催 · 出席状況を記録してください
                   </p>
@@ -549,7 +552,7 @@ function RegularMeetingsTab() {
                 style={{ borderLeft: "3px solid var(--color-brand)" }}
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>{m.title}</p>
+                  <p className="text-sm font-semibold truncate" style={{ color: m.titleColor ?? "var(--color-ink-800)" }}>{m.title}</p>
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
                     {m.host?.emoji} {m.host?.name}さん主催 · 参加可否の回答をお願いします
                   </p>
@@ -576,7 +579,7 @@ function RegularMeetingsTab() {
                 style={{ borderLeft: "3px solid var(--color-brand)" }}
               >
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>🔁 {s.title}</p>
+                  <p className="text-sm font-semibold truncate" style={{ color: s.titleColor ?? "var(--color-ink-800)" }}>🔁 {s.title}</p>
                   <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
                     {s.host?.emoji} {s.host?.name}さん主催 · 候補パターンへの回答をお願いします
                   </p>

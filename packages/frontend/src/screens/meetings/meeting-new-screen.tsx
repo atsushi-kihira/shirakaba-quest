@@ -1,6 +1,8 @@
 // =============================================================
 // ミーティング新規作成画面
 // =============================================================
+import { CustomFieldsEditor } from "@/components/custom-fields-editor";
+import { customFieldsToPayload, validateCustomFields, type CustomField } from "@/lib/custom-fields";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -73,6 +75,7 @@ export function MeetingNewScreen() {
   const prefillTeamId = searchParams.get("collabTeamId") ?? "";
   const [title, setTitle] = useState(searchParams.get("title") ?? "");
   const [descDoc, setDescDoc] = useState<RichDoc>(() => plainToDoc(""));
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachBusy, setAttachBusy] = useState(false);
   const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected" | "group">(prefillTeamId ? "collab_team" : "all");
@@ -239,6 +242,8 @@ export function MeetingNewScreen() {
     if (validCandidates.length === 0) { setError(meetingMode === "confirmed" ? "確定日を1つ以上設定してください" : "候補日を1つ以上設定してください"); return; }
     const optionsError = validateMeetingOptions(meetingOptions);
     if (optionsError) { setError(optionsError); return; }
+    const fieldsError = validateCustomFields(customFields);
+    if (fieldsError) { setError(fieldsError); return; }
     const noEmailGuest = guestMissingEmail(guests);
     if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（メールで案内しない方は、一覧から外して、「招待メールを送る」のチェックを外して追加し直してください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
@@ -259,6 +264,7 @@ export function MeetingNewScreen() {
     createMutation.mutate({
       title: title.trim(),
       descriptionDoc: docIsEmpty(descDoc) ? undefined : descDoc,
+      customFields: customFieldsToPayload(customFields),
       attachmentIds: attachments.length > 0 ? attachments.map((a) => a.id) : undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
@@ -339,6 +345,8 @@ export function MeetingNewScreen() {
             placeholder="場所や目的など補足情報を入力（文字の大きさ・色・写真も使えます）"
           />
         </div>
+
+        <CustomFieldsEditor value={customFields} onChange={setCustomFields} />
 
         {/* 紐づけるイベント。ポイントはイベントに設定されている */}
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}

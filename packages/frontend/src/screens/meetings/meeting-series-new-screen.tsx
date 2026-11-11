@@ -2,6 +2,8 @@
 // 定例会（繰り返しミーティング）新規作成画面
 // 曜日・時刻の候補パターンを複数提示し、参加者の投票で1つに確定する。
 // =============================================================
+import { CustomFieldsEditor } from "@/components/custom-fields-editor";
+import { customFieldsToPayload, validateCustomFields, type CustomField } from "@/lib/custom-fields";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -88,6 +90,7 @@ export function MeetingSeriesNewScreen() {
 
   const [title, setTitle] = useState("");
   const [descDoc, setDescDoc] = useState<RichDoc>(() => plainToDoc(""));
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachBusy, setAttachBusy] = useState(false);
   const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected" | "group">("collab_team");
@@ -236,6 +239,8 @@ export function MeetingSeriesNewScreen() {
     if (!title.trim()) { setError("タイトルを入力してください"); return; }
     const optionsError = validateMeetingOptions(meetingOptions);
     if (optionsError) { setError(optionsError); return; }
+    const fieldsError = validateCustomFields(customFields);
+    if (fieldsError) { setError(fieldsError); return; }
     const noEmailGuest = guestMissingEmail(guests);
     if (noEmailGuest) { setError(`ゲスト「${noEmailGuest}」さんのメールアドレスを入力してください（メールで案内しない方は、一覧から外して、「招待メールを送る」のチェックを外して追加し直してください）`); return; }
     if (scope === "team" && !teamId) { setError("ギルドを選択してください"); return; }
@@ -250,6 +255,7 @@ export function MeetingSeriesNewScreen() {
       ...selectionToPayload(eventSelection),
       ...optionsToPayload(meetingOptions),
       descriptionDoc: docIsEmpty(descDoc) ? undefined : descDoc,
+      customFields: customFieldsToPayload(customFields),
       attachmentIds: attachments.length > 0 ? attachments.map((a) => a.id) : undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
@@ -365,6 +371,8 @@ export function MeetingSeriesNewScreen() {
             placeholder="場所や目的など補足情報（文字の大きさ・色・写真も使えます）"
           />
         </div>
+
+        <CustomFieldsEditor value={customFields} onChange={setCustomFields} />
 
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、定例会1回の参加ごとにポイントが付与されます" />

@@ -4,7 +4,7 @@
 // （multiplier）に設定する（種別の pointValue は「ポイントの対象種別か」を示す印で、ポイント数ではない）。
 // イベントが紐づいていない旧データのミーティングだけ、従来どおり種別の値を使う。
 // =============================================================
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 
@@ -86,4 +86,33 @@ export async function attendancePointsFor(
     return td?.pointValue ?? 0;
   }
   return 0;
+}
+
+// ---------------------------------------------------------------
+// イベント種別の「タイトル文字の色」（セミナーなどを強調表示する）
+// ---------------------------------------------------------------
+const TITLE_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/** 管理画面から届いた色を整える。null/空 = 色なし、不正な値は undefined */
+export function parseTitleColor(v: unknown): string | null | undefined {
+  if (v === null || v === "") return null;
+  return typeof v === "string" && TITLE_COLOR_RE.test(v) ? v.toLowerCase() : undefined;
+}
+
+/** イベント種別IDごとの、タイトル文字の色（色のある種別だけ） */
+export async function loadTitleColors(db: Db, typeDefIds: Array<string | null | undefined>): Promise<Map<string, string>> {
+  const ids = [...new Set(typeDefIds.filter((x): x is string => !!x))];
+  const out = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const rows = await db.select({ id: schema.eventTypeDefinitions.id, color: schema.eventTypeDefinitions.titleColor })
+      .from(schema.eventTypeDefinitions).where(inArray(schema.eventTypeDefinitions.id, ids.slice(i, i + 50))).all();
+    for (const r of rows) if (r.color) out.set(r.id, r.color);
+  }
+  return out;
+}
+
+/** 1つの種別のタイトル文字の色（なければ null） */
+export async function titleColorOfType(db: Db, typeDefId: string | null | undefined): Promise<string | null> {
+  if (!typeDefId) return null;
+  return (await loadTitleColors(db, [typeDefId])).get(typeDefId) ?? null;
 }

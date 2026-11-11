@@ -212,7 +212,7 @@ export function WeekTimeGrid({ days, tz, today, selected, onPick, appByDay, goog
                         title={`${ev.title}（${fmtTime(ev.startsAt, tz)}〜${fmtTime(ev.endsAt, tz)}）`}
                         onClick={(e) => e.stopPropagation()}
                         className="absolute rounded overflow-hidden px-0.5 text-white"
-                        style={{ ...pos, background: KIND_COLOR[ev.kind], opacity: isMuted(ev) ? 0.45 : 1, zIndex: 5 }}
+                        style={{ ...pos, background: ev.titleColor ?? KIND_COLOR[ev.kind], opacity: isMuted(ev) ? 0.45 : 1, zIndex: 5 }}
                       >
                         {/* 幅がせまいとき（予定が重なっているとき）は、タイトルを折り返して、読める範囲を増やす */}
                         <span className={`block text-[10px] leading-tight ${it.lanes > 1 ? "break-all" : "truncate"}`}>{KIND_INFO[ev.kind].icon} {ev.title}</span>

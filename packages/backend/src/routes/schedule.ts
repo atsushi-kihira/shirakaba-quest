@@ -14,6 +14,8 @@ import { isEmailLike, normalizeEmail, registerGuestAsContact } from "../services
 import { loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
 import { listAttachments } from "../services/meeting-attachments.ts";
 import { parseStoredDoc } from "../services/rich-doc.ts";
+import { parseStoredCustomFields } from "../services/custom-fields.ts";
+import { titleColorOfType } from "../services/meeting-event.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -130,6 +132,8 @@ scheduleRoutes.get("/:token", async (c) => {
         title: meeting.title,
         description: meeting.description,
         descriptionDoc: parseStoredDoc(meeting.descriptionDoc),
+        customFields: parseStoredCustomFields(meeting.customFieldsJson),
+        titleColor: await titleColorOfType(db, meeting.eventTypeDefId),
         attachments: [...(meeting.seriesId ? await listAttachments(db, "series", meeting.seriesId) : []), ...(await listAttachments(db, "meeting", meeting.id))],
         noAttendanceCheck: meeting.noAttendanceCheck === 1,
         isPaid: meeting.isPaid === 1,
@@ -321,6 +325,8 @@ scheduleRoutes.get("/invite/:inviteToken", async (c) => {
         title: meeting.title,
         description: meeting.description,
         descriptionDoc: parseStoredDoc(meeting.descriptionDoc),
+        customFields: parseStoredCustomFields(meeting.customFieldsJson),
+        titleColor: await titleColorOfType(db, meeting.eventTypeDefId),
         attachments: [...(meeting.seriesId ? await listAttachments(db, "series", meeting.seriesId) : []), ...(await listAttachments(db, "meeting", meeting.id))],
         noAttendanceCheck: meeting.noAttendanceCheck === 1,
         isPaid: meeting.isPaid === 1,

@@ -776,6 +776,7 @@ export const eventTypeDefinitions = sqliteTable("event_type_definitions", {
   // 'admin' | 'member'
   linksToMeeting:       integer("links_to_meeting").notNull().default(0),
   linksToOneOnOne:      integer("links_to_one_on_one").notNull().default(0), // 1to1に結びつけるイベント種別か
+  titleColor:           text("title_color"), // この種別のミーティング・定例会のタイトル文字の色（"#rrggbb"。マイグレーション 0113）。NULL = ふつうの色
   isSystem:             integer("is_system").notNull().default(0),
   isActive:             integer("is_active").notNull().default(1),
   sortOrder:            integer("sort_order").notNull().default(0),
@@ -890,6 +891,7 @@ export const meetings = sqliteTable("meetings", {
   title:                text("title").notNull(),
   description:          text("description"),
   descriptionDoc:       text("description_doc"), // 書式つきの説明（JSON文字列。マイグレーション 0112）。description は、これから作った文章だけの版
+  customFieldsJson:     text("custom_fields_json"), // 主催者が追加した入力項目（JSON文字列。マイグレーション 0113）
   hostMemberId:         text("host_member_id").notNull(),
   scope:                text("scope").notNull().default("all"), // 'all' | 'team' | 'collab_team' | 'selected'
   teamId:               text("team_id"),
@@ -1004,6 +1006,7 @@ export const meetingSeries = sqliteTable("meeting_series", {
   title:               text("title").notNull(),
   description:         text("description"),
   descriptionDoc:      text("description_doc"), // 書式つきの説明（JSON文字列。マイグレーション 0112）
+  customFieldsJson:    text("custom_fields_json"), // 主催者が追加した入力項目（JSON文字列。マイグレーション 0113）
   hostMemberId:        text("host_member_id").notNull(),
   scope:               text("scope").notNull(), // 'all' | 'team' | 'collab_team' | 'selected'
   teamId:              text("team_id"),         // scope='team' の場合（ギルド）

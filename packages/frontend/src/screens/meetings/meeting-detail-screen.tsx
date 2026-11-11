@@ -19,6 +19,8 @@ import { DEFAULT_START_TIME, defaultEndTime, addMinutesToTime } from "@/lib/meet
 import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 import { DescriptionEditor } from "@/components/description-editor";
 import { DescriptionBody } from "@/components/description-body";
+import { CustomFieldsSection } from "@/components/custom-fields-section";
+import type { CustomField } from "@/lib/custom-fields";
 import { AttachmentGallery } from "@/components/attachment-gallery";
 import { docIsEmpty, effectiveDoc, hasDescription, plainToDoc, type RichDoc } from "@/lib/rich-doc";
 import type { Attachment } from "@/lib/attachments";
@@ -40,6 +42,10 @@ type Respondent = {
 type ExternalInvitee = { id: string; name: string; email: string | null; token: string; createdAt: number; invitedAt?: number | null; company?: string | null };
 type Meeting = {
   id: string; title: string; description: string | null;
+  /** イベント種別で指定された、タイトル文字の色（セミナーなどの強調表示）。なければ null */
+  titleColor?: string | null;
+  /** 主催者が追加した入力項目（講師・定員など） */
+  customFields: CustomField[];
   /** 書式つきの説明（なければ null。description は、その文章だけの版） */
   descriptionDoc: RichDoc | null;
   /** 説明に添付した画像・ファイル。定例会の回では、定例会に添付したもの */
@@ -428,6 +434,11 @@ export function MeetingDetailScreen() {
     },
   });
 
+  const customFieldsMutation = useMutation({
+    mutationFn: (fields: CustomField[] | undefined) => api.patch(`/meetings/${id}/custom-fields`, { customFields: fields ?? null }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["meetings", id] }); },
+  });
+
   const descMutation = useMutation({
     mutationFn: (doc: RichDoc) =>
       api.patch(`/meetings/${id}/description`, { descriptionDoc: docIsEmpty(doc) ? null : doc, notify: descNotify }),
@@ -593,7 +604,7 @@ export function MeetingDetailScreen() {
           <ChevronLeft size={18} style={{ color: "var(--color-ink-600)" }} />
         </button>
         <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-semibold truncate" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          <h1 className="text-lg font-semibold truncate" style={{ fontFamily: "var(--font-klee)", color: meeting.titleColor ?? "var(--color-ink-900)" }}>
             {meeting.title}
           </h1>
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
@@ -704,6 +715,17 @@ export function MeetingDetailScreen() {
           <DescriptionBody className="mb-4" doc={meeting.descriptionDoc} plain={meeting.description} attachments={allAttachments} />
         )
       )}
+
+      {/* 追加項目（講師・定員など。説明のすぐ下。主催者は編集できる） */}
+      <CustomFieldsSection
+        className="mb-4"
+        fields={meeting.customFields ?? []}
+        canEdit={isHost}
+        saving={customFieldsMutation.isPending}
+        saveError={customFieldsMutation.isError ? "保存できませんでした。もう一度お試しください" : undefined}
+        onSave={async (fields) => { try { await customFieldsMutation.mutateAsync(fields); return true; } catch { return false; } }}
+        hint="保存すると、すぐに反映されます。お知らせ（メール・通知）は送りません。"
+      />
 
       {/* 開催のしかた（出欠を確認しない・有料） */}
       {meeting.noAttendanceCheck && (

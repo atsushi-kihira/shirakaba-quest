@@ -3,6 +3,7 @@
 // Layer 1: event_type_definitions（種別テンプレート）
 // Layer 2: event_campaigns（種別に紐づくインスタンス）
 // =============================================================
+import { TitleColorSetting } from "@/components/title-color-setting";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -92,6 +93,7 @@ function TypeDefEditForm({ typeDef, instanceCount, onDone }: { typeDef: EventTyp
   const [creatorRole, setCreatorRole] = useState(typeDef.creatorRole);
   const [linksToMeeting, setLinksToMeeting] = useState(typeDef.linksToMeeting === 1);
   const [linksToOneOnOne, setLinksToOneOnOne] = useState(typeDef.linksToOneOnOne === 1);
+  const [titleColor, setTitleColor] = useState<string | null>(typeDef.titleColor ?? null);
 
   const effectiveHasPoints = triggerType === "on_action" && hasPoints;
 
@@ -106,9 +108,11 @@ function TypeDefEditForm({ typeDef, instanceCount, onDone }: { typeDef: EventTyp
       creatorRole,
       linksToMeeting,
       linksToOneOnOne,
+      titleColor,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "event-type-definitions"] });
+      qc.invalidateQueries({ queryKey: ["events", "meeting-events"] });
       onDone();
     },
   });
@@ -176,6 +180,7 @@ function TypeDefEditForm({ typeDef, instanceCount, onDone }: { typeDef: EventTyp
           <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>1to1連携（1to1に結びつけるイベント種別）</span>
         </label>
       </div>
+      {linksToMeeting && <TitleColorSetting value={titleColor} onChange={setTitleColor} sampleText={name} />}
       <div>
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>インスタンス作成権限</label>
         <div className="grid grid-cols-2 gap-2">
@@ -591,7 +596,7 @@ function TypeDefSection({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-base" style={{
                 fontFamily: "var(--font-klee)",
-                color: typeDef.isActive ? "var(--color-ink-900)" : "var(--color-ink-400)",
+                color: typeDef.isActive ? (typeDef.titleColor ?? "var(--color-ink-900)") : "var(--color-ink-400)",
               }}>
                 {typeDef.name}
               </span>
@@ -806,6 +811,7 @@ function CreateTypeModal({ onClose }: { onClose: () => void }) {
   const [creatorRole, setCreatorRole] = useState<"admin" | "member">("admin");
   const [linksToMeeting, setLinksToMeeting] = useState(false);
   const [linksToOneOnOne, setLinksToOneOnOne] = useState(false);
+  const [titleColor, setTitleColor] = useState<string | null>(null);
 
   const effectiveHasPoints = triggerType === "on_action" && hasPoints;
 
@@ -815,7 +821,7 @@ function CreateTypeModal({ onClose }: { onClose: () => void }) {
       emoji: emoji || "🎪", triggerType,
       pointValue: effectiveHasPoints ? 1 : 0,
       requiresTargetMember: requiresTarget,
-      creatorRole, linksToMeeting, linksToOneOnOne,
+      creatorRole, linksToMeeting, linksToOneOnOne, titleColor,
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "event-type-definitions"] });
@@ -884,6 +890,7 @@ function CreateTypeModal({ onClose }: { onClose: () => void }) {
               <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>1to1連携（1to1に結びつけるイベント種別）</span>
             </label>
           </div>
+          {linksToMeeting && <TitleColorSetting value={titleColor} onChange={setTitleColor} sampleText={name} />}
           <div>
             <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>インスタンス作成権限</label>
             <div className="grid grid-cols-2 gap-2">

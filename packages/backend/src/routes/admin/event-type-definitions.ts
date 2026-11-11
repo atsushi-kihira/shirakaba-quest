@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { eq, asc } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
+import { parseTitleColor } from "../../services/meeting-event.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminEventTypeDefinitionRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -38,12 +39,17 @@ adminEventTypeDefinitionRoutes.post("/", async (c) => {
     creatorRole?: "admin" | "member";
     linksToMeeting?: boolean;
     linksToOneOnOne?: boolean;
+    /** タイトル文字の色（"#rrggbb"。なし = null） */
+    titleColor?: string | null;
     sortOrder?: number;
   }>();
 
   if (!body.name?.trim()) {
     return c.json({ error: { code: "invalid_input", message: "種別名は必須です" } }, 400);
   }
+
+  const titleColor = body.titleColor === undefined ? null : parseTitleColor(body.titleColor);
+  if (titleColor === undefined) return c.json({ error: { code: "invalid_input", message: "タイトルの色は、「#」と6桁の英数字（例：#b5384b）で指定してください" } }, 400);
 
   const id = newId();
   const slug = body.slug?.trim() || id;
@@ -61,6 +67,7 @@ adminEventTypeDefinitionRoutes.post("/", async (c) => {
     creatorRole: body.creatorRole ?? "admin",
     linksToMeeting: body.linksToMeeting ? 1 : 0,
     linksToOneOnOne: body.linksToOneOnOne ? 1 : 0,
+    titleColor,
     isSystem: 0,
     isActive: 1,
     sortOrder: body.sortOrder ?? 0,
@@ -87,6 +94,7 @@ adminEventTypeDefinitionRoutes.patch("/:id", async (c) => {
     creatorRole?: "admin" | "member";
     linksToMeeting?: boolean;
     linksToOneOnOne?: boolean;
+    titleColor?: string | null;
     isActive?: boolean;
     sortOrder?: number;
   }>();
@@ -94,6 +102,10 @@ adminEventTypeDefinitionRoutes.patch("/:id", async (c) => {
   const existing = await db.select().from(schema.eventTypeDefinitions)
     .where(eq(schema.eventTypeDefinitions.id, id)).get();
   if (!existing) return c.json({ error: { code: "not_found", message: "見つかりません" } }, 404);
+  const patchColor = body.titleColor === undefined ? undefined : parseTitleColor(body.titleColor);
+  if (body.titleColor !== undefined && patchColor === undefined) {
+    return c.json({ error: { code: "invalid_input", message: "タイトルの色は、「#」と6桁の英数字（例：#b5384b）で指定してください" } }, 400);
+  }
 
   await db.update(schema.eventTypeDefinitions).set({
     ...(body.name      !== undefined && { name: body.name.trim() }),
@@ -108,6 +120,7 @@ adminEventTypeDefinitionRoutes.patch("/:id", async (c) => {
     ...(body.creatorRole           !== undefined && { creatorRole: body.creatorRole }),
     ...(body.linksToMeeting        !== undefined && { linksToMeeting: body.linksToMeeting ? 1 : 0 }),
     ...(body.linksToOneOnOne       !== undefined && { linksToOneOnOne: body.linksToOneOnOne ? 1 : 0 }),
+    ...(patchColor                 !== undefined && { titleColor: patchColor }),
     updatedAt: now,
   }).where(eq(schema.eventTypeDefinitions.id, id));
 

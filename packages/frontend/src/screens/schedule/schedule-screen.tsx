@@ -2,6 +2,8 @@
 // 外部ゲスト向け日程回答画面（認証不要・公開ページ）
 // /schedule/:token
 // =============================================================
+import { CustomFieldsView } from "@/components/custom-fields-view";
+import type { CustomField } from "@/lib/custom-fields";
 import { GuestDescriptionBody } from "@/components/description-body";
 import type { Attachment } from "@/lib/attachments";
 import type { RichDoc } from "@/lib/rich-doc";
@@ -25,7 +27,7 @@ type ApiResponse = {
     inviteeEmail: string | null;
     inviteeCompany?: string;
     meeting: {
-      id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; status: string;
+      id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; customFields?: CustomField[]; titleColor?: string | null; status: string;
       confirmedCandidateId: string | null;
       noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null; feeNote?: string | null;
       host: { id: string; name: string; emoji: string } | null;
@@ -222,7 +224,7 @@ export function ScheduleScreen() {
         <div className="text-center mb-6">
           <div className="text-3xl mb-1">📅</div>
           <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>{appTitle} · 日程調整</p>
-          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: meeting.titleColor ?? "var(--color-ink-900)" }}>
             {meeting.title}
           </h1>
           {meeting.host && (
@@ -231,6 +233,7 @@ export function ScheduleScreen() {
             </p>
           )}
 <GuestDescriptionBody className="text-left mt-3 mx-1" token={token ?? ""} doc={meeting.descriptionDoc} plain={meeting.description} attachments={meeting.attachments} />
+          <CustomFieldsView className="text-left mt-3 mx-1" fields={meeting.customFields} />
           {meeting.isPaid && (
             <p className="text-sm mt-3 mx-2 px-3 py-2 rounded-xl text-left" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-700)" }}>
               💴 <span className="font-medium">有料のミーティングです。参加費：{meeting.feeAmount != null ? `${meeting.feeAmount.toLocaleString("ja-JP")}円` : "—"}</span>

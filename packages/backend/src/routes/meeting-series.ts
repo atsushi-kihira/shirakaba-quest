@@ -31,6 +31,8 @@ import { computeOccurrences, computeOccurrencesWithRules, parseExcludedDates, is
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent, refreshHostMeetingCalendarEvents, pickConferenceUrl } from "../services/conferenceService.ts";
 import { deleteOwnersAttachments, listAttachments, pruneInlineAttachments, syncOwnerAttachments } from "../services/meeting-attachments.ts";
 import { parseStoredDoc, resolveDescriptionInput } from "../services/rich-doc.ts";
+import { loadTitleColors, titleColorOfType } from "../services/meeting-event.ts";
+import { parseCustomFields, parseStoredCustomFields, withCustomFieldLines } from "../services/custom-fields.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -149,6 +151,8 @@ meetingSeriesRoutes.post("/", async (c) => {
     description?: string;
     /** 書式つきの説明（見たまま編集の内容。JSON） */
     descriptionDoc?: unknown;
+    /** 主催者が追加した入力項目（最大10個。テキスト・数値・日付） */
+    customFields?: unknown;
     /** 説明に添付する画像・ファイル（アップロード済みの添付ID） */
     attachmentIds?: string[];
     scope: "all" | "team" | "collab_team" | "selected" | "group";
@@ -199,6 +203,8 @@ meetingSeriesRoutes.post("/", async (c) => {
   const descResolved = resolveDescriptionInput(body);
   if (!descResolved.ok) return c.json({ error: { code: "invalid_input", message: descResolved.message } }, 400);
   body.description = descResolved.plain ?? undefined;
+  const fieldsResolved = parseCustomFields(body.customFields);
+  if (!fieldsResolved.ok) return c.json({ error: { code: "invalid_input", message: fieldsResolved.message } }, 400);
   // 開催のしかた（出欠を確認しない・有料）。出欠を確認しない定例会は、日程が決まっている作り方（確定日）のときだけ
   const optionsResult = parseMeetingOptions(body, mode === "confirmed");
   if (!optionsResult.ok) return c.json({ error: { code: "invalid_input", message: optionsResult.message } }, 400);
@@ -397,6 +403,7 @@ meetingSeriesRoutes.post("/", async (c) => {
     title: body.title.trim(),
     description: body.description?.trim() || null,
     descriptionDoc: descResolved.docJson,
+    customFieldsJson: fieldsResolved.json,
     hostMemberId: memberId,
     scope: body.scope,
     teamId: body.scope === "team" ? body.teamId ?? null : null,
@@ -478,7 +485,7 @@ meetingSeriesRoutes.post("/", async (c) => {
           memberName: m.name,
           hostName: host?.name ?? "主催者",
           meetingTitle: `【定例会】${body.title.trim()}`,
-          meetingDescription: withFeeLine(body.description, meetingOptions),
+          meetingDescription: withFeeLine(withCustomFieldLines(body.description, fieldsResolved.value), meetingOptions),
           deadlineStr: "",
           meetingUrl: `${appUrl}/meetings/series/${seriesId}`,
         }).catch(console.error)
@@ -491,7 +498,7 @@ meetingSeriesRoutes.post("/", async (c) => {
           guestName: g.name,
           hostName: host?.name ?? "主催者",
           meetingTitle: `【定例会】${body.title.trim()}`,
-          meetingDescription: withFeeLine(body.description, meetingOptions),
+          meetingDescription: withFeeLine(withCustomFieldLines(body.description, fieldsResolved.value), meetingOptions),
           deadlineStr: "",
           scheduleUrl: `${appUrl}/schedule/series/${g.token}`,
         }).catch(console.error)
@@ -582,6 +589,7 @@ meetingSeriesRoutes.get("/hosting-voting-summary", async (c) => {
     respondedMemberIdsBySeriesId.set(r.seriesId, set);
   }
 
+  const hostingTitleColors = await loadTitleColors(db, hosting.map((s) => s.eventTypeDefId));
   const data = await Promise.all(hosting.map(async (s) => {
     const targetIds = (await resolveSeriesMemberIds(db, s)).filter((tid) => tid !== memberId);
     const respondedIds = respondedMemberIdsBySeriesId.get(s.id) ?? new Set<string>();
@@ -589,6 +597,7 @@ meetingSeriesRoutes.get("/hosting-voting-summary", async (c) => {
     return {
       id: s.id,
       title: s.title,
+      titleColor: hostingTitleColors.get(s.eventTypeDefId ?? "") ?? null,
       candidateCount: candidateCountBySeriesId.get(s.id) ?? 0,
       targetCount: targetIds.length,
       respondedCount,
@@ -680,10 +689,12 @@ meetingSeriesRoutes.get("/", async (c) => {
     }
   }
 
+  const listTitleColors = await loadTitleColors(db, mine.map((s) => s.eventTypeDefId));
   const data = mine
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((s) => ({
       id: s.id, title: s.title, status: s.status,
+      titleColor: listTitleColors.get(s.eventTypeDefId ?? "") ?? null,
       noAttendanceCheck: s.noAttendanceCheck === 1,
       isPaid: s.isPaid === 1,
       feeAmount: s.isPaid === 1 ? s.feeAmount : null,
@@ -802,7 +813,9 @@ meetingSeriesRoutes.get("/:id", async (c) => {
   return c.json({
     data: {
       id: series.id, title: series.title, description: series.description,
+      titleColor: await titleColorOfType(db, series.eventTypeDefId),
       descriptionDoc: parseStoredDoc(series.descriptionDoc),
+      customFields: parseStoredCustomFields(series.customFieldsJson),
       attachments: await listAttachments(db, "series", series.id),
       event: linkedEvent ? { id: linkedEvent.id, title: linkedEvent.title, ended: linkedEvent.status !== "active", points: eventPoints } : null,
       eventType: eventType ?? null,
@@ -1067,6 +1080,7 @@ async function generateSeriesOccurrences(
       title: occurrenceTitle(series, i, dateLabel),
       description: series.description,
       descriptionDoc: series.descriptionDoc,
+      customFieldsJson: series.customFieldsJson,
       hostMemberId: series.hostMemberId,
       scope: "selected",
       status: "confirmed",
@@ -1336,6 +1350,40 @@ meetingSeriesRoutes.patch("/:id/description", async (c) => {
   }
 
   return c.json({ ok: true, updatedOccurrences: updated });
+});
+
+// ----------------------------------------------------------------
+// PATCH /api/meeting-series/:id/custom-fields — 定例会の追加項目の変更（主催者のみ）
+//   これから開催する各回のうち、追加項目が定例会のままの回にも反映する（個別に直した回は、そのまま残す）。
+// ----------------------------------------------------------------
+meetingSeriesRoutes.patch("/:id/custom-fields", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ変更できます" } }, 403);
+  const body = await c.req.json<{ customFields?: unknown }>().catch(() => ({} as { customFields?: unknown }));
+  const parsed = parseCustomFields(body.customFields);
+  if (!parsed.ok) return c.json({ error: { code: "invalid_input", message: parsed.message } }, 400);
+
+  const oldJson = series.customFieldsJson ?? null;
+  await db.update(schema.meetingSeries).set({ customFieldsJson: parsed.json, updatedAt: now }).where(eq(schema.meetingSeries.id, id));
+  const occurrences = await db.select({ id: schema.meetings.id, json: schema.meetings.customFieldsJson, cand: schema.meetings.confirmedCandidateId })
+    .from(schema.meetings).where(and(eq(schema.meetings.seriesId, id), ne(schema.meetings.status, "cancelled"))).all();
+  const same = occurrences.filter((m) => (m.json ?? null) === oldJson);
+  const startsById = new Map<string, number>();
+  for (const chunk of chunkOf(same.map((m) => m.cand).filter((x): x is string => !!x), DELETE_CHUNK)) {
+    for (const r of await db.select({ id: schema.meetingDateCandidates.id, startsAt: schema.meetingDateCandidates.startsAt })
+      .from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, chunk)).all()) startsById.set(r.id, r.startsAt);
+  }
+  const targets = same.filter((m) => { const t = m.cand ? startsById.get(m.cand) : undefined; return t === undefined || t >= now; });
+  for (const chunk of chunkOf(targets.map((m) => m.id), DELETE_CHUNK)) {
+    await db.update(schema.meetings).set({ customFieldsJson: parsed.json, updatedAt: now }).where(inArray(schema.meetings.id, chunk));
+  }
+  return c.json({ ok: true, updatedOccurrences: targets.length });
 });
 
 // ----------------------------------------------------------------

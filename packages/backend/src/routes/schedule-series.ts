@@ -18,6 +18,8 @@ import { loadResponseComments, normalizeComment, saveResponseComment } from "../
 import { patternLabel, upcomingDatesFor } from "./meeting-series.ts";
 import { listAttachments } from "../services/meeting-attachments.ts";
 import { parseStoredDoc } from "../services/rich-doc.ts";
+import { parseStoredCustomFields } from "../services/custom-fields.ts";
+import { titleColorOfType } from "../services/meeting-event.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -79,6 +81,8 @@ async function buildView(db: Db, series: Series, invitee: Invitee | null) {
     series: {
       id: series.id, title: series.title, description: series.description, status: series.status, host: host ?? null,
       descriptionDoc: parseStoredDoc(series.descriptionDoc),
+      customFields: parseStoredCustomFields(series.customFieldsJson),
+      titleColor: await titleColorOfType(db, series.eventTypeDefId),
       attachments: await listAttachments(db, "series", series.id),
       noAttendanceCheck: series.noAttendanceCheck === 1,
       isPaid: series.isPaid === 1,
