@@ -154,7 +154,7 @@ export function EditBookingScheduleModal({
               <button type="button" onClick={() => { setMode("none"); setConferenceUrl(""); }}
                 className="py-2 rounded-xl text-xs font-medium transition"
                 style={{ background: mode === "none" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "none" ? "white" : "var(--color-ink-600)" }}>
-                URLなし
+                URLなし（対面）
               </button>
             </div>
             {(!zoomConnected || !googleConnected) && (

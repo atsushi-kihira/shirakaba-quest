@@ -301,43 +301,6 @@ export function MeetingNewScreen() {
       </div>
 
       <div className="space-y-5">
-        {/* 作成モード（投票 / 確定日） */}
-        <div>
-          <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
-            作成方法
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => setMeetingMode("vote")}
-              className="py-2.5 rounded-2xl text-sm font-medium transition"
-              style={{ background: meetingMode === "vote" ? "var(--color-brand)" : "var(--color-paper-200)", color: meetingMode === "vote" ? "white" : "var(--color-ink-600)" }}
-            >
-              📋 候補日を提案する
-            </button>
-            <button
-              type="button"
-              onClick={() => setMeetingMode("confirmed")}
-              className="py-2.5 rounded-2xl text-sm font-medium transition"
-              style={{ background: meetingMode === "confirmed" ? "var(--color-brand)" : "var(--color-paper-200)", color: meetingMode === "confirmed" ? "white" : "var(--color-ink-600)" }}
-            >
-              ✅ 日程は決定済み
-            </button>
-          </div>
-          <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-400)" }}>
-            {meetingMode === "vote"
-              ? "候補日を出して参加者に投票してもらい、あとで日程を確定します"
-              : "すでに決まっている日程で、このまま確定して案内・招待します"}
-          </p>
-        </div>
-
-        {/* 紐づけるイベント（先頭）。ポイントはイベントに設定されている */}
-        <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
-          hint="ポイントのつくイベントを選ぶと、出席者にポイントが付与されます" />
-
-        {/* 開催のしかた（出欠を確認しない・有料） */}
-        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={meetingMode === "confirmed"} />
-
         {/* タイトル */}
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
@@ -374,6 +337,13 @@ export function MeetingNewScreen() {
             }}
           />
         </div>
+
+        {/* 紐づけるイベント。ポイントはイベントに設定されている */}
+        <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
+          hint="ポイントのつくイベントを選ぶと、出席者にポイントが付与されます" />
+
+        {/* 開催のしかた（出欠を確認しない・有料） */}
+        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={meetingMode === "confirmed"} />
 
         {/* 対象者 */}
         <div>
@@ -456,6 +426,36 @@ export function MeetingNewScreen() {
 
         {/* 外部ゲスト（ビジター）の招待 */}
         <MeetingGuestSection kind="meeting" guests={guests} onGuestsChange={setGuests} onReservationChange={setReservationToken} />
+
+        {/* 作成モード（投票 / 確定日） */}
+        <div>
+          <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
+            作成方法
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMeetingMode("vote")}
+              className="py-2.5 rounded-2xl text-sm font-medium transition"
+              style={{ background: meetingMode === "vote" ? "var(--color-brand)" : "var(--color-paper-200)", color: meetingMode === "vote" ? "white" : "var(--color-ink-600)" }}
+            >
+              📋 候補日を提案する
+            </button>
+            <button
+              type="button"
+              onClick={() => setMeetingMode("confirmed")}
+              className="py-2.5 rounded-2xl text-sm font-medium transition"
+              style={{ background: meetingMode === "confirmed" ? "var(--color-brand)" : "var(--color-paper-200)", color: meetingMode === "confirmed" ? "white" : "var(--color-ink-600)" }}
+            >
+              ✅ 日程は決定済み
+            </button>
+          </div>
+          <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-400)" }}>
+            {meetingMode === "vote"
+              ? "候補日を出して参加者に投票してもらい、あとで日程を確定します"
+              : "すでに決まっている日程で、このまま確定して案内・招待します"}
+          </p>
+        </div>
 
         {/* 所要時間（すべての候補日時で共通） */}
         <DurationSelect value={duration} onChange={setDuration}

@@ -339,52 +339,6 @@ export function MeetingSeriesNewScreen() {
       </p>
 
       <div className="space-y-5">
-        <DurationSelect value={duration} onChange={setDuration} />
-
-        <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
-          hint="ポイントのつくイベントを選ぶと、定例会1回の参加ごとにポイントが付与されます" />
-
-        {/* 開催のしかた（出欠を確認しない・有料） */}
-        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={seriesMode === "confirmed"} />
-
-        <div>
-          <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
-            作成方法
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => setSeriesMode("vote")}
-              className="py-2.5 rounded-2xl text-sm font-medium transition"
-              style={{ background: seriesMode === "vote" ? "var(--color-brand)" : "var(--color-paper-200)", color: seriesMode === "vote" ? "white" : "var(--color-ink-600)" }}>
-              🗳️ 投票してもらう
-            </button>
-            <button onClick={() => setSeriesMode("confirmed")}
-              className="py-2.5 rounded-2xl text-sm font-medium transition"
-              style={{ background: seriesMode === "confirmed" ? "var(--color-brand)" : "var(--color-paper-200)", color: seriesMode === "confirmed" ? "white" : "var(--color-ink-600)" }}>
-              ✅ 日程はもう決まっている
-            </button>
-          </div>
-        </div>
-
-        {seriesMode === "confirmed" && (
-          <div>
-            <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
-              日程の決め方
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => setDateMode("recurring")}
-                className="py-2.5 rounded-2xl text-sm font-medium transition"
-                style={{ background: dateMode === "recurring" ? "var(--color-accent)" : "var(--color-paper-200)", color: dateMode === "recurring" ? "white" : "var(--color-ink-600)" }}>
-                🔁 繰り返しパターン
-              </button>
-              <button onClick={() => setDateMode("fixed")}
-                className="py-2.5 rounded-2xl text-sm font-medium transition"
-                style={{ background: dateMode === "fixed" ? "var(--color-accent)" : "var(--color-paper-200)", color: dateMode === "fixed" ? "white" : "var(--color-ink-600)" }}>
-                📅 個別の固定日
-              </button>
-            </div>
-          </div>
-        )}
-
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
             タイトル <span style={{ color: "var(--color-brand)" }}>*</span>
@@ -401,6 +355,12 @@ export function MeetingSeriesNewScreen() {
             className="w-full px-4 py-3 rounded-2xl text-sm outline-none border resize-none"
             style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
         </div>
+
+        <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
+          hint="ポイントのつくイベントを選ぶと、定例会1回の参加ごとにポイントが付与されます" />
+
+        {/* 開催のしかた（出欠を確認しない・有料） */}
+        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={seriesMode === "confirmed"} />
 
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>対象者</label>
@@ -464,6 +424,46 @@ export function MeetingSeriesNewScreen() {
 
         {/* 外部ゲスト（ビジター）の招待 */}
         <MeetingGuestSection kind="series" guests={guests} onGuestsChange={setGuests} onReservationChange={setReservationToken} />
+
+        <div>
+          <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
+            作成方法
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={() => setSeriesMode("vote")}
+              className="py-2.5 rounded-2xl text-sm font-medium transition"
+              style={{ background: seriesMode === "vote" ? "var(--color-brand)" : "var(--color-paper-200)", color: seriesMode === "vote" ? "white" : "var(--color-ink-600)" }}>
+              🗳️ 投票してもらう
+            </button>
+            <button onClick={() => setSeriesMode("confirmed")}
+              className="py-2.5 rounded-2xl text-sm font-medium transition"
+              style={{ background: seriesMode === "confirmed" ? "var(--color-brand)" : "var(--color-paper-200)", color: seriesMode === "confirmed" ? "white" : "var(--color-ink-600)" }}>
+              ✅ 日程はもう決まっている
+            </button>
+          </div>
+        </div>
+
+        {seriesMode === "confirmed" && (
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
+              日程の決め方
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => setDateMode("recurring")}
+                className="py-2.5 rounded-2xl text-sm font-medium transition"
+                style={{ background: dateMode === "recurring" ? "var(--color-accent)" : "var(--color-paper-200)", color: dateMode === "recurring" ? "white" : "var(--color-ink-600)" }}>
+                🔁 繰り返しパターン
+              </button>
+              <button onClick={() => setDateMode("fixed")}
+                className="py-2.5 rounded-2xl text-sm font-medium transition"
+                style={{ background: dateMode === "fixed" ? "var(--color-accent)" : "var(--color-paper-200)", color: dateMode === "fixed" ? "white" : "var(--color-ink-600)" }}>
+                📅 個別の固定日
+              </button>
+            </div>
+          </div>
+        )}
+
+        <DurationSelect value={duration} onChange={setDuration} />
 
         {dateMode === "fixed" && seriesMode === "confirmed" ? (
           <div>

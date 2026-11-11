@@ -1,5 +1,5 @@
 // =============================================================
-// 会議URLの設定方法を選ぶ4択UI（手入力／Zoom自動生成／Meet自動生成／URLなし）
+// 会議URLの設定方法を選ぶ4択UI（手入力／Zoom自動生成／Meet自動生成／URLなし（対面））
 // 複数人ミーティング・定例会を「確定日として作成する」ときに共通で使う。
 // =============================================================
 export type ConferenceMode = "manual" | "zoom" | "google_meet" | "none";
@@ -40,7 +40,7 @@ export function ConferenceModeSelector({
         <button type="button" onClick={() => onModeChange("none")}
           className="py-2 rounded-xl text-xs font-medium transition"
           style={{ background: mode === "none" ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === "none" ? "white" : "var(--color-ink-600)" }}>
-          URLなし
+          URLなし（対面）
         </button>
       </div>
       {(!zoomConnected || !googleConnected) && (
