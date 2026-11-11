@@ -220,3 +220,66 @@ export function computeOccurrences(
   }
   return results;
 }
+
+
+// ---- 開催ルール（祝日は開催しない・開催しない日） ----
+
+export type OccurrenceRules = {
+  /** 祝日と重なる日は開催しない */
+  skipHolidays: boolean;
+  /** 開催しない日（"YYYY-MM-DD"。日本時間の日付） */
+  excludedDates: string[];
+};
+
+/** DBに持っている「開催しない日」（JSON文字列）を、正しい形の日付だけ取り出す */
+export function parseExcludedDates(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** "YYYY-MM-DD" が、実在する日付か */
+export function isValidDateKey(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/** 開催日時の一覧から、祝日・開催しない日にあたるものを外す */
+export function filterOccurrencesByRules<T extends { startsAt: number }>(occurrences: T[], rules: OccurrenceRules): T[] {
+  if (!rules.skipHolidays && rules.excludedDates.length === 0) return occurrences;
+  const excluded = new Set(rules.excludedDates);
+  return occurrences.filter((o) => {
+    const p = jstPartsFromUnix(o.startsAt);
+    const key = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+    if (excluded.has(key)) return false;
+    if (rules.skipHolidays && isJapanHoliday(p.year, p.month, p.day)) return false;
+    return true;
+  });
+}
+
+/**
+ * computeOccurrences に、開催ルールを適用する。
+ * 回数で終わりを決めている場合は、「開催する回」がその回数になるように、外した分だけ先の日まで延ばす。
+ */
+export function computeOccurrencesWithRules(
+  pattern: RecurrencePattern,
+  fromTs: number,
+  endCondition: { type: "date"; endDate: number } | { type: "count"; count: number },
+  rules: OccurrenceRules,
+): Array<{ startsAt: number; endsAt: number }> {
+  if (!rules.skipHolidays && rules.excludedDates.length === 0) return computeOccurrences(pattern, fromTs, endCondition);
+  if (endCondition.type === "date") {
+    return filterOccurrencesByRules(computeOccurrences(pattern, fromTs, endCondition), rules);
+  }
+  const wanted = Math.min(endCondition.count, MAX_OCCURRENCES);
+  // 外される分（開催しない日の数＋祝日の分）の余裕を見て多めに作り、外したあとに、必要な回数だけ残す
+  const buffer = rules.excludedDates.length + Math.ceil(wanted / 4) + 15;
+  const all = computeOccurrences(pattern, fromTs, { type: "count", count: Math.min(wanted + buffer, MAX_OCCURRENCES) });
+  return filterOccurrencesByRules(all, rules).slice(0, wanted);
+}

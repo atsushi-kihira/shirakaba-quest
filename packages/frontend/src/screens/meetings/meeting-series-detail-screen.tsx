@@ -41,6 +41,8 @@ type SeriesDetail = {
   deadline: number | null;
   /** 出欠を確認しない（お知らせのみ）／有料（参加費・補足） */
   noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null; feeNote?: string | null;
+  /** 開催のルール（祝日は開催しない・開催しない日）と、各回のタイトルの連番 */
+  skipHolidays?: boolean; excludedDates?: string[]; numberedTitles?: boolean;
   endCondition: "date" | "count" | null; endDate: number | null; occurrenceCount: number | null;
   conferenceType: "manual" | "google_meet" | "zoom" | null;
   conferenceUrl: string | null;
@@ -292,6 +294,14 @@ export function MeetingSeriesDetailScreen() {
             {series.feeNote && <span className="block text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>{series.feeNote}</span>}
           </p>
         )}
+        {(series.skipHolidays || (series.excludedDates?.length ?? 0) > 0) && (
+          <p className="text-xs my-1.5" style={{ color: "var(--color-ink-500)" }}>
+            🗓️ 開催しない日：
+            {series.skipHolidays ? "祝日" : ""}
+            {series.skipHolidays && (series.excludedDates?.length ?? 0) > 0 ? "、" : ""}
+            {(series.excludedDates ?? []).map((d) => d.replaceAll("-", "/")).join("、")}
+          </p>
+        )}
         <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
           対象: {series.targetMembers.map((m) => `${m.emoji} ${m.name}`).join("、") || "（対象者なし）"}
         </p>
@@ -517,7 +527,7 @@ export function MeetingSeriesDetailScreen() {
                 {upcoming.map((o, idx) => {
                   const text = (
                     <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>
-                      第{o.seriesOccurrenceIndex ?? idx + 1}回・{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
+                      {series.numberedTitles === false ? "" : `第${o.seriesOccurrenceIndex ?? idx + 1}回・`}{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
                       {o.endsAt ? `〜${fmtTime(o.endsAt, tz)}` : ""}
                     </p>
                   );
@@ -589,7 +599,7 @@ export function MeetingSeriesDetailScreen() {
                     className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80 opacity-70">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium" style={{ color: "var(--color-ink-700)" }}>
-                        {o.status === "cancelled" ? "キャンセル" : `第${o.seriesOccurrenceIndex}回`}・{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
+                        {o.status === "cancelled" ? "キャンセル・" : series.numberedTitles === false ? "" : `第${o.seriesOccurrenceIndex}回・`}{fmtDateJP(o.startsAt, tz)} {fmtTime(o.startsAt, tz)}
                       </p>
                     </div>
                     {o.status === "cancelled" && <XCircle size={14} style={{ color: "var(--color-ink-400)" }} />}
@@ -643,6 +653,7 @@ export function MeetingSeriesDetailScreen() {
       {showUrlsModal && (
         <SeriesConferenceUrlsModal
           occurrences={upcoming}
+          numbered={series.numberedTitles !== false}
           pending={conferenceUrlsMutation.isPending}
           error={urlsError}
           onClose={() => setShowUrlsModal(false)}

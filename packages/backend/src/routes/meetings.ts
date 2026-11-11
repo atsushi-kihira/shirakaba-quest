@@ -109,6 +109,15 @@ async function loadRepresentativeConfirmedDates(
 }
 
 
+/** 各回のタイトルに「第N回」の連番をつけていない定例会のID（画面で「第N回」を出さないために使う） */
+async function loadUnnumberedSeriesIds(db: ReturnType<typeof createDb>, seriesIds: Array<string | null>): Promise<Set<string>> {
+  const ids = [...new Set(seriesIds.filter((x): x is string => !!x))];
+  if (ids.length === 0) return new Set();
+  const rows = await db.select({ id: schema.meetingSeries.id }).from(schema.meetingSeries)
+    .where(and(inArray(schema.meetingSeries.id, ids), eq(schema.meetingSeries.numberedTitles, 0))).all();
+  return new Set(rows.map((r) => r.id));
+}
+
 const MAX_CANDIDATES = 20;
 const REMINDER_COOLDOWN_SECONDS = 6 * 60 * 60; // 6時間
 // AIの空き時間検索で指定できる所要時間は、ほかの所要時間の設定と同じ 5分〜12時間
@@ -989,6 +998,7 @@ meetingRoutes.get("/", async (c) => {
     ...myAttendances.map((a) => a.meetingId),
   ]);
 
+  const unnumberedSeriesIds = await loadUnnumberedSeriesIds(db, all.map((m) => m.seriesId));
   const result = all
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((m) => {
@@ -1007,7 +1017,7 @@ meetingRoutes.get("/", async (c) => {
         confirmedDate: confCand ? { startsAt: confCand.startsAt, endsAt: confCand.endsAt } : null,
         hasResponded: respondedSet.has(m.id),
         seriesId: m.seriesId,
-        seriesOccurrenceIndex: m.seriesOccurrenceIndex,
+        seriesOccurrenceIndex: m.seriesId && unnumberedSeriesIds.has(m.seriesId) ? null : m.seriesOccurrenceIndex,
         noAttendanceCheck: m.noAttendanceCheck === 1,
         isPaid: m.isPaid === 1,
         feeAmount: m.isPaid === 1 ? m.feeAmount : null,
@@ -1396,6 +1406,7 @@ meetingRoutes.get("/:id", async (c) => {
   }
 
   // グループで作成したミーティングは、主催者にだけ、グループ名を返す（グループは本人だけのもの）
+  const detailUnnumbered = await loadUnnumberedSeriesIds(db, [meeting.seriesId]);
   const groupName = isHost && meeting.groupId
     ? (await db.select({ name: schema.meetingGroups.name }).from(schema.meetingGroups).where(eq(schema.meetingGroups.id, meeting.groupId)).get())?.name ?? null
     : null;
@@ -1421,7 +1432,7 @@ meetingRoutes.get("/:id", async (c) => {
         conferenceType: meeting.conferenceType,
         conferenceUrl: meeting.conferenceUrl,
         seriesId: meeting.seriesId,
-        seriesOccurrenceIndex: meeting.seriesOccurrenceIndex,
+        seriesOccurrenceIndex: meeting.seriesId && detailUnnumbered.has(meeting.seriesId) ? null : meeting.seriesOccurrenceIndex,
         noAttendanceCheck: meeting.noAttendanceCheck === 1,
         isPaid: meeting.isPaid === 1,
         feeAmount: meeting.isPaid === 1 ? meeting.feeAmount : null,

@@ -11,8 +11,8 @@ import { formatRangeText } from "@/lib/schedule-text";
 export type SeriesUrlOccurrence = { id: string; startsAt: number; endsAt: number | null; conferenceUrl: string | null; seriesOccurrenceIndex: number | null };
 export type SeriesUrlPayload = { mode: "same"; url: string } | { mode: "per_day"; urls: Record<string, string> };
 
-export function SeriesConferenceUrlsModal({ occurrences, pending, error, onClose, onSubmit }: {
-  occurrences: SeriesUrlOccurrence[]; pending: boolean; error: string | null; onClose: () => void; onSubmit: (p: SeriesUrlPayload) => void;
+export function SeriesConferenceUrlsModal({ occurrences, numbered = true, pending, error, onClose, onSubmit }: {
+  occurrences: SeriesUrlOccurrence[]; /** 各回に「第N回」の連番をつけている定例会か */ numbered?: boolean; pending: boolean; error: string | null; onClose: () => void; onSubmit: (p: SeriesUrlPayload) => void;
 }) {
   const tz = useTimezone();
   const [mode, setMode] = useState<"same" | "per_day">("same");
@@ -49,7 +49,7 @@ export function SeriesConferenceUrlsModal({ occurrences, pending, error, onClose
             <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>URLを入れた（変えた）回だけが更新されます。</p>
             {occurrences.map((o) => (
               <div key={o.id}>
-                <p className="text-xs mb-0.5" style={{ color: "var(--color-ink-600)" }}>第{o.seriesOccurrenceIndex}回・{formatRangeText(o.startsAt, o.endsAt, tz)}</p>
+                <p className="text-xs mb-0.5" style={{ color: "var(--color-ink-600)" }}>{numbered ? `第${o.seriesOccurrenceIndex}回・` : ""}{formatRangeText(o.startsAt, o.endsAt, tz)}</p>
                 <input type="url" placeholder="https://..." value={urls[o.id] ?? ""} onChange={(e) => setUrls((p) => ({ ...p, [o.id]: e.target.value }))}
                   className="w-full px-3 py-2 rounded-xl text-sm border" style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }} />
               </div>

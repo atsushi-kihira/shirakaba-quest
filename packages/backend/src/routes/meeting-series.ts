@@ -27,7 +27,7 @@ import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups
 import { resolveSeriesMemberIds, addMembersToSeries, addGuestsToSeries, removeMembersFromSeries, seriesIsOpenForAdditions } from "../services/meeting-participants.ts";
 import { generateRawToken } from "../services/auth.ts";
 import { deleteExternalComments, deleteResponseCommentsForTargets, loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
-import { computeOccurrences, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
+import { computeOccurrences, computeOccurrencesWithRules, parseExcludedDates, isValidDateKey, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent, refreshHostMeetingCalendarEvents, pickConferenceUrl } from "../services/conferenceService.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -100,7 +100,7 @@ function extraSlotsJsonFor(cand: CandidateInput): string | null {
 const UPCOMING_PREVIEW_COUNT = 8;
 export function upcomingDatesFor(
   cand: { recurrenceType: string; dayOfWeek: number; weekOfMonth: number | null; startTimeLocal: string; endTimeLocal: string; extraSlotsJson?: string | null },
-  series: { endCondition: string | null; endDate: number | null },
+  series: { endCondition: string | null; endDate: number | null; skipHolidays?: number | null; excludedDatesJson?: string | null },
   now: number
 ): Array<{ startsAt: number; endsAt: number }> {
   const pattern: RecurrencePattern = {
@@ -110,7 +110,9 @@ export function upcomingDatesFor(
   const end = series.endCondition === "date" && series.endDate
     ? { type: "date" as const, endDate: series.endDate }
     : { type: "count" as const, count: UPCOMING_PREVIEW_COUNT };
-  return computeOccurrences(pattern, now, end).slice(0, UPCOMING_PREVIEW_COUNT);
+  // 祝日・開催しない日にあたる日は、候補に表示しない（実際に作られる開催日と同じにする）
+  const rules = { skipHolidays: series.skipHolidays === 1, excludedDates: parseExcludedDates(series.excludedDatesJson) };
+  return computeOccurrencesWithRules(pattern, now, end, rules).slice(0, UPCOMING_PREVIEW_COUNT);
 }
 
 function usesDayOfWeek(t: RecurrenceType): boolean {
@@ -172,6 +174,11 @@ meetingSeriesRoutes.post("/", async (c) => {
       note?: string;
     }>;
     fixedDates?: Array<{ startsAt: number; endsAt: number }>;
+    /** 開催ルール（繰り返しパターンのときのみ）：祝日と重なる日は開催しない／開催しない日（"YYYY-MM-DD"） */
+    skipHolidays?: boolean;
+    excludedDates?: string[];
+    /** 各回のタイトルに「第N回」をつけるか（省略時はつける） */
+    numberedTitles?: boolean;
     /** 作成前に発行した、外部ゲスト用の共有URLの予約トークン */
     inviteReservationToken?: string;
     /** 外部ゲスト。メールアドレスのある人には、作成と同時に招待メールを送る */
@@ -186,6 +193,16 @@ meetingSeriesRoutes.post("/", async (c) => {
   const optionsResult = parseMeetingOptions(body, mode === "confirmed");
   if (!optionsResult.ok) return c.json({ error: { code: "invalid_input", message: optionsResult.message } }, 400);
   const meetingOptions = optionsResult.value;
+  // 開催ルール（祝日は開催しない・開催しない日）。繰り返しパターンのときだけ使う（個別に日を指定する場合は不要）
+  const excludedDates = [...new Set((dateMode === "recurring" ? body.excludedDates ?? [] : []).map((x) => String(x).trim()))].sort();
+  if (excludedDates.some((x) => !isValidDateKey(x))) {
+    return c.json({ error: { code: "invalid_input", message: "開催しない日の日付が正しくありません" } }, 400);
+  }
+  if (excludedDates.length > 100) {
+    return c.json({ error: { code: "invalid_input", message: "開催しない日は100日までです" } }, 400);
+  }
+  const skipHolidays = dateMode === "recurring" && body.skipHolidays === true;
+  const numberedTitles = body.numberedTitles !== false;
   // 対象者を「グループ」で指定した場合は、グループのメンバーを招待メンバー（scope=selected）に、外部ゲストをゲストにする。
   // 作成した定例会にグループIDを残し、グループに後から人が加わったときに、この定例会にも招待できるようにする
   let groupId: string | null = null;
@@ -340,9 +357,10 @@ meetingSeriesRoutes.post("/", async (c) => {
         weekOfMonth: singleCandidate.weekOfMonth, startTimeLocal: singleCandidate.startTimeLocal, endTimeLocal: singleCandidate.endTimeLocal,
         extraSlots: singleCandidate.extraSlots,
       };
-      occurrences = computeOccurrences(
+      occurrences = computeOccurrencesWithRules(
         pattern, now,
-        body.endCondition === "date" ? { type: "date", endDate: body.endDate! } : { type: "count", count: body.occurrenceCount! }
+        body.endCondition === "date" ? { type: "date", endDate: body.endDate! } : { type: "count", count: body.occurrenceCount! },
+        { skipHolidays, excludedDates },
       );
       if (occurrences.length === 0) {
         return c.json({ error: { code: "invalid_input", message: "指定した条件では開催回が1つも作成できません" } }, 400);
@@ -387,6 +405,9 @@ meetingSeriesRoutes.post("/", async (c) => {
     isPaid: meetingOptions.isPaid,
     feeAmount: meetingOptions.feeAmount,
     feeNote: meetingOptions.feeNote,
+    skipHolidays: skipHolidays ? 1 : 0,
+    excludedDatesJson: excludedDates.length > 0 ? JSON.stringify(excludedDates) : null,
+    numberedTitles: numberedTitles ? 1 : 0,
     createdAt: now,
     updatedAt: now,
   });
@@ -779,6 +800,9 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       isPaid: series.isPaid === 1,
       feeAmount: series.isPaid === 1 ? series.feeAmount : null,
       feeNote: series.isPaid === 1 ? series.feeNote : null,
+      skipHolidays: series.skipHolidays === 1,
+      excludedDates: parseExcludedDates(series.excludedDatesJson),
+      numberedTitles: series.numberedTitles === 1,
       endCondition: series.endCondition, endDate: series.endDate, occurrenceCount: series.occurrenceCount,
       conferenceType: series.conferenceType,
       conferenceUrl: series.conferenceUrl,
@@ -950,6 +974,10 @@ meetingSeriesRoutes.post("/:id/respond", async (c) => {
 // 開催回の一括生成＋会議URL発行＋招待＋確定通知（投票後の確定・作成時点での即時確定の両方から呼ばれる）
 // ----------------------------------------------------------------
 type SeriesRow = typeof schema.meetingSeries.$inferSelect;
+/** 各回のタイトル。連番ありは「定例会（第3回・2026/11/17）」、連番なしは「定例会（2026/11/17）」 */
+function occurrenceTitle(series: { title: string; numberedTitles: number }, index: number, dateLabel: string): string {
+  return series.numberedTitles === 1 ? `${series.title}（第${index + 1}回・${dateLabel}）` : `${series.title}（${dateLabel}）`;
+}
 type OccurrenceConference = { conferenceType: "manual" | "google_meet" | "zoom"; conferenceUrl: string | null; conferenceMetaJson: string | null; calendarEventId: string | null };
 
 async function generateSeriesOccurrences(
@@ -1004,7 +1032,7 @@ async function generateSeriesOccurrences(
     if (!conf?.calendarEventId) {
       const blocked = await blockHostCalendarForDate({
         db, env, hostMemberId: series.hostMemberId,
-        summary: `${series.title}（第${i + 1}回・${dateLabel}）`,
+        summary: occurrenceTitle(series, i, dateLabel),
         description: [series.description ?? "", sharedUrl ? `会議URL（全回共通）: ${sharedUrl}` : ""].filter(Boolean).join("\n\n"),
         startAtUtc: new Date(occ.startsAt * 1000).toISOString(),
         endAtUtc: new Date(occ.endsAt * 1000).toISOString(),
@@ -1017,7 +1045,7 @@ async function generateSeriesOccurrences(
 
     await db.insert(schema.meetings).values({
       id: meetingId,
-      title: `${series.title}（第${i + 1}回・${dateLabel}）`,
+      title: occurrenceTitle(series, i, dateLabel),
       description: series.description,
       hostMemberId: series.hostMemberId,
       scope: "selected",
@@ -1159,9 +1187,10 @@ meetingSeriesRoutes.patch("/:id/confirm", async (c) => {
     endTimeLocal: candidate.endTimeLocal,
     extraSlots: parseExtraSlots(candidate.extraSlotsJson),
   };
-  const occurrences = computeOccurrences(
+  const occurrences = computeOccurrencesWithRules(
     pattern, now,
-    series.endCondition === "date" ? { type: "date", endDate: series.endDate! } : { type: "count", count: series.occurrenceCount! }
+    series.endCondition === "date" ? { type: "date", endDate: series.endDate! } : { type: "count", count: series.occurrenceCount! },
+    { skipHolidays: series.skipHolidays === 1, excludedDates: parseExcludedDates(series.excludedDatesJson) },
   );
   if (occurrences.length === 0) {
     return c.json({ error: { code: "invalid_input", message: "指定した条件では開催回が1つも作成できません" } }, 400);

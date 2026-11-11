@@ -17,6 +17,7 @@ import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { MeetingOptionsPicker, DEFAULT_MEETING_OPTIONS, optionsToPayload, validateMeetingOptions, type MeetingOptionsValue } from "@/components/meeting-options-picker";
+import { SeriesRulesPicker, NumberedTitlesToggle } from "@/components/series-rules-picker";
 import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
 import { GuestInviteResult, dmGuestsOf, type CreatedGuest } from "@/components/guest-invite-result";
 
@@ -105,6 +106,10 @@ export function MeetingSeriesNewScreen() {
   const [seriesMode, setSeriesMode] = useState<"vote" | "confirmed">("vote");
   const [meetingOptions, setMeetingOptions] = useState<MeetingOptionsValue>(DEFAULT_MEETING_OPTIONS); // 出欠を確認しない・有料
   const [dateMode, setDateMode] = useState<"recurring" | "fixed">("recurring");
+  // 開催のルール（繰り返しパターンのとき）と、各回のタイトルの連番
+  const [skipHolidays, setSkipHolidays] = useState(false);
+  const [excludedDates, setExcludedDates] = useState<string[]>([]);
+  const [numberedTitles, setNumberedTitles] = useState(true);
   const [fixedDates, setFixedDates] = useState<FixedDateRow[]>([emptyFixedDateRow()]);
   const [showCalendarPicker, setShowCalendarPicker] = useState(false);
   const [error, setError] = useState("");
@@ -249,6 +254,7 @@ export function MeetingSeriesNewScreen() {
       guests: guests.length > 0 ? guestsToPayload(guests) : undefined,
       deadline: seriesMode === "vote" && deadline ? Math.floor(new Date(deadline).getTime() / 1000) : undefined,
       mode: seriesMode,
+      numberedTitles,
       conferenceType: conferenceMode !== "none" ? conferenceMode : undefined,
       conferenceUrl: conferenceMode === "manual" ? conferenceUrl.trim() : undefined,
     };
@@ -279,6 +285,8 @@ export function MeetingSeriesNewScreen() {
         setError("終了日を指定してください"); return;
       }
       body.dateMode = "recurring";
+      body.skipHolidays = skipHolidays || undefined;
+      body.excludedDates = excludedDates.length > 0 ? excludedDates : undefined;
       body.endCondition = endCondition;
       body.occurrenceCount = endCondition === "count" ? Number(occurrenceCount) : undefined;
       body.endDate = endCondition === "date" ? Math.floor(new Date(`${endDate}T23:59:59`).getTime() / 1000) : undefined;
@@ -705,9 +713,25 @@ export function MeetingSeriesNewScreen() {
                   className="w-full px-4 py-3 rounded-2xl text-sm outline-none border"
                   style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
               )}
+              {endCondition === "count" && (skipHolidays || excludedDates.length > 0) && (
+                <p className="text-xs mt-1.5" style={{ color: "var(--color-ink-500)" }}>
+                  回数は「実際に開催する回」の数です。祝日・開催しない日は、数に入れず、先の日まで延ばして数えます。
+                </p>
+              )}
             </div>
+
+            {/* 開催のルール（祝日は開催しない・開催しない日） */}
+            <SeriesRulesPicker
+              skipHolidays={skipHolidays}
+              onSkipHolidays={setSkipHolidays}
+              excludedDates={excludedDates}
+              onExcludedDates={setExcludedDates}
+            />
           </>
         )}
+
+        {/* 各回のタイトルの連番（個別に日を指定する場合も共通） */}
+        <NumberedTitlesToggle value={numberedTitles} onChange={setNumberedTitles} title={title} />
 
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>会議URLの設定（任意）</label>

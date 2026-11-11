@@ -594,7 +594,7 @@ export function MeetingDetailScreen() {
           {meeting.seriesId && (
             <button onClick={() => navigate(`/meetings/series/${meeting.seriesId}`)}
               className="text-xs mt-0.5" style={{ color: "var(--color-brand)" }}>
-              🔁 定例会の第{meeting.seriesOccurrenceIndex}回です（シリーズ全体を見る）
+              🔁 定例会{meeting.seriesOccurrenceIndex ? `の第${meeting.seriesOccurrenceIndex}回` : "の開催回"}です（シリーズ全体を見る）
             </button>
           )}
         </div>

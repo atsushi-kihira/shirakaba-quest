@@ -1027,6 +1027,10 @@ export const meetingSeries = sqliteTable("meeting_series", {
   isPaid:              integer("is_paid").notNull().default(0),
   feeAmount:           integer("fee_amount"),
   feeNote:             text("fee_note"),
+  // 開催ルール・タイトルの連番（マイグレーション 0110）
+  skipHolidays:        integer("skip_holidays").notNull().default(0),   // 1 = 祝日と重なる日は開催しない
+  excludedDatesJson:   text("excluded_dates_json"),                      // 開催しない日 ["YYYY-MM-DD", ...]（日本時間）
+  numberedTitles:      integer("numbered_titles").notNull().default(1),  // 1 = 各回のタイトルに「第N回」をつける
   createdAt:           integer("created_at").notNull(),
   updatedAt:           integer("updated_at").notNull(),
 });
