@@ -274,7 +274,8 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
   });
 
   if (!editor) return null;
-  const run = editor.chain().focus();
+  // 操作は、ボタンを押した瞬間に作る（描画のたびに作ると、focus() がエディタにフォーカスを移してしまう。選択範囲も古くなる）
+  const run = () => editor.chain().focus();
 
   function applyLink() {
     const url = linkUrl.trim();
@@ -293,13 +294,13 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
     <div className="rounded-2xl border overflow-hidden" style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}>
       {/* ツールバー */}
       <div className="flex flex-wrap items-center gap-0.5 px-1.5 py-1 border-b" style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}>
-        <ToolBtn label="太字" active={st.bold} onClick={() => run.toggleBold().run()}><Bold size={15} /></ToolBtn>
-        <ToolBtn label="斜体" active={st.italic} onClick={() => run.toggleItalic().run()}><Italic size={15} /></ToolBtn>
-        <ToolBtn label="下線" active={st.underline} onClick={() => run.toggleUnderline().run()}><UnderlineIcon size={15} /></ToolBtn>
+        <ToolBtn label="太字" active={st.bold} onClick={() => run().toggleBold().run()}><Bold size={15} /></ToolBtn>
+        <ToolBtn label="斜体" active={st.italic} onClick={() => run().toggleItalic().run()}><Italic size={15} /></ToolBtn>
+        <ToolBtn label="下線" active={st.underline} onClick={() => run().toggleUnderline().run()}><UnderlineIcon size={15} /></ToolBtn>
         <Divider />
         {FONT_SIZES.map((f) => (
           <ToolBtn key={f.key} wide label={`文字の大きさ：${f.label}`} active={(st.fontSize ?? null) === f.value}
-            onClick={() => (f.value ? run.setFontSize(f.value).run() : run.unsetFontSize().run())}>{f.label}</ToolBtn>
+            onClick={() => (f.value ? run().setFontSize(f.value).run() : run().unsetFontSize().run())}>{f.label}</ToolBtn>
         ))}
         <Divider />
         <div className="relative">
@@ -315,7 +316,7 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
               {TEXT_COLORS.map((c) => (
                 <button key={c.label} type="button" title={c.label} aria-label={`文字の色：${c.label}`}
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => { if (c.value) run.setColor(c.value).run(); else run.unsetColor().run(); setMenu(null); }}
+                  onClick={() => { if (c.value) run().setColor(c.value).run(); else run().unsetColor().run(); setMenu(null); }}
                   className="h-9 rounded-lg flex items-center justify-center text-sm font-bold"
                   style={{ background: "var(--color-paper-100)", color: c.value ?? "var(--color-ink-700)", border: st.color === c.value ? "2px solid var(--color-brand)" : "1px solid var(--color-paper-300)" }}>
                   A
@@ -326,11 +327,11 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
           )}
         </div>
         <Divider />
-        <ToolBtn label="見出し" active={st.h2} onClick={() => run.toggleHeading({ level: 2 }).run()}><Heading2 size={16} /></ToolBtn>
+        <ToolBtn label="見出し" active={st.h2} onClick={() => run().toggleHeading({ level: 2 }).run()}><Heading2 size={16} /></ToolBtn>
         <ToolBtn label="字下げを増やす（インデント）" disabled={!st.inList && st.indent >= MAX_INDENT} onClick={() => changeIndent(editor, 1)}><IndentIncrease size={16} /></ToolBtn>
         <ToolBtn label="字下げを減らす" disabled={!st.inList && st.indent <= 0} onClick={() => changeIndent(editor, -1)}><IndentDecrease size={16} /></ToolBtn>
-        <ToolBtn label="箇条書き" active={st.ul} onClick={() => run.toggleBulletList().run()}><List size={16} /></ToolBtn>
-        <ToolBtn label="番号付きの箇条書き" active={st.ol} onClick={() => run.toggleOrderedList().run()}><ListOrdered size={16} /></ToolBtn>
+        <ToolBtn label="箇条書き" active={st.ul} onClick={() => run().toggleBulletList().run()}><List size={16} /></ToolBtn>
+        <ToolBtn label="番号付きの箇条書き" active={st.ol} onClick={() => run().toggleOrderedList().run()}><ListOrdered size={16} /></ToolBtn>
         <div className="relative">
           <ToolBtn label="リンク" active={st.link || menu === "link"}
             onClick={() => { setLinkUrl((editor.getAttributes("link").href as string | undefined) ?? ""); setMenu(menu === "link" ? null : "link"); }}>
@@ -364,8 +365,8 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
         <input ref={imageInput} type="file" accept={IMAGE_ACCEPT} multiple className="hidden"
           onChange={(e) => { const picked = Array.from(e.target.files ?? []); e.target.value = ""; void uploadImages(picked); }} />
         <span className="flex-1" />
-        <ToolBtn label="元に戻す" disabled={!st.canUndo} onClick={() => run.undo().run()}><Undo2 size={15} /></ToolBtn>
-        <ToolBtn label="やり直す" disabled={!st.canRedo} onClick={() => run.redo().run()}><Redo2 size={15} /></ToolBtn>
+        <ToolBtn label="元に戻す" disabled={!st.canUndo} onClick={() => run().undo().run()}><Undo2 size={15} /></ToolBtn>
+        <ToolBtn label="やり直す" disabled={!st.canRedo} onClick={() => run().redo().run()}><Redo2 size={15} /></ToolBtn>
       </div>
 
       {/* 編集欄（右下をドラッグして、広げられる） */}
