@@ -17,6 +17,10 @@ import { EventReminderSetting } from "@/components/reminder-settings";
 import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
 import { DEFAULT_START_TIME, defaultEndTime, addMinutesToTime } from "@/lib/meeting-time";
 import { confirmPaidParticipation } from "@/components/meeting-options-picker";
+import { DescriptionEditor } from "@/components/description-editor";
+import { AttachmentGallery } from "@/components/attachment-gallery";
+import { LinkifiedText } from "@/components/linkified-text";
+import type { Attachment } from "@/lib/attachments";
 
 type Availability = "yes" | "maybe" | "no";
 
@@ -35,6 +39,8 @@ type Respondent = {
 type ExternalInvitee = { id: string; name: string; email: string | null; token: string; createdAt: number; invitedAt?: number | null; company?: string | null };
 type Meeting = {
   id: string; title: string; description: string | null;
+  /** 説明に添付した画像・ファイル。定例会の回では、定例会に添付したもの */
+  attachments: Attachment[]; attachmentsFromSeries: boolean;
   host: { id: string; name: string; emoji: string } | null;
   hostMemberId: string; scope: string; teamId: string | null;
   collabTeamId: string | null;
@@ -863,18 +869,20 @@ export function MeetingDetailScreen() {
         <div className="mb-4">
           {editingDesc ? (
             <div className="card-paper rounded-2xl p-3 space-y-2">
-              <textarea
+              <DescriptionEditor
                 value={descText}
-                onChange={(e) => setDescText(e.target.value)}
-                rows={4}
-                placeholder="詳細・場所・連絡事項など"
-                className="w-full px-3 py-2 rounded-xl text-sm outline-none border resize-none"
-                style={{
-                  background: "var(--color-paper-50)",
-                  borderColor: "var(--color-paper-300)",
-                  color: "var(--color-ink-900)",
-                }}
+                onChange={setDescText}
+                attachments={meeting.attachments}
+                onAttachmentsChange={() => qc.invalidateQueries({ queryKey: ["meetings", id] })}
+                owner={meeting.attachmentsFromSeries ? undefined : { type: "meeting", id: meeting.id }}
+                attachmentsLocked={meeting.attachmentsFromSeries}
+                placeholder="詳細・場所・連絡事項など（画像・ファイルも添付できます）"
               />
+              <p className="px-1 text-[11px]" style={{ color: "var(--color-ink-400)" }}>
+                {meeting.attachmentsFromSeries
+                  ? "添付の画像・ファイルは、定例会のページで変更できます。"
+                  : "添付した画像・ファイルの追加・削除は、「保存する」を押さなくても、すぐに反映されます。"}
+              </p>
               <label className="flex items-start gap-2 px-1 text-xs cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
                 <input
                   type="checkbox"
@@ -910,25 +918,31 @@ export function MeetingDetailScreen() {
             </div>
           ) : (
             <div className="flex items-start gap-2">
-              {meeting.description ? (
-                <p className="flex-1 text-sm" style={{ color: "var(--color-ink-600)" }}>{meeting.description}</p>
-              ) : (
-                <p className="flex-1 text-sm italic" style={{ color: "var(--color-ink-300)" }}>詳細未設定</p>
-              )}
+              <div className="flex-1 min-w-0">
+                {meeting.description ? (
+                  <LinkifiedText text={meeting.description} className="text-sm" style={{ color: "var(--color-ink-600)" }} />
+                ) : meeting.attachments.length === 0 ? (
+                  <p className="text-sm italic" style={{ color: "var(--color-ink-300)" }}>詳細未設定</p>
+                ) : null}
+                <AttachmentGallery attachments={meeting.attachments} className={meeting.description ? "mt-2" : ""} />
+              </div>
               <button
                 onClick={startEditDesc}
                 className="shrink-0 flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-xl"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}
               >
                 <Edit2 size={12} />
-                {meeting.description ? "詳細を更新" : "詳細を追加"}
+                {meeting.description || meeting.attachments.length > 0 ? "詳細を更新" : "詳細を追加"}
               </button>
             </div>
           )}
         </div>
       ) : (
-        meeting.description && (
-          <p className="mb-4 text-sm" style={{ color: "var(--color-ink-600)" }}>{meeting.description}</p>
+        (meeting.description || meeting.attachments.length > 0) && (
+          <div className="mb-4">
+            {meeting.description && <LinkifiedText text={meeting.description} className="text-sm" style={{ color: "var(--color-ink-600)" }} />}
+            <AttachmentGallery attachments={meeting.attachments} className={meeting.description ? "mt-2" : ""} />
+          </div>
         )
       )}
 

@@ -1506,3 +1506,17 @@ export const meetingGroupGuests = sqliteTable(
   },
   (t) => [uniqueIndex("uniq_meeting_group_guest_email").on(t.groupId, t.email)]
 );
+
+// ミーティング・定例会の説明に添付する画像・ファイル（マイグレーション 0111）
+export const meetingAttachments = sqliteTable("meeting_attachments", {
+  id:          text("id").primaryKey(),
+  ownerType:   text("owner_type"),   // 'meeting' | 'series'。会を作る前（アップロード直後）は null
+  ownerId:     text("owner_id"),
+  uploaderId:  text("uploader_id").notNull(),
+  fileName:    text("file_name").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes:   integer("size_bytes").notNull(),
+  r2Key:       text("r2_key").notNull(),
+  sortOrder:   integer("sort_order").notNull().default(0),
+  createdAt:   integer("created_at").notNull(),
+});

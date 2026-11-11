@@ -29,6 +29,7 @@ import { generateRawToken } from "../services/auth.ts";
 import { deleteExternalComments, deleteResponseCommentsForTargets, loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
 import { computeOccurrences, computeOccurrencesWithRules, parseExcludedDates, isValidDateKey, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent, refreshHostMeetingCalendarEvents, pickConferenceUrl } from "../services/conferenceService.ts";
+import { linkAttachments, listAttachments } from "../services/meeting-attachments.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -145,6 +146,8 @@ meetingSeriesRoutes.post("/", async (c) => {
   const body = await c.req.json<{
     title: string;
     description?: string;
+    /** 説明に添付する画像・ファイル（アップロード済みの添付ID） */
+    attachmentIds?: string[];
     scope: "all" | "team" | "collab_team" | "selected" | "group";
     teamId?: string;
     collabTeamId?: string;
@@ -411,6 +414,7 @@ meetingSeriesRoutes.post("/", async (c) => {
     createdAt: now,
     updatedAt: now,
   });
+  await linkAttachments(db, "series", seriesId, memberId, body.attachmentIds);
 
   if (body.scope === "selected" && body.inviteeIds?.length) {
     for (const mid of body.inviteeIds) {
@@ -790,6 +794,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
   return c.json({
     data: {
       id: series.id, title: series.title, description: series.description,
+      attachments: await listAttachments(db, "series", series.id),
       event: linkedEvent ? { id: linkedEvent.id, title: linkedEvent.title, ended: linkedEvent.status !== "active", points: eventPoints } : null,
       eventType: eventType ?? null,
       hostMemberId: series.hostMemberId, isHost: series.hostMemberId === memberId,

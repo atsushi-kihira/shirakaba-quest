@@ -20,6 +20,10 @@ import { SeriesGuestPanel, type SeriesExternalInvitee } from "./_series-guest-pa
 import { SeriesParticipantsPanel } from "./_series-participants-panel";
 import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
 import { confirmPaidParticipation } from "@/components/meeting-options-picker";
+import { DescriptionEditor } from "@/components/description-editor";
+import { AttachmentGallery } from "@/components/attachment-gallery";
+import { LinkifiedText } from "@/components/linkified-text";
+import type { Attachment } from "@/lib/attachments";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -33,6 +37,7 @@ type TargetMember = { id: string; name: string; emoji: string; bgColor: string; 
 type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null; conferenceUrl: string | null };
 type SeriesDetail = {
   id: string; title: string; description: string | null;
+  attachments: Attachment[];
   event: { id: string; title: string; ended: boolean; points: number } | null;
   eventType: { id: string; name: string; emoji: string; pointValue: number } | null;
   hostMemberId: string; isHost: boolean; hostName: string | null;
@@ -100,6 +105,7 @@ export function MeetingSeriesDetailScreen() {
   const qc = useQueryClient();
   const tz = useTimezone();
   const user = useAuthStore((s) => s.user);
+  const [editingAttachments, setEditingAttachments] = useState(false);
   const [myAnswers, setMyAnswers] = useState<Record<string, Availability>>({});
   const [hasEdited, setHasEdited] = useState(false);
   // 一言コメントの書きかけ（null: まだ書き換えていない＝サーバーの内容を表示）
@@ -282,7 +288,30 @@ export function MeetingSeriesDetailScreen() {
             )}
           </div>
         )}
-        {series.description && <p className="text-sm mb-1" style={{ color: "var(--color-ink-700)" }}>{series.description}</p>}
+        {series.description && <LinkifiedText text={series.description} className="text-sm mb-1" style={{ color: "var(--color-ink-700)" }} />}
+        {editingAttachments ? (
+          <div className="card-paper rounded-2xl p-3 my-2 space-y-2">
+            <DescriptionEditor
+              value="" onChange={() => {}} hideText
+              attachments={series.attachments}
+              onAttachmentsChange={() => { qc.invalidateQueries({ queryKey: ["meeting-series", id] }); qc.invalidateQueries({ queryKey: ["meetings"] }); }}
+              owner={{ type: "series", id: series.id }}
+            />
+            <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>追加・削除は、すぐに反映されます。各回のページにも表示されます。</p>
+            <button type="button" onClick={() => setEditingAttachments(false)} className="px-4 py-2 rounded-xl text-sm" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+              閉じる
+            </button>
+          </div>
+        ) : (
+          <>
+            <AttachmentGallery attachments={series.attachments} className="my-2" />
+            {series.isHost && (
+              <button type="button" onClick={() => setEditingAttachments(true)} className="text-xs px-2.5 py-1.5 rounded-xl my-1" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+                📎 {series.attachments.length > 0 ? "添付を変更する" : "画像・ファイルを添付する"}
+              </button>
+            )}
+          </>
+        )}
         {series.noAttendanceCheck && (
           <p className="text-sm my-2 px-3 py-2 rounded-xl" style={{ background: "rgba(90,140,92,0.10)", color: "var(--color-ink-700)" }}>
             📢 <span className="font-medium">お知らせの定例会です。</span>出欠のご返事は不要です。直前にはリマインドが届きます。

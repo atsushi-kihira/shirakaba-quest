@@ -82,11 +82,28 @@ export async function getBlob(path: string): Promise<Blob> {
   return res.blob();
 }
 
+/** ファイルをアップロードする（multipart）。Content-Type はブラウザに任せる */
+export async function uploadFile<T>(path: string, form: FormData): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${BASE_URL}${path}`, { method: "POST", headers, body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({
+      error: { code: "unknown", message: "アップロードに失敗しました。もう一度お試しください" },
+    }));
+    throw new ApiError(res.status, err.error?.code ?? "unknown", err.error?.message ?? "アップロードに失敗しました。もう一度お試しください");
+  }
+  return res.json() as Promise<T>;
+}
+
 export const api = {
   get: <T>(path: string, signal?: AbortSignal) =>
     request<T>(path, { method: "GET", signal }),
 
   getBlob,
+
+  upload: uploadFile,
 
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body }),

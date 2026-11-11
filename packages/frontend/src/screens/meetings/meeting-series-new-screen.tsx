@@ -15,6 +15,8 @@ import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 import { MemberSelectList } from "@/components/member-select-list";
 import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components/group-scope-picker";
 import { DurationSelect } from "@/components/duration-select";
+import { DescriptionEditor } from "@/components/description-editor";
+import type { Attachment } from "@/lib/attachments";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { MeetingOptionsPicker, DEFAULT_MEETING_OPTIONS, optionsToPayload, validateMeetingOptions, type MeetingOptionsValue } from "@/components/meeting-options-picker";
 import { SeriesRulesPicker, NumberedTitlesToggle } from "@/components/series-rules-picker";
@@ -85,6 +87,8 @@ export function MeetingSeriesNewScreen() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachBusy, setAttachBusy] = useState(false);
   const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected" | "group">("collab_team");
   const [groupId, setGroupId] = useState("");
   const [teamId, setTeamId] = useState("");
@@ -245,6 +249,7 @@ export function MeetingSeriesNewScreen() {
       ...selectionToPayload(eventSelection),
       ...optionsToPayload(meetingOptions),
       description: description.trim() || undefined,
+      attachmentIds: attachments.length > 0 ? attachments.map((a) => a.id) : undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
       collabTeamId: scope === "collab_team" ? collabTeamId : undefined,
@@ -350,10 +355,14 @@ export function MeetingSeriesNewScreen() {
 
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>説明（任意）</label>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
-            placeholder="場所や目的など補足情報"
-            className="w-full px-4 py-3 rounded-2xl text-sm outline-none border resize-none"
-            style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }} />
+          <DescriptionEditor
+            value={description}
+            onChange={setDescription}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
+            onBusyChange={setAttachBusy}
+            placeholder="場所や目的など補足情報（画像・ファイルも添付できます）"
+          />
         </div>
 
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
@@ -768,7 +777,7 @@ export function MeetingSeriesNewScreen() {
           <p className="text-sm text-center px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>{error}</p>
         )}
 
-        <button onClick={handleSubmit} disabled={createMutation.isPending}
+        <button onClick={handleSubmit} disabled={createMutation.isPending || attachBusy}
           className="w-full py-4 rounded-2xl text-base font-medium text-white flex items-center justify-center gap-2 transition disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}>
           {createMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : seriesMode === "confirmed" ? "✅ 確定して案内する" : "🔁 定例会を主催する"}

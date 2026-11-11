@@ -58,6 +58,7 @@ import { insertCalendarEvent } from "../services/googleClient.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { parseMeetingOptions, withFeeLine, feeLine, type MeetingOptionsInput } from "../services/meeting-options.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
+import { deleteOwnerAttachments, linkAttachments, listAttachments } from "../services/meeting-attachments.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
 import { searchCommonFreeSlots } from "../services/meetingSlotSearch.ts";
@@ -140,6 +141,8 @@ meetingRoutes.post("/", async (c) => {
   const body = await c.req.json<{
     title: string;
     description?: string;
+    /** 説明に添付する画像・ファイル（アップロード済みの添付ID） */
+    attachmentIds?: string[];
     scope: "all" | "team" | "collab_team" | "selected" | "group";
     teamId?: string;
     collabTeamId?: string;
@@ -267,6 +270,7 @@ meetingRoutes.post("/", async (c) => {
     createdAt: now,
     updatedAt: now,
   });
+  await linkAttachments(db, "meeting", meetingId, memberId, body.attachmentIds);
 
   // 候補日を挿入（確定日として作成する場合は、すべての候補日を最初から確定済みとして登録する）
   const candidateIds: string[] = [];
@@ -1432,6 +1436,10 @@ meetingRoutes.get("/:id", async (c) => {
     }));
   }
 
+  const meetingAttachments = meeting.seriesId
+    ? await listAttachments(db, "series", meeting.seriesId)
+    : await listAttachments(db, "meeting", meeting.id);
+
   // グループで作成したミーティングは、主催者にだけ、グループ名を返す（グループは本人だけのもの）
   const detailUnnumbered = await loadUnnumberedSeriesIds(db, [meeting.seriesId]);
   const groupName = isHost && meeting.groupId
@@ -1444,6 +1452,9 @@ meetingRoutes.get("/:id", async (c) => {
         id: meeting.id,
         title: meeting.title,
         description: meeting.description,
+        // 説明に添付した画像・ファイル（定例会の回は、定例会に添付したもの。回からは変更できない）
+        attachments: meetingAttachments,
+        attachmentsFromSeries: !!meeting.seriesId,
         host: host ?? null,
         hostMemberId: meeting.hostMemberId,
         scope: meeting.scope,
@@ -3031,6 +3042,7 @@ meetingRoutes.delete("/:id/delete", async (c) => {
   await db.delete(schema.meetingDateCandidates).where(eq(schema.meetingDateCandidates.meetingId, id));
   await db.delete(schema.meetingInvitees).where(eq(schema.meetingInvitees.meetingId, id));
   await db.delete(schema.meetingExternalInvitees).where(eq(schema.meetingExternalInvitees.meetingId, id));
+  await deleteOwnerAttachments(db, c.env.R2, "meeting", id);
   await db.delete(schema.meetings).where(eq(schema.meetings.id, id));
 
   queueMeetingCalendarSync(c.executionCtx, db, c.env, id);

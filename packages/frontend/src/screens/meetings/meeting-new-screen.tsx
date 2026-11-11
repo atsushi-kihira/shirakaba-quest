@@ -9,6 +9,8 @@ import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
+import { DescriptionEditor } from "@/components/description-editor";
+import type { Attachment } from "@/lib/attachments";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { MeetingOptionsPicker, DEFAULT_MEETING_OPTIONS, optionsToPayload, validateMeetingOptions, type MeetingOptionsValue } from "@/components/meeting-options-picker";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
@@ -70,6 +72,8 @@ export function MeetingNewScreen() {
   const prefillTeamId = searchParams.get("collabTeamId") ?? "";
   const [title, setTitle] = useState(searchParams.get("title") ?? "");
   const [description, setDescription] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachBusy, setAttachBusy] = useState(false);
   const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected" | "group">(prefillTeamId ? "collab_team" : "all");
   const [groupId, setGroupId] = useState("");
   const [teamId, setTeamId] = useState("");
@@ -254,6 +258,7 @@ export function MeetingNewScreen() {
     createMutation.mutate({
       title: title.trim(),
       description: description.trim() || undefined,
+      attachmentIds: attachments.length > 0 ? attachments.map((a) => a.id) : undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
       collabTeamId: scope === "collab_team" ? collabTeamId : undefined,
@@ -324,17 +329,13 @@ export function MeetingNewScreen() {
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
             説明（任意）
           </label>
-          <textarea
+          <DescriptionEditor
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="場所や目的など補足情報を入力"
-            rows={3}
-            className="w-full px-4 py-3 rounded-2xl text-sm outline-none border transition resize-none"
-            style={{
-              background: "var(--color-paper-50)",
-              borderColor: "var(--color-paper-300)",
-              color: "var(--color-ink-900)",
-            }}
+            onChange={setDescription}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
+            onBusyChange={setAttachBusy}
+            placeholder="場所や目的など補足情報を入力（画像・ファイルも添付できます）"
           />
         </div>
 
@@ -663,7 +664,7 @@ export function MeetingNewScreen() {
         {/* 作成ボタン */}
         <button
           onClick={handleSubmit}
-          disabled={createMutation.isPending || !eventSelection}
+          disabled={createMutation.isPending || !eventSelection || attachBusy}
           className="w-full py-4 rounded-2xl text-base font-medium text-white flex items-center justify-center gap-2 transition disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}
         >
