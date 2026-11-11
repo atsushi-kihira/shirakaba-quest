@@ -342,9 +342,6 @@ export function MeetingNewScreen() {
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、出席者にポイントが付与されます" />
 
-        {/* 開催のしかた（出欠を確認しない・有料） */}
-        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={meetingMode === "confirmed"} />
-
         {/* 対象者 */}
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>
@@ -456,6 +453,9 @@ export function MeetingNewScreen() {
               : "すでに決まっている日程で、このまま確定して案内・招待します"}
           </p>
         </div>
+
+        {/* 開催のしかた（出欠を確認しない・有料） */}
+        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={meetingMode === "confirmed"} />
 
         {/* 所要時間（すべての候補日時で共通） */}
         <DurationSelect value={duration} onChange={setDuration}

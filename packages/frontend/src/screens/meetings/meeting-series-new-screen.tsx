@@ -359,9 +359,6 @@ export function MeetingSeriesNewScreen() {
         <MeetingEventSelector value={eventSelection} onChange={setEventSelection}
           hint="ポイントのつくイベントを選ぶと、定例会1回の参加ごとにポイントが付与されます" />
 
-        {/* 開催のしかた（出欠を確認しない・有料） */}
-        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={seriesMode === "confirmed"} />
-
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>対象者</label>
           <div className="grid grid-cols-3 gap-2">
@@ -462,6 +459,9 @@ export function MeetingSeriesNewScreen() {
             </div>
           </div>
         )}
+
+        {/* 開催のしかた（出欠を確認しない・有料） */}
+        <MeetingOptionsPicker value={meetingOptions} onChange={setMeetingOptions} dateIsConfirmed={seriesMode === "confirmed"} />
 
         <DurationSelect value={duration} onChange={setDuration} />
 
