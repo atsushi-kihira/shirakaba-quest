@@ -18,18 +18,32 @@ import {
   type DayKey,
 } from "@/lib/calendar-grid";
 import type { CalendarEvent, CalendarEventKind, CalendarEventMyStatus } from "@shared/types";
+import { KIND_INFO, WEEKDAY_LABELS, isMuted, type GoogleEvent } from "./_home-calendar-shared";
+import { WeekTimeGrid } from "./_home-calendar-week";
 
 type ViewMode = "month" | "week";
 
 const VIEW_STORAGE_KEY = "home_calendar_view";
-const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 
-/** 予定の種類ごとのアイコンと名前 */
-const KIND_INFO: Record<CalendarEventKind, { icon: string; label: string }> = {
-  oneonone: { icon: "🤝", label: "1to1" },
-  meeting: { icon: "📅", label: "ミーティング" },
-  series: { icon: "🔁", label: "定例会" },
-};
+const GOOGLE_STORAGE_KEY = "home_calendar_google";
+
+function loadGoogle(): boolean {
+  try {
+    return localStorage.getItem(GOOGLE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Googleカレンダーから返ってくる予定（必要な項目だけ） */
+type RawGoogleEvent = { id: string; summary: string; startUtc: string; endUtc: string; allDay: boolean };
+
+/** 2つの日付（含む・含まない）のあいだの日付の一覧（日数が極端に多い予定でも、14日までにする） */
+function dayKeysBetween(startKey: DayKey, endExclusive: DayKey): DayKey[] {
+  const out: DayKey[] = [];
+  for (let k = startKey; k < endExclusive && out.length < 14; k = addDays(k, 1)) out.push(k);
+  return out.length > 0 ? out : [startKey];
+}
 
 function loadView(): ViewMode {
   try {
@@ -65,10 +79,6 @@ function statusBadge(ev: CalendarEvent): { text: string; bg: string; color: stri
   return map[ev.myStatus];
 }
 
-function isMuted(ev: CalendarEvent): boolean {
-  return ev.myStatus === "absent" || ev.myStatus === "declined";
-}
-
 export function HomeCalendar({ tz }: { tz: string }) {
   const today = todayKey(tz);
   const [view, setView] = useState<ViewMode>(loadView);
@@ -101,6 +111,64 @@ export function HomeCalendar({ tz }: { tz: string }) {
     return map;
   }, [data, tz]);
 
+  // ---- 自分のGoogleカレンダーを重ねる ----
+  const [showGoogle, setShowGoogle] = useState(loadGoogle);
+  useEffect(() => {
+    try { localStorage.setItem(GOOGLE_STORAGE_KEY, showGoogle ? "1" : "0"); } catch { /* 保存できなくても、そのまま使える */ }
+  }, [showGoogle]);
+  const { data: googleStatus } = useQuery({
+    queryKey: ["scheduler", "google-status"],
+    queryFn: () => api.get<{ data: { connected: boolean } }>("/scheduler/oauth/google/status"),
+    staleTime: 5 * 60_000,
+  });
+  const googleConnected = googleStatus?.data.connected ?? false;
+  const googleOn = showGoogle && googleConnected;
+  // 日本時間の日の境目に合わせて、前後1日ぶん多めに取る
+  const googleFrom = addDays(days[0], -1);
+  const googleTo = addDays(days[days.length - 1], 1);
+  const { data: googleData, isError: googleError, isFetching: googleFetching } = useQuery({
+    queryKey: ["calendar", "google", googleFrom, googleTo],
+    queryFn: () => api.get<{ data: { connected: boolean; events: RawGoogleEvent[] } }>(`/scheduler/me/calendar-events?from=${googleFrom}&to=${googleTo}`),
+    enabled: googleOn,
+    staleTime: 120_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const googleEvents = useMemo<GoogleEvent[]>(() => {
+    if (!googleOn) return [];
+    // 白樺クエストが、Googleカレンダーに書き込んだ予定（同じ日時）は、アプリの予定と二重にならないように、重ねて表示しない
+    const appSpans = new Set((data?.data.events ?? []).map((e) => `${e.startsAt}-${e.endsAt}`));
+    const out: GoogleEvent[] = [];
+    for (const g of googleData?.data.events ?? []) {
+      if (g.allDay) {
+        out.push({ id: g.id, title: g.summary, allDay: true, startsAt: 0, endsAt: 0, startDate: g.startUtc.slice(0, 10), endDate: g.endUtc.slice(0, 10) });
+        continue;
+      }
+      const s = Math.floor(Date.parse(g.startUtc) / 1000);
+      const e = Math.floor(Date.parse(g.endUtc) / 1000);
+      if (appSpans.has(`${s}-${e}`)) continue;
+      out.push({ id: g.id, title: g.summary, allDay: false, startsAt: s, endsAt: e, startDate: null, endDate: null });
+    }
+    return out;
+  }, [googleOn, googleData, data]);
+
+  const googleByDay = useMemo(() => {
+    const map = new Map<DayKey, GoogleEvent[]>();
+    const add = (k: DayKey, g: GoogleEvent) => { const l = map.get(k) ?? []; l.push(g); map.set(k, l); };
+    for (const g of googleEvents) {
+      if (g.allDay && g.startDate && g.endDate) {
+        for (const k of dayKeysBetween(g.startDate, g.endDate)) add(k, g);
+      } else {
+        const startKey = tsToDateInput(g.startsAt, tz);
+        const endKey = tsToDateInput(Math.max(g.startsAt, g.endsAt - 1), tz);
+        for (const k of dayKeysBetween(startKey, addDays(endKey, 1))) add(k, g);
+      }
+    }
+    // 終日を先に、そのあとは時刻順
+    for (const l of map.values()) l.sort((a, b) => Number(b.allDay) - Number(a.allDay) || a.startsAt - b.startsAt);
+    return map;
+  }, [googleEvents, tz]);
+
   const { y: anchorY, m: anchorM } = parseKey(anchor);
   const weekStart = parseKey(days[0]);
   const weekEnd = parseKey(days[days.length - 1]);
@@ -132,6 +200,13 @@ export function HomeCalendar({ tz }: { tz: string }) {
   }
 
   const selectedEvents = eventsByDay.get(selected) ?? [];
+  const selectedGoogle = googleOn ? googleByDay.get(selected) ?? [] : [];
+  // 選んだ日の一覧は、アプリの予定とGoogleカレンダーの予定を、時刻の順に並べる（終日の予定は先頭）
+  type Row = { sort: number; app?: CalendarEvent; google?: GoogleEvent };
+  const rows: Row[] = [
+    ...selectedEvents.map((ev): Row => ({ sort: ev.startsAt, app: ev })),
+    ...selectedGoogle.map((g): Row => ({ sort: g.allDay ? -1 : g.startsAt, google: g })),
+  ].sort((a, b) => a.sort - b.sort);
   const selectedHoliday = holidayOf(selected);
   const selectedParts = parseKey(selected);
 
@@ -180,6 +255,27 @@ export function HomeCalendar({ tz }: { tz: string }) {
             <ChevronRight size={16} />
           </button>
         </div>
+
+        {/* 自分のGoogleカレンダーを重ねる */}
+        <div className="flex items-center justify-between gap-2 mb-2 px-1">
+          {googleConnected ? (
+            <label className="inline-flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
+              <input type="checkbox" checked={showGoogle} onChange={(e) => setShowGoogle(e.target.checked)} />
+              自分のGoogleカレンダーを重ねて表示
+              {googleOn && googleFetching && <Loader2 size={11} className="animate-spin" style={{ color: "var(--color-ink-400)" }} />}
+            </label>
+          ) : googleStatus ? (
+            <p className="text-[11px]" style={{ color: "var(--color-ink-500)" }}>
+              Googleカレンダーと連携すると、自分の予定を重ねて表示できます。
+              <Link to="/scheduler/settings" className="ml-1 font-medium underline" style={{ color: "var(--color-brand)" }}>連携する →</Link>
+            </p>
+          ) : <span />}
+        </div>
+        {googleOn && googleError && (
+          <p className="text-[11px] mb-2 px-1" style={{ color: "var(--color-brand)" }}>
+            Googleカレンダーの予定を読み込めませんでした。少し時間をおいて、もう一度お試しください。
+          </p>
+        )}
 
         {isError && (
           <div className="text-center py-6">
@@ -240,25 +336,41 @@ export function HomeCalendar({ tz }: { tz: string }) {
                     {holiday && inMonth && (
                       <span className="hidden sm:block text-[9px] leading-tight px-0.5 truncate max-w-full" style={{ color: "var(--color-brand)" }}>{holiday}</span>
                     )}
-                    {/* 予定は、アイコンとタイトルの一部を、小さい文字で表示する（スマホは2件、広い画面は3件まで） */}
-                    <span className="flex flex-col gap-px mt-0.5 w-full min-w-0 px-0.5">
-                      {evs.slice(0, 3).map((ev, i) => (
-                        <span
-                          key={ev.key}
-                          className={`${i === 2 ? "hidden sm:flex" : "flex"} items-center gap-px min-w-0 text-[9px] leading-tight text-left`}
-                          style={{ opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55, color: "var(--color-ink-700)" }}
-                        >
-                          <span className="shrink-0 text-[10px] leading-none">{KIND_INFO[ev.kind].icon}</span>
-                          <span className="truncate">{ev.title}</span>
+                    {/* 予定は、アイコンとタイトルの一部を、小さい文字で表示する（スマホは2件、広い画面は3件まで）。Googleカレンダーの予定は、そのあとに続ける */}
+                    {(() => {
+                      const gEvs = googleOn ? googleByDay.get(key) ?? [] : [];
+                      const total = evs.length + gEvs.length;
+                      return (
+                        <span className="flex flex-col gap-px mt-0.5 w-full min-w-0 px-0.5">
+                          {evs.slice(0, 3).map((ev, i) => (
+                            <span
+                              key={ev.key}
+                              className={`${i === 2 ? "hidden sm:flex" : "flex"} items-center gap-px min-w-0 text-[9px] leading-tight text-left`}
+                              style={{ opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55, color: "var(--color-ink-700)" }}
+                            >
+                              <span className="shrink-0 text-[10px] leading-none">{KIND_INFO[ev.kind].icon}</span>
+                              <span className="truncate">{ev.title}</span>
+                            </span>
+                          ))}
+                          {gEvs.slice(0, Math.max(0, 3 - evs.length)).map((g, i) => (
+                            <span
+                              key={`g-${g.id}`}
+                              className={`${evs.length + i >= 2 ? "hidden sm:flex" : "flex"} items-center gap-0.5 min-w-0 text-[9px] leading-tight text-left`}
+                              style={{ opacity: inMonth ? 1 : 0.55, color: "var(--color-ink-500)" }}
+                            >
+                              <span className="shrink-0 inline-block w-1.5 h-1.5 rounded-sm" style={{ background: "var(--color-saturday)", opacity: 0.55 }} />
+                              <span className="truncate">{g.title}</span>
+                            </span>
+                          ))}
+                          {total > 2 && (
+                            <span className="text-[9px] leading-tight sm:hidden" style={{ color: "var(--color-ink-500)" }}>他{total - 2}件</span>
+                          )}
+                          {total > 3 && (
+                            <span className="text-[9px] leading-tight hidden sm:block" style={{ color: "var(--color-ink-500)" }}>他{total - 3}件</span>
+                          )}
                         </span>
-                      ))}
-                      {evs.length > 2 && (
-                        <span className="text-[9px] leading-tight sm:hidden" style={{ color: "var(--color-ink-500)" }}>他{evs.length - 2}件</span>
-                      )}
-                      {evs.length > 3 && (
-                        <span className="text-[9px] leading-tight hidden sm:block" style={{ color: "var(--color-ink-500)" }}>他{evs.length - 3}件</span>
-                      )}
-                    </span>
+                      );
+                    })()}
                   </button>
                 );
               })}
@@ -267,57 +379,17 @@ export function HomeCalendar({ tz }: { tz: string }) {
         )}
 
         {!isError && !isLoading && view === "week" && (
-          <div className="space-y-1" role="list">
-            {days.map((key) => {
-              const { m, d } = parseKey(key);
-              const holiday = holidayOf(key);
-              const evs = eventsByDay.get(key) ?? [];
-              const isSel = key === selected;
-              const isTodayRow = key === today;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  role="listitem"
-                  onClick={() => pick(key)}
-                  aria-pressed={isSel}
-                  className="w-full flex items-start gap-3 rounded-2xl px-2.5 py-2 text-left transition"
-                  style={{
-                    background: isSel ? "rgba(181,56,75,0.10)" : holiday || weekdayOf(key) === 0 ? "rgba(181,56,75,0.03)" : "transparent",
-                    outline: isSel ? "2px solid var(--color-brand)" : "none",
-                    outlineOffset: "-2px",
-                  }}
-                >
-                  <span className="shrink-0 w-12 text-center">
-                    <span className="block text-[11px] font-medium" style={{ color: dayColor(key) }}>{WEEKDAY_LABELS[weekdayOf(key)]}</span>
-                    <span
-                      className="inline-flex w-7 h-7 items-center justify-center rounded-full text-sm font-semibold"
-                      style={isTodayRow ? { background: "var(--color-accent)", color: "white" } : { color: dayColor(key) }}
-                    >
-                      {d}
-                    </span>
-                    <span className="sr-only">{m}月</span>
-                  </span>
-                  <span className="flex-1 min-w-0 pt-0.5">
-                    {holiday && <span className="block text-[10px] mb-0.5" style={{ color: "var(--color-brand)" }}>🎌 {holiday}</span>}
-                    {evs.length === 0 ? (
-                      <span className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>予定なし</span>
-                    ) : (
-                      <span className="block space-y-0.5">
-                        {evs.map((ev) => (
-                          <span key={ev.key} className="flex items-center gap-1.5 text-xs min-w-0" style={{ opacity: isMuted(ev) ? 0.5 : 1, color: "var(--color-ink-800)" }}>
-                            <span>{KIND_INFO[ev.kind].icon}</span>
-                            <span className="shrink-0 tabular-nums" style={{ color: "var(--color-ink-500)" }}>{fmtTime(ev.startsAt, tz)}</span>
-                            <span className="truncate">{ev.title}</span>
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          <WeekTimeGrid
+            days={days}
+            tz={tz}
+            today={today}
+            selected={selected}
+            onPick={pick}
+            appByDay={eventsByDay}
+            google={googleOn ? googleEvents : null}
+            holidayOf={holidayOf}
+            dayColor={(k) => dayColor(k)}
+          />
         )}
 
         {/* 凡例 */}
@@ -327,6 +399,12 @@ export function HomeCalendar({ tz }: { tz: string }) {
           ))}
           <span style={{ color: "var(--color-brand)" }}>● 日曜・祝日</span>
           <span style={{ color: "var(--color-saturday)" }}>● 土曜</span>
+          {googleOn && (
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-saturday) 10%, transparent), color-mix(in srgb, var(--color-saturday) 10%, transparent) 2px, color-mix(in srgb, var(--color-saturday) 20%, transparent) 2px, color-mix(in srgb, var(--color-saturday) 20%, transparent) 4px)", border: "1px solid color-mix(in srgb, var(--color-saturday) 40%, transparent)" }} />
+              Googleカレンダー
+            </span>
+          )}
         </div>
       </div>
 
@@ -336,13 +414,33 @@ export function HomeCalendar({ tz }: { tz: string }) {
           📌 {selectedParts.m}月{selectedParts.d}日（{WEEKDAY_LABELS[weekdayOf(selected)]}）の予定
           {selectedHoliday && <span className="ml-1.5 font-normal" style={{ color: "var(--color-brand)" }}>🎌 {selectedHoliday}</span>}
         </p>
-        {selectedEvents.length === 0 ? (
+        {rows.length === 0 ? (
           <div className="card-paper rounded-2xl px-4 py-4 text-center text-xs" style={{ color: "var(--color-ink-500)" }}>
             この日の予定はありません
           </div>
         ) : (
           <div className="space-y-2">
-            {selectedEvents.map((ev) => {
+            {rows.map((row) => {
+              if (row.google) {
+                const g = row.google;
+                return (
+                  <div
+                    key={`g-${g.id}`}
+                    className="rounded-2xl px-4 py-2.5 flex items-center gap-3"
+                    style={{ background: "color-mix(in srgb, var(--color-saturday) 8%, transparent)", border: "1px dashed color-mix(in srgb, var(--color-saturday) 35%, transparent)" }}
+                  >
+                    <div className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-base" style={{ background: "var(--color-paper-200)" }}>🗓️</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm truncate" style={{ color: "var(--color-ink-700)" }}>{g.title}</p>
+                      <p className="text-xs tabular-nums" style={{ color: "var(--color-ink-500)" }}>
+                        {g.allDay ? "終日" : `${fmtTime(g.startsAt, tz)}〜${fmtTime(g.endsAt, tz)}`}
+                        <span className="ml-1.5">Googleカレンダー</span>
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+              const ev = row.app!;
               const badge = statusBadge(ev);
               return (
                 <Link
