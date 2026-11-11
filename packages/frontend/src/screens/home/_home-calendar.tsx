@@ -222,7 +222,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
                     title={holiday ?? undefined}
                     aria-label={`${parseKey(key).m}月${d}日${holiday ? `（${holiday}）` : ""}、予定${evs.length}件`}
                     aria-pressed={isSel}
-                    className="flex flex-col items-center rounded-xl py-1 min-h-[3.4rem] sm:min-h-[4.2rem] transition"
+                    className="flex flex-col items-center rounded-xl py-1 min-h-[4.4rem] sm:min-h-[5.6rem] transition"
                     style={{
                       background: isSel ? "rgba(181,56,75,0.10)" : holiday || weekdayOf(key) === 0 ? "rgba(181,56,75,0.03)" : "transparent",
                       outline: isSel ? "2px solid var(--color-brand)" : "none",
@@ -240,11 +240,24 @@ export function HomeCalendar({ tz }: { tz: string }) {
                     {holiday && inMonth && (
                       <span className="hidden sm:block text-[9px] leading-tight px-0.5 truncate max-w-full" style={{ color: "var(--color-brand)" }}>{holiday}</span>
                     )}
-                    <span className="flex flex-wrap justify-center gap-x-0.5 mt-0.5 text-[11px] leading-none">
-                      {evs.slice(0, 3).map((ev) => (
-                        <span key={ev.key} style={{ opacity: isMuted(ev) ? 0.35 : inMonth ? 1 : 0.55 }}>{KIND_INFO[ev.kind].icon}</span>
+                    {/* 予定は、アイコンとタイトルの一部を、小さい文字で表示する（スマホは2件、広い画面は3件まで） */}
+                    <span className="flex flex-col gap-px mt-0.5 w-full min-w-0 px-0.5">
+                      {evs.slice(0, 3).map((ev, i) => (
+                        <span
+                          key={ev.key}
+                          className={`${i === 2 ? "hidden sm:flex" : "flex"} items-center gap-px min-w-0 text-[9px] leading-tight text-left`}
+                          style={{ opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55, color: "var(--color-ink-700)" }}
+                        >
+                          <span className="shrink-0 text-[10px] leading-none">{KIND_INFO[ev.kind].icon}</span>
+                          <span className="truncate">{ev.title}</span>
+                        </span>
                       ))}
-                      {evs.length > 3 && <span className="text-[10px]" style={{ color: "var(--color-ink-500)" }}>+{evs.length - 3}</span>}
+                      {evs.length > 2 && (
+                        <span className="text-[9px] leading-tight sm:hidden" style={{ color: "var(--color-ink-500)" }}>他{evs.length - 2}件</span>
+                      )}
+                      {evs.length > 3 && (
+                        <span className="text-[9px] leading-tight hidden sm:block" style={{ color: "var(--color-ink-500)" }}>他{evs.length - 3}件</span>
+                      )}
                     </span>
                   </button>
                 );
