@@ -12,7 +12,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import {
-  MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_OWNER, MAX_PENDING_PER_UPLOADER,
+  MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_OWNER, MAX_INLINE_IMAGES_PER_OWNER, MAX_PENDING_PER_UPLOADER,
   classifyFile, cleanFileName, countOwnerAttachments, looksLikeImage, pendingCountAndSweep,
   type AttachmentOwnerType,
 } from "../services/meeting-attachments.ts";
@@ -60,6 +60,8 @@ meetingAttachmentRoutes.post("/", async (c) => {
   }
 
   // 添付先を指定したとき（すでにある会に追加するとき）は、主催者だけが追加できる
+  // 説明の文章の中に差し込む画像か（画像だけ。説明の下の添付一覧には出さない）
+  const inline = form["inline"] === "1" && kind.isImage;
   const ownerTypeRaw = typeof form["ownerType"] === "string" ? form["ownerType"] : "";
   const ownerId = typeof form["ownerId"] === "string" ? form["ownerId"] : "";
   let ownerType: AttachmentOwnerType | null = null;
@@ -72,9 +74,10 @@ meetingAttachmentRoutes.post("/", async (c) => {
     const host = await isOwnerHost(db, ownerType, ownerId, memberId);
     if (host === null) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
     if (!host) return c.json({ error: { code: "forbidden", message: "主催者のみ添付できます" } }, 403);
-    sortOrder = await countOwnerAttachments(db, ownerType, ownerId);
-    if (sortOrder >= MAX_ATTACHMENTS_PER_OWNER) {
-      return c.json({ error: { code: "too_many", message: `添付できるのは${MAX_ATTACHMENTS_PER_OWNER}個までです` } }, 400);
+    sortOrder = await countOwnerAttachments(db, ownerType, ownerId, inline);
+    const cap = inline ? MAX_INLINE_IMAGES_PER_OWNER : MAX_ATTACHMENTS_PER_OWNER;
+    if (sortOrder >= cap) {
+      return c.json({ error: { code: "too_many", message: inline ? `説明に入れられる画像は${cap}枚までです` : `添付できるのは${cap}個までです` } }, 400);
     }
   } else {
     const pending = await pendingCountAndSweep(db, c.env.R2, memberId, now);
@@ -91,7 +94,7 @@ meetingAttachmentRoutes.post("/", async (c) => {
     ownerType, ownerId: ownerType ? ownerId : null,
     uploaderId: memberId,
     fileName, contentType: kind.contentType, sizeBytes: bytes.byteLength, r2Key,
-    sortOrder, createdAt: now,
+    sortOrder, inline: inline ? 1 : 0, createdAt: now,
   });
 
   return c.json({ data: { id, name: fileName, contentType: kind.contentType, sizeBytes: bytes.byteLength, isImage: kind.isImage } });

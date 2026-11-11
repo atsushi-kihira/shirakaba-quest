@@ -9,7 +9,7 @@
 // DELETE /api/meeting-series/:id          — 定例会をキャンセル（未来の開催回もあわせてキャンセル）
 // =============================================================
 import { Hono } from "hono";
-import { eq, and, or, inArray, gte, isNotNull } from "drizzle-orm";
+import { eq, and, or, ne, inArray, gte, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -29,7 +29,8 @@ import { generateRawToken } from "../services/auth.ts";
 import { deleteExternalComments, deleteResponseCommentsForTargets, loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
 import { computeOccurrences, computeOccurrencesWithRules, parseExcludedDates, isValidDateKey, isValidSlot, parseExtraSlots, MAX_MONTHLY_SLOTS, MULTI_SLOT_TYPES, RECURRENCE_TYPES, type MonthlySlot, type RecurrencePattern, type RecurrenceType } from "../services/recurrence.ts";
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent, refreshHostMeetingCalendarEvents, pickConferenceUrl } from "../services/conferenceService.ts";
-import { linkAttachments, listAttachments } from "../services/meeting-attachments.ts";
+import { deleteOwnersAttachments, listAttachments, pruneInlineAttachments, syncOwnerAttachments } from "../services/meeting-attachments.ts";
+import { parseStoredDoc, resolveDescriptionInput } from "../services/rich-doc.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -146,6 +147,8 @@ meetingSeriesRoutes.post("/", async (c) => {
   const body = await c.req.json<{
     title: string;
     description?: string;
+    /** 書式つきの説明（見たまま編集の内容。JSON） */
+    descriptionDoc?: unknown;
     /** 説明に添付する画像・ファイル（アップロード済みの添付ID） */
     attachmentIds?: string[];
     scope: "all" | "team" | "collab_team" | "selected" | "group";
@@ -192,6 +195,10 @@ meetingSeriesRoutes.post("/", async (c) => {
   const dateMode: "recurring" | "fixed" = mode === "confirmed" && body.dateMode === "fixed" ? "fixed" : "recurring";
 
   if (!body.title?.trim()) return c.json({ error: { code: "invalid_input", message: "タイトルを入力してください" } }, 400);
+  // 説明：書式つき（descriptionDoc）なら、安全な形に整えて、文章だけの版（メール・通知・カレンダー用）も作る
+  const descResolved = resolveDescriptionInput(body);
+  if (!descResolved.ok) return c.json({ error: { code: "invalid_input", message: descResolved.message } }, 400);
+  body.description = descResolved.plain ?? undefined;
   // 開催のしかた（出欠を確認しない・有料）。出欠を確認しない定例会は、日程が決まっている作り方（確定日）のときだけ
   const optionsResult = parseMeetingOptions(body, mode === "confirmed");
   if (!optionsResult.ok) return c.json({ error: { code: "invalid_input", message: optionsResult.message } }, 400);
@@ -389,6 +396,7 @@ meetingSeriesRoutes.post("/", async (c) => {
     inviteToken: reservedInviteToken,
     title: body.title.trim(),
     description: body.description?.trim() || null,
+    descriptionDoc: descResolved.docJson,
     hostMemberId: memberId,
     scope: body.scope,
     teamId: body.scope === "team" ? body.teamId ?? null : null,
@@ -414,7 +422,7 @@ meetingSeriesRoutes.post("/", async (c) => {
     createdAt: now,
     updatedAt: now,
   });
-  await linkAttachments(db, "series", seriesId, memberId, body.attachmentIds);
+  await syncOwnerAttachments(db, c.env.R2, "series", seriesId, memberId, body.attachmentIds, descResolved.imageIds);
 
   if (body.scope === "selected" && body.inviteeIds?.length) {
     for (const mid of body.inviteeIds) {
@@ -794,6 +802,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
   return c.json({
     data: {
       id: series.id, title: series.title, description: series.description,
+      descriptionDoc: parseStoredDoc(series.descriptionDoc),
       attachments: await listAttachments(db, "series", series.id),
       event: linkedEvent ? { id: linkedEvent.id, title: linkedEvent.title, ended: linkedEvent.status !== "active", points: eventPoints } : null,
       eventType: eventType ?? null,
@@ -1057,6 +1066,7 @@ async function generateSeriesOccurrences(
       confirmedCandidateId: candidateId,
       title: occurrenceTitle(series, i, dateLabel),
       description: series.description,
+      descriptionDoc: series.descriptionDoc,
       hostMemberId: series.hostMemberId,
       scope: "selected",
       status: "confirmed",
@@ -1266,6 +1276,69 @@ meetingSeriesRoutes.patch("/:id/event", async (c) => {
 });
 
 // ----------------------------------------------------------------
+// PATCH /api/meeting-series/:id/description — 定例会の説明（書式つき）を変更（主催者のみ）
+//   propagate=true のとき、これから開催する各回のうち、説明を個別に直していない回（定例会の説明のままの回）にも反映する。
+//   個別に直した回は、そのまま残す。お知らせ（メール・通知）は送らない。
+// ----------------------------------------------------------------
+meetingSeriesRoutes.patch("/:id/description", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ説明を変更できます" } }, 403);
+
+  const body = await c.req.json<{ description?: string; descriptionDoc?: unknown; propagate?: boolean }>()
+    .catch(() => ({} as { description?: string; descriptionDoc?: unknown; propagate?: boolean }));
+  const resolved = resolveDescriptionInput(body);
+  if (!resolved.ok) return c.json({ error: { code: "invalid_input", message: resolved.message } }, 400);
+
+  const oldPlain = series.description ?? null;
+  const oldDoc = series.descriptionDoc ?? null;
+  await db.update(schema.meetingSeries)
+    .set({ description: resolved.plain, descriptionDoc: resolved.docJson, updatedAt: now })
+    .where(eq(schema.meetingSeries.id, id));
+  await pruneInlineAttachments(db, c.env.R2, "series", id, resolved.imageIds);
+
+  // これから開催する各回のうち、説明が定例会のままの回にも反映する
+  let updated = 0;
+  if (body.propagate === true) {
+    const occurrences = await db.select().from(schema.meetings)
+      .where(and(eq(schema.meetings.seriesId, id), ne(schema.meetings.status, "cancelled"))).all();
+    const candIds = occurrences.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
+    const startsById = new Map<string, number>();
+    for (const chunk of chunkOf(candIds, DELETE_CHUNK)) {
+      const rows = await db.select({ id: schema.meetingDateCandidates.id, startsAt: schema.meetingDateCandidates.startsAt })
+        .from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, chunk)).all();
+      for (const r of rows) startsById.set(r.id, r.startsAt);
+    }
+    const targets = occurrences.filter((m) => {
+      const startsAt = m.confirmedCandidateId ? startsById.get(m.confirmedCandidateId) : undefined;
+      const upcoming = startsAt === undefined || startsAt >= now;
+      return upcoming && (m.description ?? null) === oldPlain && (m.descriptionDoc ?? null) === oldDoc;
+    });
+    for (const chunk of chunkOf(targets.map((m) => m.id), DELETE_CHUNK)) {
+      await db.update(schema.meetings)
+        .set({ description: resolved.plain, descriptionDoc: resolved.docJson, updatedAt: now })
+        .where(inArray(schema.meetings.id, chunk));
+    }
+    updated = targets.length;
+    if (targets.length > 0) {
+      // カレンダーの予定の説明も、更新する（時間がかかるので、返事を返したあとに行う）
+      c.executionCtx.waitUntil((async () => {
+        for (const m of targets) await refreshHostMeetingCalendarEvents(db, c.env, m.id).catch(() => {});
+      })());
+      queueSeriesCalendarSync(c.executionCtx, db, c.env, id);
+    }
+  }
+
+  return c.json({ ok: true, updatedOccurrences: updated });
+});
+
+// ----------------------------------------------------------------
 // PATCH /api/meeting-series/:id/event-type — 定例会のイベント種別を設定・変更（主催者のみ）
 // 各回（すでに生成済みのミーティング）にも反映する。すでに付与したポイントは変わらない。
 // ----------------------------------------------------------------
@@ -1470,6 +1543,7 @@ meetingSeriesRoutes.post("/:id/occurrences/delete", async (c) => {
     await db.delete(schema.meetingExternalInvitees).where(inArray(schema.meetingExternalInvitees.meetingId, chunk));
     await db.delete(schema.meetings).where(inArray(schema.meetings.id, chunk));
   }
+  await deleteOwnersAttachments(db, c.env.R2, "meeting", targetIds);
 
   // 残った回（キャンセル済みを除く）の「第N回」を日付順に詰め直す
   const deletedSet = new Set(targetIds);

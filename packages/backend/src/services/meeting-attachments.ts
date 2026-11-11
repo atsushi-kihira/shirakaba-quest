@@ -4,7 +4,7 @@
 //   ・アップロード直後は、まだ会に結びついていない（owner が空）。会を作るとき（または追加するとき）に結びつける
 //   ・定例会の各回には、定例会に添付したものが表示される
 // =============================================================
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, notInArray } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 
 type Db = ReturnType<typeof createDb>;
@@ -12,7 +12,8 @@ type Db = ReturnType<typeof createDb>;
 export type AttachmentOwnerType = "meeting" | "series";
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 1ファイル 10MB まで
-export const MAX_ATTACHMENTS_PER_OWNER = 10;           // 1つの会に 10個まで
+export const MAX_ATTACHMENTS_PER_OWNER = 10;           // 1つの会に、添付のファイル（説明の下に並ぶもの）は 10個まで
+export const MAX_INLINE_IMAGES_PER_OWNER = 20;         // 説明の文章の中に差し込む画像は 20枚まで
 const MAX_PENDING_PER_UPLOADER = 30;                   // 会に結びつけていないアップロードの上限（本人ぶん）
 const PENDING_TTL_SEC = 24 * 60 * 60;                  // 会に結びつかないまま1日たったものは片づける
 
@@ -77,18 +78,21 @@ function toDto(r: typeof schema.meetingAttachments.$inferSelect): AttachmentDto 
   };
 }
 
-/** 会に結びついている添付の一覧（並び順どおり） */
+/** 会に結びついている添付の一覧（並び順どおり）。説明の文章の中に差し込んだ画像は、ここには含めない */
 export async function listAttachments(db: Db, ownerType: AttachmentOwnerType, ownerId: string): Promise<AttachmentDto[]> {
   const rows = await db.select().from(schema.meetingAttachments)
-    .where(and(eq(schema.meetingAttachments.ownerType, ownerType), eq(schema.meetingAttachments.ownerId, ownerId)))
+    .where(and(eq(schema.meetingAttachments.ownerType, ownerType), eq(schema.meetingAttachments.ownerId, ownerId), eq(schema.meetingAttachments.inline, 0)))
     .orderBy(asc(schema.meetingAttachments.sortOrder), asc(schema.meetingAttachments.createdAt)).all();
   return rows.map(toDto);
 }
 
-/** 会にすでに結びついている添付の数 */
-export async function countOwnerAttachments(db: Db, ownerType: AttachmentOwnerType, ownerId: string): Promise<number> {
+/** 会にすでに結びついている添付の数（inline=true は、説明の文章の中の画像） */
+export async function countOwnerAttachments(db: Db, ownerType: AttachmentOwnerType, ownerId: string, inline = false): Promise<number> {
   const rows = await db.select({ id: schema.meetingAttachments.id }).from(schema.meetingAttachments)
-    .where(and(eq(schema.meetingAttachments.ownerType, ownerType), eq(schema.meetingAttachments.ownerId, ownerId))).all();
+    .where(and(
+      eq(schema.meetingAttachments.ownerType, ownerType), eq(schema.meetingAttachments.ownerId, ownerId),
+      eq(schema.meetingAttachments.inline, inline ? 1 : 0),
+    )).all();
   return rows.length;
 }
 
@@ -119,7 +123,7 @@ export async function linkAttachments(
   db: Db, ownerType: AttachmentOwnerType, ownerId: string, uploaderId: string, ids: unknown,
 ): Promise<number> {
   if (!Array.isArray(ids)) return 0;
-  const wanted = [...new Set(ids.filter((x): x is string => typeof x === "string"))].slice(0, MAX_ATTACHMENTS_PER_OWNER);
+  const wanted = [...new Set(ids.filter((x): x is string => typeof x === "string"))].slice(0, MAX_ATTACHMENTS_PER_OWNER + MAX_INLINE_IMAGES_PER_OWNER);
   if (wanted.length === 0) return 0;
   const rows = await db.select().from(schema.meetingAttachments)
     .where(and(
@@ -128,17 +132,56 @@ export async function linkAttachments(
       isNull(schema.meetingAttachments.ownerId),
     )).all();
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const existing = await countOwnerAttachments(db, ownerType, ownerId);
-  let order = existing;
+  const fileCount = { value: await countOwnerAttachments(db, ownerType, ownerId, false) };
+  const inlineCount = { value: await countOwnerAttachments(db, ownerType, ownerId, true) };
+  let order = fileCount.value;
   let linked = 0;
   for (const id of wanted) {
-    if (!byId.has(id) || existing + linked >= MAX_ATTACHMENTS_PER_OWNER) continue;
+    const row = byId.get(id);
+    if (!row) continue;
+    const counter = row.inline === 1 ? inlineCount : fileCount;
+    const cap = row.inline === 1 ? MAX_INLINE_IMAGES_PER_OWNER : MAX_ATTACHMENTS_PER_OWNER;
+    if (counter.value >= cap) continue;
     await db.update(schema.meetingAttachments)
       .set({ ownerType, ownerId, sortOrder: order++ })
       .where(eq(schema.meetingAttachments.id, id));
+    counter.value++;
     linked++;
   }
   return linked;
+}
+
+/**
+ * 説明の文章の中に差し込んだ画像のうち、いまの説明に入っていないもの（消した画像）を、削除する。
+ * 説明を保存するたびに呼ぶ。keepIds は、いまの説明が参照している添付ID。
+ */
+export async function pruneInlineAttachments(
+  db: Db, r2: R2Bucket, ownerType: AttachmentOwnerType, ownerId: string, keepIds: string[],
+): Promise<void> {
+  const where = and(
+    eq(schema.meetingAttachments.ownerType, ownerType),
+    eq(schema.meetingAttachments.ownerId, ownerId),
+    eq(schema.meetingAttachments.inline, 1),
+    ...(keepIds.length > 0 ? [notInArray(schema.meetingAttachments.id, keepIds)] : []),
+  );
+  const stale = await db.select().from(schema.meetingAttachments).where(where).all();
+  for (const r of stale) {
+    await r2.delete(r.r2Key).catch(() => {});
+    await db.delete(schema.meetingAttachments).where(eq(schema.meetingAttachments.id, r.id));
+  }
+}
+
+/**
+ * 説明を保存したあとに呼ぶ：アップロード済みの添付を会に結びつけ、説明から消された画像を片づける。
+ * attachmentIds：画面から届いた添付ID（ファイル・画像）／ imageIds：いまの説明に差し込まれている画像
+ */
+export async function syncOwnerAttachments(
+  db: Db, r2: R2Bucket, ownerType: AttachmentOwnerType, ownerId: string, uploaderId: string,
+  attachmentIds: unknown, imageIds: string[],
+): Promise<void> {
+  const ids = [...(Array.isArray(attachmentIds) ? attachmentIds : []), ...imageIds];
+  await linkAttachments(db, ownerType, ownerId, uploaderId, ids);
+  await pruneInlineAttachments(db, r2, ownerType, ownerId, imageIds);
 }
 
 /** 会を完全に削除するときに、添付（ファイル本体も）を片づける */
@@ -149,5 +192,19 @@ export async function deleteOwnerAttachments(db: Db, r2: R2Bucket, ownerType: At
   if (rows.length > 0) {
     await db.delete(schema.meetingAttachments)
       .where(and(eq(schema.meetingAttachments.ownerType, ownerType), eq(schema.meetingAttachments.ownerId, ownerId)));
+  }
+}
+
+/** 会（複数）の添付を、まとめて片づける（定例会の開催回をまとめて削除するとき） */
+export async function deleteOwnersAttachments(db: Db, r2: R2Bucket, ownerType: AttachmentOwnerType, ownerIds: string[]): Promise<void> {
+  for (let i = 0; i < ownerIds.length; i += 50) {
+    const chunk = ownerIds.slice(i, i + 50);
+    const rows = await db.select().from(schema.meetingAttachments)
+      .where(and(eq(schema.meetingAttachments.ownerType, ownerType), inArray(schema.meetingAttachments.ownerId, chunk))).all();
+    for (const r of rows) await r2.delete(r.r2Key).catch(() => {});
+    if (rows.length > 0) {
+      await db.delete(schema.meetingAttachments)
+        .where(and(eq(schema.meetingAttachments.ownerType, ownerType), inArray(schema.meetingAttachments.ownerId, chunk)));
+    }
   }
 }

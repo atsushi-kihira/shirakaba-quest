@@ -465,3 +465,21 @@ p {
 label:has(> input.sr-only) {
   position: relative;
 }
+
+/* ===================================================
+   書式つきの説明（見たまま編集・表示で共通）
+   =================================================== */
+.rich-body { font-size: 0.875rem; line-height: 1.7; color: var(--color-ink-700); overflow-wrap: anywhere; }
+.rich-body p { margin: 0 0 0.45em; min-height: 1.7em; }
+.rich-body h2 { font-size: 1.15rem; font-weight: 700; margin: 0.9em 0 0.35em; color: var(--color-ink-900); }
+.rich-body h3 { font-size: 1rem; font-weight: 700; margin: 0.8em 0 0.3em; color: var(--color-ink-900); }
+.rich-body ul { list-style: disc; padding-left: 1.5em; margin: 0 0 0.5em; }
+.rich-body ol { list-style: decimal; padding-left: 1.6em; margin: 0 0 0.5em; }
+.rich-body li > p { margin: 0; }
+.rich-body a { color: var(--color-brand); text-decoration: underline; }
+.rich-body > :first-child { margin-top: 0; }
+.rich-body > :last-child { margin-bottom: 0; }
+.rich-editor .ProseMirror { outline: none; min-height: 9rem; padding: 0.75rem 1rem; }
+.rich-editor .ProseMirror-selectednode > .rte-image-box { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+.rich-body ul ul { list-style: circle; margin-bottom: 0; }
+.rich-body ol ol, .rich-body ul ol { margin-bottom: 0; }

@@ -3,6 +3,9 @@
 // /schedule/invite/:inviteToken
 // 1つのURLを複数人で共有できる方式。回答時に新規ゲストを作成する。
 // =============================================================
+import { GuestDescriptionBody } from "@/components/description-body";
+import type { Attachment } from "@/lib/attachments";
+import type { RichDoc } from "@/lib/rich-doc";
 import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
@@ -19,7 +22,7 @@ type Candidate = { id: string; startsAt: number; endsAt: number | null; note: st
 type ApiResponse = {
   data: {
     meeting: {
-      id: string; title: string; description: string | null; status: string;
+      id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; status: string;
       confirmedCandidateId: string | null;
       noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null; feeNote?: string | null;
       host: { id: string; name: string; emoji: string } | null;
@@ -210,7 +213,7 @@ export function ScheduleInviteScreen() {
           {meeting.host && (
             <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>{meeting.host.emoji} {meeting.host.name}さんからのお知らせです</p>
           )}
-          {meeting.description && <p className="text-sm mt-2 px-2" style={{ color: "var(--color-ink-600)" }}>{meeting.description}</p>}
+<GuestDescriptionBody className="text-left mt-3 mx-1" token={inviteToken ?? ""} doc={meeting.descriptionDoc} plain={meeting.description} attachments={meeting.attachments} />
           <div className="mt-4 space-y-1.5">
             {displayCandidates.map((cand) => (
               <div key={cand.id} className="card-paper rounded-2xl px-4 py-2.5">
@@ -239,9 +242,7 @@ export function ScheduleInviteScreen() {
               {meeting.host.emoji} {meeting.host.name}さんから招待されています
             </p>
           )}
-          {meeting.description && (
-            <p className="text-sm mt-2 px-2" style={{ color: "var(--color-ink-600)" }}>{meeting.description}</p>
-          )}
+<GuestDescriptionBody className="text-left mt-3 mx-1" token={inviteToken ?? ""} doc={meeting.descriptionDoc} plain={meeting.description} attachments={meeting.attachments} />
           {meeting.isPaid && (
             <p className="text-sm mt-3 mx-2 px-3 py-2 rounded-xl text-left" style={{ background: "rgba(212,160,59,0.12)", color: "var(--color-ink-700)" }}>
               💴 <span className="font-medium">有料のミーティングです。参加費：{meeting.feeAmount != null ? `${meeting.feeAmount.toLocaleString("ja-JP")}円` : "—"}</span>

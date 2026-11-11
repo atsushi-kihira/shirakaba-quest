@@ -18,8 +18,9 @@ import { ResponseCommentField, CommentBubble } from "@/components/response-comme
 import { DEFAULT_START_TIME, defaultEndTime, addMinutesToTime } from "@/lib/meeting-time";
 import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 import { DescriptionEditor } from "@/components/description-editor";
+import { DescriptionBody } from "@/components/description-body";
 import { AttachmentGallery } from "@/components/attachment-gallery";
-import { LinkifiedText } from "@/components/linkified-text";
+import { docIsEmpty, effectiveDoc, hasDescription, plainToDoc, type RichDoc } from "@/lib/rich-doc";
 import type { Attachment } from "@/lib/attachments";
 
 type Availability = "yes" | "maybe" | "no";
@@ -39,8 +40,10 @@ type Respondent = {
 type ExternalInvitee = { id: string; name: string; email: string | null; token: string; createdAt: number; invitedAt?: number | null; company?: string | null };
 type Meeting = {
   id: string; title: string; description: string | null;
+  /** 書式つきの説明（なければ null。description は、その文章だけの版） */
+  descriptionDoc: RichDoc | null;
   /** 説明に添付した画像・ファイル。定例会の回では、定例会に添付したもの */
-  attachments: Attachment[]; attachmentsFromSeries: boolean;
+  attachments: Attachment[]; seriesAttachments: Attachment[];
   host: { id: string; name: string; emoji: string } | null;
   hostMemberId: string; scope: string; teamId: string | null;
   collabTeamId: string | null;
@@ -205,7 +208,7 @@ export function MeetingDetailScreen() {
   const [commentDirty, setCommentDirty] = useState(false);
   const [copiedToken, setCopiedToken] = useState("");
   const [editingDesc, setEditingDesc] = useState(false);
-  const [descText, setDescText] = useState("");
+  const [descDoc, setDescDoc] = useState<RichDoc>(() => plainToDoc(""));
   // 説明を直したときに、対象者へ通知するか（既定は通知しない。直すたびに通知が届かないようにするため）
   const [descNotify, setDescNotify] = useState(false);
   const [showMemberPicker, setShowMemberPicker] = useState(false);
@@ -426,8 +429,8 @@ export function MeetingDetailScreen() {
   });
 
   const descMutation = useMutation({
-    mutationFn: (description: string) =>
-      api.patch(`/meetings/${id}/description`, { description, notify: descNotify }),
+    mutationFn: (doc: RichDoc) =>
+      api.patch(`/meetings/${id}/description`, { descriptionDoc: docIsEmpty(doc) ? null : doc, notify: descNotify }),
     onSuccess: () => {
       setEditingDesc(false);
       setDescNotify(false);
@@ -573,10 +576,12 @@ export function MeetingDetailScreen() {
   }
 
   function startEditDesc() {
-    setDescText(meeting.description ?? "");
+    setDescDoc(effectiveDoc(meeting.descriptionDoc, meeting.description) ?? plainToDoc(""));
     setEditingDesc(true);
   }
 
+  // 説明の下に並べるファイル：定例会全体のものと、この回のもの
+  const allAttachments = [...meeting.seriesAttachments, ...meeting.attachments];
   const scopeLabel: Record<string, string> = { all: "全メンバー", team: "ギルド", selected: "指定メンバー" };
 
   return (
@@ -618,6 +623,87 @@ export function MeetingDetailScreen() {
           </span>
         )}
       </div>
+
+      {/* 説明（タイトルのすぐ下。主催者は編集できる） */}
+      {isHost ? (
+        <div className="mb-4">
+          {editingDesc ? (
+            <div className="card-paper rounded-2xl p-3 space-y-2">
+              <DescriptionEditor
+                doc={descDoc}
+                onDocChange={setDescDoc}
+                attachments={meeting.attachments}
+                onAttachmentsChange={() => qc.invalidateQueries({ queryKey: ["meetings", id] })}
+                owner={{ type: "meeting", id: meeting.id }}
+                placeholder="詳細・場所・連絡事項など（文字の大きさ・色・写真も使えます）"
+              />
+              {meeting.seriesAttachments.length > 0 && (
+                <div className="px-1">
+                  <p className="text-[11px] mb-1" style={{ color: "var(--color-ink-400)" }}>定例会全体に添付されているファイル（定例会のページで変更できます）</p>
+                  <AttachmentGallery attachments={meeting.seriesAttachments} />
+                </div>
+              )}
+              <p className="px-1 text-[11px]" style={{ color: "var(--color-ink-400)" }}>
+                {meeting.seriesId
+                  ? "ここで添付したファイルは、この回にだけ表示されます。ファイルの追加・削除は、「保存する」を押さなくても、すぐに反映されます。文章と写真は、「保存する」を押すと反映されます。"
+                  : "添付したファイル（PDFなど）の追加・削除は、「保存する」を押さなくても、すぐに反映されます。文章と写真は、「保存する」を押すと反映されます。"}
+              </p>
+              <label className="flex items-start gap-2 px-1 text-xs cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
+                <input
+                  type="checkbox"
+                  checked={descNotify}
+                  onChange={(e) => setDescNotify(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  📣 この変更を、メンバーと回答済みのゲストにメール・通知でお知らせする
+                  <span className="block mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+                    {descNotify ? "保存と同時に、お知らせが届きます。" : "チェックしなければ、お知らせは送らず、内容だけを更新します。"}
+                  </span>
+                </span>
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => descMutation.mutate(descDoc)}
+                  disabled={descMutation.isPending}
+                  className="flex-1 py-2 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  style={{ background: "var(--color-brand)" }}
+                >
+                  {descMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                  {descNotify ? "保存して通知する" : "保存する"}
+                </button>
+                <button
+                  onClick={() => { setEditingDesc(false); setDescNotify(false); }}
+                  className="px-4 py-2 rounded-xl text-sm"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}
+                >
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                {hasDescription(meeting.descriptionDoc, meeting.description, allAttachments)
+                  ? <DescriptionBody doc={meeting.descriptionDoc} plain={meeting.description} attachments={allAttachments} />
+                  : <p className="text-sm italic" style={{ color: "var(--color-ink-300)" }}>詳細未設定</p>}
+              </div>
+              <button
+                onClick={startEditDesc}
+                className="shrink-0 flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-xl"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}
+              >
+                <Edit2 size={12} />
+                {hasDescription(meeting.descriptionDoc, meeting.description, allAttachments) ? "詳細を更新" : "詳細を追加"}
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
+        hasDescription(meeting.descriptionDoc, meeting.description, allAttachments) && (
+          <DescriptionBody className="mb-4" doc={meeting.descriptionDoc} plain={meeting.description} attachments={allAttachments} />
+        )
+      )}
 
       {/* 開催のしかた（出欠を確認しない・有料） */}
       {meeting.noAttendanceCheck && (
@@ -862,88 +948,6 @@ export function MeetingDetailScreen() {
             )}
           </div>
         </div>
-      )}
-
-      {/* 詳細（主催者は編集可） */}
-      {isHost ? (
-        <div className="mb-4">
-          {editingDesc ? (
-            <div className="card-paper rounded-2xl p-3 space-y-2">
-              <DescriptionEditor
-                value={descText}
-                onChange={setDescText}
-                attachments={meeting.attachments}
-                onAttachmentsChange={() => qc.invalidateQueries({ queryKey: ["meetings", id] })}
-                owner={meeting.attachmentsFromSeries ? undefined : { type: "meeting", id: meeting.id }}
-                attachmentsLocked={meeting.attachmentsFromSeries}
-                placeholder="詳細・場所・連絡事項など（画像・ファイルも添付できます）"
-              />
-              <p className="px-1 text-[11px]" style={{ color: "var(--color-ink-400)" }}>
-                {meeting.attachmentsFromSeries
-                  ? "添付の画像・ファイルは、定例会のページで変更できます。"
-                  : "添付した画像・ファイルの追加・削除は、「保存する」を押さなくても、すぐに反映されます。"}
-              </p>
-              <label className="flex items-start gap-2 px-1 text-xs cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
-                <input
-                  type="checkbox"
-                  checked={descNotify}
-                  onChange={(e) => setDescNotify(e.target.checked)}
-                  className="mt-0.5"
-                />
-                <span>
-                  📣 この変更を、メンバーと回答済みのゲストにメール・通知でお知らせする
-                  <span className="block mt-0.5" style={{ color: "var(--color-ink-400)" }}>
-                    {descNotify ? "保存と同時に、お知らせが届きます。" : "チェックしなければ、お知らせは送らず、内容だけを更新します。"}
-                  </span>
-                </span>
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => descMutation.mutate(descText)}
-                  disabled={descMutation.isPending}
-                  className="flex-1 py-2 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
-                  style={{ background: "var(--color-brand)" }}
-                >
-                  {descMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
-                  {descNotify ? "保存して通知する" : "保存する"}
-                </button>
-                <button
-                  onClick={() => { setEditingDesc(false); setDescNotify(false); }}
-                  className="px-4 py-2 rounded-xl text-sm"
-                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}
-                >
-                  キャンセル
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-start gap-2">
-              <div className="flex-1 min-w-0">
-                {meeting.description ? (
-                  <LinkifiedText text={meeting.description} className="text-sm" style={{ color: "var(--color-ink-600)" }} />
-                ) : meeting.attachments.length === 0 ? (
-                  <p className="text-sm italic" style={{ color: "var(--color-ink-300)" }}>詳細未設定</p>
-                ) : null}
-                <AttachmentGallery attachments={meeting.attachments} className={meeting.description ? "mt-2" : ""} />
-              </div>
-              <button
-                onClick={startEditDesc}
-                className="shrink-0 flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-xl"
-                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}
-              >
-                <Edit2 size={12} />
-                {meeting.description || meeting.attachments.length > 0 ? "詳細を更新" : "詳細を追加"}
-              </button>
-            </div>
-          )}
-        </div>
-      ) : (
-        (meeting.description || meeting.attachments.length > 0) && (
-          <div className="mb-4">
-            {meeting.description && <LinkifiedText text={meeting.description} className="text-sm" style={{ color: "var(--color-ink-600)" }} />}
-            <AttachmentGallery attachments={meeting.attachments} className={meeting.description ? "mt-2" : ""} />
-          </div>
-        )
       )}
 
       {/* ---- 回答グリッド（出欠を確認しない会では出さない） ---- */}

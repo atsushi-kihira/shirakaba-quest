@@ -6,7 +6,7 @@
 import { useState, Fragment } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Loader2, CheckCircle, XCircle, Trash2, Check } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, CheckCircle, XCircle, Trash2, Check, Edit2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTimezone } from "@/hooks/use-timezone";
@@ -21,9 +21,9 @@ import { SeriesParticipantsPanel } from "./_series-participants-panel";
 import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
 import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 import { DescriptionEditor } from "@/components/description-editor";
-import { AttachmentGallery } from "@/components/attachment-gallery";
-import { LinkifiedText } from "@/components/linkified-text";
+import { DescriptionBody } from "@/components/description-body";
 import type { Attachment } from "@/lib/attachments";
+import { docIsEmpty, effectiveDoc, hasDescription, plainToDoc, type RichDoc } from "@/lib/rich-doc";
 
 type Availability = "yes" | "maybe" | "no";
 type Respondent = { memberId: string; name: string; emoji: string; availability: Availability };
@@ -37,6 +37,7 @@ type TargetMember = { id: string; name: string; emoji: string; bgColor: string; 
 type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null; conferenceUrl: string | null };
 type SeriesDetail = {
   id: string; title: string; description: string | null;
+  descriptionDoc: RichDoc | null;
   attachments: Attachment[];
   event: { id: string; title: string; ended: boolean; points: number } | null;
   eventType: { id: string; name: string; emoji: string; pointValue: number } | null;
@@ -105,7 +106,9 @@ export function MeetingSeriesDetailScreen() {
   const qc = useQueryClient();
   const tz = useTimezone();
   const user = useAuthStore((s) => s.user);
-  const [editingAttachments, setEditingAttachments] = useState(false);
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDoc, setDescDoc] = useState<RichDoc>(() => plainToDoc(""));
+  const [propagateDesc, setPropagateDesc] = useState(true);
   const [myAnswers, setMyAnswers] = useState<Record<string, Availability>>({});
   const [hasEdited, setHasEdited] = useState(false);
   // 一言コメントの書きかけ（null: まだ書き換えていない＝サーバーの内容を表示）
@@ -125,6 +128,16 @@ export function MeetingSeriesDetailScreen() {
     queryKey: ["meeting-series", id],
     queryFn: () => api.get<{ data: SeriesDetail }>(`/meeting-series/${id}`),
     enabled: !!id,
+  });
+
+  const descMutation = useMutation({
+    mutationFn: (v: { doc: RichDoc; propagate: boolean }) =>
+      api.patch<{ ok: boolean; updatedOccurrences: number }>(`/meeting-series/${id}/description`, { descriptionDoc: docIsEmpty(v.doc) ? null : v.doc, propagate: v.propagate }),
+    onSuccess: () => {
+      setEditingDesc(false);
+      qc.invalidateQueries({ queryKey: ["meeting-series", id] });
+      qc.invalidateQueries({ queryKey: ["meetings"] });
+    },
   });
 
   const respondMutation = useMutation({
@@ -222,6 +235,23 @@ export function MeetingSeriesDetailScreen() {
   const upcoming = series.occurrences.filter((o) => o.status !== "cancelled" && (o.endsAt ?? o.startsAt) >= nowSec);
   const past = series.occurrences.filter((o) => o.status === "cancelled" || (o.endsAt ?? o.startsAt) < nowSec);
 
+  // 主催者向け：招待の管理（外部ゲスト・参加者の追加）。ページの一番下にまとめて置く
+  const hostPanels = (
+    <>
+      {/* 外部ゲスト（主催者のみ。共有URL・ゲストの一覧） */}
+      {series.isHost && series.status !== "cancelled" && (
+        <SeriesGuestPanel seriesId={series.id} voting={series.status === "voting"} inviteToken={series.inviteToken ?? null} guests={series.externalInvitees ?? []} />
+      )}
+
+      {/* 参加者の追加（主催者のみ。投票中・確定済みの定例会） */}
+      {series.isHost && (series.status === "voting" || series.status === "confirmed") && (
+        <SeriesParticipantsPanel seriesId={series.id} scope={series.scope} confirmed={series.status === "confirmed"}
+          currentMemberIds={series.targetMembers.filter((m) => !m.isExternal).map((m) => m.id)} groupName={series.groupName ?? null}
+          removableMembers={series.targetMembers.filter((m) => !m.isExternal && (series.removableMemberIds ?? []).includes(m.id))} />
+      )}
+    </>
+  );
+
   return (
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto">
       <div className="flex items-center gap-3 mb-5">
@@ -235,6 +265,70 @@ export function MeetingSeriesDetailScreen() {
           </h1>
         </div>
       </div>
+
+      {/* 説明（タイトルのすぐ下。主催者は編集できる） */}
+      {(hasDescription(series.descriptionDoc, series.description, series.attachments) || (series.isHost && series.status !== "cancelled")) && (
+        <div className="mb-4">
+          {editingDesc ? (
+            <div className="card-paper rounded-2xl p-3 space-y-2">
+              <DescriptionEditor
+                doc={descDoc}
+                onDocChange={setDescDoc}
+                attachments={series.attachments}
+                onAttachmentsChange={() => { qc.invalidateQueries({ queryKey: ["meeting-series", id] }); qc.invalidateQueries({ queryKey: ["meetings"] }); }}
+                owner={{ type: "series", id: series.id }}
+                placeholder="定例会の説明・場所・連絡事項など（文字の大きさ・色・写真も使えます）"
+              />
+              <label className="flex items-start gap-2 px-1 text-xs cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
+                <input type="checkbox" checked={propagateDesc} onChange={(e) => setPropagateDesc(e.target.checked)} className="mt-0.5" />
+                <span>
+                  これから開催する各回の説明にも反映する
+                  <span className="block mt-0.5" style={{ color: "var(--color-ink-400)" }}>
+                    各回で、個別に説明を直している回は、そのまま残ります。お知らせ（メール・通知）は送りません。
+                  </span>
+                </span>
+              </label>
+              <p className="px-1 text-[11px]" style={{ color: "var(--color-ink-400)" }}>
+                添付したファイル（PDFなど）の追加・削除は、「保存する」を押さなくても、すぐに反映されます（各回のページにも表示されます）。文章と写真は、「保存する」を押すと反映されます。
+              </p>
+              {descMutation.isError && (
+                <p className="text-xs px-1" style={{ color: "var(--color-brand)" }}>保存できませんでした。もう一度お試しください。</p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => descMutation.mutate({ doc: descDoc, propagate: propagateDesc })}
+                  disabled={descMutation.isPending}
+                  className="flex-1 py-2 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  style={{ background: "var(--color-brand)" }}>
+                  {descMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                  保存する
+                </button>
+                <button onClick={() => setEditingDesc(false)} className="px-4 py-2 rounded-xl text-sm"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2">
+              <div className="flex-1 min-w-0">
+                {hasDescription(series.descriptionDoc, series.description, series.attachments)
+                  ? <DescriptionBody doc={series.descriptionDoc} plain={series.description} attachments={series.attachments} />
+                  : <p className="text-sm italic" style={{ color: "var(--color-ink-300)" }}>説明未設定</p>}
+              </div>
+              {series.isHost && (
+                <button
+                  onClick={() => { setDescDoc(effectiveDoc(series.descriptionDoc, series.description) ?? plainToDoc("")); setPropagateDesc(true); descMutation.reset(); setEditingDesc(true); }}
+                  className="shrink-0 flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-xl"
+                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+                  <Edit2 size={12} />
+                  {hasDescription(series.descriptionDoc, series.description, series.attachments) ? "説明を更新" : "説明を追加"}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card-paper rounded-2xl px-4 py-3 mb-5">
         <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -288,30 +382,6 @@ export function MeetingSeriesDetailScreen() {
             )}
           </div>
         )}
-        {series.description && <LinkifiedText text={series.description} className="text-sm mb-1" style={{ color: "var(--color-ink-700)" }} />}
-        {editingAttachments ? (
-          <div className="card-paper rounded-2xl p-3 my-2 space-y-2">
-            <DescriptionEditor
-              value="" onChange={() => {}} hideText
-              attachments={series.attachments}
-              onAttachmentsChange={() => { qc.invalidateQueries({ queryKey: ["meeting-series", id] }); qc.invalidateQueries({ queryKey: ["meetings"] }); }}
-              owner={{ type: "series", id: series.id }}
-            />
-            <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>追加・削除は、すぐに反映されます。各回のページにも表示されます。</p>
-            <button type="button" onClick={() => setEditingAttachments(false)} className="px-4 py-2 rounded-xl text-sm" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-              閉じる
-            </button>
-          </div>
-        ) : (
-          <>
-            <AttachmentGallery attachments={series.attachments} className="my-2" />
-            {series.isHost && (
-              <button type="button" onClick={() => setEditingAttachments(true)} className="text-xs px-2.5 py-1.5 rounded-xl my-1" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
-                📎 {series.attachments.length > 0 ? "添付を変更する" : "画像・ファイルを添付する"}
-              </button>
-            )}
-          </>
-        )}
         {series.noAttendanceCheck && (
           <p className="text-sm my-2 px-3 py-2 rounded-xl" style={{ background: "rgba(90,140,92,0.10)", color: "var(--color-ink-700)" }}>
             📢 <span className="font-medium">お知らせの定例会です。</span>出欠のご返事は不要です。直前にはリマインドが届きます。
@@ -335,18 +405,6 @@ export function MeetingSeriesDetailScreen() {
           対象: {series.targetMembers.map((m) => `${m.emoji} ${m.name}`).join("、") || "（対象者なし）"}
         </p>
       </div>
-
-      {/* 外部ゲスト（主催者のみ。共有URL・ゲストの一覧） */}
-      {series.isHost && series.status !== "cancelled" && (
-        <SeriesGuestPanel seriesId={series.id} voting={series.status === "voting"} inviteToken={series.inviteToken ?? null} guests={series.externalInvitees ?? []} />
-      )}
-
-      {/* 参加者の追加（主催者のみ。投票中・確定済みの定例会） */}
-      {series.isHost && (series.status === "voting" || series.status === "confirmed") && (
-        <SeriesParticipantsPanel seriesId={series.id} scope={series.scope} confirmed={series.status === "confirmed"}
-          currentMemberIds={series.targetMembers.filter((m) => !m.isExternal).map((m) => m.id)} groupName={series.groupName ?? null}
-          removableMembers={series.targetMembers.filter((m) => !m.isExternal && (series.removableMemberIds ?? []).includes(m.id))} />
-      )}
 
       {series.status === "voting" && (
         <>
@@ -507,26 +565,19 @@ export function MeetingSeriesDetailScreen() {
               </button>
             </div>
           )}
+
+          {hostPanels}
         </>
       )}
 
       {(series.status === "confirmed" || series.status === "ended" || series.status === "cancelled") && (
         <>
           {upcoming.length > 0 && series.status === "confirmed" && (
-            <EventReminderSetting kind="series" id={series.id} ownLabel="この定例会の全回に共通の設定" className="mb-4" />
-          )}
-          {upcoming.length > 0 && series.status === "confirmed" && (
             <div className="grid gap-2 mb-4">
               <button onClick={() => setShowScheduleText(true)} className="py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
                 📋 確定した日程と会議URLをテキストで出力（メール・DM用）
               </button>
-              {series.isHost && (
-                <button onClick={() => { setUrlsError(null); setShowUrlsModal(true); }} className="py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5"
-                  style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-                  📹 各回の会議URLをまとめて設定
-                </button>
-              )}
             </div>
           )}
           {upcoming.length > 0 && (
@@ -638,6 +689,22 @@ export function MeetingSeriesDetailScreen() {
               </div>
             </section>
           )}
+
+          {/* リマインド（日程のあと） */}
+          {upcoming.length > 0 && series.status === "confirmed" && (
+            <EventReminderSetting kind="series" id={series.id} ownLabel="この定例会の全回に共通の設定" className="mb-4" />
+          )}
+
+          {/* 主催者メニューと、招待の管理（一番下） */}
+          {series.isHost && upcoming.length > 0 && series.status === "confirmed" && (
+            <div className="grid gap-2 mb-4">
+              <button onClick={() => { setUrlsError(null); setShowUrlsModal(true); }} className="py-2.5 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                📹 各回の会議URLをまとめて設定
+              </button>
+            </div>
+          )}
+          {hostPanels}
 
           {series.isHost && series.status === "confirmed" && (
             <div className="mt-6">

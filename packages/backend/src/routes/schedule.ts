@@ -12,6 +12,8 @@ import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { PREPARING_MESSAGE, isReserved } from "../services/invite-reservations.ts";
 import { isEmailLike, normalizeEmail, registerGuestAsContact } from "../services/guest-contacts.ts";
 import { loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
+import { listAttachments } from "../services/meeting-attachments.ts";
+import { parseStoredDoc } from "../services/rich-doc.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -127,6 +129,8 @@ scheduleRoutes.get("/:token", async (c) => {
         id: meeting.id,
         title: meeting.title,
         description: meeting.description,
+        descriptionDoc: parseStoredDoc(meeting.descriptionDoc),
+        attachments: [...(meeting.seriesId ? await listAttachments(db, "series", meeting.seriesId) : []), ...(await listAttachments(db, "meeting", meeting.id))],
         noAttendanceCheck: meeting.noAttendanceCheck === 1,
         isPaid: meeting.isPaid === 1,
         feeAmount: meeting.isPaid === 1 ? meeting.feeAmount : null,
@@ -316,6 +320,8 @@ scheduleRoutes.get("/invite/:inviteToken", async (c) => {
         id: meeting.id,
         title: meeting.title,
         description: meeting.description,
+        descriptionDoc: parseStoredDoc(meeting.descriptionDoc),
+        attachments: [...(meeting.seriesId ? await listAttachments(db, "series", meeting.seriesId) : []), ...(await listAttachments(db, "meeting", meeting.id))],
         noAttendanceCheck: meeting.noAttendanceCheck === 1,
         isPaid: meeting.isPaid === 1,
         feeAmount: meeting.isPaid === 1 ? meeting.feeAmount : null,

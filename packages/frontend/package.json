@@ -12,6 +12,10 @@
   "dependencies": {
     "@shirakaba/shared": "workspace:*",
     "@tanstack/react-query": "^5.100.9",
+    "@tiptap/extension-text-style": "3.33.1",
+    "@tiptap/pm": "3.33.1",
+    "@tiptap/react": "3.33.1",
+    "@tiptap/starter-kit": "3.33.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.14.0",

@@ -4,6 +4,7 @@
 //   ・ファイルの大きさ・種類は、ここでも確かめて、やさしい日本語で伝える（サーバー側でも確かめている）
 // =============================================================
 import { api } from "@/lib/api";
+import { memberAttachmentPath, type AttachmentPathFn } from "@/lib/attachment-source";
 
 export type Attachment = {
   id: string;
@@ -21,6 +22,10 @@ const MAX_IMAGE_EDGE = 1600; // 写真の長いほうの辺（px）。これよ�
 
 export const ATTACHMENT_ACCEPT =
   ".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.mp3,.m4a,.mp4,.mov";
+
+/** 説明の下に添付するファイル（画像は、説明の中に差し込むので、ここには含めない） */
+export const FILE_ACCEPT =
+  ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.mp3,.m4a,.mp4,.mov";
 
 const ALLOWED_EXT = new Set(ATTACHMENT_ACCEPT.split(",").map((e) => e.slice(1)));
 
@@ -77,7 +82,8 @@ export function checkAttachFile(file: File): string {
 }
 
 /** ファイルをアップロードする。owner を渡すと、主催している会に、その場で結びつける */
-export async function uploadAttachment(rawFile: File, owner?: AttachmentOwner): Promise<Attachment> {
+/** inline: 説明の文章の中に差し込む画像として保存する（説明の下の添付一覧には出さない） */
+export async function uploadAttachment(rawFile: File, owner?: AttachmentOwner, opts?: { inline?: boolean }): Promise<Attachment> {
   const problem = checkAttachFile(rawFile);
   if (problem) throw new Error(problem);
   const file = await shrinkImage(rawFile);
@@ -86,6 +92,7 @@ export async function uploadAttachment(rawFile: File, owner?: AttachmentOwner): 
   }
   const form = new FormData();
   form.append("file", file, file.name);
+  if (opts?.inline) form.append("inline", "1");
   if (owner) {
     form.append("ownerType", owner.type);
     form.append("ownerId", owner.id);
@@ -99,8 +106,8 @@ export function removeAttachment(id: string): Promise<unknown> {
 }
 
 /** ファイルを、端末に保存する */
-export async function downloadAttachment(a: Pick<Attachment, "id" | "name">): Promise<void> {
-  const blob = await api.getBlob(`/meeting-attachments/${a.id}/file?download=1`);
+export async function downloadAttachment(a: Pick<Attachment, "id" | "name">, pathOf: AttachmentPathFn = memberAttachmentPath): Promise<void> {
+  const blob = await api.getBlob(pathOf(a.id, true));
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

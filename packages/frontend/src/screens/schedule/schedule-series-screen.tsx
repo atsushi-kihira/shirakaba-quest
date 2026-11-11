@@ -3,6 +3,9 @@
 //   /schedule/series/:token                 … ゲスト専用ページ（投票中は候補パターンへの回答、確定後は開催日の一覧）
 //   /schedule/series-invite/:inviteToken    … 共有URL（名前・メールアドレスを入れて回答すると、専用ページができる）
 // =============================================================
+import { GuestDescriptionBody } from "@/components/description-body";
+import type { Attachment } from "@/lib/attachments";
+import type { RichDoc } from "@/lib/rich-doc";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { AlertCircle, Check, Clock, Link as LinkIcon, Loader2 } from "lucide-react";
@@ -20,7 +23,7 @@ type Candidate = {
 };
 type View = {
   inviteeName: string; inviteeEmail: string | null; inviteeCompany?: string;
-  series: { id: string; title: string; description: string | null; status: string; host: { id: string; name: string; emoji: string } | null };
+  series: { id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; status: string; host: { id: string; name: string; emoji: string } | null };
   candidates: Candidate[];
   myAnswers: Record<string, Availability>;
   myComment?: string;
@@ -156,7 +159,7 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
           <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>{appTitle} · 定例会の日程調整</p>
           <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>{series.title}</h1>
           {series.host && <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>{series.host.emoji} {series.host.name}さんから招待されています</p>}
-          {series.description && <p className="text-sm mt-2 px-2" style={{ color: "var(--color-ink-600)" }}>{series.description}</p>}
+<GuestDescriptionBody className="text-left mt-3 mx-1" token={token} doc={series.descriptionDoc} plain={series.description} attachments={series.attachments} />
         </div>
 
         {!voting ? (

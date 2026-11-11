@@ -16,6 +16,8 @@ import { isEmailLike, normalizeEmail, registerGuestAsContact } from "../services
 import { parseExtraSlots } from "../services/recurrence.ts";
 import { loadResponseComments, normalizeComment, saveResponseComment } from "../services/response-comments.ts";
 import { patternLabel, upcomingDatesFor } from "./meeting-series.ts";
+import { listAttachments } from "../services/meeting-attachments.ts";
+import { parseStoredDoc } from "../services/rich-doc.ts";
 import type { Env, Variables } from "../types.ts";
 
 type Availability = "yes" | "maybe" | "no";
@@ -76,6 +78,8 @@ async function buildView(db: Db, series: Series, invitee: Invitee | null) {
     inviteeCompany: invitee?.company ?? "",
     series: {
       id: series.id, title: series.title, description: series.description, status: series.status, host: host ?? null,
+      descriptionDoc: parseStoredDoc(series.descriptionDoc),
+      attachments: await listAttachments(db, "series", series.id),
       noAttendanceCheck: series.noAttendanceCheck === 1,
       isPaid: series.isPaid === 1,
       feeAmount: series.isPaid === 1 ? series.feeAmount : null,

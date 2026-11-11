@@ -11,6 +11,7 @@ import { useDragReorder } from "@/hooks/use-drag-reorder";
 import { DropInsertionLine } from "@/components/drop-insertion-line";
 import { DescriptionEditor } from "@/components/description-editor";
 import type { Attachment } from "@/lib/attachments";
+import { docIsEmpty, plainToDoc, type RichDoc } from "@/lib/rich-doc";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { MeetingOptionsPicker, DEFAULT_MEETING_OPTIONS, optionsToPayload, validateMeetingOptions, type MeetingOptionsValue } from "@/components/meeting-options-picker";
 import { MeetingCandidatePicker, type SuggestedSlot } from "./_meeting-candidate-picker";
@@ -71,7 +72,7 @@ export function MeetingNewScreen() {
   const [searchParams] = useSearchParams();
   const prefillTeamId = searchParams.get("collabTeamId") ?? "";
   const [title, setTitle] = useState(searchParams.get("title") ?? "");
-  const [description, setDescription] = useState("");
+  const [descDoc, setDescDoc] = useState<RichDoc>(() => plainToDoc(""));
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachBusy, setAttachBusy] = useState(false);
   const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected" | "group">(prefillTeamId ? "collab_team" : "all");
@@ -257,7 +258,7 @@ export function MeetingNewScreen() {
 
     createMutation.mutate({
       title: title.trim(),
-      description: description.trim() || undefined,
+      descriptionDoc: docIsEmpty(descDoc) ? undefined : descDoc,
       attachmentIds: attachments.length > 0 ? attachments.map((a) => a.id) : undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
@@ -330,12 +331,12 @@ export function MeetingNewScreen() {
             説明（任意）
           </label>
           <DescriptionEditor
-            value={description}
-            onChange={setDescription}
+            doc={descDoc}
+            onDocChange={setDescDoc}
             attachments={attachments}
             onAttachmentsChange={setAttachments}
             onBusyChange={setAttachBusy}
-            placeholder="場所や目的など補足情報を入力（画像・ファイルも添付できます）"
+            placeholder="場所や目的など補足情報を入力（文字の大きさ・色・写真も使えます）"
           />
         </div>
 

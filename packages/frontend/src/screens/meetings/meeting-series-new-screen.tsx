@@ -17,6 +17,7 @@ import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components
 import { DurationSelect } from "@/components/duration-select";
 import { DescriptionEditor } from "@/components/description-editor";
 import type { Attachment } from "@/lib/attachments";
+import { docIsEmpty, plainToDoc, type RichDoc } from "@/lib/rich-doc";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { MeetingOptionsPicker, DEFAULT_MEETING_OPTIONS, optionsToPayload, validateMeetingOptions, type MeetingOptionsValue } from "@/components/meeting-options-picker";
 import { SeriesRulesPicker, NumberedTitlesToggle } from "@/components/series-rules-picker";
@@ -86,7 +87,7 @@ export function MeetingSeriesNewScreen() {
   const qc = useQueryClient();
 
   const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const [descDoc, setDescDoc] = useState<RichDoc>(() => plainToDoc(""));
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachBusy, setAttachBusy] = useState(false);
   const [scope, setScope] = useState<"all" | "team" | "collab_team" | "selected" | "group">("collab_team");
@@ -248,7 +249,7 @@ export function MeetingSeriesNewScreen() {
       title: title.trim(),
       ...selectionToPayload(eventSelection),
       ...optionsToPayload(meetingOptions),
-      description: description.trim() || undefined,
+      descriptionDoc: docIsEmpty(descDoc) ? undefined : descDoc,
       attachmentIds: attachments.length > 0 ? attachments.map((a) => a.id) : undefined,
       scope,
       teamId: scope === "team" ? teamId : undefined,
@@ -356,12 +357,12 @@ export function MeetingSeriesNewScreen() {
         <div>
           <label className="block text-sm font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>説明（任意）</label>
           <DescriptionEditor
-            value={description}
-            onChange={setDescription}
+            doc={descDoc}
+            onDocChange={setDescDoc}
             attachments={attachments}
             onAttachmentsChange={setAttachments}
             onBusyChange={setAttachBusy}
-            placeholder="場所や目的など補足情報（画像・ファイルも添付できます）"
+            placeholder="場所や目的など補足情報（文字の大きさ・色・写真も使えます）"
           />
         </div>
 

@@ -889,6 +889,7 @@ export const meetings = sqliteTable("meetings", {
   id:                   text("id").primaryKey(),
   title:                text("title").notNull(),
   description:          text("description"),
+  descriptionDoc:       text("description_doc"), // 書式つきの説明（JSON文字列。マイグレーション 0112）。description は、これから作った文章だけの版
   hostMemberId:         text("host_member_id").notNull(),
   scope:                text("scope").notNull().default("all"), // 'all' | 'team' | 'collab_team' | 'selected'
   teamId:               text("team_id"),
@@ -1002,6 +1003,7 @@ export const meetingSeries = sqliteTable("meeting_series", {
   id:                  text("id").primaryKey(),
   title:               text("title").notNull(),
   description:         text("description"),
+  descriptionDoc:      text("description_doc"), // 書式つきの説明（JSON文字列。マイグレーション 0112）
   hostMemberId:        text("host_member_id").notNull(),
   scope:               text("scope").notNull(), // 'all' | 'team' | 'collab_team' | 'selected'
   teamId:              text("team_id"),         // scope='team' の場合（ギルド）
@@ -1518,5 +1520,6 @@ export const meetingAttachments = sqliteTable("meeting_attachments", {
   sizeBytes:   integer("size_bytes").notNull(),
   r2Key:       text("r2_key").notNull(),
   sortOrder:   integer("sort_order").notNull().default(0),
+  inline:      integer("inline").notNull().default(0), // 1 = 説明の文章の中に差し込んだ画像（マイグレーション 0112）
   createdAt:   integer("created_at").notNull(),
 });

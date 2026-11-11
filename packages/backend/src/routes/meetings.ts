@@ -58,7 +58,8 @@ import { insertCalendarEvent } from "../services/googleClient.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
 import { parseMeetingOptions, withFeeLine, feeLine, type MeetingOptionsInput } from "../services/meeting-options.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
-import { deleteOwnerAttachments, linkAttachments, listAttachments } from "../services/meeting-attachments.ts";
+import { deleteOwnerAttachments, listAttachments, pruneInlineAttachments, syncOwnerAttachments } from "../services/meeting-attachments.ts";
+import { parseStoredDoc, resolveDescriptionInput } from "../services/rich-doc.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
 import { searchCommonFreeSlots } from "../services/meetingSlotSearch.ts";
@@ -141,6 +142,8 @@ meetingRoutes.post("/", async (c) => {
   const body = await c.req.json<{
     title: string;
     description?: string;
+    /** 書式つきの説明（見たまま編集の内容。JSON） */
+    descriptionDoc?: unknown;
     /** 説明に添付する画像・ファイル（アップロード済みの添付ID） */
     attachmentIds?: string[];
     scope: "all" | "team" | "collab_team" | "selected" | "group";
@@ -168,6 +171,10 @@ meetingRoutes.post("/", async (c) => {
   if (!body.title?.trim()) {
     return c.json({ error: { code: "invalid_input", message: "タイトルを入力してください" } }, 400);
   }
+  // 説明：書式つき（descriptionDoc）なら、安全な形に整えて、文章だけの版（メール・通知・カレンダー用）も作る
+  const descResolved = resolveDescriptionInput(body);
+  if (!descResolved.ok) return c.json({ error: { code: "invalid_input", message: descResolved.message } }, 400);
+  body.description = descResolved.plain ?? undefined;
   if (!body.candidates || body.candidates.length === 0) {
     return c.json({ error: { code: "invalid_input", message: "候補日を1つ以上設定してください" } }, 400);
   }
@@ -252,6 +259,7 @@ meetingRoutes.post("/", async (c) => {
     inviteToken: reservedInviteToken,
     title: body.title.trim(),
     description: body.description?.trim() || null,
+    descriptionDoc: descResolved.docJson,
     hostMemberId: memberId,
     scope: body.scope ?? "all",
     teamId: body.scope === "team" ? body.teamId ?? null : null,
@@ -270,7 +278,7 @@ meetingRoutes.post("/", async (c) => {
     createdAt: now,
     updatedAt: now,
   });
-  await linkAttachments(db, "meeting", meetingId, memberId, body.attachmentIds);
+  await syncOwnerAttachments(db, c.env.R2, "meeting", meetingId, memberId, body.attachmentIds, descResolved.imageIds);
 
   // 候補日を挿入（確定日として作成する場合は、すべての候補日を最初から確定済みとして登録する）
   const candidateIds: string[] = [];
@@ -1436,9 +1444,9 @@ meetingRoutes.get("/:id", async (c) => {
     }));
   }
 
-  const meetingAttachments = meeting.seriesId
-    ? await listAttachments(db, "series", meeting.seriesId)
-    : await listAttachments(db, "meeting", meeting.id);
+  // 添付ファイル：この回に添付したもの（この回の主催者が変更できる）と、定例会全体に添付したもの（定例会のページで変更する）
+  const meetingAttachments = await listAttachments(db, "meeting", meeting.id);
+  const seriesAttachments = meeting.seriesId ? await listAttachments(db, "series", meeting.seriesId) : [];
 
   // グループで作成したミーティングは、主催者にだけ、グループ名を返す（グループは本人だけのもの）
   const detailUnnumbered = await loadUnnumberedSeriesIds(db, [meeting.seriesId]);
@@ -1452,9 +1460,10 @@ meetingRoutes.get("/:id", async (c) => {
         id: meeting.id,
         title: meeting.title,
         description: meeting.description,
-        // 説明に添付した画像・ファイル（定例会の回は、定例会に添付したもの。回からは変更できない）
+        descriptionDoc: parseStoredDoc(meeting.descriptionDoc),
+        // 説明に添付したファイル（この回のものと、定例会全体のもの）
         attachments: meetingAttachments,
-        attachmentsFromSeries: !!meeting.seriesId,
+        seriesAttachments,
         host: host ?? null,
         hostMemberId: meeting.hostMemberId,
         scope: meeting.scope,
@@ -3119,12 +3128,18 @@ meetingRoutes.patch("/:id/description", async (c) => {
     return c.json({ error: { code: "forbidden", message: "主催者のみ詳細を更新できます" } }, 403);
   }
 
-  const { description, notify } = await c.req.json<{ description: string; notify?: boolean }>();
-  const shouldNotify = notify === true;
+  const patchBody = await c.req.json<{ description?: string; descriptionDoc?: unknown; notify?: boolean }>();
+  const shouldNotify = patchBody.notify === true;
+  const resolvedDesc = resolveDescriptionInput(patchBody);
+  if (!resolvedDesc.ok) return c.json({ error: { code: "invalid_input", message: resolvedDesc.message } }, 400);
+  // これまでの文章だけの版を空にする保存（書式つき説明を消した場合）は、空文字で保存する
+  const description = resolvedDesc.plain ?? "";
 
   await db.update(schema.meetings)
-    .set({ description, updatedAt: now })
+    .set({ description, descriptionDoc: resolvedDesc.docJson, updatedAt: now })
     .where(eq(schema.meetings.id, id));
+  // 説明から消した画像を片づける（文章の中に差し込んだ画像は、いまの説明に入っているものだけを残す）
+  await pruneInlineAttachments(db, c.env.R2, "meeting", id, resolvedDesc.imageIds);
 
   // 通知しない場合は、説明を保存して、カレンダーの予定の説明だけ更新する
   if (!shouldNotify) {

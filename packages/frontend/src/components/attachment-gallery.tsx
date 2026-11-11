@@ -10,6 +10,7 @@ import { Download, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { downloadAttachment, fileIcon, fmtFileSize, type Attachment } from "@/lib/attachments";
 import { DialogCloseButton } from "@/components/dialog-close-button";
+import { useAttachmentPath } from "@/lib/attachment-source";
 
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -24,10 +25,11 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 export function AttachmentImage({ id, alt, className, style, onClick }: {
   id: string; alt: string; className?: string; style?: React.CSSProperties; onClick?: () => void;
 }) {
+  const pathOf = useAttachmentPath();
   // 画像は data URL にして持つ（一時アドレスの作成・解放を気にしなくてよく、キャッシュもそのまま使える）
   const { data: url, isError } = useQuery({
     queryKey: ["meeting-attachment-image", id],
-    queryFn: async () => blobToDataUrl(await api.getBlob(`/meeting-attachments/${id}/file`)),
+    queryFn: async () => blobToDataUrl(await api.getBlob(pathOf(id, false))),
     staleTime: Infinity,
     gcTime: 10 * 60 * 1000,
   });
@@ -45,7 +47,8 @@ export function AttachmentImage({ id, alt, className, style, onClick }: {
   return <img src={url} alt={alt} className={className} style={style} onClick={onClick} draggable={false} />;
 }
 
-function Lightbox({ attachment, onClose }: { attachment: Attachment; onClose: () => void }) {
+export function Lightbox({ attachment, onClose }: { attachment: Attachment; onClose: () => void }) {
+  const pathOf = useAttachmentPath();
   const [saving, setSaving] = useState(false);
   return (
     <div
@@ -68,7 +71,7 @@ function Lightbox({ attachment, onClose }: { attachment: Attachment; onClose: ()
         <button
           type="button"
           disabled={saving}
-          onClick={async () => { setSaving(true); try { await downloadAttachment(attachment); } finally { setSaving(false); } }}
+          onClick={async () => { setSaving(true); try { await downloadAttachment(attachment, pathOf); } finally { setSaving(false); } }}
           className="mt-3 self-end flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-50"
           style={{ background: "var(--color-brand)" }}
         >
@@ -81,6 +84,7 @@ function Lightbox({ attachment, onClose }: { attachment: Attachment; onClose: ()
 }
 
 export function FileRow({ attachment }: { attachment: Attachment }) {
+  const pathOf = useAttachmentPath();
   const [saving, setSaving] = useState(false);
   const [failed, setFailed] = useState(false);
   return (
@@ -97,7 +101,7 @@ export function FileRow({ attachment }: { attachment: Attachment }) {
         disabled={saving}
         onClick={async () => {
           setSaving(true); setFailed(false);
-          try { await downloadAttachment(attachment); } catch { setFailed(true); } finally { setSaving(false); }
+          try { await downloadAttachment(attachment, pathOf); } catch { setFailed(true); } finally { setSaving(false); }
         }}
         className="shrink-0 flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg disabled:opacity-50"
         style={{ background: "var(--color-paper-50)", color: "var(--color-ink-600)", border: "1px solid var(--color-paper-300)" }}
