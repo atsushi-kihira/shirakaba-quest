@@ -10,6 +10,15 @@ import type { RichDoc, RichMark, RichNode } from "@/lib/rich-doc";
 const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
 const SAFE_COLOR = /^#[0-9a-fA-F]{6}$/;
 const SAFE_SIZE = new Set(["0.85em", "1.25em", "1.6em"]);
+const SAFE_BULLET = new Set(["circle", "disc", "dash"]);
+const SAFE_ORDERED = new Set(["paren-alpha", "circled", "paren-roman"]);
+
+/** 箇条書きの種類（ふつうの「・」「1.」のときは、指定なし） */
+function listStyleAttr(node: RichNode): string | undefined {
+  const v = node.attrs?.listStyle;
+  if (typeof v !== "string") return undefined;
+  return (node.type === "bulletList" ? SAFE_BULLET : SAFE_ORDERED).has(v) ? v : undefined;
+}
 
 function renderMarks(text: string, marks: RichMark[] | undefined, key: string): ReactNode {
   let node: ReactNode = text;
@@ -50,12 +59,18 @@ function indentStyle(node: RichNode): CSSProperties | undefined {
   return n > 0 ? { paddingLeft: `${n * 1.5}em` } : undefined;
 }
 
+/** 箇条書き全体の字下げ（「・」や番号ごと下がる） */
+function listIndentStyle(node: RichNode): CSSProperties | undefined {
+  const n = Math.min(5, Math.max(0, Math.round(Number(node.attrs?.indent) || 0)));
+  return n > 0 ? { marginLeft: `${n * 1.5}em` } : undefined;
+}
+
 function Block({ node, k, onImage }: { node: RichNode; k: string; onImage: (id: string) => void }) {
   switch (node.type) {
     case "paragraph": return <p style={indentStyle(node)}><Inline nodes={node.content} k={k} /></p>;
     case "heading": return node.attrs?.level === 3 ? <h3 style={indentStyle(node)}><Inline nodes={node.content} k={k} /></h3> : <h2 style={indentStyle(node)}><Inline nodes={node.content} k={k} /></h2>;
-    case "bulletList": return <ul>{(node.content ?? []).map((li, i) => <Block key={i} node={li} k={`${k}${i}`} onImage={onImage} />)}</ul>;
-    case "orderedList": return <ol>{(node.content ?? []).map((li, i) => <Block key={i} node={li} k={`${k}${i}`} onImage={onImage} />)}</ol>;
+    case "bulletList": return <ul style={listIndentStyle(node)} data-list-style={listStyleAttr(node)}>{(node.content ?? []).map((li, i) => <Block key={i} node={li} k={`${k}${i}`} onImage={onImage} />)}</ul>;
+    case "orderedList": return <ol style={listIndentStyle(node)} data-list-style={listStyleAttr(node)}>{(node.content ?? []).map((li, i) => <Block key={i} node={li} k={`${k}${i}`} onImage={onImage} />)}</ol>;
     case "listItem": return <li>{(node.content ?? []).map((c, i) => <Block key={i} node={c} k={`${k}${i}`} onImage={onImage} />)}</li>;
     case "image": {
       const id = node.attrs?.attachmentId;

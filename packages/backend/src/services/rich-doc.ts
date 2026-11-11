@@ -31,6 +31,11 @@ const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const HREF_RE = /^(https?:\/\/|mailto:)[^\s<>"']+$/i;
 const ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 const ALIGNS = new Set(["left", "center", "right"]);
+// 箇条書きの種類。番号なし：dot（・）／circle（○）／disc（●）／dash（−）、番号付き：decimal（1.）／paren-alpha（(a)）／circled（①）／paren-roman（(i)）
+const BULLET_STYLES = new Set(["dot", "circle", "disc", "dash"]);
+const ORDERED_STYLES = new Set(["decimal", "paren-alpha", "circled", "paren-roman"]);
+const DEFAULT_BULLET = "dot";
+const DEFAULT_ORDERED = "decimal";
 
 type Ctx = { nodes: number; imageIds: string[]; error: string };
 
@@ -106,10 +111,20 @@ function cleanNode(raw: unknown, depth: number, ctx: Ctx): RichNode | null {
       const indent = cleanIndent(n.attrs?.indent);
       return { type: "heading", attrs: { level, ...(indent > 0 && { indent }) }, ...(c.length > 0 && { content: c }) };
     }
-    case "bulletList": case "orderedList": case "listItem": {
+    case "bulletList": case "orderedList": {
       const c = children();
       if (c.length === 0) return null;
-      return { type: n.type, content: c };
+      const indent = cleanIndent(n.attrs?.indent); // 箇条書き全体の字下げ（「・」や番号ごと下がる）
+      const raw = n.attrs?.listStyle;
+      const isBullet = n.type === "bulletList";
+      const listStyle = typeof raw === "string" && (isBullet ? BULLET_STYLES : ORDERED_STYLES).has(raw) && raw !== (isBullet ? DEFAULT_BULLET : DEFAULT_ORDERED) ? raw : "";
+      const attrs = { ...(indent > 0 && { indent }), ...(listStyle && { listStyle }) };
+      return { type: n.type, ...(Object.keys(attrs).length > 0 && { attrs }), content: c };
+    }
+    case "listItem": {
+      const c = children();
+      if (c.length === 0) return null;
+      return { type: "listItem", content: c };
     }
     case "image": {
       const id = n.attrs?.attachmentId;
@@ -137,6 +152,25 @@ function inlinePlain(nodes: RichNode[] | undefined): string {
   return s;
 }
 
+const toRoman = (n: number): string => {
+  const table: Array<[number, string]> = [[40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]];
+  let rest = n;
+  let out = "";
+  for (const [v, sym] of table) while (rest >= v) { out += sym; rest -= v; }
+  return out;
+};
+
+/** 箇条書きの先頭の印（文章だけの版用）。種類は、画面で選んだものと同じ */
+function listMarker(isBullet: boolean, style: string, i: number): string {
+  if (isBullet) return ({ circle: "○ ", disc: "● ", dash: "− " } as Record<string, string>)[style] ?? "・";
+  switch (style) {
+    case "paren-alpha": return i <= 26 ? `(${String.fromCharCode(96 + i)}) ` : `(${i}) `;
+    case "circled": return i <= 20 ? `${String.fromCodePoint(0x2460 + i - 1)} ` : `(${i}) `;
+    case "paren-roman": return i < 40 ? `(${toRoman(i)}) ` : `(${i}) `;
+    default: return `${i}. `;
+  }
+}
+
 /** 段落・見出し・一覧を、文章だけの版にする。字下げ・入れ子の一覧は、全角スペースで表す */
 function blockPlain(node: RichNode, out: string[], depth = 0, lead = ""): void {
   const pad = "　".repeat(depth);
@@ -147,14 +181,15 @@ function blockPlain(node: RichNode, out: string[], depth = 0, lead = ""): void {
       break;
     }
     case "bulletList": case "orderedList": {
+      const listDepth = depth + (Number(node.attrs?.indent) || 0); // 箇条書き全体の字下げぶん、さらに下げる
       let i = 0;
       for (const li of node.content ?? []) {
         i++;
-        const prefix = node.type === "bulletList" ? "・" : `${i}. `;
+        const prefix = listMarker(node.type === "bulletList", String(node.attrs?.listStyle ?? ""), i);
         let first = true;
         for (const child of li.content ?? []) {
-          if (child.type === "bulletList" || child.type === "orderedList") { blockPlain(child, out, depth + 1); continue; }
-          blockPlain(child, out, depth, first ? prefix : "　");
+          if (child.type === "bulletList" || child.type === "orderedList") { blockPlain(child, out, listDepth + 1); continue; }
+          blockPlain(child, out, listDepth, first ? prefix : "　");
           first = false;
         }
       }

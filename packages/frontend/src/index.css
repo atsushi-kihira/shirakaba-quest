@@ -473,13 +473,34 @@ label:has(> input.sr-only) {
 .rich-body p { margin: 0 0 0.45em; min-height: 1.7em; }
 .rich-body h2 { font-size: 1.15rem; font-weight: 700; margin: 0.9em 0 0.35em; color: var(--color-ink-900); }
 .rich-body h3 { font-size: 1rem; font-weight: 700; margin: 0.8em 0 0.3em; color: var(--color-ink-900); }
-.rich-body ul { list-style: disc; padding-left: 1.5em; margin: 0 0 0.5em; }
-.rich-body ol { list-style: decimal; padding-left: 1.6em; margin: 0 0 0.5em; }
-.rich-body li > p { margin: 0; }
+.rich-body ul { list-style-type: rich-dot; padding-left: 1.5em; margin: 0 0 0.5em; }
+.rich-body ol { list-style-type: decimal; padding-left: 1.6em; margin: 0 0 0.5em; }
+/* 箇条書きの種類（番号なし：・ ○ ● −／番号付き：1. (a) ① (i)）。保存する値は data-list-style に入る */
+.rich-body ul[data-list-style="circle"] { list-style-type: rich-circle; }
+.rich-body ul[data-list-style="disc"] { list-style-type: rich-disc; }
+.rich-body ul[data-list-style="dash"] { list-style-type: rich-dash; }
+.rich-body ol[data-list-style="paren-alpha"] { list-style-type: rich-paren-alpha; padding-left: 2.4em; }
+.rich-body ol[data-list-style="paren-roman"] { list-style-type: rich-paren-roman; padding-left: 2.8em; }
+.rich-body ol[data-list-style="circled"] { list-style-type: rich-circled; padding-left: 1.9em; }
+.rich-body li > p { margin: 0; padding-left: 0 !important; } /* 箇条書きの中の段落は、字下げしない（字下げは、箇条書き全体で表す） */
 .rich-body a { color: var(--color-brand); text-decoration: underline; }
 .rich-body > :first-child { margin-top: 0; }
 .rich-body > :last-child { margin-bottom: 0; }
 .rich-editor .ProseMirror { outline: none; min-height: 9rem; padding: 0.75rem 1rem; }
 .rich-editor .ProseMirror-selectednode > .rte-image-box { outline: 2px solid var(--color-brand); outline-offset: 2px; }
-.rich-body ul ul { list-style: circle; margin-bottom: 0; }
+.rich-body ul ul { margin-bottom: 0; }
 .rich-body ol ol, .rich-body ul ol { margin-bottom: 0; }
+
+/* 箇条書きの印（@counter-style）。①は、20までは丸数字、それ以降は 21. 22. … */
+@counter-style rich-dot { system: cyclic; symbols: "・"; suffix: " "; }
+@counter-style rich-circle { system: cyclic; symbols: "○"; suffix: " "; }
+@counter-style rich-disc { system: cyclic; symbols: "●"; suffix: " "; }
+@counter-style rich-dash { system: cyclic; symbols: "−"; suffix: " "; }
+@counter-style rich-paren-alpha { system: extends lower-alpha; prefix: "("; suffix: ") "; }
+@counter-style rich-paren-roman { system: extends lower-roman; prefix: "("; suffix: ") "; }
+@counter-style rich-circled {
+  system: fixed;
+  symbols: "①" "②" "③" "④" "⑤" "⑥" "⑦" "⑧" "⑨" "⑩" "⑪" "⑫" "⑬" "⑭" "⑮" "⑯" "⑰" "⑱" "⑲" "⑳";
+  suffix: " ";
+  fallback: decimal;
+}

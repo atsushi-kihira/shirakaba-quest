@@ -42,6 +42,25 @@ export const IMAGE_WIDTH_PRESETS = [
   { label: "最大", value: 100 },
 ] as const;
 
+/** 箇条書きの種類（番号なし）。key は保存する値（サーバー側 rich-doc.ts と同じ） */
+export const BULLET_STYLES = [
+  { key: "dot", label: "・" },
+  { key: "circle", label: "○" },
+  { key: "disc", label: "●" },
+  { key: "dash", label: "−" },
+] as const;
+
+/** 箇条書きの種類（番号付き） */
+export const ORDERED_STYLES = [
+  { key: "decimal", label: "1." },
+  { key: "paren-alpha", label: "(a)" },
+  { key: "circled", label: "①" },
+  { key: "paren-roman", label: "(i)" },
+] as const;
+
+export const DEFAULT_BULLET_STYLE = "dot";
+export const DEFAULT_ORDERED_STYLE = "decimal";
+
 export type ImageAlign = "left" | "center" | "right";
 
 const URL_RE = /(https?:\/\/[^\s<>"'、。）)]+)/g;

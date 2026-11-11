@@ -7,13 +7,14 @@
 // 保存する形は、書式を表す JSON（サーバーで、許可した書式だけに整えて保存）。
 // =============================================================
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { EditorContent, Extension, NodeViewWrapper, ReactNodeViewRenderer, mergeAttributes, useEditor, useEditorState, Node, type Editor, type NodeViewProps } from "@tiptap/react";
+import { EditorContent, Extension, NodeViewWrapper, ReactNodeViewRenderer, mergeAttributes, useEditor, useEditorState, Node, type CommandProps, type Editor, type NodeViewProps } from "@tiptap/react";
+import type { Node as PMNode } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { Color, FontSize, TextStyle } from "@tiptap/extension-text-style";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Heading2, ImagePlus, IndentDecrease, IndentIncrease, Italic, Link2, List, ListOrdered, Loader2, Redo2, Trash2, Underline as UnderlineIcon, Undo2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, Heading2, ImagePlus, IndentDecrease, IndentIncrease, Italic, Link2, List, ListOrdered, Loader2, Redo2, Trash2, Underline as UnderlineIcon, Undo2 } from "lucide-react";
 import { AttachmentImage } from "@/components/attachment-gallery";
 import { uploadAttachment, type AttachmentOwner } from "@/lib/attachments";
-import { FONT_SIZES, IMAGE_WIDTH_PRESETS, TEXT_COLORS, docImageIds, type ImageAlign, type RichDoc } from "@/lib/rich-doc";
+import { BULLET_STYLES, DEFAULT_BULLET_STYLE, DEFAULT_ORDERED_STYLE, FONT_SIZES, IMAGE_WIDTH_PRESETS, ORDERED_STYLES, TEXT_COLORS, docImageIds, type ImageAlign, type RichDoc } from "@/lib/rich-doc";
 
 const MAX_INLINE_IMAGES = 20;
 const MAX_INDENT = 5; // 字下げの段数（1段 = 全角1.5文字ぶん）。サーバー側（rich-doc.ts）と同じ
@@ -25,9 +26,54 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 //   ・段落・見出し：字下げの段数（0〜5）を持たせる
 //   ・箇条書き・番号付きの中：一覧の入れ子（1段深く／浅く）にする
 // ---------------------------------------------------------------
+type ListType = "bulletList" | "orderedList";
+
+/** カーソルのある、いちばん内側の箇条書き（なければ null） */
+function innermostList(editor: Editor): { node: PMNode; pos: number; type: ListType } | null {
+  const { $from } = editor.state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type.name === "bulletList" || node.type.name === "orderedList") return { node, pos: $from.before(d), type: node.type.name };
+  }
+  return null;
+}
+
+/** いちばん内側の箇条書きだけの属性（字下げ・種類）を変える。入れ子の外側の箇条書きは変えない */
+const setInnerListAttrs = (attrs: Record<string, unknown>) => ({ tr }: CommandProps): boolean => {
+  const { $from } = tr.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type.name === "bulletList" || node.type.name === "orderedList") {
+      tr.setNodeMarkup($from.before(d), undefined, { ...node.attrs, ...attrs });
+      return true;
+    }
+  }
+  return false;
+};
+
+/** カーソルが、入れ子の箇条書きの何段目か（箇条書きの外は 0） */
+function listDepth(editor: Editor): number {
+  const { $from } = editor.state.selection;
+  let n = 0;
+  for (let d = $from.depth; d > 0; d--) {
+    const name = $from.node(d).type.name;
+    if (name === "bulletList" || name === "orderedList") n++;
+  }
+  return n;
+}
+
 function changeIndent(editor: Editor, delta: 1 | -1): boolean {
-  if (editor.isActive("listItem")) {
-    return delta > 0 ? editor.chain().focus().sinkListItem("listItem").run() : editor.chain().focus().liftListItem("listItem").run();
+  const list = innermostList(editor);
+  if (list) {
+    // 箇条書き：2つ目以降の項目は、1段深く（入れ子）／浅くする。入れ子にできない先頭の項目などは、箇条書き全体を字下げする
+    const whole = Number(list.node.attrs.indent) || 0;
+    if (delta > 0) {
+      if (editor.can().sinkListItem("listItem")) return editor.chain().focus().sinkListItem("listItem").run();
+      return whole < MAX_INDENT ? editor.chain().focus().command(setInnerListAttrs({ indent: whole + 1 })).run() : false;
+    }
+    if (listDepth(editor) > 1) return editor.chain().focus().liftListItem("listItem").run();
+    if (whole > 0) return editor.chain().focus().command(setInnerListAttrs({ indent: whole - 1 })).run();
+    return editor.chain().focus().liftListItem("listItem").run();
   }
   const type = editor.isActive("heading") ? "heading" : "paragraph";
   const current = Number(editor.getAttributes(type).indent) || 0;
@@ -36,19 +82,51 @@ function changeIndent(editor: Editor, delta: 1 | -1): boolean {
   return editor.chain().focus().updateAttributes(type, { indent: next }).run();
 }
 
+/**
+ * 箇条書き・番号付きの箇条書きの入り切り。
+ * 字下げした段落を箇条書きにするときは、字下げを箇条書き全体に移す（「・」や番号も、文字といっしょに下がる）。
+ * 箇条書きをはずすときは、箇条書き全体の字下げを、段落に戻す。
+ */
+function toggleList(editor: Editor, kind: ListType): void {
+  const toggle = (c: ReturnType<Editor["chain"]>) => (kind === "bulletList" ? c.toggleBulletList() : c.toggleOrderedList());
+  const current = innermostList(editor);
+  if (!current) {
+    const type = editor.isActive("heading") ? "heading" : "paragraph";
+    const n = Number(editor.getAttributes(type).indent) || 0;
+    const chain = toggle(editor.chain().focus());
+    if (n > 0) chain.command(setInnerListAttrs({ indent: n })).updateAttributes("paragraph", { indent: 0 }).updateAttributes("heading", { indent: 0 });
+    chain.run();
+    return;
+  }
+  const n = Number(current.node.attrs.indent) || 0;
+  const chain = toggle(editor.chain().focus());
+  if (current.type !== kind) { if (n > 0) chain.command(setInnerListAttrs({ indent: n })); } // 種類の切り替え：字下げは引き継ぐ（印の種類は、新しい箇条書きの初期値）
+  else if (n > 0) chain.updateAttributes("paragraph", { indent: n }); // はずす：字下げを段落に戻す
+  chain.run();
+}
+
 const Indent = Extension.create({
   name: "indent",
   addGlobalAttributes() {
-    return [{
-      types: ["paragraph", "heading"],
-      attributes: {
-        indent: {
-          default: 0,
-          parseHTML: (el) => Math.min(MAX_INDENT, Number(el.getAttribute("data-indent")) || 0),
-          renderHTML: (a) => (a.indent ? { "data-indent": a.indent, style: `padding-left: ${Number(a.indent) * 1.5}em` } : {}),
+    const parse = (el: HTMLElement) => Math.min(MAX_INDENT, Number(el.getAttribute("data-indent")) || 0);
+    return [
+      {
+        // 段落・見出し：文字を字下げする
+        types: ["paragraph", "heading"],
+        attributes: {
+          indent: { default: 0, parseHTML: parse, renderHTML: (a) => (a.indent ? { "data-indent": a.indent, style: `padding-left: ${Number(a.indent) * 1.5}em` } : {}) },
         },
       },
-    }];
+      {
+        // 箇条書き：「・」や番号ごと、全体を字下げする
+        types: ["bulletList", "orderedList"],
+        attributes: {
+          indent: { default: 0, parseHTML: parse, renderHTML: (a) => (a.indent ? { "data-indent": a.indent, style: `margin-left: ${Number(a.indent) * 1.5}em` } : {}) },
+          // 箇条書きの種類（空なら、ふつうの「・」「1.」）
+          listStyle: { default: null, parseHTML: (el) => el.getAttribute("data-list-style"), renderHTML: (a) => (a.listStyle ? { "data-list-style": a.listStyle } : {}) },
+        },
+      },
+    ];
   },
   addKeyboardShortcuts() {
     return {
@@ -194,7 +272,7 @@ const Divider = () => <span className="w-px h-5 mx-0.5 shrink-0" style={{ backgr
 export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange, expanded }: Props) {
   const [uploading, setUploading] = useState(0);
   const [error, setError] = useState("");
-  const [menu, setMenu] = useState<"color" | "link" | null>(null);
+  const [menu, setMenu] = useState<"color" | "link" | "listStyle" | null>(null);
   const [linkUrl, setLinkUrl] = useState("");
   const imageInput = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<(files: File[]) => void>(() => {});
@@ -268,6 +346,8 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
       empty: ed?.isEmpty ?? true,
       indent: Number(ed?.getAttributes(ed.isActive("heading") ? "heading" : "paragraph").indent) || 0,
       inList: ed?.isActive("listItem") ?? false,
+      listType: (ed ? innermostList(ed)?.type : null) ?? null,
+      listStyle: (ed ? (innermostList(ed)?.node.attrs.listStyle as string | null | undefined) : null) ?? null,
       canUndo: ed?.can().undo() ?? false,
       canRedo: ed?.can().redo() ?? false,
     }),
@@ -330,8 +410,37 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
         <ToolBtn label="見出し" active={st.h2} onClick={() => run().toggleHeading({ level: 2 }).run()}><Heading2 size={16} /></ToolBtn>
         <ToolBtn label="字下げを増やす（インデント）" disabled={!st.inList && st.indent >= MAX_INDENT} onClick={() => changeIndent(editor, 1)}><IndentIncrease size={16} /></ToolBtn>
         <ToolBtn label="字下げを減らす" disabled={!st.inList && st.indent <= 0} onClick={() => changeIndent(editor, -1)}><IndentDecrease size={16} /></ToolBtn>
-        <ToolBtn label="箇条書き" active={st.ul} onClick={() => run().toggleBulletList().run()}><List size={16} /></ToolBtn>
-        <ToolBtn label="番号付きの箇条書き" active={st.ol} onClick={() => run().toggleOrderedList().run()}><ListOrdered size={16} /></ToolBtn>
+        <ToolBtn label="箇条書き" active={st.ul} onClick={() => toggleList(editor, "bulletList")}><List size={16} /></ToolBtn>
+        <ToolBtn label="番号付きの箇条書き" active={st.ol} onClick={() => toggleList(editor, "orderedList")}><ListOrdered size={16} /></ToolBtn>
+        <div className="relative">
+          <ToolBtn label="箇条書きの種類" wide disabled={!st.listType} active={menu === "listStyle"} onClick={() => setMenu(menu === "listStyle" ? null : "listStyle")}>
+            <span className="text-sm font-bold">{st.listType ? (st.listType === "bulletList" ? BULLET_STYLES : ORDERED_STYLES).find((o) => o.key === (st.listStyle ?? (st.listType === "bulletList" ? DEFAULT_BULLET_STYLE : DEFAULT_ORDERED_STYLE)))?.label : "種類"}</span>
+            <ChevronDown size={12} className="ml-0.5" />
+          </ToolBtn>
+          {menu === "listStyle" && st.listType && (
+            <div className="absolute left-0 top-9 z-20 p-2 rounded-xl shadow-lg w-52"
+              style={{ background: "var(--color-paper-50)", border: "1px solid var(--color-paper-300)" }}>
+              <p className="text-[11px] mb-1.5" style={{ color: "var(--color-ink-500)" }}>
+                {st.listType === "bulletList" ? "箇条書きの印を選びます" : "番号の形を選びます"}
+              </p>
+              <div className="grid grid-cols-4 gap-1.5">
+                {(st.listType === "bulletList" ? BULLET_STYLES : ORDERED_STYLES).map((o) => {
+                  const isDefault = o.key === DEFAULT_BULLET_STYLE || o.key === DEFAULT_ORDERED_STYLE;
+                  const selected = (st.listStyle ?? (st.listType === "bulletList" ? DEFAULT_BULLET_STYLE : DEFAULT_ORDERED_STYLE)) === o.key;
+                  return (
+                    <button key={o.key} type="button" aria-label={`箇条書きの種類：${o.label}`} aria-pressed={selected}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => { editor.chain().focus().command(setInnerListAttrs({ listStyle: isDefault ? null : o.key })).run(); setMenu(null); }}
+                      className="h-9 rounded-lg text-sm font-bold"
+                      style={{ background: selected ? "var(--color-brand)" : "var(--color-paper-100)", color: selected ? "white" : "var(--color-ink-700)", border: "1px solid var(--color-paper-300)" }}>
+                      {o.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
         <div className="relative">
           <ToolBtn label="リンク" active={st.link || menu === "link"}
             onClick={() => { setLinkUrl((editor.getAttributes("link").href as string | undefined) ?? ""); setMenu(menu === "link" ? null : "link"); }}>
@@ -371,9 +480,13 @@ export function RichTextEditor({ doc, onChange, placeholder, owner, onBusyChange
 
       {/* 編集欄（右下をドラッグして、広げられる） */}
       <div
-        className="rich-editor overflow-auto"
+        className="rich-editor overflow-auto cursor-text"
         style={{ resize: "vertical", height: expanded ? "32rem" : "16rem", minHeight: "9rem", maxHeight: "90vh" }}
-        onClick={() => setMenu(null)}
+        onClick={(e) => {
+          setMenu(null);
+          // 文字のある部分より下の余白をクリックしたときも、いちばん最後にカーソルを置く
+          if (!(e.target as HTMLElement).closest(".ProseMirror")) editor.chain().focus("end").run();
+        }}
       >
         <div className="relative">
           {st.empty && placeholder && (
