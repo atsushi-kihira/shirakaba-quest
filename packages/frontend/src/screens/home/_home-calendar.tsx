@@ -26,6 +26,17 @@ type ViewMode = "month" | "week";
 const VIEW_STORAGE_KEY = "home_calendar_view";
 
 const GOOGLE_STORAGE_KEY = "home_calendar_google";
+const HIDDEN_KINDS_STORAGE_KEY = "home_calendar_hidden_kinds";
+
+/** 表示をオフにしている予定の種類（記録のない種類は、新しく増えた種類も含めて、最初からオン） */
+function loadHiddenKinds(): Set<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HIDDEN_KINDS_STORAGE_KEY) ?? "[]") as unknown;
+    return new Set(Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
 
 function loadGoogle(): boolean {
   try {
@@ -100,16 +111,34 @@ export function HomeCalendar({ tz }: { tz: string }) {
     placeholderData: (prev) => prev,
   });
 
+  // 予定の種類ごとの表示のオン・オフ（凡例のチェック）。最初は、すべてオン
+  const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(loadHiddenKinds);
+  useEffect(() => {
+    try { localStorage.setItem(HIDDEN_KINDS_STORAGE_KEY, JSON.stringify([...hiddenKinds])); } catch { /* 保存できなくても、そのまま使える */ }
+  }, [hiddenKinds]);
+  function toggleKind(kind: string, on: boolean) {
+    setHiddenKinds((prev) => {
+      const next = new Set(prev);
+      if (on) next.delete(kind); else next.add(kind);
+      return next;
+    });
+  }
+
+  const visibleEvents = useMemo(
+    () => (data?.data.events ?? []).filter((ev) => !hiddenKinds.has(ev.kind)),
+    [data, hiddenKinds],
+  );
+
   const eventsByDay = useMemo(() => {
     const map = new Map<DayKey, CalendarEvent[]>();
-    for (const ev of data?.data.events ?? []) {
+    for (const ev of visibleEvents) {
       const k = tsToDateInput(ev.startsAt, tz);
       const list = map.get(k) ?? [];
       list.push(ev);
       map.set(k, list);
     }
     return map;
-  }, [data, tz]);
+  }, [visibleEvents, tz]);
 
   // ---- 自分のGoogleカレンダーを重ねる ----
   const [showGoogle, setShowGoogle] = useState(loadGoogle);
@@ -137,7 +166,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
   const googleEvents = useMemo<GoogleEvent[]>(() => {
     if (!googleOn) return [];
     // 白樺クエストが、Googleカレンダーに書き込んだ予定（同じ日時）は、アプリの予定と二重にならないように、重ねて表示しない
-    const appSpans = new Set((data?.data.events ?? []).map((e) => `${e.startsAt}-${e.endsAt}`));
+    const appSpans = new Set(visibleEvents.map((e) => `${e.startsAt}-${e.endsAt}`));
     const out: GoogleEvent[] = [];
     for (const g of googleData?.data.events ?? []) {
       if (g.allDay) {
@@ -150,7 +179,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
       out.push({ id: g.id, title: g.summary, allDay: false, startsAt: s, endsAt: e, startDate: null, endDate: null });
     }
     return out;
-  }, [googleOn, googleData, data]);
+  }, [googleOn, googleData, visibleEvents]);
 
   const googleByDay = useMemo(() => {
     const map = new Map<DayKey, GoogleEvent[]>();
@@ -256,21 +285,6 @@ export function HomeCalendar({ tz }: { tz: string }) {
           </button>
         </div>
 
-        {/* 自分のGoogleカレンダーを重ねる */}
-        <div className="flex items-center justify-between gap-2 mb-2 px-1">
-          {googleConnected ? (
-            <label className="inline-flex items-center gap-1.5 text-[11px] cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
-              <input type="checkbox" checked={showGoogle} onChange={(e) => setShowGoogle(e.target.checked)} />
-              自分のGoogleカレンダーを重ねて表示
-              {googleOn && googleFetching && <Loader2 size={11} className="animate-spin" style={{ color: "var(--color-ink-400)" }} />}
-            </label>
-          ) : googleStatus ? (
-            <p className="text-[11px]" style={{ color: "var(--color-ink-500)" }}>
-              Googleカレンダーと連携すると、自分の予定を重ねて表示できます。
-              <Link to="/scheduler/settings" className="ml-1 font-medium underline" style={{ color: "var(--color-brand)" }}>連携する →</Link>
-            </p>
-          ) : <span />}
-        </div>
         {googleOn && googleError && (
           <p className="text-[11px] mb-2 px-1" style={{ color: "var(--color-brand)" }}>
             Googleカレンダーの予定を読み込めませんでした。少し時間をおいて、もう一度お試しください。
@@ -392,19 +406,34 @@ export function HomeCalendar({ tz }: { tz: string }) {
           />
         )}
 
-        {/* 凡例 */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3 pt-2 text-[11px]" style={{ borderTop: "1px dashed var(--color-paper-300)", color: "var(--color-ink-500)" }}>
-          {(Object.keys(KIND_INFO) as CalendarEventKind[]).map((k) => (
-            <span key={k}>{KIND_INFO[k].icon} {KIND_INFO[k].label}</span>
-          ))}
-          <span style={{ color: "var(--color-brand)" }}>● 日曜・祝日</span>
-          <span style={{ color: "var(--color-saturday)" }}>● 土曜</span>
-          {googleOn && (
-            <span className="inline-flex items-center gap-1">
-              <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-saturday) 10%, transparent), color-mix(in srgb, var(--color-saturday) 10%, transparent) 2px, color-mix(in srgb, var(--color-saturday) 20%, transparent) 2px, color-mix(in srgb, var(--color-saturday) 20%, transparent) 4px)", border: "1px solid color-mix(in srgb, var(--color-saturday) 40%, transparent)" }} />
-              Googleカレンダー
-            </span>
-          )}
+        {/* 凡例（チェックで、予定の種類ごとに、表示のオン・オフを切り替える）。予定の種類が増えたときも、ここに並ぶ */}
+        <div className="mt-3 pt-2 text-[11px]" style={{ borderTop: "1px dashed var(--color-paper-300)", color: "var(--color-ink-600)" }}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            {(Object.keys(KIND_INFO) as CalendarEventKind[]).map((k) => (
+              <label key={k} className="inline-flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" checked={!hiddenKinds.has(k)} onChange={(e) => toggleKind(k, e.target.checked)} />
+                <span>{KIND_INFO[k].icon} {KIND_INFO[k].label}</span>
+              </label>
+            ))}
+            {googleConnected ? (
+              <label className="inline-flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" checked={showGoogle} onChange={(e) => setShowGoogle(e.target.checked)} />
+                <span className="inline-block w-3 h-3 rounded-sm" style={{ background: "repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-saturday) 10%, transparent), color-mix(in srgb, var(--color-saturday) 10%, transparent) 2px, color-mix(in srgb, var(--color-saturday) 20%, transparent) 2px, color-mix(in srgb, var(--color-saturday) 20%, transparent) 4px)", border: "1px solid color-mix(in srgb, var(--color-saturday) 40%, transparent)" }} />
+                <span>自分のGoogleカレンダー</span>
+                {googleOn && googleFetching && <Loader2 size={11} className="animate-spin" style={{ color: "var(--color-ink-400)" }} />}
+              </label>
+            ) : googleStatus ? (
+              <span className="inline-flex items-center gap-1" style={{ color: "var(--color-ink-500)" }}>
+                <input type="checkbox" disabled />
+                自分のGoogleカレンダー
+                <Link to="/scheduler/settings" className="font-medium underline" style={{ color: "var(--color-brand)" }}>連携する →</Link>
+              </span>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 mt-1.5" style={{ color: "var(--color-ink-500)" }}>
+            <span style={{ color: "var(--color-brand)" }}>● 日曜・祝日</span>
+            <span style={{ color: "var(--color-saturday)" }}>● 土曜</span>
+          </div>
         </div>
       </div>
 
