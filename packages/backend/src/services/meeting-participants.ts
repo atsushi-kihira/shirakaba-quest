@@ -252,12 +252,15 @@ export async function addMembersToSeries(ctx: ParticipantsCtx, series: SeriesRow
         .where(and(inArray(schema.meetingInvitees.meetingId, ids), inArray(schema.meetingInvitees.memberId, targets.map((t) => t.id)))).all();
       for (const r of rows) (already.get(r.meetingId) ?? already.set(r.meetingId, new Set()).get(r.meetingId)!).add(r.memberId);
     }
+    // 回数×人数ぶんを1件ずつ登録すると、長い定例会で1回の処理の上限を超えるため、まとめて登録する（D1は1回に値が100個まで＝33行ずつ）
+    const inviteRows: Array<{ id: string; meetingId: string; memberId: string }> = [];
     for (const meetingId of meetingIds) {
       for (const m of targets) {
         if (already.get(meetingId)?.has(m.id)) continue;
-        await db.insert(schema.meetingInvitees).values({ id: newId(), meetingId, memberId: m.id });
+        inviteRows.push({ id: newId(), meetingId, memberId: m.id });
       }
     }
+    for (const rows of chunkOf(inviteRows, 33)) await db.insert(schema.meetingInvitees).values(rows);
     const sharedUrl = series.conferenceUrl ?? null;
     const block = formatScheduleBlock(occ.map((o) => ({ startsAt: o.startsAt, endsAt: o.endsAt, url: o.url ?? sharedUrl })), common.tz);
     const hasUrl = occ.some((o) => !!(o.url ?? sharedUrl));
@@ -468,7 +471,9 @@ export async function addMemberToScopedSeries(
     }
     const missing = occ.filter((o) => !have.has(o.meetingId));
     if (missing.length === 0) continue;
-    for (const o of missing) await db.insert(schema.meetingInvitees).values({ id: newId(), meetingId: o.meetingId, memberId });
+    for (const rows of chunkOf(missing.map((o) => ({ id: newId(), meetingId: o.meetingId, memberId })), 33)) {
+      await db.insert(schema.meetingInvitees).values(rows);
+    }
     await db.insert(schema.meetingNotifications).values({
       id: newId(), meetingId: missing[0].meetingId, memberId, type: "invited", readAt: null, createdAt: now,
       message: `定例会「${series.title}」の対象になりました（これから全${missing.length}回）`,

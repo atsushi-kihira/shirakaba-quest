@@ -68,6 +68,8 @@ export type InsertEventArgs = {
   attendeeEmails: string[];
   requestId: string;
   withMeet: boolean;
+  /** false のとき、参加者への招待・通知（Googleからのメール）を送らない（既定は送る） */
+  notify?: boolean;
 };
 
 /** Calendar イベントを作成。withMeet=true のとき Google Meet URL を同時発行 */
@@ -81,7 +83,7 @@ export async function insertCalendarEvent(args: InsertEventArgs): Promise<Calend
     ...(location !== undefined && { location }),
     start: { dateTime: startAtUtc, timeZone: "UTC" },
     end:   { dateTime: endAtUtc,   timeZone: "UTC" },
-    attendees: attendeeEmails.map((email) => ({ email })),
+    attendees: args.notify === false ? [] : attendeeEmails.map((email) => ({ email })),
     reminders: { useDefault: false },
   };
 
@@ -94,7 +96,8 @@ export async function insertCalendarEvent(args: InsertEventArgs): Promise<Calend
     };
   }
 
-  const qs = withMeet ? "?conferenceDataVersion=1&sendUpdates=all" : "?sendUpdates=all";
+  const sendUpdates = args.notify === false ? "none" : "all";
+  const qs = withMeet ? `?conferenceDataVersion=1&sendUpdates=${sendUpdates}` : `?sendUpdates=${sendUpdates}`;
   const res = await fetch(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events${qs}`,
     {

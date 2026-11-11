@@ -623,6 +623,8 @@ export async function blockHostCalendarForDate(opts: {
   endAtUtc: string;
   requestId: string;
   withMeet?: boolean;
+  /** false のとき、Googleから招待・通知のメールを送らない（定例会の各回など、回数が多いときに使う） */
+  notify?: boolean;
 }): Promise<{ eventId: string | null; meetUrl: string | null }> {
   try {
     if (!opts.env.GOOGLE_OAUTH_CLIENT_ID || !opts.env.GOOGLE_OAUTH_CLIENT_SECRET) return { eventId: null, meetUrl: null };
@@ -639,6 +641,7 @@ export async function blockHostCalendarForDate(opts: {
       attendeeEmails: host?.email ? [host.email] : [],
       requestId: opts.requestId,
       withMeet: opts.withMeet ?? false,
+      notify: opts.notify,
     });
     return { eventId: result.eventId, meetUrl: result.meetUrl };
   } catch (e) {

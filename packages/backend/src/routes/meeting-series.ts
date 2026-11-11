@@ -1014,6 +1014,7 @@ async function generateSeriesOccurrences(
   }
 
   const createdMeetingIds: string[] = [];
+  const inviteRows: Array<{ id: string; meetingId: string; memberId: string }> = [];
   for (let i = 0; i < occurrences.length; i++) {
     const occ = occurrences[i];
     const meetingId = newId();
@@ -1037,14 +1038,18 @@ async function generateSeriesOccurrences(
         startAtUtc: new Date(occ.startsAt * 1000).toISOString(),
         endAtUtc: new Date(occ.endsAt * 1000).toISOString(),
         requestId: `series-block-${series.id}-${i + 1}`,
+        // 開催回ごとに、Googleからの招待メールが何通も届かないようにする（主催者のカレンダーに予定を入れるだけ）
+        notify: false,
       });
       if (blocked.eventId) {
         conf = conf ? { ...conf, calendarEventId: blocked.eventId } : { conferenceType: "manual", conferenceUrl: null, conferenceMetaJson: null, calendarEventId: blocked.eventId };
       }
     }
 
+    const candidateId = newId();
     await db.insert(schema.meetings).values({
       id: meetingId,
+      confirmedCandidateId: candidateId,
       title: occurrenceTitle(series, i, dateLabel),
       description: series.description,
       hostMemberId: series.hostMemberId,
@@ -1065,19 +1070,18 @@ async function generateSeriesOccurrences(
       createdAt: now,
       updatedAt: now,
     });
-    const candidateId = newId();
     await db.insert(schema.meetingDateCandidates).values({
       id: candidateId, meetingId, startsAt: occ.startsAt, endsAt: occ.endsAt,
       sortOrder: 0, isConfirmed: 1, addedByMemberId: series.hostMemberId,
       conferenceUrl: conf?.conferenceUrl ?? null,
       calendarEventId: conf?.calendarEventId ?? null,
     });
-    await db.update(schema.meetings).set({ confirmedCandidateId: candidateId }).where(eq(schema.meetings.id, meetingId));
-    for (const mid of inviteeIds) {
-      await db.insert(schema.meetingInvitees).values({ id: newId(), meetingId, memberId: mid });
-    }
+    for (const mid of inviteeIds) inviteRows.push({ id: newId(), meetingId, memberId: mid });
     createdMeetingIds.push(meetingId);
   }
+  // 招待メンバーは、開催回ぶんをまとめて登録する（1件ずつだと、回数×人数の数だけデータベースを呼び出し、
+  // 6か月の毎週開催のような長い定例会で、1回の処理の上限を超えてしまうため）。D1は1回の命令に渡せる値が100個までなので、33行ずつ
+  for (const rows of chunkOf(inviteRows, 33)) await db.insert(schema.meetingInvitees).values(rows);
 
   // 確定通知（開催回ごとにメールは送らず、シリーズ確定として1通にまとめる）
   const targets = inviteeIds.length > 0
@@ -1100,10 +1104,13 @@ async function generateSeriesOccurrences(
   const seriesFeeText = feeLine(series);
   const confirmedDateText = `${scheduleLabel}\n${block.dateText}${seriesFeeText ? `\n\n${seriesFeeText}` : ""}`;
   const mailPromises: Promise<void>[] = [];
-  for (const m of targets) {
-    await db.insert(schema.meetingNotifications).values({
+  // アプリ内のお知らせは、開催回ごとではなく、定例会として1人に1件だけ（まとめて登録する。1回の命令に渡せる値は100個まで）
+  for (const rows of chunkOf(targets, 14)) {
+    await db.insert(schema.meetingNotifications).values(rows.map((m) => ({
       id: newId(), meetingId: createdMeetingIds[0], memberId: m.id, type: "confirmed", message: notifyMsg, readAt: null, createdAt: now,
-    });
+    })));
+  }
+  for (const m of targets) {
     if (m.email) {
       mailPromises.push(
         mailer.send("meeting_confirmed_member", m.email, {

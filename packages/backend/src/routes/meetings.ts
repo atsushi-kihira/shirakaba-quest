@@ -1033,6 +1033,33 @@ meetingRoutes.get("/", async (c) => {
 // ----------------------------------------------------------------
 // GET /api/meetings/notifications — 未読通知一覧（ホーム画面用）
 // ----------------------------------------------------------------
+/**
+ * 定例会の開催回に付いたお知らせは、開催回ごとに並べず、定例会ごとに（種類ごとに）いちばん新しい1件にまとめる。
+ * 確定した日ごとに、同じ内容のお知らせが何件も並ばないようにするため。
+ */
+async function collapseSeriesNotifications<T extends { meetingId: string; type: string; createdAt: number }>(
+  db: ReturnType<typeof createDb>, rows: T[],
+): Promise<T[]> {
+  if (rows.length < 2) return rows;
+  const ids = [...new Set(rows.map((r) => r.meetingId))];
+  const seriesByMeeting = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 50) {
+    const ms = await db.select({ id: schema.meetings.id, seriesId: schema.meetings.seriesId }).from(schema.meetings)
+      .where(inArray(schema.meetings.id, ids.slice(i, i + 50))).all();
+    for (const m of ms) if (m.seriesId) seriesByMeeting.set(m.id, m.seriesId);
+  }
+  const plain: T[] = [];
+  const latest = new Map<string, T>();
+  for (const r of rows) {
+    const sid = seriesByMeeting.get(r.meetingId);
+    if (!sid) { plain.push(r); continue; }
+    const key = `${sid}|${r.type}`;
+    const cur = latest.get(key);
+    if (!cur || r.createdAt > cur.createdAt) latest.set(key, r);
+  }
+  return [...plain, ...latest.values()].sort((a, b) => b.createdAt - a.createdAt);
+}
+
 meetingRoutes.get("/notifications", async (c) => {
   const db = createDb(c.env.DB);
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
@@ -1049,7 +1076,7 @@ meetingRoutes.get("/notifications", async (c) => {
     )
     .all();
 
-  return c.json({ data: rows });
+  return c.json({ data: await collapseSeriesNotifications(db, rows) });
 });
 
 // ----------------------------------------------------------------
@@ -1095,7 +1122,7 @@ meetingRoutes.get("/notifications/history", async (c) => {
     .limit(100)
     .all();
 
-  return c.json({ data: rows });
+  return c.json({ data: await collapseSeriesNotifications(db, rows) });
 });
 
 // ----------------------------------------------------------------
@@ -3497,6 +3524,25 @@ meetingRoutes.post("/:id/read-notifications", async (c) => {
         isNull(schema.meetingNotifications.readAt)
       )
     );
+
+  // 定例会の開催回なら、同じ定例会の「確定」「招待」のお知らせ（一覧では1件にまとめて表示している）も、あわせて既読にする
+  const target = await db.select({ seriesId: schema.meetings.seriesId }).from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (target?.seriesId) {
+    const siblings = (await db.select({ id: schema.meetings.id }).from(schema.meetings).where(eq(schema.meetings.seriesId, target.seriesId)).all()).map((m) => m.id);
+    for (let i = 0; i < siblings.length; i += 50) {
+      await db
+        .update(schema.meetingNotifications)
+        .set({ readAt: now })
+        .where(
+          and(
+            inArray(schema.meetingNotifications.meetingId, siblings.slice(i, i + 50)),
+            eq(schema.meetingNotifications.memberId, memberId),
+            inArray(schema.meetingNotifications.type, ["confirmed", "invited"]),
+            isNull(schema.meetingNotifications.readAt)
+          )
+        );
+    }
+  }
 
   return c.json({ ok: true });
 });
