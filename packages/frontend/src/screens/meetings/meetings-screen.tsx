@@ -206,7 +206,7 @@ export function MeetingsScreen() {
             key={key}
             onClick={() => { if (!locked) { setTab(key); setTabPicked(true); } }}
             disabled={locked}
-            className={`py-2.5 px-1 rounded-2xl text-[13px] sm:text-sm font-medium transition relative flex items-center justify-center gap-1 whitespace-nowrap min-w-0 ${key === "otsunagi" ? "flex-none px-3 sm:px-4" : "flex-1"}`}
+            className="flex-1 basis-0 min-w-0 py-2.5 px-0.5 rounded-2xl text-[12px] sm:text-sm font-medium transition relative flex items-center justify-center gap-1 whitespace-nowrap"
             style={{
               background: tab === key && !locked ? "var(--color-brand)" : "var(--color-paper-200)",
               color: tab === key && !locked ? "white" : locked ? "var(--color-ink-300)" : "var(--color-ink-600)",
@@ -218,7 +218,7 @@ export function MeetingsScreen() {
             {label}
             {locked && <Lock size={12} />}
             {!locked && count > 0 && (
-              <span className="min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
+              <span className="absolute -top-1.5 -right-1 min-w-[18px] h-[18px] rounded-full text-white text-xs flex items-center justify-center px-1 font-bold"
                 style={{ background: tab === key ? "var(--color-accent)" : "var(--color-brand)" }}>
                 {count > 9 ? "9+" : count}
               </span>
