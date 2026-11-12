@@ -28,6 +28,13 @@ function toSec(iso: string): number {
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 
+/** IN (...) に入れるIDが多いと、データベースの上限（1回の問い合わせに使える値は100個まで）を超えるので、小分けにして問い合わせる */
+async function inChunks<T>(ids: string[], run: (part: string[]) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += 40) out.push(...(await run(ids.slice(i, i + 40))));
+  return out;
+}
+
 /** 期間内の、自分の予定（1to1・ミーティング・定例会）を集める */
 async function buildCalendarEvents(db: Db, memberId: string, from: number, to: number): Promise<CalendarEvent[]> {
   const approved = await isMemberApproved(db, memberId);
@@ -68,31 +75,26 @@ async function buildCalendarEvents(db: Db, memberId: string, from: number, to: n
   const sessionIdsFromBookings = [...new Set(myBookings.map((b) => b.oneOnOneSessionId).filter((x): x is string => !!x))];
   const knownSessionIds = new Set(sessionsByDate.map((s) => s.id));
   const extraSessionIds = sessionIdsFromBookings.filter((id) => !knownSessionIds.has(id));
-  const extraSessions = extraSessionIds.length > 0
-    ? await db.select().from(schema.oneOnOneSessions)
-        .where(and(
-          inArray(schema.oneOnOneSessions.id, extraSessionIds),
-          inArray(schema.oneOnOneSessions.status, ["accepted", "completed"]),
-          or(eq(schema.oneOnOneSessions.requesterId, memberId), eq(schema.oneOnOneSessions.responderId, memberId)),
-        )).all()
-    : [];
+  const extraSessions = await inChunks(extraSessionIds, (part) => db.select().from(schema.oneOnOneSessions)
+    .where(and(
+      inArray(schema.oneOnOneSessions.id, part),
+      inArray(schema.oneOnOneSessions.status, ["accepted", "completed"]),
+      or(eq(schema.oneOnOneSessions.requesterId, memberId), eq(schema.oneOnOneSessions.responderId, memberId)),
+    )).all());
   const sessions = [...sessionsByDate, ...extraSessions];
 
   // 日時が予約側で変更されているセッションは、予約の日時を正とする（予約が期間外なら出さない）
   const sessionIdsAll = sessions.map((s) => s.id);
-  const linkedBookings = sessionIdsAll.length > 0
-    ? await db.select().from(schema.bookings)
-        .where(and(inArray(schema.bookings.oneOnOneSessionId, sessionIdsAll), eq(schema.bookings.status, "confirmed"))).all()
-    : [];
+  const linkedBookings = await inChunks(sessionIdsAll, (part) => db.select().from(schema.bookings)
+    .where(and(inArray(schema.bookings.oneOnOneSessionId, part), eq(schema.bookings.status, "confirmed"))).all());
   const bookingBySession = new Map(linkedBookings.map((b) => [b.oneOnOneSessionId as string, b]));
 
   // 名前の解決（相手メンバー・予約の主催者）
   const nameIds = new Set<string>();
   for (const s of sessions) { nameIds.add(s.requesterId); nameIds.add(s.responderId); }
   for (const b of myBookings) nameIds.add(b.hostMemberId);
-  const nameRows = nameIds.size > 0
-    ? await db.select({ id: schema.members.id, name: schema.members.name }).from(schema.members).where(inArray(schema.members.id, [...nameIds])).all()
-    : [];
+  const nameRows = await inChunks([...nameIds], (part) =>
+    db.select({ id: schema.members.id, name: schema.members.name }).from(schema.members).where(inArray(schema.members.id, part)).all());
   const nameById = new Map(nameRows.map((r) => [r.id, r.name]));
 
   for (const s of sessions) {
@@ -164,16 +166,16 @@ async function buildCalendarEvents(db: Db, memberId: string, from: number, to: n
         db.select({ teamId: schema.teamMembers.teamId }).from(schema.teamMembers).where(eq(schema.teamMembers.memberId, memberId)).all(),
         db.select({ teamId: schema.collabTeamMembers.teamId }).from(schema.collabTeamMembers)
           .where(and(eq(schema.collabTeamMembers.memberId, memberId), eq(schema.collabTeamMembers.status, "active"))).all(),
-        db.select({ meetingId: schema.meetingInvitees.meetingId }).from(schema.meetingInvitees)
-          .where(and(eq(schema.meetingInvitees.memberId, memberId), inArray(schema.meetingInvitees.meetingId, meetingIds))).all(),
-        db.select({ meetingId: schema.meetingDeclines.meetingId }).from(schema.meetingDeclines)
-          .where(and(eq(schema.meetingDeclines.memberId, memberId), inArray(schema.meetingDeclines.meetingId, meetingIds))).all(),
-        db.select({ meetingId: schema.meetingAttendances.meetingId, candidateId: schema.meetingAttendances.candidateId, status: schema.meetingAttendances.status })
+        inChunks(meetingIds, (part) => db.select({ meetingId: schema.meetingInvitees.meetingId }).from(schema.meetingInvitees)
+          .where(and(eq(schema.meetingInvitees.memberId, memberId), inArray(schema.meetingInvitees.meetingId, part))).all()),
+        inChunks(meetingIds, (part) => db.select({ meetingId: schema.meetingDeclines.meetingId }).from(schema.meetingDeclines)
+          .where(and(eq(schema.meetingDeclines.memberId, memberId), inArray(schema.meetingDeclines.meetingId, part))).all()),
+        inChunks(meetingIds, (part) => db.select({ meetingId: schema.meetingAttendances.meetingId, candidateId: schema.meetingAttendances.candidateId, status: schema.meetingAttendances.status })
           .from(schema.meetingAttendances)
-          .where(and(eq(schema.meetingAttendances.memberId, memberId), inArray(schema.meetingAttendances.meetingId, meetingIds))).all(),
-        db.select({ candidateId: schema.meetingResponses.candidateId, availability: schema.meetingResponses.availability })
+          .where(and(eq(schema.meetingAttendances.memberId, memberId), inArray(schema.meetingAttendances.meetingId, part))).all()),
+        inChunks(meetingIds, (part) => db.select({ candidateId: schema.meetingResponses.candidateId, availability: schema.meetingResponses.availability })
           .from(schema.meetingResponses)
-          .where(and(eq(schema.meetingResponses.memberId, memberId), inArray(schema.meetingResponses.meetingId, meetingIds))).all(),
+          .where(and(eq(schema.meetingResponses.memberId, memberId), inArray(schema.meetingResponses.meetingId, part))).all()),
       ]);
       const teamIds = new Set(teamRows.map((r) => r.teamId));
       const collabIds = new Set(collabRows.map((r) => r.teamId));
