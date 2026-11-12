@@ -9,15 +9,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { fmtTime, tsToDateInput } from "@/lib/date";
+import { fmtDateShort, fmtTime, tsToDateInput } from "@/lib/date";
 import { getJpHoliday } from "@/lib/jp-holidays";
 import {
   addDays, addMonthsFirst, dayStartSec, monthDays, parseKey, todayKey, weekDays, weekdayOf,
   type DayKey,
 } from "@/lib/calendar-grid";
-import type { CalendarEvent, CalendarEventKind, CalendarEventMyStatus } from "@shared/types";
+import type { CalendarEvent, CalendarEventKind, CalendarEventMyStatus, CalendarTypeInfo } from "@shared/types";
 import { KIND_INFO, WEEKDAY_LABELS, isMuted, type GoogleEvent } from "./_home-calendar-shared";
 import { WeekTimeGrid } from "./_home-calendar-week";
 
@@ -90,6 +90,39 @@ function statusBadge(ev: CalendarEvent): { text: string; bg: string; color: stri
   return map[ev.myStatus];
 }
 
+/** 予定1件ぶんの行（選んだ日の一覧と、検索結果で共通）。showDate=true のときは、日付も出す */
+function EventRow({ ev, tz, showDate = false }: { ev: CalendarEvent; tz: string; showDate?: boolean }) {
+  const badge = statusBadge(ev);
+  return (
+    <Link
+      to={ev.linkPath}
+      className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+      style={{ opacity: isMuted(ev) ? 0.7 : 1 }}
+    >
+      <div className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: "var(--color-paper-200)" }}>
+        {ev.typeEmoji ?? KIND_INFO[ev.kind].icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate" style={{ color: ev.titleColor ?? "var(--color-ink-800)", fontWeight: ev.titleColor ? 700 : undefined }}>{ev.title}</p>
+        <p className="text-xs tabular-nums" style={{ color: "var(--color-ink-500)" }}>
+          {showDate && <span className="mr-1.5">{fmtDateShort(ev.startsAt, tz)}</span>}
+          {fmtTime(ev.startsAt, tz)}〜{fmtTime(ev.endsAt, tz)}
+          <span className="ml-1.5">{KIND_INFO[ev.kind].label}{ev.kind === "oneonone" && ev.isExternalGuest ? "（ビジター）" : ""}</span>
+        </p>
+        <div className="flex flex-wrap gap-1 mt-1">
+          {ev.isHost && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "rgba(181,56,75,0.10)", color: "var(--color-brand)" }}>主催</span>
+          )}
+          {badge && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: badge.bg, color: badge.color }}>{badge.text}</span>
+          )}
+        </div>
+      </div>
+      <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
+    </Link>
+  );
+}
+
 export function HomeCalendar({ tz }: { tz: string }) {
   const today = todayKey(tz);
   const [view, setView] = useState<ViewMode>(loadView);
@@ -106,7 +139,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["calendar", "events", rangeFrom, rangeTo],
-    queryFn: () => api.get<{ data: { events: CalendarEvent[] } }>(`/calendar/events?from=${rangeFrom}&to=${rangeTo}`),
+    queryFn: () => api.get<{ data: { events: CalendarEvent[]; types?: CalendarTypeInfo[] } }>(`/calendar/events?from=${rangeFrom}&to=${rangeTo}`),
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
@@ -124,10 +157,37 @@ export function HomeCalendar({ tz }: { tz: string }) {
     });
   }
 
+  // ミーティング連携のイベント種別（セミナー・座談会など）も、表示を絞る対象にする。「ミーティング」などの予定の種類と同じ名前の種別は、重複するので出さない
+  const meetingTypes = useMemo(() => {
+    const kindLabels = new Set(Object.values(KIND_INFO).map((k) => k.label));
+    return (data?.data.types ?? []).filter((t) => !kindLabels.has(t.name));
+  }, [data]);
+
+  // 種類（1to1・ミーティング・定例会）と、イベント種別の、どちらもオンのものだけ表示する
   const visibleEvents = useMemo(
-    () => (data?.data.events ?? []).filter((ev) => !hiddenKinds.has(ev.kind)),
+    () => (data?.data.events ?? []).filter((ev) => !hiddenKinds.has(ev.kind) && !(ev.typeId && hiddenKinds.has(`type:${ev.typeId}`))),
     [data, hiddenKinds],
   );
+
+  // ---- 検索（入力するとすぐ、下に結果を出す。最初は、過去の予定は含めない） ----
+  const [searchText, setSearchText] = useState("");
+  const [searchPast, setSearchPast] = useState(false);
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchText.trim()), 250);
+    return () => clearTimeout(t);
+  }, [searchText]);
+  const searching = searchText.trim() !== "";
+  const searchPending = searching && searchText.trim() !== debouncedSearch; // 入力から検索までの、ほんの少しの待ち
+  const searchQuery = useQuery({
+    queryKey: ["calendar", "search", debouncedSearch, searchPast],
+    queryFn: () => api.get<{ data: { events: CalendarEvent[]; truncated: boolean } }>(
+      `/calendar/search?q=${encodeURIComponent(debouncedSearch)}${searchPast ? "&past=1" : ""}`
+    ),
+    enabled: debouncedSearch !== "",
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
 
   const eventsByDay = useMemo(() => {
     const map = new Map<DayKey, CalendarEvent[]>();
@@ -241,11 +301,29 @@ export function HomeCalendar({ tz }: { tz: string }) {
 
   return (
     <section aria-label="ミーティング・イベントカレンダー">
-      <div className="flex items-center justify-between mb-2 gap-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2 mb-2">
         <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
           🗓️ ミーティング/イベントカレンダー
         </h2>
-        <div className="flex rounded-full p-0.5 shrink-0" style={{ background: "var(--color-paper-200)" }} role="group" aria-label="表示の切り替え">
+        <div className="relative order-last sm:order-none w-full sm:w-auto sm:flex-1 sm:max-w-xs sm:ml-2">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-ink-400)" }} />
+          <input
+            type="search"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="予定を検索（例：セミナー）"
+            aria-label="予定を検索"
+            className="w-full rounded-full pl-8 pr-8 py-1.5 text-xs outline-none"
+            style={{ background: "var(--color-paper-50)", border: "1px solid var(--color-paper-300)", color: "var(--color-ink-800)" }}
+          />
+          {searchText && (
+            <button type="button" onClick={() => setSearchText("")} aria-label="検索をやめる"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded-full" style={{ color: "var(--color-ink-500)" }}>
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <div className="flex rounded-full p-0.5 shrink-0 ml-auto" style={{ background: "var(--color-paper-200)" }} role="group" aria-label="表示の切り替え">
           {(["month", "week"] as const).map((v) => (
             <button
               key={v}
@@ -262,6 +340,35 @@ export function HomeCalendar({ tz }: { tz: string }) {
           ))}
         </div>
       </div>
+
+      {searching && (
+        <div className="mb-3" aria-live="polite">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <p className="text-xs font-semibold" style={{ color: "var(--color-ink-700)" }}>
+              🔍 「{searchText.trim()}」の検索結果
+              {searchQuery.data && !searchQuery.isFetching && !searchPending && <span className="ml-1 font-normal" style={{ color: "var(--color-ink-500)" }}>{searchQuery.data.data.events.length}件{searchQuery.data.data.truncated ? "（先頭の一部のみ）" : ""}</span>}
+              {(searchQuery.isFetching || searchPending) && <Loader2 size={12} className="inline ml-1.5 animate-spin" style={{ color: "var(--color-ink-400)" }} />}
+            </p>
+            <label className="inline-flex items-center gap-1 text-[11px] cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
+              <input type="checkbox" checked={searchPast} onChange={(e) => setSearchPast(e.target.checked)} />
+              過去の予定も検索する
+            </label>
+          </div>
+          {searchQuery.isError ? (
+            <div className="card-paper rounded-2xl px-4 py-4 text-center text-xs" style={{ color: "var(--color-ink-600)" }}>
+              検索できませんでした。通信の状態を確認して、もう一度お試しください。
+            </div>
+          ) : searchQuery.data && searchQuery.data.data.events.length === 0 && !searchQuery.isFetching && !searchPending ? (
+            <div className="card-paper rounded-2xl px-4 py-4 text-center text-xs" style={{ color: "var(--color-ink-500)" }}>
+              見つかりませんでした{!searchPast && "（これからの予定だけを検索しています。過去の予定も探すときは、上のチェックを入れてください）"}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {(searchQuery.data?.data.events ?? []).map((ev) => <EventRow key={ev.key} ev={ev} tz={tz} showDate />)}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card-paper rounded-3xl p-3 sm:p-4">
         {/* 月・週の移動 */}
@@ -415,6 +522,12 @@ export function HomeCalendar({ tz }: { tz: string }) {
                 <span>{KIND_INFO[k].icon} {KIND_INFO[k].label}</span>
               </label>
             ))}
+            {meetingTypes.map((t) => (
+              <label key={t.id} className="inline-flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" checked={!hiddenKinds.has(`type:${t.id}`)} onChange={(e) => toggleKind(`type:${t.id}`, e.target.checked)} />
+                <span>{t.emoji} {t.name}</span>
+              </label>
+            ))}
             {googleConnected ? (
               <label className="inline-flex items-center gap-1 cursor-pointer">
                 <input type="checkbox" checked={showGoogle} onChange={(e) => setShowGoogle(e.target.checked)} />
@@ -469,36 +582,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
                   </div>
                 );
               }
-              const ev = row.app!;
-              const badge = statusBadge(ev);
-              return (
-                <Link
-                  key={ev.key}
-                  to={ev.linkPath}
-                  className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
-                  style={{ opacity: isMuted(ev) ? 0.7 : 1 }}
-                >
-                  <div className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: "var(--color-paper-200)" }}>
-                    {ev.typeEmoji ?? KIND_INFO[ev.kind].icon}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" style={{ color: ev.titleColor ?? "var(--color-ink-800)", fontWeight: ev.titleColor ? 700 : undefined }}>{ev.title}</p>
-                    <p className="text-xs tabular-nums" style={{ color: "var(--color-ink-500)" }}>
-                      {fmtTime(ev.startsAt, tz)}〜{fmtTime(ev.endsAt, tz)}
-                      <span className="ml-1.5">{KIND_INFO[ev.kind].label}{ev.kind === "oneonone" && ev.isExternalGuest ? "（ビジター）" : ""}</span>
-                    </p>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {ev.isHost && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "rgba(181,56,75,0.10)", color: "var(--color-brand)" }}>主催</span>
-                      )}
-                      {badge && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: badge.bg, color: badge.color }}>{badge.text}</span>
-                      )}
-                    </div>
-                  </div>
-                  <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
-                </Link>
-              );
+              return <EventRow key={row.app!.key} ev={row.app!} tz={tz} />;
             })}
           </div>
         )}

@@ -1,6 +1,7 @@
 // =============================================================
 // ホーム画面の「ミーティング/イベントカレンダー」用 API（読み取り専用）
 //   GET /api/calendar/events?from=<unix秒>&to=<unix秒>
+//   GET /api/calendar/search?q=<文字>&past=1   （タイトルなどで予定を探す。past=1 で過去の予定も含める）
 // 自分が主催している／招待されている、日程が確定した予定を返す：
 //   ・1to1（メンバー同士＝accepted/completed で日時あり、ビジターとの予約＝confirmed の予約）
 //   ・通常ミーティング（確定した候補日）
@@ -10,12 +11,12 @@
 // =============================================================
 import { Hono } from "hono";
 import { and, eq, gte, inArray, lte, or } from "drizzle-orm";
-import { createDb, schema } from "../db/index.ts";
+import { createDb, schema, type Db } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { loadTypeStyles, typeStyleOf } from "../services/meeting-event.ts";
 import type { Env, Variables } from "../types.ts";
-import type { CalendarEvent, CalendarEventMyStatus } from "@shared/types";
+import type { CalendarEvent, CalendarEventMyStatus, CalendarTypeInfo } from "@shared/types";
 
 export const calendarRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 calendarRoutes.use("*", authMiddleware);
@@ -27,20 +28,8 @@ function toSec(iso: string): number {
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 
-calendarRoutes.get("/events", async (c) => {
-  const db = createDb(c.env.DB);
-  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
-  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
-
-  const from = Number(c.req.query("from"));
-  const to = Number(c.req.query("to"));
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
-    return c.json({ error: { code: "bad_request", message: "表示する期間を指定してください" } }, 400);
-  }
-  if (to - from > MAX_RANGE_SECONDS) {
-    return c.json({ error: { code: "bad_request", message: "表示する期間が長すぎます（最大で約2か月です）" } }, 400);
-  }
-
+/** 期間内の、自分の予定（1to1・ミーティング・定例会）を集める */
+async function buildCalendarEvents(db: Db, memberId: string, from: number, to: number): Promise<CalendarEvent[]> {
   const approved = await isMemberApproved(db, memberId);
   const me = await db.select({ email: schema.members.email }).from(schema.members).where(eq(schema.members.id, memberId)).get();
   const events: CalendarEvent[] = [];
@@ -217,6 +206,7 @@ calendarRoutes.get("/events", async (c) => {
           id: m.id,
           title: m.title,
           ...typeStyleOf(calTitleColors, m.eventTypeDefId),
+          typeId: m.eventTypeDefId ?? null,
           startsAt: cand.startsAt,
           endsAt: cand.endsAt ?? cand.startsAt + 3600,
           isHost,
@@ -230,5 +220,66 @@ calendarRoutes.get("/events", async (c) => {
   }
 
   events.sort((a, b) => a.startsAt - b.startsAt || a.title.localeCompare(b.title));
-  return c.json({ data: { events } });
+  return events;
+}
+
+/** 表示を絞るための、ミーティング連携のイベント種別（セミナー・座談会など）の一覧 */
+async function listMeetingTypes(db: Db): Promise<CalendarTypeInfo[]> {
+  return db.select({ id: schema.eventTypeDefinitions.id, name: schema.eventTypeDefinitions.name, emoji: schema.eventTypeDefinitions.emoji })
+    .from(schema.eventTypeDefinitions)
+    .where(and(eq(schema.eventTypeDefinitions.linksToMeeting, 1), eq(schema.eventTypeDefinitions.isActive, 1)))
+    .orderBy(schema.eventTypeDefinitions.sortOrder, schema.eventTypeDefinitions.createdAt).all();
+}
+
+calendarRoutes.get("/events", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const from = Number(c.req.query("from"));
+  const to = Number(c.req.query("to"));
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    return c.json({ error: { code: "bad_request", message: "表示する期間を指定してください" } }, 400);
+  }
+  if (to - from > MAX_RANGE_SECONDS) {
+    return c.json({ error: { code: "bad_request", message: "表示する期間が長すぎます（最大で約2か月です）" } }, 400);
+  }
+
+  const [events, types] = await Promise.all([buildCalendarEvents(db, memberId, from, to), listMeetingTypes(db)]);
+  return c.json({ data: { events, types } });
+});
+
+/** 検索のための正規化（大文字小文字・全角半角・ひらがなカタカナの違いを無視する） */
+function normalizeForSearch(text: string): string {
+  return text.normalize("NFKC").toLowerCase().replace(/[\u30a1-\u30f6]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+}
+
+/** 検索で返す件数の上限 */
+const SEARCH_LIMIT = 100;
+
+// GET /api/calendar/search?q=<文字>&past=1  — タイトル・種別名・1to1の相手名などで予定を探す（past=1 で過去の予定も含める）
+calendarRoutes.get("/search", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const words = normalizeForSearch((c.req.query("q") ?? "").trim()).split(/\s+/).filter(Boolean).slice(0, 5);
+  if (words.length === 0) return c.json({ data: { events: [], truncated: false } });
+
+  const includePast = c.req.query("past") === "1";
+  const now = Math.floor(Date.now() / 1000);
+  // 過去は3年前まで、先は2年先まで。今日の分は、すでに終わった予定も含めるため、今日の始まり（UTCの前日ぶんの余裕つき）から
+  const from = includePast ? now - 3 * 365 * 86400 : now - 86400;
+  const to = now + 2 * 365 * 86400;
+
+  const all = await buildCalendarEvents(db, memberId, from, to);
+  const typeNameById = new Map((await listMeetingTypes(db)).map((t) => [t.id, t.name]));
+  const matched = all.filter((ev) => {
+    if (!includePast && ev.endsAt < now) return false;
+    const hay = normalizeForSearch([ev.title, ev.partnerName ?? "", ev.typeId ? typeNameById.get(ev.typeId) ?? "" : ""].join(" "));
+    return words.every((w) => hay.includes(w));
+  });
+  // 過去を含めるときは、新しい順（これからの予定は近い順）。含めないときは、近い順
+  matched.sort((a, b) => (includePast ? b.startsAt - a.startsAt : a.startsAt - b.startsAt));
+  return c.json({ data: { events: matched.slice(0, SEARCH_LIMIT), truncated: matched.length > SEARCH_LIMIT } });
 });

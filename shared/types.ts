@@ -502,12 +502,16 @@ export type CalendarEventKind = "oneonone" | "meeting" | "series";
 /** 自分の出欠。attending=参加予定 / absent=欠席 / declined=辞退 / none=未回答 */
 export type CalendarEventMyStatus = "attending" | "absent" | "declined" | "none";
 
+/** カレンダーの表示を絞る対象になる、ミーティング連携のイベント種別 */
+export type CalendarTypeInfo = { id: string; name: string; emoji: string };
+
 export type CalendarEvent = {
   key: string;              // 画面上の重複しない識別子
   kind: CalendarEventKind;  // oneonone=1to1 / meeting=通常ミーティング / series=定例会の開催回
   id: string;               // 種別ごとの識別子（1to1=セッションID or 予約ID、ミーティング/定例会=meetingId）
   title: string;
   titleColor?: string | null; typeEmoji?: string | null; // イベント種別で指定された、タイトル文字の色（"#rrggbb"。セミナーなどの強調表示）
+  typeId?: string | null;   // ミーティング・定例会に付いているイベント種別のID（表示を絞るときに使う）
   startsAt: number;         // unix秒
   endsAt: number;           // unix秒
   isHost: boolean;          // 自分が主催者か（1to1では予約の主催側か）
