@@ -5,7 +5,7 @@
 // GET  /api/enishi/member/:memberId → 指定メンバーの金の卵・ガチョウ概要（閲覧のみ）
 // GET  /api/enishi/contributors   → 金の卵・ガチョウを登録しているメンバー一覧（貢献のご縁の対象選択用）
 // POST /api/enishi/search/for-me  → 私のご縁（自分の卵/ガチョウ × なかまの人脈）
-// POST /api/enishi/search/giver   → 貢献のご縁（自分の人脈 × 指定したメンバーの卵/ガチョウ）
+// POST /api/enishi/search/giver   → 貢献のご縁（自分の人脈 × 指定したメンバーの卵/ガチョウ）。裏で実行し、jobId を返す
 // GET  /api/enishi/contacts/specialties → 人脈検索の専門分野フィルタ候補（全メンバーの外部人脈から集計）
 // POST /api/enishi/search/contacts → 人脈検索（紹介の道筋ではなく、条件に合う人物の横断検索）
 // =============================================================
@@ -26,7 +26,7 @@ import {
   type HistoryCard, type HistoryResult,
 } from "../services/enishi-history.ts";
 import { deleteSharesFor } from "../services/content-share.ts";
-import { runEnishiSearch, CONTACT_SEARCH_SCOPES, type JobParams } from "../services/enishi-search.ts";
+import { CONTACT_SEARCH_SCOPES, type JobParams } from "../services/enishi-search.ts";
 import { buildMemberCards } from "../services/enishi-search.ts";
 import type { ContactSearchScope, EnishiResultCard, EnishiSearchResult, EnishiTarget, Hop } from "../services/enishi-search.ts";
 import type { Env, Variables } from "../types.ts";
@@ -68,12 +68,6 @@ async function fetchIntroducedKeys(db: ReturnType<typeof createDb>, meId: string
     candidateId: schema.enishiIntroducedContacts.candidateId,
   }).from(schema.enishiIntroducedContacts).where(eq(schema.enishiIntroducedContacts.memberId, meId)).all();
   return new Set(rows.map((r) => `${r.myContactId}|${r.candidateId}`));
-}
-
-function buildGiverTitle(targetMemberNames: string[], createdAt: number, resultCount: number): string {
-  const shown = targetMemberNames.slice(0, 3).join("・");
-  const suffix = targetMemberNames.length > 3 ? ` ほか${targetMemberNames.length - 3}名` : "";
-  return `${formatHistoryDate(createdAt)} 貢献のご縁：${shown || "なかま"}${suffix}へ（${resultCount}件ヒット）`;
 }
 
 /** メンバーのUSPからの検索の履歴タイトル（人脈検索の専門分野での検索と区別できるようにする） */
@@ -561,31 +555,23 @@ enishiRoutes.post("/search/giver", async (c) => {
     return c.json({ error: { code: "no_contacts", message: "貢献のご縁をさがすには、まず外部人脈を登録してください" } }, 400);
   }
 
-  const [goodMatchContext, badMatchContext] = await Promise.all([
-    buildGoodMatchContext(db, meId, "giver"),
-    buildBadMatchContext(db, meId, "giver"),
-  ]);
-  const result = await runEnishiSearch({
-    db, apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
-    mode: "giver", meId, myContacts, targetMemberIds,
-    specialties: body.specialties ?? [], relationships: body.relationships ?? [], freeText: body.freeText?.trim() ?? "",
-    maxHop: body.maxHop, count, goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
-  });
-
   const targetMembers = await db.select({ id: schema.members.id, name: schema.members.name })
     .from(schema.members).where(inArray(schema.members.id, targetMemberIds)).all();
   const targetMemberNames = targetMemberIds
     .map((id) => targetMembers.find((m) => m.id === id)?.name)
     .filter((n): n is string => !!n);
 
-  const now = Math.floor(Date.now() / 1000);
-  const title = buildGiverTitle(targetMemberNames, now, countResults(result));
-  const params = {
-    targetMemberIds, specialties: body.specialties ?? [], relationships: body.relationships ?? [],
-    freeText: body.freeText?.trim() ?? "", maxHop: body.maxHop, count,
-  };
-  const { historyId, result: augmented } = await saveSearchHistory(db, meId, "giver", title, params, result, now);
-  return c.json({ data: augmented, historyId });
+  // 検索は裏で実行する。自分の人脈が多くても、一部を抜粋せず、小さな束に分けてすべてを照合する。
+  // 始めたらすぐに戻り、進み具合は画面上部の「検索中」に出る。終わったら通知とメールが届く
+  const [goodMatchContext, badMatchContext] = await Promise.all([
+    buildGoodMatchContext(db, meId, "giver"),
+    buildBadMatchContext(db, meId, "giver"),
+  ]);
+  return startSearchJob(c, db, meId, {
+    mode: "giver", targetMemberIds, targetMemberNames,
+    specialties: body.specialties ?? [], relationships: body.relationships ?? [], freeText: body.freeText?.trim() ?? "",
+    maxHop: body.maxHop, count, goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
+  });
 });
 
 // ---- GET /api/enishi/contacts/specialties ---- 人脈検索の専門分野フィルタ候補（検索対象になり得る全メンバーの外部人脈から集計）

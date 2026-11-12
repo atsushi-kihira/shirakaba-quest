@@ -25,11 +25,6 @@ const HOP_ORDER: Hop[] = ["direct", "2hop", "3hop"];
 const HOP_LABEL: Record<Hop, string> = { direct: "1次（直接）", "2hop": "2次", "3hop": "3次" };
 // D1のバインド変数上限を避けるため、IN句に渡すID件数を安全な単位に分割する
 const ID_CHUNK_SIZE = 50;
-// 候補が多すぎる場合にLLMへ渡す件数の上限（コスト・トークン量の安全弁）
-const MAX_CANDIDATES = 400;
-// 貢献のご縁で「さがす対象」に使う自分の人脈が多すぎると、LLMへの入力が肥大化し出力が
-// max_tokensで打ち切られてJSONが壊れる（結果0件になる）ことがあったため、候補側と同様に上限を設ける
-const MAX_MY_CONTACTS = 150;
 
 function chunkIds(ids: string[]): string[][] {
   const chunks: string[][] = [];
@@ -100,15 +95,6 @@ export type EnishiSearchResult = {
   memberCollab?: CollabIdeas | null;
 };
 
-type GiverParams = {
-  db: Db; apiKey: string; isDev: boolean;
-  mode: "giver"; meId: string;
-  myContacts: (typeof schema.externalContacts.$inferSelect)[];
-  targetMemberIds: string[]; // 貢献先として指定されたメンバー（最大5名）。この人たちの卵/ガチョウのみを候補にする
-  specialties: string[]; relationships: string[]; freeText: string;
-  maxHop: Hop; count: number;
-  goodMatchContext?: string;
-};
 // 人脈検索の対象範囲
 //  all                 : メンバー本人 ＋ 自分の外部人脈 ＋ 他のメンバー全員の外部人脈
 //  mine_and_members    : 自分の外部人脈 ＋ 他のメンバー全員の外部人脈
@@ -504,60 +490,6 @@ function formatTargets(targets: EnishiTarget[]): string {
   return targets.map((t) => `- id: ${t.id} / 種別: ${t.kind === "egg" ? "金の卵" : "金のガチョウ"} / 説明: ${t.description}`).join("\n");
 }
 
-// ---- 開発用モック ----
-function devMockResult(maxHop: Hop, mode: "for-me" | "giver" | "contact-search"): EnishiSearchResult {
-  if (mode === "contact-search") {
-    const mockMember = (id: string, name: string, emoji: string, score: number, isSelf = false) => ({
-      hop: "direct" as const, type: "egg" as const,
-      matchedTargetLabel: "検索条件（開発モック）",
-      counterpart: { memberId: id, name, emoji, bgColor: "bg-stone-100" },
-      path: isSelf ? ["あなた自身"] : ["あなた", `${name}さん（メンバー）`],
-      contactPathIndex: -1,
-      dealDescription: "開発環境用のモックです。",
-      why: "開発モックのため根拠は生成されていません。",
-      privacyNote: null,
-      linkedMemberId: id,
-      actionLabel: isSelf ? "あなた自身のカードを見る" : `${name}さんの詳細を見る`,
-      isMemberCandidate: true, score, isSelfMember: isSelf,
-      candidateId: "",
-    });
-    const members = [mockMember("dev-m1", "開発モック 太郎", "🧪", 88), mockMember("dev-m2", "開発モック 花子", "🌸", 74, true), mockMember("dev-m3", "開発モック 次郎", "🦊", 61)];
-    return {
-      groups: [{ hop: "direct", label: "検索結果", results: members }],
-      truncated: false,
-      memberCollab: {
-        members: members.map((m) => ({ memberId: m.counterpart.memberId, name: m.counterpart.name, emoji: m.counterpart.emoji, bgColor: m.counterpart.bgColor, category: "（開発モック）" })),
-        team: { title: "開発モックのチーム活動（見本）", summary: "これは開発環境の見本です。本番ではAIが、合致度の高いメンバーの職種・事業内容・USPから協業イメージを提案します。", roles: [{ memberId: "dev-m1", role: "企画を担当します（見本）" }, { memberId: "dev-m2", role: "実施を担当します（見本）" }] },
-        combos: [
-          { memberIds: ["dev-m1", "dev-m2"], title: "太郎×花子の協業（見本）", summary: "2名の組み合わせの見本です。" },
-          { memberIds: ["dev-m1", "dev-m2", "dev-m3"], title: "3名の協業（見本）", summary: "3名の組み合わせの見本です。" },
-        ],
-        isMock: true,
-      },
-    };
-  }
-  const groups = hopsUpTo(maxHop).map((hop) => ({
-    hop, label: HOP_LABEL[hop],
-    results: hop === "direct" ? [{
-      hop, type: "egg" as const,
-      matchedTargetLabel: mode === "for-me" ? "金の卵①（開発モック）" : "相手の金の卵（開発モック）",
-      counterpart: { memberId: "dev-member", name: "開発モック 太郎", emoji: "🧪", bgColor: "bg-stone-100" },
-      path: mode === "for-me"
-        ? ["あなた", "開発モック 太郎さん", "候補の人脈（属性のみ・開発モック）"]
-        : ["あなたの人脈（開発モック）", "開発モック 太郎さん"],
-      contactPathIndex: mode === "for-me" ? 2 : 0,
-      dealDescription: "これは開発環境用のモックデータです。本番環境ではAIが実際の候補データから経路を生成します。",
-      why: "開発モックのため根拠は生成されていません。",
-      privacyNote: mode === "for-me" ? "相手はメンバーの人脈です。実名・連絡先は伏せています。" : null,
-      linkedMemberId: "dev-member",
-      actionLabel: "開発モック 太郎さんと1to1を組む",
-      candidateId: "dev-candidate",
-      myContactId: mode === "giver" ? "dev-my-contact" : undefined,
-    }] : [],
-  }));
-  return { groups, truncated: false };
-}
-
 /** 人脈検索で見つかったメンバー（合致度つき）を、結果のカードにする。人脈検索（すべて）とメンバーのUSPからの検索で共通 */
 export async function buildMemberCards(
   db: Db, memberHits: { memberId: string; why: string; score: number; isSelf: boolean }[], freeText: string
@@ -589,150 +521,6 @@ export async function buildMemberCards(
   return cards;
 }
 
-// ---- メイン ----
-export async function runEnishiSearch(params: GiverParams): Promise<EnishiSearchResult> {
-  const { db, apiKey, isDev, maxHop, count } = params;
-
-  if (isDev || !apiKey || apiKey === "dev-not-set") {
-    await new Promise((r) => setTimeout(r, 500));
-    return devMockResult(maxHop, params.mode);
-  }
-
-  // ---- giver mode ----
-  const { specialties, relationships, freeText, myContacts } = params;
-  let filteredContacts = myContacts;
-  if (specialties.length > 0) filteredContacts = filteredContacts.filter((c) => c.specialty && specialties.some((s) => c.specialty!.includes(s)));
-  if (relationships.length > 0) {
-    const relMap = await attachRelationships(db, filteredContacts.map((c) => c.id));
-    filteredContacts = filteredContacts.filter((c) => (relMap.get(c.id) ?? []).some((r) => relationships.includes(r)));
-  }
-  if (freeText) {
-    const needle = freeText.toLowerCase();
-    filteredContacts = filteredContacts.filter((c) =>
-      [c.name, c.company, c.note, c.specialty, c.businessSummary].some((v) => v?.toLowerCase().includes(needle))
-    );
-  }
-  if (filteredContacts.length === 0) {
-    return { groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: [] })), truncated: false };
-  }
-  const myContactsTruncated = filteredContacts.length > MAX_MY_CONTACTS;
-  if (myContactsTruncated) filteredContacts = sampleContactsFairlyBySpecialty(filteredContacts, MAX_MY_CONTACTS);
-  const usedContactsBreakdown = myContactsTruncated ? computeSpecialtyBreakdown(filteredContacts) : undefined;
-
-  let candidates = await collectGiverCandidates(db, params.meId, params.targetMemberIds);
-  const candidatesTruncated = candidates.length > MAX_CANDIDATES;
-  if (candidatesTruncated) candidates = candidates.slice(0, MAX_CANDIDATES);
-  const truncated = candidatesTruncated || myContactsTruncated;
-  if (candidates.length === 0) return { groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: [] })), truncated: false };
-
-  const myContactsForPrompt: { id: string; description: string }[] = filteredContacts.map((c) => ({
-    id: c.id,
-    description: [c.name, c.company, c.specialty, c.businessSummary].filter(Boolean).join(" / "),
-  }));
-
-  // 「紹介しました」済みの組み合わせ（自分の人脈×相手の金の卵/ガチョウ）は、この時点でAIに伝えて
-  // 最初から除外候補として扱ってもらう。最大件数（count）の結果を返したあとに事後フィルタで
-  // 除外すると、既に紹介済みの組み合わせをAIが上位に選びがちな場合に結果が大きく減ってしまう
-  // 不具合があったため（例：貢献先を固定して何度も「紹介しました」を押していくと、AIが毎回同じ
-  // 上位候補を選び続け、そのすべてが除外されて結果がほぼ0件になる）。
-  const introducedRows = await db.select({
-    myContactId: schema.enishiIntroducedContacts.myContactId,
-    candidateId: schema.enishiIntroducedContacts.candidateId,
-  }).from(schema.enishiIntroducedContacts).where(eq(schema.enishiIntroducedContacts.memberId, params.meId)).all();
-  const introducedKeys = new Set(introducedRows.map((r) => `${r.myContactId}|${r.candidateId}`));
-
-  // 貢献先メンバーが複数（最大5名）指定された場合、その全員分の金の卵・金のガチョウを1回のAI呼び出しに
-  // まとめると、対象の一部が判定困難（例：個人の特性ベースの記述で本人の説明文と照合しにくい）な場合に、
-  // AIがバッチ全体に対して結果0件を返してしまう不具合が実運用で確認された（単独メンバーなら見つかる
-  // マッチも、他のメンバーと同時に照合すると消えてしまう）。そのため、貢献先メンバーごとに候補を分割し、
-  // それぞれ独立したAI呼び出しで照合したうえで結果をマージする。
-  const candidatesByMember = new Map<string, GiverCandidate[]>();
-  for (const c of candidates) {
-    const list = candidatesByMember.get(c.memberId) ?? [];
-    list.push(c);
-    candidatesByMember.set(c.memberId, list);
-  }
-
-  const matchResults = await Promise.all(
-    [...candidatesByMember.entries()].map(([memberId, memberCandidates]) => {
-      const relevantIntroduced = introducedRows.filter((r) =>
-        filteredContacts.some((c) => c.id === r.myContactId) && memberCandidates.some((c) => c.candidateId === r.candidateId)
-      );
-      const excludedPairsSection = relevantIntroduced.length > 0
-        ? `\n\n# 除外リスト（既に紹介済みのため、以下の組み合わせは結果に含めないこと）\n${relevantIntroduced.map((r) => `- 人脈id: ${r.myContactId} / 候補id: ${r.candidateId}`).join("\n")}`
-        : "";
-
-      const prompt = `${buildInstructions(count, maxHop, "giver")}
-
-# さがす対象（あなたの人脈。絞り込み済み）
-${myContactsForPrompt.map((t) => `- id: ${t.id} / 説明: ${t.description}`).join("\n")}
-
-# 候補一覧（なかまの金の卵・金のガチョウ）
-${formatGiverCandidates(memberCandidates)}${excludedPairsSection}${params.goodMatchContext ?? ""}`;
-
-      return runClaudeMatching(apiKey, prompt, `giver:${memberId}`);
-    })
-  );
-
-  const matches = matchResults.flatMap((r) => r.matches);
-  const aiCallFailed = matchResults.some((r) => r.failed);
-
-  // 上のプロンプトでAIに除外を依頼済みだが、指示に従わない場合の保険としてここでも念のため除外する
-  const candidateMap = new Map(candidates.map((c) => [c.candidateId, c]));
-  const myContactMap = new Map(filteredContacts.map((c) => [c.id, c]));
-  const cards: EnishiResultCard[] = [];
-  const directChecks: DirectCheckItem[] = [];
-  for (const m of matches) {
-    const cand = candidateMap.get(m.candidateId);
-    const myContact = myContactMap.get(m.matchedTargetId);
-    if (!cand || !myContact || !hopsUpTo(maxHop).includes(m.hop)) continue;
-    if (introducedKeys.has(`${myContact.id}|${cand.candidateId}`)) continue;
-    // hop/typeはAIの自己申告(m.hop, m.type)ではなく、実際にマッチした候補の種別（cand.kind）から
-    // 導出する。direct（1次）はegg、2hop/3hopはgooseに対応するはずで、一致しない場合は
-    // AIの判定が内部矛盾しているため破棄する（例：ガチョウにマッチしたのに1次のエッグとして返す）。
-    const type = cand.kind;
-    if ((m.hop === "direct") !== (type === "egg")) continue;
-    if (type === "egg") {
-      directChecks.push({
-        key: String(cards.length),
-        personDescription: [myContact.name, myContact.company, myContact.specialty, myContact.businessSummary].filter(Boolean).join(" / "),
-        eggDescription: cand.description,
-      });
-    }
-    const path = m.hop === "direct"
-      ? [`あなたの人脈：${myContact.name}`, `${cand.memberName}さんの金の卵`]
-      : m.hop === "2hop"
-        ? [`あなたの人脈：${myContact.name}`, `${cand.memberName}さんの金のガチョウ`, `${cand.memberName}さんの金の卵`]
-        : [`あなたの人脈：${myContact.name}`, "ガチョウを紹介できそうな人", `${cand.memberName}さんの金のガチョウ`, `${cand.memberName}さんの金の卵`];
-    cards.push({
-      hop: m.hop, type,
-      matchedTargetLabel: `${cand.memberName}さんの${cand.kind === "egg" ? "金の卵" : "金のガチョウ"}`,
-      counterpart: { memberId: cand.memberId, name: cand.memberName, emoji: cand.memberEmoji, bgColor: cand.memberBgColor },
-      path, contactPathIndex: 0, dealDescription: m.dealDescription, why: m.why,
-      privacyNote: null, // 貢献のご縁で使うのは自分自身の人脈なので実名で問題ない
-      linkedMemberId: cand.memberId,
-      actionLabel: `${myContact.name}さんを${cand.memberName}さんに紹介する`,
-      candidateId: cand.candidateId,
-      myContactId: myContact.id,
-    });
-  }
-
-  const directSurvivors = await verifyDirectMatches(apiKey, directChecks);
-  const rejectedIndices = new Set(
-    directChecks.filter((d) => !directSurvivors.has(d.key)).map((d) => Number(d.key))
-  );
-  const verifiedCards = cards.filter((_, idx) => !rejectedIndices.has(idx));
-
-  const sorted = HOP_ORDER.flatMap((h) => verifiedCards.filter((c) => c.hop === h)).slice(0, count);
-  return {
-    groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: sorted.filter((c) => c.hop === h) })),
-    truncated,
-    usedContactsBreakdown,
-    aiCallFailed,
-  };
-}
-
-
 // =============================================================
 // バックグラウンド実行（検索ジョブ）用の部品
 // 「私のご縁」と「人脈をさがす」は、候補をすべて1回のAI呼び出しに詰め込まず、小さな束（バッチ）に分けて照合し、
@@ -750,14 +538,18 @@ export const JOB_MEMBER_RESULT_LIMIT = MEMBER_RESULT_LIMIT;
 
 export type JobParams =
   | { mode: "for-me"; targets: EnishiTarget[]; targetIds: string[]; maxHop: Hop; includeOwnContacts: boolean; count: number; goodMatchContext?: string }
-  | { mode: "contact-search"; specialties: string[]; freeText: string; scope: ContactSearchScope; memberIds: string[]; count: number; goodMatchContext?: string };
+  | { mode: "contact-search"; specialties: string[]; freeText: string; scope: ContactSearchScope; memberIds: string[]; count: number; goodMatchContext?: string }
+  // 貢献のご縁：自分の人脈（絞り込み済み）× 貢献先メンバーの金の卵・金のガチョウ。自分の人脈が多くても、すべてを小分けにして照合する
+  | { mode: "giver"; targetMemberIds: string[]; targetMemberNames: string[]; specialties: string[]; relationships: string[]; freeText: string; maxHop: Hop; count: number; goodMatchContext?: string };
 
+/** 候補（なかまの人脈）を束に分けて照合する検索（私のご縁・人脈をさがす）のパラメータ */
+export type CandidateJobParams = Exclude<JobParams, { mode: "giver" }>;
 export type JobCandidate = ForMeCandidate;
 export type JobMatch = LlmMatch;
 export type MemberHit = { memberId: string; why: string; score: number; isSelf: boolean };
 
 /** 検索の対象になる候補を集める（上限は安全弁のみ）。メンバー本人も対象にするかも返す */
-export async function selectJobCandidates(db: Db, meId: string, params: JobParams): Promise<{ candidates: JobCandidate[]; wantMembers: boolean; truncated: boolean }> {
+export async function selectJobCandidates(db: Db, meId: string, params: CandidateJobParams): Promise<{ candidates: JobCandidate[]; wantMembers: boolean; truncated: boolean }> {
   const all = await collectForMeCandidates(db, meId);
   let candidates: JobCandidate[];
   let wantMembers = false;
@@ -782,7 +574,7 @@ export async function selectJobCandidates(db: Db, meId: string, params: JobParam
 }
 
 /** 1つの束をAIに照合させるときの依頼文 */
-function buildBatchPrompt(params: JobParams, batch: JobCandidate[]): string {
+function buildBatchPrompt(params: CandidateJobParams, batch: JobCandidate[]): string {
   if (params.mode === "for-me") {
     return `${buildInstructions(params.count, params.maxHop, "for-me")}
 
@@ -805,7 +597,7 @@ export type BatchOutcome = { ok: true; matches: JobMatch[] } | { ok: false; erro
  * 1つの束を、1回だけAIに照合させる。失敗（呼び出しの失敗・時間切れ・応答の形式不正）のときは ok:false を返す
  * （やり直しは、呼び出し側が束ごとに数えて、1回だけ行う）
  */
-export async function matchJobBatch(apiKey: string | undefined, isDev: boolean, params: JobParams, batch: JobCandidate[]): Promise<BatchOutcome> {
+export async function matchJobBatch(apiKey: string | undefined, isDev: boolean, params: CandidateJobParams, batch: JobCandidate[]): Promise<BatchOutcome> {
   if (isDev || !apiKey || apiKey === "dev-not-set") {
     // 開発環境だけの失敗の再現（失敗の扱い・リトライ・管理者へのお知らせを確かめるため）。条件の文に印を入れると失敗する
     //   [dev-fail]      : すべての束が失敗する ／ [dev-fail-half] : 束の先頭の候補IDの文字コードが奇数の束だけ失敗する
@@ -1007,4 +799,185 @@ export async function finalizeContactSearchResult(args: {
 
   const sorted = cards.slice(0, count);
   return { groups: [{ hop: "direct", label: "検索結果", results: sorted }], truncated, aiCallFailed, memberCollab };
+}
+
+
+// =============================================================
+// 貢献のご縁（giver）の、バックグラウンド実行用の部品
+//   自分の人脈（絞り込み済み）× 貢献先メンバー（最大5名）の金の卵・金のガチョウ。
+//   自分の人脈が多くても、一部を抜粋せず、人脈を小さな束に分け、貢献先ごとに照合して、結果を合算する。
+//   束の中身は「<貢献先のメンバーID>|<自分の人脈ID>」の並び（同じ束の中は、同じ貢献先だけ）。
+// =============================================================
+
+/** 1つの束に入れる、自分の人脈の数 */
+export const GIVER_BATCH_CONTACTS = 20;
+/** 費用の暴走を防ぐ安全弁（自分の人脈がこの件数を超えるときだけ、専門分野ごとに均等に抜粋する） */
+export const GIVER_MAX_CONTACTS = 1000;
+/** 貢献先1人あたりの卵・ガチョウの件数の上限（1回の依頼文が大きくなりすぎないようにする安全弁） */
+const GIVER_MAX_CANDIDATES_PER_MEMBER = 200;
+
+export type GiverJobParams = Extract<JobParams, { mode: "giver" }>;
+type MyContact = typeof schema.externalContacts.$inferSelect;
+
+export type GiverContext = {
+  /** 検索に使う自分の人脈（絞り込み済み） */
+  contacts: MyContact[];
+  /** 安全弁で、人脈を抜粋したか */
+  truncated: boolean;
+  /** 貢献先メンバーごとの、金の卵・金のガチョウ */
+  candidatesByMember: Map<string, GiverCandidate[]>;
+  /** 「紹介しました」済みの組み合わせ */
+  introduced: { myContactId: string; candidateId: string }[];
+};
+
+/** 貢献のご縁の検索に使う、自分の人脈と、貢献先の卵・ガチョウを集める */
+export async function loadGiverContext(db: Db, meId: string, params: GiverJobParams): Promise<GiverContext> {
+  let contacts = await db.select().from(schema.externalContacts)
+    .where(and(eq(schema.externalContacts.ownerMemberId, meId), ne(schema.externalContacts.visibility, "private"))).all();
+  const { specialties, relationships, freeText } = params;
+  if (specialties.length > 0) contacts = contacts.filter((c) => c.specialty && specialties.some((sp) => c.specialty!.includes(sp)));
+  if (relationships.length > 0) {
+    const relMap = await attachRelationships(db, contacts.map((c) => c.id));
+    contacts = contacts.filter((c) => (relMap.get(c.id) ?? []).some((r) => relationships.includes(r)));
+  }
+  if (freeText) {
+    const needle = freeText.toLowerCase();
+    contacts = contacts.filter((c) => [c.name, c.company, c.note, c.specialty, c.businessSummary].some((v) => v?.toLowerCase().includes(needle)));
+  }
+  const truncated = contacts.length > GIVER_MAX_CONTACTS;
+  if (truncated) contacts = sampleContactsFairlyBySpecialty(contacts, GIVER_MAX_CONTACTS);
+
+  const candidatesByMember = new Map<string, GiverCandidate[]>();
+  for (const cand of await collectGiverCandidates(db, meId, params.targetMemberIds)) {
+    const list = candidatesByMember.get(cand.memberId) ?? [];
+    if (list.length < GIVER_MAX_CANDIDATES_PER_MEMBER) list.push(cand);
+    candidatesByMember.set(cand.memberId, list);
+  }
+  const introduced = await db.select({
+    myContactId: schema.enishiIntroducedContacts.myContactId,
+    candidateId: schema.enishiIntroducedContacts.candidateId,
+  }).from(schema.enishiIntroducedContacts).where(eq(schema.enishiIntroducedContacts.memberId, meId)).all();
+  return { contacts, truncated, candidatesByMember, introduced };
+}
+
+/** 束の分け方：貢献先ごとに、自分の人脈を GIVER_BATCH_CONTACTS 人ずつに分ける（卵・ガチョウのない貢献先は、照合しようがないので飛ばす） */
+export function buildGiverBatches(params: GiverJobParams, ctx: GiverContext): string[][] {
+  const batches: string[][] = [];
+  for (const memberId of params.targetMemberIds) {
+    if ((ctx.candidatesByMember.get(memberId) ?? []).length === 0) continue;
+    for (let i = 0; i < ctx.contacts.length; i += GIVER_BATCH_CONTACTS) {
+      batches.push(ctx.contacts.slice(i, i + GIVER_BATCH_CONTACTS).map((c) => `${memberId}|${c.id}`));
+    }
+  }
+  return batches;
+}
+
+/** 束の中身（<貢献先>|<人脈>）を、貢献先のIDと人脈のIDに分ける */
+function parseGiverBatchIds(ids: string[]): { memberId: string; contactIds: string[] } {
+  const memberId = ids[0]?.split("|")[0] ?? "";
+  return { memberId, contactIds: ids.map((id) => id.slice(id.indexOf("|") + 1)) };
+}
+
+/** 貢献のご縁の束を、1回だけAIに照合させる（失敗のときは ok:false。やり直しは呼び出し側が数える） */
+export async function matchGiverBatch(
+  apiKey: string | undefined, isDev: boolean, params: GiverJobParams, ctx: GiverContext, ids: string[],
+): Promise<BatchOutcome> {
+  const { memberId, contactIds } = parseGiverBatchIds(ids);
+  const cands = ctx.candidatesByMember.get(memberId) ?? [];
+  const contactMap = new Map(ctx.contacts.map((c) => [c.id, c]));
+  const contacts = contactIds.map((id) => contactMap.get(id)).filter((c): c is MyContact => !!c);
+  if (contacts.length === 0 || cands.length === 0) return { ok: true, matches: [] };
+
+  if (isDev || !apiKey || apiKey === "dev-not-set") {
+    if (JSON.stringify(params).includes("[dev-fail]")) return { ok: false, error: "開発用の失敗の再現" };
+    // 開発環境用: 束の先頭2人を「合致」として返す（束の分割・合算・通知の流れを確かめるため）
+    const cand = cands[0];
+    return {
+      ok: true,
+      matches: contacts.slice(0, 2).map((c): JobMatch => ({
+        candidateId: cand.candidateId, matchedTargetId: c.id,
+        hop: cand.kind === "goose" ? "2hop" : "direct", type: cand.kind,
+        dealDescription: "開発環境用のモックです。", why: "開発モックのため根拠は生成されていません。",
+      })),
+    };
+  }
+
+  const relevantIntroduced = ctx.introduced.filter((r) => contacts.some((c) => c.id === r.myContactId) && cands.some((c) => c.candidateId === r.candidateId));
+  const excludedPairsSection = relevantIntroduced.length > 0
+    ? `\n\n# 除外リスト（既に紹介済みのため、以下の組み合わせは結果に含めないこと）\n${relevantIntroduced.map((r) => `- 人脈id: ${r.myContactId} / 候補id: ${r.candidateId}`).join("\n")}`
+    : "";
+  const prompt = `${buildInstructions(params.count, params.maxHop, "giver")}
+
+# さがす対象（あなたの人脈。絞り込み済み）
+${contacts.map((c) => `- id: ${c.id} / 説明: ${[c.name, c.company, c.specialty, c.businessSummary].filter(Boolean).join(" / ")}`).join("\n")}
+
+# 候補一覧（なかまの金の卵・金のガチョウ）
+${formatGiverCandidates(cands)}${excludedPairsSection}${params.goodMatchContext ?? ""}`;
+  try {
+    const parsed = parseLlmMatches(await callClaude(apiKey, prompt, { timeoutMs: JOB_CALL_TIMEOUT_MS }));
+    return parsed.ok ? { ok: true, matches: parsed.matches } : { ok: false, error: "応答の形式が不正" };
+  } catch (err) {
+    console.error("[enishi-search] 貢献のご縁の束の照合に失敗", err);
+    return { ok: false, error: describeBatchError(err) };
+  }
+}
+
+/** 「貢献のご縁」の結果を組み立てる（照合済みの結果から、表示用のカードを作る） */
+export async function finalizeGiverResult(args: {
+  apiKey: string | undefined; isDev: boolean; params: GiverJobParams; ctx: GiverContext;
+  matches: JobMatch[]; aiCallFailed: boolean;
+}): Promise<EnishiSearchResult> {
+  const { isDev, params, ctx, matches, aiCallFailed } = args;
+  const apiKey = args.apiKey ?? "";
+  const { maxHop, count } = params;
+  const introducedKeys = new Set(ctx.introduced.map((r) => `${r.myContactId}|${r.candidateId}`));
+  const candidateMap = new Map([...ctx.candidatesByMember.values()].flat().map((c) => [c.candidateId, c]));
+  const myContactMap = new Map(ctx.contacts.map((c) => [c.id, c]));
+  const cards: EnishiResultCard[] = [];
+  const directChecks: DirectCheckItem[] = [];
+  for (const m of matches) {
+    const cand = candidateMap.get(m.candidateId);
+    const myContact = myContactMap.get(m.matchedTargetId);
+    if (!cand || !myContact || !hopsUpTo(maxHop).includes(m.hop)) continue;
+    // 上の依頼でAIに除外を伝えてあるが、従わない場合の保険として、ここでも除外する
+    if (introducedKeys.has(`${myContact.id}|${cand.candidateId}`)) continue;
+    // hop/typeはAIの自己申告ではなく、実際にマッチした候補の種別（cand.kind）から導出する。
+    // direct（1次）はegg、2hop/3hopはgooseに対応するはずで、一致しない場合はAIの判定が内部矛盾しているため破棄する
+    const type = cand.kind;
+    if ((m.hop === "direct") !== (type === "egg")) continue;
+    if (type === "egg") {
+      directChecks.push({
+        key: String(cards.length),
+        personDescription: [myContact.name, myContact.company, myContact.specialty, myContact.businessSummary].filter(Boolean).join(" / "),
+        eggDescription: cand.description,
+      });
+    }
+    const path = m.hop === "direct"
+      ? [`あなたの人脈：${myContact.name}`, `${cand.memberName}さんの金の卵`]
+      : m.hop === "2hop"
+        ? [`あなたの人脈：${myContact.name}`, `${cand.memberName}さんの金のガチョウ`, `${cand.memberName}さんの金の卵`]
+        : [`あなたの人脈：${myContact.name}`, "ガチョウを紹介できそうな人", `${cand.memberName}さんの金のガチョウ`, `${cand.memberName}さんの金の卵`];
+    cards.push({
+      hop: m.hop, type,
+      matchedTargetLabel: `${cand.memberName}さんの${cand.kind === "egg" ? "金の卵" : "金のガチョウ"}`,
+      counterpart: { memberId: cand.memberId, name: cand.memberName, emoji: cand.memberEmoji, bgColor: cand.memberBgColor },
+      path, contactPathIndex: 0, dealDescription: m.dealDescription, why: m.why,
+      privacyNote: null, // 貢献のご縁で使うのは自分自身の人脈なので実名で問題ない
+      linkedMemberId: cand.memberId,
+      actionLabel: `${myContact.name}さんを${cand.memberName}さんに紹介する`,
+      candidateId: cand.candidateId,
+      myContactId: myContact.id,
+    });
+  }
+
+  const directSurvivors = isDev ? new Set(directChecks.map((d) => d.key)) : await verifyDirectMatches(apiKey, directChecks);
+  const rejectedIndices = new Set(directChecks.filter((d) => !directSurvivors.has(d.key)).map((d) => Number(d.key)));
+  const verifiedCards = cards.filter((_, idx) => !rejectedIndices.has(idx));
+  const sorted = HOP_ORDER.flatMap((h) => verifiedCards.filter((c) => c.hop === h)).slice(0, count);
+  return {
+    groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: sorted.filter((c) => c.hop === h) })),
+    truncated: ctx.truncated,
+    usedContactsBreakdown: ctx.truncated ? computeSpecialtyBreakdown(ctx.contacts) : undefined,
+    aiCallFailed,
+  };
 }

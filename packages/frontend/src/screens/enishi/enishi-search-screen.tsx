@@ -42,7 +42,6 @@ export type SearchResult = {
   coverage?: { totalCandidates: number; unmatchedCandidates: number; totalBatches: number; failedBatches: number; retriedOkBatches: number };
   memberCollab?: CollabIdeas | null; // 人脈検索：合致度の上位メンバーの力を合わせた協業イメージ
 };
-type SearchResponse = { data: SearchResult; historyId: string };
 
 // 「良いご縁だった」フラグの切替後、対象カードだけを差し替えた新しいSearchResultを作る
 export function updateCardGoodMatch(result: SearchResult, cardId: string, goodMatch: boolean): SearchResult {
@@ -190,22 +189,24 @@ export function PageSizeSelect({ value, onChange }: { value: number; onChange: (
  * 照合できなかった候補がある（AIの検索に時間がかかり、時間内に照合できなかった分がある）ときに、人数で伝える。
  * 不具合ではなく、AIの検索に時間がかかることによるもの。束の数など、内部の言葉は出さない。
  */
-export function CoverageNotice({ result }: { result: SearchResult }) {
+export function CoverageNotice({ result, mode }: { result: SearchResult; mode?: "for-me" | "giver" | "contact-search" }) {
   const c = result.coverage;
+  // 貢献のご縁は、さがす対象が「自分の人脈」。ほかは、さがされる側の「候補」
+  const who = mode === "giver" ? "あなたの人脈" : "候補";
   if (!c || c.totalCandidates === 0) return null;
   const matched = c.totalCandidates - c.unmatchedCandidates;
   if (c.unmatchedCandidates === 0) {
     return (
       <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
-        ✅ 候補{c.totalCandidates}人を、すべて照合しました。
+        ✅ {who}{c.totalCandidates}人を、すべて照合しました。
       </p>
     );
   }
   return (
     <div className="rounded-2xl p-3 mb-3 text-xs" role="status" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
-      <p className="font-medium">ℹ️ 候補{c.totalCandidates}人のうち、{c.unmatchedCandidates}人分は、時間内に照合できませんでした</p>
+      <p className="font-medium">ℹ️ {who}{c.totalCandidates}人のうち、{c.unmatchedCandidates}人分は、時間内に照合できませんでした</p>
       <p className="mt-1">
-        AIによる検索は、候補が多いと時間がかかることがあります。今回は、{c.unmatchedCandidates}人分の照合が間に合いませんでした（不具合ではありません）。
+        AIによる検索は、{who}が多いと時間がかかることがあります。今回は、{c.unmatchedCandidates}人分の照合が間に合いませんでした（不具合ではありません）。
         照合できたのは{matched}人分です。間に合わなかった分の中に、さがしている人がいるかもしれません。時間をおいて、もう一度さがすと、見つかることがあります。
       </p>
     </div>
@@ -311,7 +312,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, readOnly, onTo
     return (
       <div className="mt-4">
         <UsedContactsBreakdownNotice result={result} />
-        <CoverageNotice result={result} />
+        <CoverageNotice result={result} mode={mode} />
         <div className="card-paper rounded-2xl p-6 text-center">
           {result.aiCallFailed ? (
             <p className="text-sm" style={{ color: "var(--color-brand)" }}>
@@ -349,7 +350,7 @@ export function ResultGroups({ result, historyId, mode, pageSize, readOnly, onTo
   return (
     <div className="mt-5">
       <UsedContactsBreakdownNotice result={result} />
-      <CoverageNotice result={result} />
+      <CoverageNotice result={result} mode={mode} />
       {mode === "contact-search" && result.memberCollab && <MemberCollabPanel collab={result.memberCollab} />}
       {!readOnly && (mode === "for-me" || mode === "contact-search") && (
         <p className="text-xs mb-3 px-1" style={{ color: "var(--color-ink-500)" }}>
@@ -1047,8 +1048,9 @@ function ForMeSearchForm({ eggs, geese, selected, setSelected, maxHop, setMaxHop
 // ---- 貢献のご縁 ----
 
 const MAX_TARGET_MEMBERS = 5;
-// バックエンド（enishi-search.ts の MAX_MY_CONTACTS）と合わせる。超えると専門分野ごとに公平に抜粋される
-const MAX_MY_CONTACTS = 150;
+// バックエンド（enishi-search.ts の GIVER_MAX_CONTACTS）と合わせる。人脈が多くても、ふつうは全員を小分けにして照合する。
+// この件数を超えるほど多いときだけ、費用の安全弁として、専門分野ごとに公平に抜粋される
+const MAX_MY_CONTACTS = 1000;
 
 type Contributor = { id: string; name: string; emoji: string; bgColor: string; eggCount: number; gooseCount: number };
 
@@ -1090,7 +1092,7 @@ function GiverPanel() {
   const [error, setError] = useState<string | null>(null);
 
   // 現在の絞り込み条件（専門分野・関係性・自由記述）に一致する人脈数をその場で計算する
-  // （バックエンドの絞り込みロジックと同じ条件。150件を超えると自動的に抜粋されることを事前に知らせるため）
+  // （バックエンドの絞り込みロジックと同じ条件。対象の人数を、始める前に知らせるため）
   const matchingContactCount = useMemo(() => {
     let filtered = myContacts;
     if (specialties.size > 0) filtered = filtered.filter((c) => c.specialty && [...specialties].some((s) => c.specialty!.includes(s)));
@@ -1100,28 +1102,18 @@ function GiverPanel() {
     return filtered.length;
   }, [myContacts, specialties, relationships, freeText]);
 
-  const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
+  const queryClient = useQueryClient();
 
+  // 検索は裏で実行する。自分の人脈が多くても、すべてを小分けにして照合する。
+  // 始めたらすぐに戻り、進み具合は画面上部の「検索中」に出る。終わったら通知とメールが届く（結果は検索履歴にも残る）
   const search = useMutation({
-    mutationFn: () => api.post<SearchResponse>("/enishi/search/giver", {
+    mutationFn: () => api.post<StartSearchResponse>("/enishi/search/giver", {
       targetMemberIds: [...targetIds],
       specialties: [...specialties], relationships: [...relationships], freeText, maxHop,
     }),
-    onSuccess: setSearchResponse,
-    onError: (e) => setError(e instanceof ApiError ? e.message : "検索に失敗しました"),
+    onSuccess: () => { setError(null); queryClient.invalidateQueries({ queryKey: SEARCH_JOBS_KEY }); },
+    onError: (e) => setError(e instanceof ApiError ? e.message : "検索を始められませんでした"),
   });
-
-  function toggleGoodMatch(cardId: string, goodMatch: boolean) {
-    setSearchResponse((prev) => prev && { ...prev, data: updateCardGoodMatch(prev.data, cardId, goodMatch) });
-  }
-
-  function removeIntroduced(myContactId: string, candidateId: string) {
-    setSearchResponse((prev) => prev && { ...prev, data: removeIntroducedCandidate(prev.data, myContactId, candidateId) });
-  }
-
-  function handleCardsRemoved(cardIds: string[]) {
-    setSearchResponse((prev) => prev && { ...prev, data: removeCards(prev.data, cardIds) });
-  }
 
   const toggle = (set: Set<string>, setFn: (s: Set<string>) => void, v: string) => {
     const next = new Set(set);
@@ -1222,9 +1214,9 @@ function GiverPanel() {
 
           <p className="text-xs mb-4" style={{ color: matchingContactCount > MAX_MY_CONTACTS ? "var(--color-brand)" : "var(--color-ink-500)" }}>
             この条件で対象になる人脈：{matchingContactCount}件
-            {matchingContactCount > MAX_MY_CONTACTS && (
-              <span>（{MAX_MY_CONTACTS}件を超えているため、専門分野ごとに公平になるよう自動的に一部が抜粋されて検索されます）</span>
-            )}
+            {matchingContactCount > MAX_MY_CONTACTS
+              ? <span>（{MAX_MY_CONTACTS}件を超えているため、専門分野ごとに公平になるよう一部が抜粋されて検索されます）</span>
+              : matchingContactCount > 0 && <span>（すべてを対象に、裏で順に検索します。人数が多いと、時間がかかります）</span>}
           </p>
 
           <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>③ 貢献の届け方（到達方法）</h2>
@@ -1245,11 +1237,6 @@ function GiverPanel() {
         </div>
       )}
 
-      {searchResponse && (
-        <ResultGroups result={searchResponse.data} historyId={searchResponse.historyId} mode="giver" pageSize={pageSize}
-          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={() => {}} onRemoveHidden={() => {}} onRemoveIntroduced={removeIntroduced}
-          onCardsRemoved={handleCardsRemoved} />
-      )}
     </div>
   );
 }
@@ -1512,7 +1499,7 @@ function ContactSpecialtySearchPanel() {
   const [memberIds, setMemberIds] = useState<Set<string>>(new Set());
   const [pageSize, setPageSize] = useState(10);
   const [error, setError] = useState<string | null>(null);
-  const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: ownersData } = useQuery({
     queryKey: ["enishi", "contact-owners"],
@@ -1521,27 +1508,15 @@ function ContactSpecialtySearchPanel() {
   });
   const owners = ownersData?.data ?? [];
 
+  // 検索は裏で実行する。始めたらすぐに戻り、進み具合は画面上部の「検索中」に出る。終わったら通知とメールが届く（結果は検索履歴にも残る）
   const search = useMutation({
-    mutationFn: () => api.post<SearchResponse>("/enishi/search/contacts", {
+    mutationFn: () => api.post<StartSearchResponse>("/enishi/search/contacts", {
       specialties: [...specialties], freeText, scope,
       memberIds: scope === "specific_members" ? [...memberIds] : [],
     }),
-    onSuccess: setSearchResponse,
-    onError: (e) => setError(e instanceof ApiError ? e.message : "検索に失敗しました"),
+    onSuccess: () => { setError(null); queryClient.invalidateQueries({ queryKey: SEARCH_JOBS_KEY }); },
+    onError: (e) => setError(e instanceof ApiError ? e.message : "検索を始められませんでした"),
   });
-
-  function toggleGoodMatch(cardId: string, goodMatch: boolean) {
-    setSearchResponse((prev) => prev && { ...prev, data: updateCardGoodMatch(prev.data, cardId, goodMatch) });
-  }
-  function removeTransacted(candidateId: string) {
-    setSearchResponse((prev) => prev && { ...prev, data: removeTransactedCandidate(prev.data, candidateId) });
-  }
-  function removeHidden(candidateId: string) {
-    setSearchResponse((prev) => prev && { ...prev, data: removeHiddenCandidate(prev.data, candidateId) });
-  }
-  function handleCardsRemoved(cardIds: string[]) {
-    setSearchResponse((prev) => prev && { ...prev, data: removeCards(prev.data, cardIds) });
-  }
 
   const toggleSpecialty = (v: string) => {
     setSpecialties((prev) => {
@@ -1663,11 +1638,6 @@ function ContactSpecialtySearchPanel() {
         </button>
       </div>
 
-      {searchResponse && (
-        <ResultGroups result={searchResponse.data} historyId={searchResponse.historyId} mode="contact-search" pageSize={pageSize}
-          onToggleGoodMatch={toggleGoodMatch} onRemoveTransacted={removeTransacted} onRemoveHidden={removeHidden} onRemoveIntroduced={() => {}}
-          onCardsRemoved={handleCardsRemoved} />
-      )}
     </div>
   );
 }

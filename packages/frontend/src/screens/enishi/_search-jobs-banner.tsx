@@ -1,6 +1,6 @@
 // =============================================================
 // ご縁さがし — 裏で実行している検索の進み具合と、終わった検索（結果へのリンク）
-// 「私のご縁」「人脈をさがす」は、始めたらすぐに画面を離れてよい。終わったら、通知・プッシュ通知・メールで知らせる。
+// 「私のご縁」「貢献のご縁」「人脈をさがす」は、始めたらすぐに画面を離れてよい。終わったら、通知・プッシュ通知・メールで知らせる。
 // =============================================================
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -12,7 +12,7 @@ export const SEARCH_JOBS_KEY = ["enishi", "search-jobs"] as const;
 export type StartSearchResponse = { data: { jobId: string } };
 
 type SearchJob = {
-  id: string; mode: "for-me" | "contact-search"; label: string;
+  id: string; mode: "for-me" | "giver" | "contact-search"; label: string;
   status: "running" | "done" | "error"; stage: string; totalBatches: number; doneBatches: number;
   historyId: string | null; resultCount: number | null; errorMessage: string | null; createdAt: number;
 };

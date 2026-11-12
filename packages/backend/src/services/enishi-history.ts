@@ -82,3 +82,9 @@ export async function saveSearchHistory(
   return { historyId, result: augmented };
 }
 
+
+export function buildGiverTitle(targetMemberNames: string[], createdAt: number, resultCount: number): string {
+  const shown = targetMemberNames.slice(0, 3).join("・");
+  const suffix = targetMemberNames.length > 3 ? ` ほか${targetMemberNames.length - 3}名` : "";
+  return `${formatHistoryDate(createdAt)} 貢献のご縁：${shown || "なかま"}${suffix}へ（${resultCount}件ヒット）`;
+}

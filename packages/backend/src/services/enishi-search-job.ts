@@ -19,10 +19,11 @@ import { waitUpTo } from "./sweep-util.ts";
 import {
   JOB_BATCH_SIZE, selectJobCandidates, matchJobBatch, interleaveMatches, searchMemberHits, buildMemberCollab,
   finalizeForMeResult, finalizeContactSearchResult,
+  loadGiverContext, buildGiverBatches, matchGiverBatch, finalizeGiverResult,
   type JobParams, type JobCandidate, type JobMatch, type MemberHit, type MatchCoverage,
 } from "./enishi-search.ts";
 import type { CollabIdeas } from "./member-collab.ts";
-import { augmentResultWithCards, buildForMeTitle, buildContactSearchTitle, countResults, saveSearchHistory, type HistoryResult } from "./enishi-history.ts";
+import { augmentResultWithCards, buildForMeTitle, buildContactSearchTitle, buildGiverTitle, countResults, saveSearchHistory, type HistoryResult } from "./enishi-history.ts";
 import type { Env } from "../types.ts";
 
 type Db = ReturnType<typeof createDb>;
@@ -57,6 +58,10 @@ export function jobLabel(params: JobParams): string {
     const short = first.length > 18 ? `${first.slice(0, 18)}…` : first;
     return `私のご縁：${short}${params.targets.length > 1 ? ` ほか${params.targets.length - 1}件` : ""}`;
   }
+  if (params.mode === "giver") {
+    const shown = params.targetMemberNames.slice(0, 3).join("・") || "なかま";
+    return `貢献のご縁：${shown}${params.targetMemberNames.length > 3 ? ` ほか${params.targetMemberNames.length - 3}名` : ""}へ`;
+  }
   const short = params.freeText.length > 20 ? `${params.freeText.slice(0, 20)}…` : params.freeText;
   return `人脈検索：${short}`;
 }
@@ -85,10 +90,19 @@ function needsMembers(params: JobParams): boolean { return params.mode === "cont
 // ---- 各ステップ ----
 
 async function stagePrepare(db: Db, job: Job, params: JobParams): Promise<void> {
-  const { candidates, truncated } = await selectJobCandidates(db, job.memberId, params);
-  const batches: string[][] = [];
-  for (let i = 0; i < candidates.length; i += JOB_BATCH_SIZE) {
-    batches.push(candidates.slice(i, i + JOB_BATCH_SIZE).map((c) => c.candidateId));
+  let batches: string[][] = [];
+  let truncated: boolean;
+  if (params.mode === "giver") {
+    // 貢献のご縁：自分の人脈を、貢献先ごとに小さな束に分ける（人脈の一部を抜粋することはしない）
+    const ctx = await loadGiverContext(db, job.memberId, params);
+    batches = buildGiverBatches(params, ctx);
+    truncated = ctx.truncated;
+  } else {
+    const found = await selectJobCandidates(db, job.memberId, params);
+    for (let i = 0; i < found.candidates.length; i += JOB_BATCH_SIZE) {
+      batches.push(found.candidates.slice(i, i + JOB_BATCH_SIZE).map((c) => c.candidateId));
+    }
+    truncated = found.truncated;
   }
   await db.delete(schema.enishiSearchJobBatches).where(eq(schema.enishiSearchJobBatches.jobId, job.id)).run();
   const INSERT_CHUNK = 10; // D1のバインド変数の上限（1行6個）に収める
@@ -172,7 +186,8 @@ async function stageMatch(db: Db, env: Env, job: Job, params: JobParams): Promis
     .orderBy(asc(schema.enishiSearchJobBatches.attempts), asc(schema.enishiSearchJobBatches.idx)).limit(MATCH_PARALLEL).all();
 
   if (todo.length > 0) {
-    const { candidates } = await selectJobCandidates(db, job.memberId, params);
+    const giverCtx = params.mode === "giver" ? await loadGiverContext(db, job.memberId, params) : null;
+    const candidates = params.mode === "giver" ? [] : (await selectJobCandidates(db, job.memberId, params)).candidates;
     const byId = new Map<string, JobCandidate>(candidates.map((c) => [c.candidateId, c]));
     // 取りかかる前に、やり直しの回数を数えておく（途中で打ち切られても、回数は残る）
     await Promise.all(todo.map((b) => db.update(schema.enishiSearchJobBatches)
@@ -181,7 +196,9 @@ async function stageMatch(db: Db, env: Env, job: Job, params: JobParams): Promis
     await Promise.all(todo.map(async (b) => {
       const ids = JSON.parse(b.candidateIdsJson) as string[];
       const batch = ids.map((id) => byId.get(id)).filter((c): c is JobCandidate => !!c);
-      const outcome = batch.length === 0 ? { ok: true as const, matches: [] } : await matchJobBatch(env.ANTHROPIC_API_KEY, isDev, params, batch);
+      const outcome = params.mode === "giver" && giverCtx
+        ? await matchGiverBatch(env.ANTHROPIC_API_KEY, isDev, params, giverCtx, ids)
+        : params.mode === "giver" || batch.length === 0 ? { ok: true as const, matches: [] } : await matchJobBatch(env.ANTHROPIC_API_KEY, isDev, params, batch);
       const key = and(eq(schema.enishiSearchJobBatches.jobId, b.jobId), eq(schema.enishiSearchJobBatches.idx, b.idx));
       if (outcome.ok) {
         await db.update(schema.enishiSearchJobBatches).set({ status: "done", matchesJson: JSON.stringify(outcome.matches), lastError: null }).where(key).run();
@@ -245,12 +262,21 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   const failedBatches = summary.failed;
   const countIds = (b: { candidateIdsJson: string }) => (JSON.parse(b.candidateIdsJson) as string[]).length;
   const countable = batches.filter((b) => b.status !== "split");
-  const coverage: MatchCoverage = {
-    totalCandidates: countable.reduce((n, b) => n + countIds(b), 0),
-    unmatchedCandidates: countable.filter((b) => b.status === "failed").reduce((n, b) => n + countIds(b), 0),
-    totalBatches: summary.total, failedBatches,
-    retriedOkBatches: summary.retriedOk,
-  };
+  // 貢献のご縁は、「自分の人脈」の人数で数える（同じ人脈が、貢献先ごとの束に入っているので、重ねて数えない）
+  const contactIdsOf = (b: { candidateIdsJson: string }) => (JSON.parse(b.candidateIdsJson) as string[]).map((id) => id.slice(id.indexOf("|") + 1));
+  const coverage: MatchCoverage = params.mode === "giver"
+    ? {
+        totalCandidates: new Set(countable.flatMap(contactIdsOf)).size,
+        unmatchedCandidates: new Set(countable.filter((b) => b.status === "failed").flatMap(contactIdsOf)).size,
+        totalBatches: summary.total, failedBatches,
+        retriedOkBatches: summary.retriedOk,
+      }
+    : {
+        totalCandidates: countable.reduce((n, b) => n + countIds(b), 0),
+        unmatchedCandidates: countable.filter((b) => b.status === "failed").reduce((n, b) => n + countIds(b), 0),
+        totalBatches: summary.total, failedBatches,
+        retriedOkBatches: summary.retriedOk,
+      };
   if (summary.total > 0 && failedBatches === summary.total) {
     await failJob(db, env, job, params, "AIの検索に時間がかかり、今回は結果を出せませんでした。時間をおいて、もう一度お試しください。");
     return;
@@ -258,7 +284,6 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   const matches: JobMatch[] = interleaveMatches(
     batches.filter((b) => b.status === "done").map((b) => JSON.parse(b.matchesJson ?? "[]") as JobMatch[]),
   );
-  const { candidates, truncated } = await selectJobCandidates(db, job.memberId, params);
   const aiCallFailed = failedBatches > 0;
   // 最後の1回は、二次チェック（AI）を省いて確実に仕上げる
   const skipVerify = isDev || job.stageAttempts >= MAX_ATTEMPTS;
@@ -268,11 +293,21 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   let result;
   let title: string;
   let historyParams: unknown;
-  if (params.mode === "for-me") {
+  if (params.mode === "giver") {
+    const ctx = await loadGiverContext(db, job.memberId, params);
+    result = await finalizeGiverResult({ apiKey, isDev: skipVerify, params, ctx, matches, aiCallFailed });
+    title = buildGiverTitle(params.targetMemberNames, created, countResults(result));
+    historyParams = {
+      targetMemberIds: params.targetMemberIds, specialties: params.specialties, relationships: params.relationships,
+      freeText: params.freeText, maxHop: params.maxHop, count: params.count,
+    };
+  } else if (params.mode === "for-me") {
+    const { candidates, truncated } = await selectJobCandidates(db, job.memberId, params);
     result = await finalizeForMeResult({ apiKey, isDev: skipVerify, params, candidates, matches, aiCallFailed, truncated });
     title = buildForMeTitle(params.targets, created, countResults(result));
     historyParams = { targetIds: params.targetIds, maxHop: params.maxHop, count: params.count, includeOwnContacts: params.includeOwnContacts };
   } else {
+    const { candidates, truncated } = await selectJobCandidates(db, job.memberId, params);
     result = await finalizeContactSearchResult({
       db, params, candidates, matches, aiCallFailed, truncated,
       memberHits: JSON.parse(job.membersJson ?? "[]") as MemberHit[],
@@ -335,8 +370,9 @@ async function completeJob(db: Db, env: Env, job: Job, params: JobParams, histor
     .where(eq(schema.enishiSearchHistory.id, historyId)).get().catch(() => undefined);
   let coverage: MatchCoverage | undefined;
   try { coverage = row ? (JSON.parse(row.resultJson) as { coverage?: MatchCoverage }).coverage : undefined; } catch { coverage = undefined; }
+  const subject = params.mode === "giver" ? "あなたの人脈" : "候補";
   const note = coverage && coverage.unmatchedCandidates > 0
-    ? `\n（候補${coverage.totalCandidates}人のうち、${coverage.unmatchedCandidates}人分は、AIの検索に時間がかかり、時間内に照合できませんでした。時間をおいて、もう一度さがすと、見つかることがあります）`
+    ? `\n（${subject}${coverage.totalCandidates}人のうち、${coverage.unmatchedCandidates}人分は、AIの検索に時間がかかり、時間内に照合できませんでした。時間をおいて、もう一度さがすと、見つかることがあります）`
     : job.failedBatches > 0 || job.truncated ? "\n（AIの検索に時間がかかり、一部の人脈は照合できていない可能性があります。気になるときは、時間をおいて、もう一度さがしてみてください）" : "";
   await notifyMember(db, env, job, {
     subject: "🔎 検索が終わりました",
@@ -394,7 +430,7 @@ async function alertAdminsIfManyFailures(db: Db, env: Env, job: Job, params: Job
   ]);
   const vars = {
     appTitle: design?.appTitle ?? "白樺クエスト",
-    searchMode: params.mode === "for-me" ? "私のご縁" : "人脈をさがす",
+    searchMode: params.mode === "for-me" ? "私のご縁" : params.mode === "giver" ? "貢献のご縁" : "人脈をさがす",
     memberName: member?.name ?? "（不明）",
     failedBatches: String(summary.failed), totalBatches: String(summary.total),
     outcome, causes: summarizeCauses(summary.failedErrors),
@@ -428,6 +464,11 @@ export async function buildPartialJobView(db: Db, job: Job): Promise<PartialJobV
   if (batches.length === 0 && !job.membersJson) return { ...base, result: null };
 
   const matches: JobMatch[] = interleaveMatches(batches.map((b) => JSON.parse(b.matchesJson ?? "[]") as JobMatch[]));
+  if (params.mode === "giver") {
+    const ctx = await loadGiverContext(db, job.memberId, params);
+    const giverResult = await finalizeGiverResult({ apiKey: undefined, isDev: true, params, ctx, matches, aiCallFailed: false });
+    return { ...base, result: augmentResultWithCards(giverResult, new Set(), new Set()) };
+  }
   const { candidates, truncated } = await selectJobCandidates(db, job.memberId, params);
   const result = params.mode === "for-me"
     ? await finalizeForMeResult({ apiKey: undefined, isDev: true, params, candidates, matches, aiCallFailed: false, truncated })

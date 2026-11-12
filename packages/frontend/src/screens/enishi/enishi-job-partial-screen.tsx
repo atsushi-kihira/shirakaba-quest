@@ -13,7 +13,7 @@ import { ResultGroups, PageSizeSelect } from "./enishi-search-screen";
 import type { SearchResult } from "./enishi-search-screen";
 
 type PartialView =
-  | { status: "running"; mode: "for-me" | "contact-search"; label: string; stage: string; totalBatches: number; doneBatches: number; failedBatches: number; result: SearchResult | null }
+  | { status: "running"; mode: "for-me" | "giver" | "contact-search"; label: string; stage: string; totalBatches: number; doneBatches: number; failedBatches: number; result: SearchResult | null }
   | { status: "done"; historyId: string | null }
   | { status: "error"; message: string };
 
