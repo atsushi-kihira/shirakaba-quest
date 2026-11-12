@@ -3,8 +3,22 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
+// 公開のたびに変わる版の目印。画面に埋め込み、/version.json にも書き出す。
+// 画面を開いたままの人に「新しい版があります」と知らせるために使う（src/components/update-notice.tsx）
+const BUILD_ID = Date.now().toString(36);
+
+export default defineConfig(({ command }) => ({
+  define: { __BUILD_ID__: JSON.stringify(command === "build" ? BUILD_ID : "dev") },
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "emit-version-json",
+      generateBundle() {
+        this.emitFile({ type: "asset", fileName: "version.json", source: JSON.stringify({ id: BUILD_ID }) });
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -22,4 +36,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

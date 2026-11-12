@@ -56,6 +56,8 @@ import { AdminCollabScreen } from "@/screens/admin/admin-collab-screen";
 import { AdminCardSettingsScreen } from "@/screens/admin/admin-card-settings-screen";
 import { AdminUsageReportScreen } from "@/screens/admin/admin-usage-report-screen";
 import { DialogEscapeSupport } from "@/components/dialog-escape-support";
+import { AppErrorBoundary } from "@/components/error-boundary";
+import { UpdateNotice } from "@/components/update-notice";
 import { CardOrderScreen } from "@/screens/card-order/card-order-screen";
 import { SchedulerDashboardScreen } from "@/screens/scheduler/scheduler-dashboard-screen";
 import { SchedulerIntegrationsScreen } from "@/screens/scheduler/scheduler-integrations-screen";
@@ -92,7 +94,9 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <DialogEscapeSupport />
+        <UpdateNotice />
         <AppWithMe>
+          <AppErrorBoundary>
           <Routes>
             {/* サービスサイト（認証不要） */}
             <Route path="/" element={<LandingScreen />} />
@@ -203,6 +207,7 @@ export default function App() {
 
             <Route path="*" element={<Navigate to="/home" replace />} />
           </Routes>
+          </AppErrorBoundary>
         </AppWithMe>
       </BrowserRouter>
     </QueryClientProvider>
