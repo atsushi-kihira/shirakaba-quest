@@ -273,6 +273,40 @@ export function ContactCardPreview({ contactId }: { contactId: string }) {
   );
 }
 
+/** メンバーの詳しい情報（職種・事業内容・USP）。全員に公開されている項目だけ。メンバー一覧と同じ取得なので、一度読めば、ほかの結果でも使い回される */
+function MemberInfoPreview({ memberId }: { memberId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["members"],
+    queryFn: () => api.get<{ data: PublicMember[] }>("/members"),
+    staleTime: 5 * 60_000,
+  });
+  const member = data?.data.find((m) => m.id === memberId);
+  const usps = (member?.skills ?? []).map((sk) => sk.name).filter(Boolean);
+
+  return (
+    <div className="mb-2.5 p-3 rounded-xl text-xs" style={{ background: "white", border: "1px dashed var(--color-paper-300)" }}>
+      <p className="font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>🌳 メンバーの詳しい情報</p>
+      {isLoading ? (
+        <p style={{ color: "var(--color-ink-400)" }}>読み込み中…</p>
+      ) : member ? (
+        <div className="space-y-0.5 break-words" style={{ color: "var(--color-ink-700)" }}>
+          <p className="font-medium">{member.emoji} {member.name}さん</p>
+          {member.category && <p>職種：{member.category}</p>}
+          {usps.length > 0 && <p>USP：{usps.join("・")}</p>}
+          {member.businessDescription && (
+            <p className="mt-1.5 pt-1.5 whitespace-pre-wrap" style={{ borderTop: "1px solid var(--color-paper-200)" }}>事業内容：{member.businessDescription}</p>
+          )}
+          {!member.category && !member.businessDescription && usps.length === 0 && (
+            <p style={{ color: "var(--color-ink-400)" }}>まだ事業内容などが登録されていません</p>
+          )}
+        </div>
+      ) : (
+        <p style={{ color: "var(--color-ink-400)" }}>情報を取得できませんでした</p>
+      )}
+    </div>
+  );
+}
+
 export function ResultGroups({ result, historyId, mode, pageSize, readOnly, onToggleGoodMatch, onRemoveTransacted, onRemoveHidden, onRemoveIntroduced, onCardsRemoved }: {
   result: SearchResult; historyId: string; mode: "for-me" | "giver" | "contact-search"; pageSize: number;
   /** 閲覧専用（途中の結果）。「良い候補」「繋がりました」「削除」などの操作ボタンを出さない */
@@ -446,8 +480,15 @@ function ResultRow({ r, historyId, mode, readOnly, onToggleGoodMatch, onRemoveTr
   const { termEnishi } = useSettings();
   const resultLocation = useLocation();
   const [showContactCard, setShowContactCard] = useState(false);
+  const [showMemberCard, setShowMemberCard] = useState(false);
   const [showRemoveModal, setShowRemoveModal] = useState(false);
   const contactIdForCard = mode === "giver" ? r.myContactId : r.candidateId;
+  // メンバー（なかま）の名前は、マウスを重ねる（スマホはタップ）と、そのメンバーの詳しい情報（職種・事業内容）を出す。自分の人脈（メンバーではない）のときは出さない
+  const memberIdForCard = r.counterpart.memberId || null;
+  const memberHoverProps = memberIdForCard ? {
+    onClick: () => setShowMemberCard((v) => !v),
+    onMouseEnter: () => setShowMemberCard(true),
+  } : null;
 
   const toggleGoodMatch = useMutation({
     mutationFn: (next: boolean) => api.patch(`/enishi/history/${historyId}/cards/${r.cardId}`, { goodMatch: next }),
@@ -486,7 +527,12 @@ function ResultRow({ r, historyId, mode, readOnly, onToggleGoodMatch, onRemoveTr
         <span className="w-8 h-8 rounded-full flex items-center justify-center text-base shrink-0" style={{ background: "var(--color-paper-200)" }}>
           {r.counterpart.emoji}
         </span>
-        <b className="text-sm" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>{r.counterpart.name}さん</b>
+        {memberHoverProps ? (
+          <button type="button" {...memberHoverProps} className="text-sm font-bold underline decoration-dotted underline-offset-2"
+            style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>{r.counterpart.name}さん</button>
+        ) : (
+          <b className="text-sm" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>{r.counterpart.name}さん</b>
+        )}
         {mode !== "contact-search" && (
           <>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded-md" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>{HOP_LABEL[r.hop]}</span>
@@ -526,6 +572,8 @@ function ResultRow({ r, historyId, mode, readOnly, onToggleGoodMatch, onRemoveTr
       <div className="rounded-xl px-3 py-2 text-xs mb-1.5 flex flex-wrap items-center gap-1.5" style={{ background: "var(--color-paper-100)" }}>
         {r.path.map((node, i) => {
           const isContactNode = i === r.contactPathIndex && !!contactIdForCard;
+          // 道筋の中の、メンバーの名前を含む部分（「○○さんの金の卵」など）も、同じく、メンバーの情報を出す
+          const isMemberNode = !isContactNode && !!memberHoverProps && i !== r.contactPathIndex && node.includes(`${r.counterpart.name}さん`);
           return (
             <span key={i} className="flex items-center gap-1.5">
               {i > 0 && <span style={{ color: "var(--color-accent)" }}>→</span>}
@@ -533,6 +581,14 @@ function ResultRow({ r, historyId, mode, readOnly, onToggleGoodMatch, onRemoveTr
                 <button type="button"
                   onClick={() => setShowContactCard((v) => !v)}
                   onMouseEnter={() => setShowContactCard(true)}
+                  className="px-2 py-0.5 rounded-md underline decoration-dotted underline-offset-2"
+                  style={{
+                    background: i === r.path.length - 1 ? "var(--color-paper-200)" : "white",
+                    border: "1px solid var(--color-paper-300)",
+                    color: i === r.path.length - 1 ? "var(--color-accent)" : "var(--color-ink-700)",
+                  }}>{node}</button>
+              ) : isMemberNode ? (
+                <button type="button" {...memberHoverProps}
                   className="px-2 py-0.5 rounded-md underline decoration-dotted underline-offset-2"
                   style={{
                     background: i === r.path.length - 1 ? "var(--color-paper-200)" : "white",
@@ -551,6 +607,7 @@ function ResultRow({ r, historyId, mode, readOnly, onToggleGoodMatch, onRemoveTr
         })}
       </div>
       {showContactCard && contactIdForCard && <ContactCardPreview contactId={contactIdForCard} />}
+      {showMemberCard && memberIdForCard && <MemberInfoPreview memberId={memberIdForCard} />}
 
       <p className="text-xs" style={{ color: "var(--color-ink-800)" }}>{r.dealDescription}</p>
       <p className="text-[11px] mt-2 rounded-lg px-2.5 py-1.5" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-600)" }}>
