@@ -428,7 +428,17 @@ async function collectForMeCandidates(db: Db, meId: string): Promise<ForMeCandid
 // 人脈検索「すべて」で、メンバー本人として結果に並べる最大件数（外部人脈の結果も十分に表示されるよう、上限を設ける）
 const MEMBER_RESULT_LIMIT = 10;
 
-type GiverCandidate = { candidateId: string; kind: "egg" | "goose"; memberId: string; memberName: string; memberEmoji: string; memberBgColor: string; description: string; extra: string | null };
+type GiverCandidate = {
+  candidateId: string; kind: "egg" | "goose"; memberId: string; memberName: string; memberEmoji: string; memberBgColor: string; description: string; extra: string | null;
+  /** そのメンバーの職種・事業内容（全員に公開されている項目）。逆向きの検索で、メンバーの立場から役立つかを判断するために使う */
+  memberBusiness: string;
+};
+
+/** メンバーの職種・事業内容（全員に公開されている項目）を、1行にまとめる */
+function describeMemberBusiness(m: { category: string; businessDescription: string } | undefined): string {
+  if (!m) return "";
+  return [m.category && `職種: ${m.category}`, m.businessDescription && `事業内容: ${m.businessDescription.replace(/\s+/g, " ").slice(0, 200)}`].filter(Boolean).join(" ／ ");
+}
 
 async function collectGiverCandidates(db: Db, meId: string, targetMemberIds: string[] | null): Promise<GiverCandidate[]> {
   // 通常は、指定された貢献先メンバー（最大5名）の卵/ガチョウのみ。targetMemberIds が null のときは、自分以外の全メンバーのもの（逆向きの検索）
@@ -455,7 +465,7 @@ async function collectGiverCandidates(db: Db, meId: string, targetMemberIds: str
     return {
       candidateId: e.id, kind: "egg", memberId: e.memberId,
       memberName: m?.name ?? "不明なメンバー", memberEmoji: m?.emoji ?? "❓", memberBgColor: m?.bgColor ?? "bg-stone-100",
-      description: e.description, extra: e.issue,
+      description: e.description, extra: e.issue, memberBusiness: describeMemberBusiness(m),
     };
   });
   const gooseCandidates: GiverCandidate[] = geese.filter((g) => isTarget(g.memberId)).map((g) => {
@@ -463,7 +473,7 @@ async function collectGiverCandidates(db: Db, meId: string, targetMemberIds: str
     return {
       candidateId: g.id, kind: "goose", memberId: g.memberId,
       memberName: m?.name ?? "不明なメンバー", memberEmoji: m?.emoji ?? "❓", memberBgColor: m?.bgColor ?? "bg-stone-100",
-      description: g.description, extra: g.contactHypothesis,
+      description: g.description, extra: g.contactHypothesis, memberBusiness: describeMemberBusiness(m),
     };
   });
   return [...eggCandidates, ...gooseCandidates];
@@ -483,10 +493,12 @@ function formatForMeCandidates(candidates: ForMeCandidate[]): string {
   }).join("\n");
 }
 
-function formatGiverCandidates(candidates: GiverCandidate[]): string {
+function formatGiverCandidates(candidates: GiverCandidate[], withBusiness = false): string {
   return candidates.map((c) => {
     const label = c.kind === "egg" ? "金の卵" : "金のガチョウ";
-    const parts = [`id: ${c.candidateId}`, `種別: ${label}`, `登録メンバー: ${c.memberName}`, `説明: ${c.description}`];
+    const parts = [`id: ${c.candidateId}`, `種別: ${label}`, `登録メンバー: ${c.memberName}`];
+    if (withBusiness && c.memberBusiness) parts.push(`メンバーの${c.memberBusiness}`);
+    parts.push(`説明: ${c.description}`);
     if (c.extra) parts.push(`補足: ${c.extra}`);
     return `- ${parts.join(" / ")}`;
   }).join("\n");
@@ -917,6 +929,38 @@ function parseGiverBatchIds(ids: string[]): { memberId: string; contactIds: stri
   return { memberId, contactIds: ids.map((id) => id.slice(id.indexOf("|") + 1)) };
 }
 
+/**
+ * 逆向きの検索（選んだ外部人脈が、メンバーの誰の役に立ちそうか）の依頼文。
+ * 向きをはっきりさせる：「メンバーが外部人脈に何かを提供できるか」ではなく、「外部人脈が、メンバーのビジネスの役に立つか」を、メンバーの立場から見る。
+ */
+function buildReverseGiverInstructions(count: number, maxHop: Hop): string {
+  return `あなたはBNIチャプターの紹介マッチングを支援するAIです。
+これは「選んだ外部人脈（さがす対象）が、なかま（メンバー）のビジネスの役に立つか」を、メンバーの立場から探すものです。
+各メンバーが登録した「金の卵」（そのメンバーが狙いたい案件・お客様像）と「金のガチョウ」（その卵を運んでくれそうな立場・紹介してくれそうな人）に、外部人脈が当てはまるかを照らし合わせ、有望な組み合わせを最大${count}件、JSON形式のみで出力してください。
+
+# 向きについて（最重要）
+- 考えるのは「外部人脈が、メンバーのビジネスにとって役に立つか」という向きだけです。
+- 「メンバーが外部人脈の課題を解決できる」「メンバーのサービスが外部人脈に役立つ」という向きで合致させてはいけません。それは今回の目的ではありません。
+- 外部人脈がメンバーの金の卵に当てはまるのは、メンバーにとって、その外部人脈が「お客様・案件の相手になり得る」ときだけです。
+
+# 到達方法（hop）の判定基準（すべて、メンバーの立場から見た役立ち方）
+- direct: 外部人脈「本人」が、そのメンバーの「金の卵」の説明に当てはまり、メンバーにとってお客様・案件の相手になり得る場合。外部人脈が、その卵と全く同じサービスを提供する側（メンバーの競合・同業の供給元）だと明確に判断できる場合は、direct にしないこと。
+- 2hop: 外部人脈が、そのメンバーの「金のガチョウ」の説明に当てはまり、メンバーの卵（お客様・案件）を運んでくれそうな場合。
+- 3hop: 外部人脈から直接ガチョウには見えないが、業種・立場から見て「メンバーの金のガチョウ像に当てはまる人を知っていそう」と推測できる場合。
+今回は「${HOP_LABEL[maxHop]}まで」が指定されているため、${hopsUpTo(maxHop).map((h) => HOP_LABEL[h]).join("・")} のいずれかに分類されるものだけを対象にしてください。
+
+# 出力ルール
+- candidateId は候補一覧に存在するものだけを、matchedTargetId は「さがす対象（外部人脈）」に存在する id だけを使うこと。存在しないIDや実名を作り出さないこと。
+- 渡された情報以外の個人情報（連絡先など）を推測・記載しないこと。
+- 役立ちそうな根拠が弱いものは、無理に出さないこと（${count}件に満たなくてよい）。
+- dealDescription（1〜2文、日本語、温かみのある丁寧な文体）: 「（メンバー名）さんにとって、この外部人脈と出会うと、どんな案件・お客様・紹介が期待できそうか」を、メンバーの立場で書く。
+- why（1文、日本語）: 「この外部人脈は、（メンバー名）さんの（金の卵／金のガチョウ）のどの点に当てはまり、メンバーのビジネスにどう役立つか」を、メンバーの立場で書く。
+- 数値スコアは一切出力しないこと。
+- 対象・候補が多い場合でも、1件ずつの検討過程やリストの読み上げを本文として書き出さないこと。内部で判断した上で、結論のJSONだけを出力すること。
+- 出力は次のJSON形式のみ。1文字目から必ず「{」で始めること（前置きの説明・検討過程・コードブロック記法は一切書かない）:
+{"results":[{"candidateId":"...","matchedTargetId":"...","hop":"direct|2hop|3hop","type":"egg|goose","dealDescription":"...","why":"..."}]}`;
+}
+
 /** 貢献のご縁の束を、1回だけAIに照合させる（失敗のときは ok:false。やり直しは呼び出し側が数える） */
 export async function matchGiverBatch(
   apiKey: string | undefined, isDev: boolean, params: GiverJobParams, ctx: GiverContext, ids: string[],
@@ -966,19 +1010,71 @@ export async function matchGiverBatch(
   const excludedPairsSection = relevantIntroduced.length > 0
     ? `\n\n# 除外リスト（既に紹介済みのため、以下の組み合わせは結果に含めないこと）\n${relevantIntroduced.map((r) => `- 人脈id: ${r.myContactId} / 候補id: ${r.candidateId}`).join("\n")}`
     : "";
-  const prompt = `${buildInstructions(params.count, params.maxHop, "giver")}
+  const reverse = isReverseGiver(params);
+  const prompt = `${reverse ? buildReverseGiverInstructions(params.count, params.maxHop) : buildInstructions(params.count, params.maxHop, "giver")}
 
-# さがす対象（あなたの人脈。絞り込み済み）
+# さがす対象（${reverse ? "あなたが選んだ外部人脈" : "あなたの人脈。絞り込み済み"}）
 ${contacts.map((c) => `- id: ${c.id} / 説明: ${[c.name, c.company, c.specialty, c.businessSummary].filter(Boolean).join(" / ")}`).join("\n")}
 
 # 候補一覧（なかまの金の卵・金のガチョウ）
-${formatGiverCandidates(cands)}${excludedPairsSection}${params.goodMatchContext ?? ""}`;
+${formatGiverCandidates(cands, reverse)}${excludedPairsSection}${params.goodMatchContext ?? ""}`;
   try {
     const parsed = parseLlmMatches(await callClaude(apiKey, prompt, { timeoutMs: JOB_CALL_TIMEOUT_MS }));
     return parsed.ok ? { ok: true, matches: parsed.matches } : { ok: false, error: "応答の形式が不正" };
   } catch (err) {
     console.error("[enishi-search] 貢献のご縁の束の照合に失敗", err);
     return { ok: false, error: describeBatchError(err) };
+  }
+}
+
+// 逆向きの検索の、仕上げの検証：「その外部人脈は、本当に、そのメンバーのビジネスの役に立つか」を、メンバーの立場から確かめる。
+// 照合の段階（束ごと）では、メンバーの卵・ガチョウに当てはまるかを広く拾うため、メンバーにとっての役立ち方が弱いもの、
+// 向きが逆のもの（メンバーが外部人脈の役に立つだけ）が混じることがある。ここで、上位の候補だけを、まとめて確かめ直す。
+type UsefulnessItem = { key: string; memberName: string; memberBusiness: string; targetLabel: string; targetDescription: string; contactDescription: string; hop: Hop };
+type UsefulnessVerdict = { useful: boolean; reason: string };
+
+/** 検証にかける候補の最大件数（1回のAI呼び出しに収める） */
+const USEFULNESS_VERIFY_MAX = 30;
+/** 検証の呼び出しを待つ時間（ミリ秒）。裏の処理の1回分に収まる長さ */
+const USEFULNESS_VERIFY_TIMEOUT_MS = 18_000;
+
+/** 失敗したとき（呼び出しの失敗・時間切れ・形式不正）は null（検証できなかった。呼び出し側は、照合の結果をそのまま使う） */
+async function verifyUsefulToMember(apiKey: string, items: UsefulnessItem[]): Promise<Map<string, UsefulnessVerdict> | null> {
+  if (items.length === 0) return new Map();
+  const prompt = `あなたはBNIチャプターの紹介を支援するAIです。次の各組み合わせについて、「外部人脈が、そのメンバーのビジネスの役に立つか」を、メンバーの立場から検証してください。
+
+# 検証の観点（すべて、メンバーの立場から）
+- 向きは「外部人脈 → メンバーのビジネス」だけです。「メンバーのサービスが外部人脈の役に立つ」という理由では、useful を true にしないこと。
+- 種別が「金の卵」の場合：外部人脈が、メンバーにとって、お客様・案件の相手になり得るか。外部人脈が、メンバーと同じサービスを提供する同業・競合だと明確なら false。
+- 種別が「金のガチョウ」の場合：外部人脈が、メンバーのお客様（卵）を運んでくれそう・紹介してくれそうな立場か。
+- メンバーの職種・事業内容に照らして、不自然な組み合わせ（業種が全く噛み合わない、役立つ筋道が想像できない）は false。
+- 判断に迷う場合や、情報が乏しい場合は true としてください（false にするのは、はっきりした理由があるときだけ）。
+
+# reason（1文、日本語）
+「（メンバー名）さんにとって、この外部人脈は、〜の点で役立ちそう」という形で、メンバーの立場から書く。false のときは、役立たないと考えた理由を書く。
+
+# 検証対象
+${items.map((it) => `- id: ${it.key}
+  メンバー: ${it.memberName}${it.memberBusiness ? `（${it.memberBusiness}）` : ""}
+  メンバーの${it.targetLabel}: ${it.targetDescription}
+  外部人脈: ${it.contactDescription}`).join("\n")}
+
+出力は次のJSON形式のみ。1文字目から必ず「{」で始めること（前置きの説明は書かない）:
+{"results":[{"id":"...","useful":true|false,"reason":"..."}]}`;
+  try {
+    const text = await callClaude(apiKey, prompt, { timeoutMs: USEFULNESS_VERIFY_TIMEOUT_MS });
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]) as { results?: { id?: unknown; useful?: unknown; reason?: unknown }[] };
+    if (!Array.isArray(parsed.results)) return null;
+    const out = new Map<string, UsefulnessVerdict>();
+    for (const r of parsed.results) {
+      if (typeof r.id === "string" && typeof r.useful === "boolean") out.set(r.id, { useful: r.useful, reason: typeof r.reason === "string" ? r.reason.trim() : "" });
+    }
+    return out;
+  } catch (err) {
+    console.error("[enishi-search] メンバーの立場からの役立ちの検証に失敗（照合の結果をそのまま使う）", err);
+    return null;
   }
 }
 
@@ -1030,9 +1126,33 @@ export async function finalizeGiverResult(args: {
     });
   }
 
-  const directSurvivors = isDev ? new Set(directChecks.map((d) => d.key)) : await verifyDirectMatches(apiKey, directChecks);
-  const rejectedIndices = new Set(directChecks.filter((d) => !directSurvivors.has(d.key)).map((d) => Number(d.key)));
-  const verifiedCards = cards.filter((_, idx) => !rejectedIndices.has(idx));
+  let verifiedCards: EnishiResultCard[];
+  if (isReverseGiver(params)) {
+    // 逆向き：上位の候補を、メンバーの立場から「外部人脈が役立つか」検証し、役立たないものを外して、根拠の文も、メンバーの立場のものにする
+    const ordered = HOP_ORDER.flatMap((h) => cards.filter((c) => c.hop === h)).slice(0, USEFULNESS_VERIFY_MAX);
+    const items: UsefulnessItem[] = ordered.map((card, i) => {
+      const cand = candidateMap.get(card.candidateId);
+      const contact = myContactMap.get(card.myContactId ?? "");
+      return {
+        key: String(i), memberName: card.counterpart.name, memberBusiness: cand?.memberBusiness ?? "",
+        targetLabel: card.type === "egg" ? "金の卵" : "金のガチョウ", targetDescription: cand?.description ?? "",
+        contactDescription: [contact?.name, contact?.company, contact?.specialty, contact?.businessSummary].filter(Boolean).join(" / "), hop: card.hop,
+      };
+    });
+    const verdicts = isDev ? null : await verifyUsefulToMember(apiKey, items);
+    // 検証できなかったときは、検証なしの結果を出さず、失敗として扱って、もう一度やり直す（呼び出し側が回数を数え、最後の1回だけは、検証を省いて仕上げる）
+    if (!isDev && !verdicts && items.length > 0) throw new Error("[enishi-search] メンバーの立場からの役立ちの検証ができませんでした");
+    verifiedCards = ordered.flatMap((card, i) => {
+      const v = verdicts?.get(String(i));
+      if (!verdicts) return [card]; // 検証できなかったときは、照合の結果をそのまま使う
+      if (!v || !v.useful) return []; // 役立たないと判断されたもの、判定が返ってこなかったものは外す
+      return [v.reason ? { ...card, why: v.reason } : card];
+    });
+  } else {
+    const directSurvivors = isDev ? new Set(directChecks.map((d) => d.key)) : await verifyDirectMatches(apiKey, directChecks);
+    const rejectedIndices = new Set(directChecks.filter((d) => !directSurvivors.has(d.key)).map((d) => Number(d.key)));
+    verifiedCards = cards.filter((_, idx) => !rejectedIndices.has(idx));
+  }
   const sorted = HOP_ORDER.flatMap((h) => verifiedCards.filter((c) => c.hop === h)).slice(0, count);
   return {
     groups: hopsUpTo(maxHop).map((h) => ({ hop: h, label: HOP_LABEL[h], results: sorted.filter((c) => c.hop === h) })),

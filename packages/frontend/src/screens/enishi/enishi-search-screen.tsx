@@ -1111,11 +1111,40 @@ const MAX_REVERSE_CONTACTS = 20;
 /** 人脈の選択リストに、いちどに並べる最大件数（多いときは、検索ボックスで絞り込んでもらう） */
 const CONTACT_LIST_LIMIT = 50;
 
+/** 外部人脈の詳しい情報（選ぶときに、どんな人か確かめるための表示。マウスを重ねる・「詳細」を押すと切り替わる） */
+function ContactDetailPane({ contact }: { contact: Contact | null }) {
+  return (
+    <div className="mb-4 p-3 rounded-xl text-xs min-h-[5.5rem] md:max-h-72 md:overflow-y-auto" style={{ background: "white", border: "1px dashed var(--color-paper-300)" }} aria-live="polite">
+      <p className="font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>📇 外部人脈の詳しい情報</p>
+      {!contact ? (
+        <p style={{ color: "var(--color-ink-400)" }}>人脈にマウスを重ねる（スマホは「詳細」を押す）と、ここに詳しく表示されます。</p>
+      ) : (
+        <div className="space-y-0.5 break-words" style={{ color: "var(--color-ink-700)" }}>
+          <p className="font-medium text-sm">{contact.name ?? "（名前なし）"}</p>
+          {contact.company && <p>会社：{contact.company}</p>}
+          {contact.specialty && <p>専門分野：{contact.specialty}</p>}
+          {contact.relationships.length > 0 && <p>関係性：{contact.relationships.join("・")}</p>}
+          {contact.note && <p className="whitespace-pre-wrap">備考：{contact.note}</p>}
+          {contact.businessSummary && (
+            <p className="mt-1.5 pt-1.5 whitespace-pre-wrap" style={{ borderTop: "1px solid var(--color-paper-200)" }}>{contact.businessSummary}</p>
+          )}
+          {!contact.company && !contact.specialty && !contact.note && !contact.businessSummary && contact.relationships.length === 0 && (
+            <p style={{ color: "var(--color-ink-400)" }}>登録されている詳しい情報はありません</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 特定の外部人脈を選んで、その人が、なかまの誰に貢献できそうかをさがす */
 function GiverFromContactsPanel() {
   const myContacts = useMyContactsList();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
+  // マウスを重ねた（スマホは「詳細」を押した・キーボードで移動した）人脈の、詳しい情報を、リストの下に表示する
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const preview = previewId ? myContacts.find((c) => c.id === previewId) ?? null : null;
   const [maxHop, setMaxHop] = useState<Hop>("2hop");
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -1165,6 +1194,9 @@ function GiverFromContactsPanel() {
       )}
       <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="名前・会社名・専門分野で絞り込む"
         className="w-full rounded-xl px-3 py-2 text-sm mb-2" style={{ border: "1px solid var(--color-paper-300)" }} />
+      {/* 広い画面では、リストの右に、詳しい情報を並べる（マウスを重ねたまま、見比べられる）。スマホでは、リストの下 */}
+      <div className="md:grid md:grid-cols-2 md:gap-3 md:items-start">
+      <div>
       <div className="rounded-xl overflow-y-auto max-h-72 mb-1" style={{ border: "1px solid var(--color-paper-300)", background: "white" }}>
         {shown.length === 0 ? (
           <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-400)" }}>あてはまる人脈がありません</p>
@@ -1172,22 +1204,31 @@ function GiverFromContactsPanel() {
           const on = selectedIds.includes(c.id);
           const full = !on && selectedIds.length >= MAX_REVERSE_CONTACTS;
           return (
-            <label key={c.id} className={`flex items-start gap-2.5 px-3 py-2 cursor-pointer ${full ? "opacity-40" : ""}`}
-              style={{ borderBottom: "1px solid var(--color-paper-200)" }}>
-              <input type="checkbox" className="mt-1" checked={on} disabled={full} onChange={() => toggle(c.id)} />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium break-words" style={{ color: "var(--color-ink-800)" }}>{c.name ?? "（名前なし）"}</span>
-                <span className="block text-xs break-words" style={{ color: "var(--color-ink-500)" }}>
-                  {[c.company, c.specialty].filter(Boolean).join(" ／ ") || "（会社・専門分野の登録なし）"}
+            <div key={c.id} className="flex items-start gap-1" onMouseEnter={() => setPreviewId(c.id)}
+              style={{ borderBottom: "1px solid var(--color-paper-200)", background: previewId === c.id ? "var(--color-paper-100)" : undefined }}>
+              <label className={`flex-1 min-w-0 flex items-start gap-2.5 pl-3 py-2 cursor-pointer ${full ? "opacity-40" : ""}`}>
+                <input type="checkbox" className="mt-1" checked={on} disabled={full} onChange={() => toggle(c.id)} onFocus={() => setPreviewId(c.id)} />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium break-words" style={{ color: "var(--color-ink-800)" }}>{c.name ?? "（名前なし）"}</span>
+                  <span className="block text-xs break-words" style={{ color: "var(--color-ink-500)" }}>
+                    {[c.company, c.specialty].filter(Boolean).join(" ／ ") || "（会社・専門分野の登録なし）"}
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+              <button type="button" onClick={() => setPreviewId(c.id)} aria-label={`${c.name ?? "人脈"}の詳細を見る`}
+                className="shrink-0 text-[11px] px-2 py-1 mr-2 mt-1.5 rounded-full" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                詳細
+              </button>
+            </div>
           );
         })}
       </div>
-      <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
+      <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>
         {matched.length > CONTACT_LIST_LIMIT ? `${matched.length}人のうち、先頭の${CONTACT_LIST_LIMIT}人を表示しています。上の欄で絞り込めます。` : `${matched.length}人`}
       </p>
+      </div>
+      <div className="md:sticky md:top-4"><ContactDetailPane contact={preview} /></div>
+      </div>
 
       <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>② 貢献の届け方（到達方法）</h2>
       <HopRadio value={maxHop} onChange={setMaxHop} />
