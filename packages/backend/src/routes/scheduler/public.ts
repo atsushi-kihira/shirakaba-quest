@@ -15,6 +15,7 @@ import { getBusySources, listEventsAcrossAccounts } from "../../services/googleB
 import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
 import { resolvePublicBookingToken } from "../../services/schedulerShareToken.ts";
 import { createBookingForConfirmedSlot, formatBookingDateRange } from "../../services/bookingCreation.ts";
+import { onGuestInviteBooked } from "../../services/otsunagi.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const publicBookingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -586,6 +587,8 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
       .update(schema.oneOnOneGuestInvites)
       .set({ status: "selected", resultingBookingId: bookingResult.bookingId })
       .where(eq(schema.oneOnOneGuestInvites.id, linkedGuestInviteId));
+    // お繋ぎ（ご紹介）から作られた招待なら、紹介者に日時が決まったことを知らせる（それ以外は何もしない）
+    c.executionCtx.waitUntil(onGuestInviteBooked(db, c.env, linkedGuestInviteId));
   }
 
   return c.json({

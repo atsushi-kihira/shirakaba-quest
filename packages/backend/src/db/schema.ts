@@ -655,6 +655,32 @@ export const oneOnOneGuestInvites = sqliteTable("one_on_one_guest_invites", {
   createdAt:             integer("created_at").notNull(),
 });
 
+// ---- お繋ぎ（ご紹介）。紹介者が、メンバーと外部の人をつなぐ。日程調整は、お繋ぎ先のメンバーが主催者（マイグレーション 0114）----
+export const otsunagiRequests = sqliteTable("otsunagi_requests", {
+  id:                     text("id").primaryKey(),
+  introducerMemberId:     text("introducer_member_id").notNull(),
+  memberId:               text("member_id").notNull(),             // お繋ぎ先のメンバー（1to1の主催者になる）
+  guestName:              text("guest_name").notNull(),
+  guestCompany:           text("guest_company"),
+  guestEmail:             text("guest_email").notNull().default(""), // 紹介者がわかっていた場合、または外部の人が受付ページで入力したもの
+  guestEmailConsent:      integer("guest_email_consent").notNull().default(0), // 紹介者が「ご本人の了承を得ている」と確認した
+  message:                text("message").notNull().default(""),
+  token:                  text("token").notNull().unique(),         // 受付ページのURL用（変わらない）
+  status:                 text("status").notNull().default("active"), // 'active' | 'declined' | 'cancelled'
+  guestInviteId:          text("guest_invite_id"),                   // one_on_one_guest_invites.id（メンバーが日程の決め方を選んだあと）
+  preparedAt:             integer("prepared_at"),
+  guestOpenedAt:          integer("guest_opened_at"),
+  guestEmailRegisteredAt: integer("guest_email_registered_at"),
+  memberRemindedAt:       integer("member_reminded_at"),
+  guestRemind1At:         integer("guest_remind1_at"),
+  guestRemind2At:         integer("guest_remind2_at"),
+  confirmedNotifiedAt:    integer("confirmed_notified_at"),
+  declinedAt:             integer("declined_at"),
+  expiresAt:              integer("expires_at").notNull(),
+  createdAt:              integer("created_at").notNull(),
+  updatedAt:              integer("updated_at").notNull(),
+});
+
 export const oneOnOneGuestInviteCandidateSlots = sqliteTable("one_on_one_guest_invite_candidate_slots", {
   id:        text("id").primaryKey(),
   inviteId:  text("invite_id").notNull(),

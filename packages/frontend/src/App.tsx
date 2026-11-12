@@ -68,6 +68,10 @@ import { PublicBookingPage } from "@/screens/public-booking/public-booking-page"
 import { PublicBookingForm } from "@/screens/public-booking/public-booking-form";
 import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
 import { OneOnOneGuestInvitePage } from "@/screens/public-booking/oneonone-guest-invite-page";
+import { OtsunagiScreen } from "@/screens/otsunagi/otsunagi-screen";
+import { OtsunagiNewScreen } from "@/screens/otsunagi/otsunagi-new-screen";
+import { OtsunagiDetailScreen } from "@/screens/otsunagi/otsunagi-detail-screen";
+import { OtsunagiGuestPage } from "@/screens/otsunagi/otsunagi-guest-page";
 import { EnishiJobPartialScreen } from "@/screens/enishi/enishi-job-partial-screen";
 import { SharedViewScreen } from "@/screens/shared/shared-view-screen";
 import { SharedListScreen } from "@/screens/shared/shared-list-screen";
@@ -130,6 +134,7 @@ export default function App() {
               <Route path="/book/:memberSlug" element={<PublicBookingPage />} />
               {/* 外部ゲスト招待（候補日提示方式）の公開ページ（認証不要） */}
               <Route path="/oneonone/guest/:token" element={<OneOnOneGuestInvitePage />} />
+              <Route path="/otsunagi/guest/:token" element={<OtsunagiGuestPage />} />
               {/* 共有（URLを知っている人全員）の閲覧ページ（認証不要・読み取り専用） */}
               <Route path="/shared/:token" element={<SharedViewScreen />} />
             </Route>
@@ -154,6 +159,9 @@ export default function App() {
                   <Route path="enishi/history" element={<EnishiHistoryScreen />} />
                   <Route path="enishi/history/:id" element={<EnishiHistoryDetailScreen />} />
                   <Route path="ranking" element={<RankingScreen />} />
+                  <Route path="otsunagi" element={<OtsunagiScreen />} />
+                  <Route path="otsunagi/new" element={<OtsunagiNewScreen />} />
+                  <Route path="otsunagi/:id" element={<OtsunagiDetailScreen />} />
                 </Route>
                 <Route path="me" element={<MypageScreen />} />
                 <Route path="me/theme" element={<MypageThemeScreen />} />

@@ -19,6 +19,8 @@ import { reminderRoutes } from "./routes/reminders.ts";
 import { oneOnOneDmRoutes } from "./routes/oneonone-dm.ts";
 import { oneOnOneGuestInviteRoutes } from "./routes/oneonone-guest-invites.ts";
 import { oneOnOneGuestInvitePublicRoutes } from "./routes/oneonone-guest-invites-public.ts";
+import { otsunagiRoutes } from "./routes/otsunagi.ts";
+import { otsunagiPublicRoutes } from "./routes/otsunagi-public.ts";
 import { questRoutes } from "./routes/quests.ts";
 import { badgeRoutes } from "./routes/badges.ts";
 import { seasonRoutes } from "./routes/seasons.ts";
@@ -88,6 +90,8 @@ app.route("/api/members", memberRoutes);
 app.route("/api/ranking", rankingRoutes);
 app.route("/api/shared", sharedPublicRoutes); // 認証なし（URLを知っている人に共有したものの閲覧用。読み取り専用）
 app.route("/api/shares", shareRoutes);
+app.route("/api/otsunagi/public", otsunagiPublicRoutes); // 認証なし（お繋ぎの受付ページ用。認証ありの /api/otsunagi より先に登録する）
+app.route("/api/otsunagi", otsunagiRoutes);
 app.route("/api/oneonone/public", oneOnOnePublicRoutes); // 認証なし（メール経由の承諾/辞退用）
 app.route("/api/oneonone/guest", oneOnOneGuestInvitePublicRoutes); // 認証なし（外部ゲスト招待リンク用）
 app.route("/api/oneonone/guest-invites", oneOnOneGuestInviteRoutes);
@@ -189,13 +193,16 @@ app.post("/api/internal/send-reminders", async (c) => {
   // 毎時の定期実行のついでに、使われなかったゲスト用URLの予約（期限切れ）を削除する
   const { purgeExpiredReservations } = await import("./services/invite-reservations.ts");
   const purgedReservations = await purgeExpiredReservations(db, Math.floor(Date.now() / 1000));
+  // お繋ぎ（ご紹介）の催促（メンバー：2日目／外部の人：日程の準備から2日目・7日目）
+  const { runOtsunagiSweep } = await import("./services/otsunagi.ts");
+  const otsunagi = await runOtsunagiSweep(db, c.env).catch((e) => { console.error("[otsunagi sweep] failed", e); return null; });
   // 1回だけの整理: 複数日確定のミーティングで、参加しない日まで登録されていたGoogleカレンダーの予定を、メンバー全員分、順に直す（完了したら何もしない）
   const { runCalendarCleanupBatch } = await import("./services/memberCalendarSync.ts");
   c.executionCtx.waitUntil(runCalendarCleanupBatch(db, c.env).catch((e) => console.error("[calendar cleanup] failed", e)));
   // 1回だけの整理: 会議URLが入っていなかった、主催者のGoogleカレンダーの予定を、順に直す（完了したら何もしない）
   const { runHostCalendarUrlRepairBatch } = await import("./services/conferenceService.ts");
   c.executionCtx.waitUntil(runHostCalendarUrlRepairBatch(db, c.env).catch((e) => console.error("[calendar url repair] failed", e)));
-  return c.json({ ok: true, ...result, purgedReservations });
+  return c.json({ ok: true, ...result, purgedReservations, otsunagi });
 });
 
 // ---- 公開アプリ設定（認証不要・全ユーザー対象） ----

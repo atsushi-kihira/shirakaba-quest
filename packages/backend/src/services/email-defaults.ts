@@ -1018,6 +1018,200 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     ],
   },
 
+  {
+    emailKey: "otsunagi_member_request",
+    label: "お繋ぎが届いたお知らせ（お繋ぎ先のメンバー向け）",
+    category: "oneonone",
+    triggerDescription: "メンバーが、別のメンバー（お繋ぎ先）と外部の人をお繋ぎしたとき（お繋ぎ先のメンバーに送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{introducerName}}さんから、{{guestName}}さんとのお繋ぎが届きました",
+    bodyText: `{{memberName}} さん
+
+{{introducerName}}さんが、あなたと{{guestName}}さんをお繋ぎしたいそうです。
+{{introducerName}}さんは1to1には参加せず、あなたと{{guestName}}さんの1to1になります。
+
+{{messageBlock}}下記のページで、日程の決め方（予約ページ／候補日を送る）を選んでください。
+準備ができると、{{guestName}}さんに案内が届きます。
+
+▼ お繋ぎの内容
+{{detailUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "お繋ぎ先のメンバー", example: "山田 花子" },
+      { key: "introducerName", label: "紹介者（お繋ぎした人）", example: "紀平 篤志" },
+      { key: "guestName", label: "外部の人", example: "田中 一郎" },
+      { key: "messageBlock", label: "紹介者からのひとこと（ある場合のみ表示）", example: "💬 ひとこと：ぜひお話ししてみてください\n\n" },
+      { key: "detailUrl", label: "お繋ぎの画面のURL", example: "https://app.example.com/otsunagi/xxx" },
+    ],
+  },
+  {
+    emailKey: "otsunagi_member_reminder",
+    label: "お繋ぎの準備のお願い（お繋ぎ先のメンバー向け）",
+    category: "oneonone",
+    triggerDescription: "お繋ぎが届いて2日たっても、お繋ぎ先のメンバーが日程の決め方を選んでいないとき（お繋ぎ先のメンバーに送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{guestName}}さんとのお繋ぎが、お待ちです",
+    bodyText: `{{memberName}} さん
+
+{{introducerName}}さんからお繋ぎいただいた、{{guestName}}さんとの1to1の日程の準備が、まだのようです。
+お手数ですが、下記のページから、日程の決め方を選んでください（見送ることもできます）。
+
+▼ お繋ぎの内容
+{{detailUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "お繋ぎ先のメンバー", example: "山田 花子" },
+      { key: "introducerName", label: "紹介者（お繋ぎした人）", example: "紀平 篤志" },
+      { key: "guestName", label: "外部の人", example: "田中 一郎" },
+      { key: "detailUrl", label: "お繋ぎの画面のURL", example: "https://app.example.com/otsunagi/xxx" },
+    ],
+  },
+  {
+    emailKey: "otsunagi_guest_invite",
+    label: "お繋ぎのご案内（外部の人向け）",
+    category: "oneonone",
+    triggerDescription: "紹介者が外部の人のメールアドレスを入力して、お繋ぎを作ったとき（外部の人に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{introducerName}}さんから、{{memberName}}さんとの1to1のご紹介です",
+    bodyText: `{{guestName}} さん
+
+{{introducerName}}さんが、{{memberName}}さんとの1to1をご紹介しています。
+
+{{messageBlock}}下記のページを開くと、ご紹介の内容と、日程の準備の状況がご確認いただけます（会員登録は不要です）。
+日程の準備ができたら、改めてメールでお知らせします。
+
+▼ こちらから
+{{receptionUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "外部の人", example: "田中 一郎" },
+      { key: "introducerName", label: "紹介者（お繋ぎした人）", example: "紀平 篤志" },
+      { key: "memberName", label: "お繋ぎ先のメンバー", example: "山田 花子" },
+      { key: "messageBlock", label: "紹介者からのひとこと（ある場合のみ表示）", example: "💬 ひとこと：ぜひお話ししてみてください\n\n" },
+      { key: "receptionUrl", label: "ご紹介の受付ページのURL", example: "https://app.example.com/otsunagi/guest/xxx" },
+    ],
+  },
+  {
+    emailKey: "otsunagi_guest_ready",
+    label: "日程を選べるようになったお知らせ（外部の人向け）",
+    category: "oneonone",
+    triggerDescription: "お繋ぎ先のメンバーが日程の準備を終えたとき（メールアドレスがわかっている外部の人に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{memberName}}さんとの1to1の日程を、選べるようになりました",
+    bodyText: `{{guestName}} さん
+
+{{introducerName}}さんのご紹介による、{{memberName}}さんとの1to1の日程の準備ができました。
+下記のページから、ご都合のよい日時をお選びください（会員登録は不要です）。
+
+▼ こちらから
+{{receptionUrl}}
+
+※ このご案内の有効期限は、{{expiresLabel}}です。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "外部の人", example: "田中 一郎" },
+      { key: "introducerName", label: "紹介者（お繋ぎした人）", example: "紀平 篤志" },
+      { key: "memberName", label: "お繋ぎ先のメンバー", example: "山田 花子" },
+      { key: "receptionUrl", label: "ご紹介の受付ページのURL", example: "https://app.example.com/otsunagi/guest/xxx" },
+      { key: "expiresLabel", label: "有効期限", example: "2024年7月29日(月)" },
+    ],
+  },
+  {
+    emailKey: "otsunagi_guest_reminder",
+    label: "日程選択のお願い（外部の人向け）",
+    category: "oneonone",
+    triggerDescription: "日程の準備ができて2日後・7日後になっても、外部の人が日時を選んでいないとき（メールアドレスがわかっている外部の人に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{memberName}}さんとの1to1の日時を、お選びください",
+    bodyText: `{{guestName}} さん
+
+{{introducerName}}さんのご紹介による、{{memberName}}さんとの1to1の日時が、まだ選ばれていないようです。
+お手数ですが、下記のページから、ご都合のよい日時をお選びください。
+
+▼ こちらから
+{{receptionUrl}}
+
+※ このご案内の有効期限は、{{expiresLabel}}です。
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "外部の人", example: "田中 一郎" },
+      { key: "introducerName", label: "紹介者（お繋ぎした人）", example: "紀平 篤志" },
+      { key: "memberName", label: "お繋ぎ先のメンバー", example: "山田 花子" },
+      { key: "receptionUrl", label: "ご紹介の受付ページのURL", example: "https://app.example.com/otsunagi/guest/xxx" },
+      { key: "expiresLabel", label: "有効期限", example: "2024年7月29日(月)" },
+    ],
+  },
+  {
+    emailKey: "otsunagi_introducer_confirmed",
+    label: "お繋ぎの日程確定のお知らせ（紹介者向け）",
+    category: "oneonone",
+    triggerDescription: "お繋ぎした1to1の日時が確定したとき（紹介者に送信。紹介者は1to1に参加しないため、カレンダーへの登録はしません）",
+    enabled: true,
+    subject: "【{{appTitle}}】お繋ぎした{{memberName}}さんと{{guestName}}さんの1to1が、決まりました",
+    bodyText: `{{introducerName}} さん
+
+お繋ぎいただいた、{{memberName}}さんと{{guestName}}さんの1to1の日時が決まりました。
+
+📅 {{dateRange}}
+
+※ {{introducerName}}さんは、この1to1には参加しません（カレンダーへの登録は、していません）。
+経過は、下記のページでいつでもご確認いただけます。
+
+▼ お繋ぎの状況
+{{detailUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "introducerName", label: "紹介者（お繋ぎした人）", example: "紀平 篤志" },
+      { key: "memberName", label: "お繋ぎ先のメンバー", example: "山田 花子" },
+      { key: "guestName", label: "外部の人", example: "田中 一郎" },
+      { key: "dateRange", label: "確定した日時", example: "2024年7月15日(月) 10:00〜11:00" },
+      { key: "detailUrl", label: "お繋ぎの画面のURL", example: "https://app.example.com/otsunagi/xxx" },
+    ],
+  },
+  {
+    emailKey: "otsunagi_introducer_declined",
+    label: "お繋ぎが見送られたお知らせ（紹介者向け）",
+    category: "oneonone",
+    triggerDescription: "お繋ぎ先のメンバーが、お繋ぎを見送ったとき（紹介者に送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】{{memberName}}さんと{{guestName}}さんのお繋ぎは、今回は見送りになりました",
+    bodyText: `{{introducerName}} さん
+
+お繋ぎいただいた、{{memberName}}さんと{{guestName}}さんの1to1は、{{memberName}}さんの都合により、今回は見送りになりました。
+せっかくのご紹介でしたが、ご了承ください。
+
+▼ お繋ぎの状況
+{{detailUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "introducerName", label: "紹介者（お繋ぎした人）", example: "紀平 篤志" },
+      { key: "memberName", label: "お繋ぎ先のメンバー", example: "山田 花子" },
+      { key: "guestName", label: "外部の人", example: "田中 一郎" },
+      { key: "detailUrl", label: "お繋ぎの画面のURL", example: "https://app.example.com/otsunagi/xxx" },
+    ],
+  },
+
   // ============================================================
   // スケジューラー（1to1予約）
   // ============================================================

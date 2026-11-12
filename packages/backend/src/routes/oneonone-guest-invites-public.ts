@@ -9,6 +9,7 @@ import { createDb, schema } from "../db/index.ts";
 import { createBookingForConfirmedSlot } from "../services/bookingCreation.ts";
 import { registerGuestAsContact } from "../services/guest-contacts.ts";
 import { getAvailableConferenceTypes } from "../services/conferenceService.ts";
+import { onGuestInviteBooked } from "../services/otsunagi.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneGuestInvitePublicRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -176,6 +177,9 @@ oneOnOneGuestInvitePublicRoutes.post("/:token/select", async (c) => {
       guestEmail: finalGuestEmail,
     })
     .where(eq(schema.oneOnOneGuestInvites.id, invite.id));
+
+  // お繋ぎ（ご紹介）から作られた招待なら、紹介者に日時が決まったことを知らせる（それ以外は何もしない）
+  c.executionCtx.waitUntil(onGuestInviteBooked(db, c.env, invite.id));
 
   // 主催者の外部人脈に登録する（すでに同じメールアドレスの人脈があれば、会社名が空のときだけ補う）。
   // 1to1を実施したあとの「人脈に追加しますか？」の確認は、これまでどおり出る（ここで登録した人脈は、その確認の保存先として再利用される）

@@ -302,6 +302,15 @@ export function HomeScreen() {
     staleTime: 30_000,
   });
 
+  // お繋ぎ（ご紹介）: お繋ぎ先として準備が必要なもの・自分が紹介して進行中のもの
+  const { data: otsunagiSummaryData } = useQuery({
+    queryKey: ["otsunagi", "summary"],
+    queryFn: () => api.get<{ data: { needsAction: number; inProgress: number; needsActionItems: { id: string; guestName: string }[] } }>("/otsunagi/summary"),
+    enabled: !!user && user.userType === "member" && isApprovedMember(user),
+    staleTime: 30_000,
+  });
+  const otsunagiSummary = otsunagiSummaryData?.data;
+
   const { data: upcomingBookingsData } = useQuery({
     queryKey: ["scheduler", "bookings", "upcoming"],
     queryFn: () => api.get<UpcomingBookingsResponse>("/scheduler/bookings/upcoming"),
@@ -1121,6 +1130,45 @@ export function HomeScreen() {
                 <ChevronRight size={16} style={{ color: "#6B7DB3" }} />
               </Link>
             ))}
+          </div>
+        </section>
+      )}
+
+      {/* お繋ぎ（ご紹介）: 日程の準備をお願いされているもの／自分が紹介して進行中のもの */}
+      {otsunagiSummary && (otsunagiSummary.needsAction > 0 || otsunagiSummary.inProgress > 0) && (
+        <section>
+          <h2 className="text-sm font-semibold mb-2 flex items-center gap-1.5" style={{ fontFamily: "var(--font-klee)", color: "var(--color-brand)" }}>
+            🔗 お繋ぎ
+          </h2>
+          <div className="space-y-2">
+            {otsunagiSummary.needsActionItems.map((it) => (
+              <Link
+                key={it.id}
+                to={`/otsunagi/${it.id}`}
+                className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+                style={{ borderLeft: "3px solid var(--color-brand)" }}
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(181,56,75,0.1)" }}>🔗</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate" style={{ color: "var(--color-ink-800)" }}>{it.guestName}さんとのお繋ぎが、届いています</p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>日程の決め方を選んでください</p>
+                </div>
+                <ChevronRight size={16} style={{ color: "var(--color-brand)" }} />
+              </Link>
+            ))}
+            {otsunagiSummary.inProgress > 0 && (
+              <Link
+                to="/otsunagi"
+                className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
+              >
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(212,160,59,0.15)" }}>🔗</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>あなたがお繋ぎした{otsunagiSummary.inProgress}件が、進行中です</p>
+                  <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>進み具合を見る（あなたが、することはありません）</p>
+                </div>
+                <ChevronRight size={16} style={{ color: "var(--color-ink-400)" }} />
+              </Link>
+            )}
           </div>
         </section>
       )}

@@ -28,7 +28,7 @@ const MAX_ONEONONE_CANDIDATES = 20;
 
 type CandidateSlotInput = { startAtUtc: string; endAtUtc: string };
 
-function validateCandidateSlots(candidateSlots: CandidateSlotInput[] | undefined, durationMinutes?: number): { error: string } | { slots: { startsAt: number; endsAt: number }[] } {
+export function validateCandidateSlots(candidateSlots: CandidateSlotInput[] | undefined, durationMinutes?: number): { error: string } | { slots: { startsAt: number; endsAt: number }[] } {
   if (!candidateSlots || candidateSlots.length < MIN_ONEONONE_CANDIDATES || candidateSlots.length > MAX_ONEONONE_CANDIDATES) {
     return { error: `候補日は${MIN_ONEONONE_CANDIDATES}〜${MAX_ONEONONE_CANDIDATES}件で指定してください` };
   }

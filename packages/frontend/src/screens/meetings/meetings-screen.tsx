@@ -283,6 +283,20 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                 <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
               </Link>
               <Link
+                to="/otsunagi"
+                className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
+                style={{ background: "var(--color-paper-200)" }}
+              >
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(181,56,75,0.1)" }}>
+                  🔗
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>メンバーと外部の方を、お繋ぎする</p>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>ご紹介したい二人の1to1を、お繋ぎ先のメンバーが日程調整します（あなたは参加しません）</p>
+                </div>
+                <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
+              </Link>
+              <Link
                 to="/meetings/groups"
                 className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
                 style={{ background: "var(--color-paper-200)" }}
