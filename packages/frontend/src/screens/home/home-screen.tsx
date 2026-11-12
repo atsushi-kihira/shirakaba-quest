@@ -1158,7 +1158,7 @@ export function HomeScreen() {
             ))}
             {otsunagiSummary.inProgress > 0 && (
               <Link
-                to="/otsunagi"
+                to="/meetings?tab=otsunagi"
                 className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
               >
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ background: "rgba(212,160,59,0.15)" }}>🔗</div>

@@ -1,10 +1,10 @@
 // =============================================================
-// お繋ぎ（ご紹介）の一覧 — 自分が紹介したお繋ぎ・自分に届いたお繋ぎ
+// お繋ぎ（ご紹介）の一覧 — 自分が紹介したお繋ぎ・自分に届いたお繋ぎ（ミーティング画面のタブとして表示）
 // =============================================================
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Loader2, Plus } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { fmtDate, fmtRange, STAGE_LABEL, TONE_STYLE, type OtsunagiItem } from "./_types";
 
@@ -40,9 +40,9 @@ function ItemCard({ item }: { item: OtsunagiItem }) {
   );
 }
 
-export function OtsunagiScreen() {
-  const navigate = useNavigate();
-  const [tab, setTab] = useState<"introduced" | "received">("introduced");
+/** ミーティング画面の「お繋ぎ」タブの中身。「自分が紹介」「自分に届いた」を切り替えて見る */
+export function OtsunagiTab({ initialSub }: { initialSub?: "introduced" | "received" }) {
+  const [tab, setTab] = useState<"introduced" | "received">(initialSub ?? "introduced");
   const { data, isLoading, isError } = useQuery({
     queryKey: ["otsunagi", "list"],
     queryFn: () => api.get<{ data: { introduced: OtsunagiItem[]; received: OtsunagiItem[] } }>("/otsunagi"),
@@ -54,20 +54,10 @@ export function OtsunagiScreen() {
   const list = tab === "introduced" ? introduced : received;
 
   return (
-    <div className="px-4 py-6 pb-24 max-w-xl mx-auto">
-      <div className="flex items-center gap-3 mb-2">
-        <button onClick={() => navigate(-1)} className="p-2 rounded-2xl hover:opacity-70" style={{ background: "var(--color-paper-200)" }} aria-label="戻る">
-          <ChevronLeft size={18} style={{ color: "var(--color-ink-600)" }} />
-        </button>
-        <h1 className="text-xl font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>🔗 お繋ぎ</h1>
-      </div>
+    <div>
       <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
         メンバーと外部の方を、お繋ぎします。1to1の日程調整は、お繋ぎ先のメンバーが行うので、紹介する人は、途中で何もしなくて大丈夫です。
       </p>
-
-      <Link to="/otsunagi/new" className="w-full py-3 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 mb-5" style={{ background: "var(--color-brand)" }}>
-        <Plus size={16} /> 新しくお繋ぎする
-      </Link>
 
       <div className="grid grid-cols-2 gap-2 mb-4">
         {([["introduced", `自分が紹介（${introduced.length}）`], ["received", `自分に届いた（${received.length}）`]] as const).map(([key, label]) => (
@@ -87,7 +77,7 @@ export function OtsunagiScreen() {
         <p className="text-sm text-center py-10" style={{ color: "var(--color-ink-500)" }}>読み込めませんでした。少し待ってから、もう一度開いてください。</p>
       ) : list.length === 0 ? (
         <p className="text-sm text-center py-10" style={{ color: "var(--color-ink-400)" }}>
-          {tab === "introduced" ? "まだ、お繋ぎはありません。「新しくお繋ぎする」から、作れます。" : "お繋ぎは、届いていません。"}
+          {tab === "introduced" ? "まだ、お繋ぎはありません。右上の「新規作成」から、作れます。" : "お繋ぎは、届いていません。"}
         </p>
       ) : (
         <div className="space-y-3">{list.map((item) => <ItemCard key={item.id} item={item} />)}</div>

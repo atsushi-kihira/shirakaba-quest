@@ -151,7 +151,7 @@ export function OtsunagiDetailScreen() {
   }
 
   const back = (
-    <button onClick={() => navigate("/otsunagi")} className="p-2 rounded-2xl hover:opacity-70" style={{ background: "var(--color-paper-200)" }} aria-label="お繋ぎの一覧へ">
+    <button onClick={() => navigate("/meetings?tab=otsunagi")} className="p-2 rounded-2xl hover:opacity-70" style={{ background: "var(--color-paper-200)" }} aria-label="お繋ぎの一覧へ">
       <ChevronLeft size={18} style={{ color: "var(--color-ink-600)" }} />
     </button>
   );

@@ -122,7 +122,7 @@ export function OtsunagiNewScreen() {
         </p>
         <div className="grid grid-cols-2 gap-2">
           <Link to={`/otsunagi/${result.id}`} className="py-3 rounded-2xl text-sm font-bold text-center text-white" style={{ background: "var(--color-brand)" }}>状況を見る</Link>
-          <Link to="/otsunagi" className="py-3 rounded-2xl text-sm font-medium text-center" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>一覧へ</Link>
+          <Link to="/meetings?tab=otsunagi" className="py-3 rounded-2xl text-sm font-medium text-center" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>一覧へ</Link>
         </div>
       </div>
     );

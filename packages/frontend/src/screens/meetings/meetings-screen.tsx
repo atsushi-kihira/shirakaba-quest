@@ -15,6 +15,7 @@ import { usePendingExternalOneOnOneCount } from "@/hooks/use-guest-followups";
 import { useActionItems } from "@/hooks/use-action-items";
 import { InProgressOneOnOneSection, OneOnOneHistorySection } from "./_oneonone-sections";
 import { ExternalGuestOneOnOneSection } from "./_external-guest-oneonone-section";
+import { OtsunagiTab } from "../otsunagi/otsunagi-screen";
 import { getMeetingEffectiveStatus, STATUS_META, type EffectiveStatus } from "@/lib/meeting-status";
 
 type MeetingItem = {
@@ -107,19 +108,20 @@ function StatusBadge({ m, hasUnreadNotification, nowSec }: { m: MeetingItem; has
   );
 }
 
-type Tab = "regular" | "oneonone";
+type Tab = "regular" | "oneonone" | "otsunagi";
 
 export function MeetingsScreen() {
   const approved = isApprovedMember(useAuthStore((s) => s.user));
   // 「通知」や「対応が必要なこと」から /meetings?tab=oneonone のように開かれたときは、そのタブを表示する
   const [searchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const [tab, setTab] = useState<Tab>(tabParam === "oneonone" || !approved ? "oneonone" : "regular");
+  const [tab, setTab] = useState<Tab>(tabParam === "oneonone" || !approved ? "oneonone" : tabParam === "otsunagi" ? "otsunagi" : "regular");
   // 利用者が自分でタブを選んだか。選んでいなければ、ログイン情報の読み込みが終わった時点で、通常ミーティングのタブに切り替える
   // （読み込み前は承認済みかどうかがわからず、1to1のタブが開いたままになって、通常ミーティングが一覧から消えて見えるのを防ぐ）
   const [tabPicked, setTabPicked] = useState(false);
   useEffect(() => {
     if (tabParam === "oneonone") setTab("oneonone");
+    else if (tabParam === "otsunagi" && approved) setTab("otsunagi");
     else if (tabParam === "regular" && approved) setTab("regular");
     else if (!tabParam && !tabPicked) setTab(approved ? "regular" : "oneonone");
   }, [tabParam, approved, tabPicked]);
@@ -130,10 +132,18 @@ export function MeetingsScreen() {
   const pendingExternal = usePendingExternalOneOnOneCount();
   const oneOnOneCount = filterInFlightOneOnOneForBadge(oneOnOneData.data?.data ?? []).length + pendingExternal;
   const alerts = useMeetingAlerts();
+  // お繋ぎタブの件数（自分に届いた、日程の決め方を選ぶ必要があるもの）
+  const otsunagiSummary = useQuery({
+    queryKey: ["otsunagi", "summary"],
+    queryFn: () => api.get<{ data: { needsAction: number; inProgress: number } }>("/otsunagi/summary"),
+    enabled: approved,
+  });
+  const otsunagiCount = otsunagiSummary.data?.data.needsAction ?? 0;
 
   const TABS: { key: Tab; label: string; count: number }[] = [
     { key: "regular",  label: "通常ミーティング", count: alerts.count },
     { key: "oneonone", label: "1to1ミーティング", count: oneOnOneCount },
+    { key: "otsunagi", label: "お繋ぎ", count: otsunagiCount },
   ];
 
   return (
@@ -190,20 +200,21 @@ export function MeetingsScreen() {
       {/* タブ: 通常ミーティング / 1to1ミーティング */}
       <div className="flex gap-2 mb-5">
         {TABS.map(({ key, label, count }) => {
-          const locked = key === "regular" && !approved;
+          const locked = key !== "oneonone" && !approved;
           return (
           <button
             key={key}
             onClick={() => { if (!locked) { setTab(key); setTabPicked(true); } }}
             disabled={locked}
-            className="flex-1 py-2.5 rounded-2xl text-sm font-medium transition relative flex items-center justify-center gap-1.5"
+            className={`py-2.5 px-1 rounded-2xl text-[13px] sm:text-sm font-medium transition relative flex items-center justify-center gap-1 whitespace-nowrap min-w-0 ${key === "otsunagi" ? "flex-none px-3 sm:px-4" : "flex-1"}`}
             style={{
               background: tab === key && !locked ? "var(--color-brand)" : "var(--color-paper-200)",
               color: tab === key && !locked ? "white" : locked ? "var(--color-ink-300)" : "var(--color-ink-600)",
               cursor: locked ? "not-allowed" : "pointer",
             }}
           >
-            {key === "oneonone" && <Handshake size={14} />}
+            {key === "oneonone" && <Handshake size={14} className="hidden sm:block" />}
+            {key === "otsunagi" && <span aria-hidden className="hidden sm:inline">🔗</span>}
             {label}
             {locked && <Lock size={12} />}
             {!locked && count > 0 && (
@@ -217,7 +228,9 @@ export function MeetingsScreen() {
         })}
       </div>
 
-      {tab === "regular" && approved ? <RegularMeetingsTab /> : <OneOnOneMeetingsTab />}
+      {tab === "regular" && approved ? <RegularMeetingsTab />
+        : tab === "otsunagi" && approved ? <OtsunagiTab initialSub={searchParams.get("sub") === "received" ? "received" : undefined} />
+        : <OneOnOneMeetingsTab />}
 
       {showCreateMenu && <CreateMenuModal onClose={() => setShowCreateMenu(false)} approved={approved} />}
     </div>
@@ -283,7 +296,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                 <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />
               </Link>
               <Link
-                to="/otsunagi"
+                to="/otsunagi/new"
                 className="flex items-center gap-3 p-4 rounded-2xl transition active:opacity-80"
                 style={{ background: "var(--color-paper-200)" }}
               >
@@ -291,7 +304,7 @@ function CreateMenuModal({ onClose, approved }: { onClose: () => void; approved:
                   🔗
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>メンバーと外部の方を、お繋ぎする</p>
+                  <p className="font-semibold text-sm" style={{ color: "var(--color-ink-900)" }}>メンバーと外部の方をお繋ぎする</p>
                   <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>ご紹介したい二人の1to1を、お繋ぎ先のメンバーが日程調整します（あなたは参加しません）</p>
                 </div>
                 <ChevronRight size={18} style={{ color: "var(--color-ink-400)" }} />

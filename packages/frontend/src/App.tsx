@@ -68,7 +68,6 @@ import { PublicBookingPage } from "@/screens/public-booking/public-booking-page"
 import { PublicBookingForm } from "@/screens/public-booking/public-booking-form";
 import { PublicBookingConfirmation } from "@/screens/public-booking/public-booking-confirmation";
 import { OneOnOneGuestInvitePage } from "@/screens/public-booking/oneonone-guest-invite-page";
-import { OtsunagiScreen } from "@/screens/otsunagi/otsunagi-screen";
 import { OtsunagiNewScreen } from "@/screens/otsunagi/otsunagi-new-screen";
 import { OtsunagiDetailScreen } from "@/screens/otsunagi/otsunagi-detail-screen";
 import { OtsunagiGuestPage } from "@/screens/otsunagi/otsunagi-guest-page";
@@ -159,7 +158,7 @@ export default function App() {
                   <Route path="enishi/history" element={<EnishiHistoryScreen />} />
                   <Route path="enishi/history/:id" element={<EnishiHistoryDetailScreen />} />
                   <Route path="ranking" element={<RankingScreen />} />
-                  <Route path="otsunagi" element={<OtsunagiScreen />} />
+                  <Route path="otsunagi" element={<Navigate to="/meetings?tab=otsunagi" replace />} />
                   <Route path="otsunagi/new" element={<OtsunagiNewScreen />} />
                   <Route path="otsunagi/:id" element={<OtsunagiDetailScreen />} />
                 </Route>
