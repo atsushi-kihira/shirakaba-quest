@@ -35,6 +35,8 @@ const MAX_EGGS = 15;
 const MAX_GEESE = 15;
 // 貢献のご縁で一度に指定できる貢献先メンバー数（登録者が増えてもAI消費量が際限なく増えないようにする上限）
 const MAX_GIVER_TARGET_MEMBERS = 5;
+/** 逆向き（外部人脈が、メンバーの誰に貢献できるか）で、いちどに選べる外部人脈の数 */
+const MAX_GIVER_REVERSE_CONTACTS = 20;
 // 検索履歴の一覧表示件数の上限
 const HISTORY_LIST_LIMIT = 100;
 // 「良いご縁だった」の過去実績をプロンプトに含める際、遡って調べる履歴件数・実際に含める件数の上限
@@ -533,14 +535,20 @@ enishiRoutes.post("/search/giver", async (c) => {
 
   const body = await c.req.json<{
     targetMemberIds?: string[];
+    contactIds?: string[]; // 逆向き：選んだ外部人脈が、メンバーの誰に貢献できるかをさがす（指定したときは、貢献先は全メンバー）
     specialties?: string[]; relationships?: string[]; freeText?: string;
     maxHop: "direct" | "2hop" | "3hop";
   }>();
   if (!["direct", "2hop", "3hop"].includes(body.maxHop)) {
     return c.json({ error: { code: "invalid_input", message: "到達方法の指定が正しくありません" } }, 400);
   }
-  const targetMemberIds = [...new Set(body.targetMemberIds ?? [])].filter((id) => id !== meId);
-  if (targetMemberIds.length === 0) {
+  const contactIds = [...new Set((body.contactIds ?? []).filter((id) => typeof id === "string" && id))];
+  const reverse = contactIds.length > 0;
+  if (reverse && contactIds.length > MAX_GIVER_REVERSE_CONTACTS) {
+    return c.json({ error: { code: "invalid_input", message: `外部人脈は最大${MAX_GIVER_REVERSE_CONTACTS}人まで選べます` } }, 400);
+  }
+  const targetMemberIds = reverse ? [] : [...new Set(body.targetMemberIds ?? [])].filter((id) => id !== meId);
+  if (!reverse && targetMemberIds.length === 0) {
     return c.json({ error: { code: "invalid_input", message: "貢献先のメンバーを1人以上選んでください" } }, 400);
   }
   if (targetMemberIds.length > MAX_GIVER_TARGET_MEMBERS) {
@@ -555,8 +563,15 @@ enishiRoutes.post("/search/giver", async (c) => {
     return c.json({ error: { code: "no_contacts", message: "貢献のご縁をさがすには、まず外部人脈を登録してください" } }, 400);
   }
 
-  const targetMembers = await db.select({ id: schema.members.id, name: schema.members.name })
-    .from(schema.members).where(inArray(schema.members.id, targetMemberIds)).all();
+  // 逆向き：選んだ人脈が、自分の（非公開でない）人脈であることを確かめ、名前を控える
+  const selectedContacts = reverse ? myContacts.filter((ct) => contactIds.includes(ct.id)) : [];
+  if (reverse && selectedContacts.length === 0) {
+    return c.json({ error: { code: "invalid_input", message: "選んだ外部人脈が見つかりません。もう一度、選び直してください" } }, 400);
+  }
+
+  const targetMembers = targetMemberIds.length > 0
+    ? await db.select({ id: schema.members.id, name: schema.members.name }).from(schema.members).where(inArray(schema.members.id, targetMemberIds)).all()
+    : [];
   const targetMemberNames = targetMemberIds
     .map((id) => targetMembers.find((m) => m.id === id)?.name)
     .filter((n): n is string => !!n);
@@ -569,6 +584,7 @@ enishiRoutes.post("/search/giver", async (c) => {
   ]);
   return startSearchJob(c, db, meId, {
     mode: "giver", targetMemberIds, targetMemberNames,
+    contactIds: selectedContacts.map((ct) => ct.id), contactNames: selectedContacts.map((ct) => ct.name),
     specialties: body.specialties ?? [], relationships: body.relationships ?? [], freeText: body.freeText?.trim() ?? "",
     maxHop: body.maxHop, count, goodMatchContext: [goodMatchContext, badMatchContext].filter(Boolean).join(""),
   });

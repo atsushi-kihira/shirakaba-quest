@@ -83,7 +83,13 @@ export async function saveSearchHistory(
 }
 
 
-export function buildGiverTitle(targetMemberNames: string[], createdAt: number, resultCount: number): string {
+export function buildGiverTitle(targetMemberNames: string[], createdAt: number, resultCount: number, contactNames: string[] | null = null): string {
+  // 逆向き（選んだ外部人脈が、メンバーの誰に貢献できるか）
+  if (contactNames) {
+    const shown = contactNames.slice(0, 3).join("・");
+    const suffix = contactNames.length > 3 ? ` ほか${contactNames.length - 3}名` : "";
+    return `${formatHistoryDate(createdAt)} 貢献のご縁：${shown || "選んだ人脈"}${suffix}が貢献できる相手（${resultCount}件ヒット）`;
+  }
   const shown = targetMemberNames.slice(0, 3).join("・");
   const suffix = targetMemberNames.length > 3 ? ` ほか${targetMemberNames.length - 3}名` : "";
   return `${formatHistoryDate(createdAt)} 貢献のご縁：${shown || "なかま"}${suffix}へ（${resultCount}件ヒット）`;

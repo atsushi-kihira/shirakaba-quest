@@ -1070,7 +1070,145 @@ function useMyRelationshipOptions(contacts: Contact[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b, "ja"));
 }
 
+type GiverDirection = "to-members" | "from-contacts";
+
+/** 貢献のためのご縁：「貢献したい相手を選んでさがす」と「特定の外部人脈が誰に貢献できるかさがす」を選んで、実行する */
 function GiverPanel() {
+  const [direction, setDirection] = useState<GiverDirection>("to-members");
+  const options: { value: GiverDirection; title: string; desc: string }[] = [
+    { value: "to-members", title: "貢献したい相手を選んでさがす", desc: "なかま（貢献先）を選んで、あなたの人脈の中で、誰が役に立てそうかをさがします" },
+    { value: "from-contacts", title: "特定の外部人脈が誰に貢献できるかさがす", desc: "あなたの外部人脈を選んで、その人が、なかまの誰の役に立てそうかをさがします" },
+  ];
+  return (
+    <div>
+      <div className="grid gap-2 sm:grid-cols-2 mb-4" role="radiogroup" aria-label="さがし方">
+        {options.map((o) => {
+          const on = direction === o.value;
+          return (
+            <button key={o.value} type="button" role="radio" aria-checked={on} onClick={() => setDirection(o.value)}
+              className="text-left rounded-2xl p-3 flex gap-3 items-start"
+              style={{ border: `1.5px solid ${on ? "var(--color-brand)" : "var(--color-paper-300)"}`, background: on ? "var(--color-paper-100)" : "white" }}>
+              <span className="w-4 h-4 rounded-full mt-0.5 shrink-0"
+                style={{ border: `2px solid ${on ? "var(--color-brand)" : "var(--color-paper-300)"}`, background: on ? "var(--color-brand)" : "transparent" }} />
+              <span>
+                <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>{o.title}</span>
+                <span className="block text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>{o.desc}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <AlreadyIntroducedSection />
+
+      {direction === "to-members" ? <GiverToMembersPanel /> : <GiverFromContactsPanel />}
+    </div>
+  );
+}
+
+/** 逆向きのさがし方で、いちどに選べる外部人脈の数（バックエンドの MAX_GIVER_REVERSE_CONTACTS と合わせる） */
+const MAX_REVERSE_CONTACTS = 20;
+/** 人脈の選択リストに、いちどに並べる最大件数（多いときは、検索ボックスで絞り込んでもらう） */
+const CONTACT_LIST_LIMIT = 50;
+
+/** 特定の外部人脈を選んで、その人が、なかまの誰に貢献できそうかをさがす */
+function GiverFromContactsPanel() {
+  const myContacts = useMyContactsList();
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [query, setQuery] = useState("");
+  const [maxHop, setMaxHop] = useState<Hop>("2hop");
+  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const byId = useMemo(() => new Map(myContacts.map((c) => [c.id, c])), [myContacts]);
+  const matched = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return myContacts;
+    return myContacts.filter((c) => [c.name, c.company, c.specialty, c.note].some((v) => v?.toLowerCase().includes(needle)));
+  }, [myContacts, query]);
+  const shown = matched.slice(0, CONTACT_LIST_LIMIT);
+
+  function toggle(id: string) {
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= MAX_REVERSE_CONTACTS ? prev : [...prev, id]);
+  }
+
+  // 検索は裏で実行する。始めたらすぐに戻り、進み具合は画面上部の「検索中」に出る。終わったら通知とメールが届く（結果は検索履歴にも残る）
+  const search = useMutation({
+    mutationFn: () => api.post<StartSearchResponse>("/enishi/search/giver", { contactIds: selectedIds, maxHop }),
+    onSuccess: () => { setError(null); queryClient.invalidateQueries({ queryKey: SEARCH_JOBS_KEY }); },
+    onError: (e) => setError(e instanceof ApiError ? e.message : "検索を始められませんでした"),
+  });
+
+  if (myContacts.length === 0) {
+    return (
+      <div className="card-paper rounded-2xl p-6 text-center">
+        <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>まだ外部人脈が登録されていません。まず、外部人脈を登録してください。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card-paper rounded-2xl p-4 mb-4">
+      <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>
+        ① 外部人脈を選ぶ（最大{MAX_REVERSE_CONTACTS}人・{selectedIds.length}/{MAX_REVERSE_CONTACTS}）
+      </h2>
+      {selectedIds.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {selectedIds.map((id) => (
+            <button key={id} type="button" onClick={() => toggle(id)} aria-label={`${byId.get(id)?.name ?? "人脈"}の選択をはずす`}
+              className="text-xs font-medium px-3 py-1.5 rounded-full flex items-center gap-1.5"
+              style={{ background: "var(--color-paper-200)", border: "1px solid var(--color-accent)", color: "var(--color-accent)" }}>
+              {byId.get(id)?.name ?? "（見つかりません）"} <span aria-hidden>✕</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="名前・会社名・専門分野で絞り込む"
+        className="w-full rounded-xl px-3 py-2 text-sm mb-2" style={{ border: "1px solid var(--color-paper-300)" }} />
+      <div className="rounded-xl overflow-y-auto max-h-72 mb-1" style={{ border: "1px solid var(--color-paper-300)", background: "white" }}>
+        {shown.length === 0 ? (
+          <p className="text-xs text-center py-4" style={{ color: "var(--color-ink-400)" }}>あてはまる人脈がありません</p>
+        ) : shown.map((c) => {
+          const on = selectedIds.includes(c.id);
+          const full = !on && selectedIds.length >= MAX_REVERSE_CONTACTS;
+          return (
+            <label key={c.id} className={`flex items-start gap-2.5 px-3 py-2 cursor-pointer ${full ? "opacity-40" : ""}`}
+              style={{ borderBottom: "1px solid var(--color-paper-200)" }}>
+              <input type="checkbox" className="mt-1" checked={on} disabled={full} onChange={() => toggle(c.id)} />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium break-words" style={{ color: "var(--color-ink-800)" }}>{c.name ?? "（名前なし）"}</span>
+                <span className="block text-xs break-words" style={{ color: "var(--color-ink-500)" }}>
+                  {[c.company, c.specialty].filter(Boolean).join(" ／ ") || "（会社・専門分野の登録なし）"}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <p className="text-xs mb-4" style={{ color: "var(--color-ink-400)" }}>
+        {matched.length > CONTACT_LIST_LIMIT ? `${matched.length}人のうち、先頭の${CONTACT_LIST_LIMIT}人を表示しています。上の欄で絞り込めます。` : `${matched.length}人`}
+      </p>
+
+      <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>② 貢献の届け方（到達方法）</h2>
+      <HopRadio value={maxHop} onChange={setMaxHop} />
+      <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
+        なかま全員の金の卵・金のガチョウを対象に、裏で順に検索します。人数が多いと、時間がかかります。
+      </p>
+
+      {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
+
+      <button
+        onClick={() => selectedIds.length > 0 ? search.mutate() : setError("外部人脈を1人以上選んでください")}
+        disabled={search.isPending}
+        className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
+        style={{ background: "var(--color-brand)" }}>
+        {search.isPending ? <Loader2 size={16} className="animate-spin" /> : <Gift size={16} />} この人脈が貢献できる相手をさがす
+      </button>
+    </div>
+  );
+}
+
+function GiverToMembersPanel() {
   const myContacts = useMyContactsList();
   const specialtyOptions = useMySpecialtyOptions(myContacts);
   const relationshipOptions = useMyRelationshipOptions(myContacts);
@@ -1088,7 +1226,6 @@ function GiverPanel() {
   // 初期設定では何も表示されなくなってしまうため、「誰かのために探す」検索と同じく
   // 「2次まで」をデフォルトにする（1次のみで絞りたい場合は引き続き画面上で選択できる）
   const [maxHop, setMaxHop] = useState<Hop>("2hop");
-  const [pageSize, setPageSize] = useState(10);
   const [error, setError] = useState<string | null>(null);
 
   // 現在の絞り込み条件（専門分野・関係性・自由記述）に一致する人脈数をその場で計算する
@@ -1133,8 +1270,6 @@ function GiverPanel() {
 
   return (
     <div>
-      <AlreadyIntroducedSection />
-
       {contributors.length === 0 ? (
         <div className="card-paper rounded-2xl p-6 text-center">
           <p className="text-sm" style={{ color: "var(--color-ink-500)" }}>まだ金の卵・金のガチョウを登録しているなかまがいません。</p>
@@ -1221,9 +1356,6 @@ function GiverPanel() {
 
           <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>③ 貢献の届け方（到達方法）</h2>
           <HopRadio value={maxHop} onChange={setMaxHop} />
-
-          <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>④ 表示件数</h2>
-          <PageSizeSelect value={pageSize} onChange={setPageSize} />
 
           {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
@@ -1497,7 +1629,6 @@ function ContactSpecialtySearchPanel() {
   const [freeText, setFreeText] = useState("");
   const [scope, setScope] = useState<ContactSearchScope>("all");
   const [memberIds, setMemberIds] = useState<Set<string>>(new Set());
-  const [pageSize, setPageSize] = useState(10);
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -1619,9 +1750,6 @@ function ContactSpecialtySearchPanel() {
             )}
           </div>
         )}
-
-        <h2 className="text-sm font-bold mb-2" style={{ color: "var(--color-ink-800)" }}>④ 表示件数</h2>
-        <PageSizeSelect value={pageSize} onChange={setPageSize} />
 
         {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
 

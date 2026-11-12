@@ -19,7 +19,7 @@ import { waitUpTo } from "./sweep-util.ts";
 import {
   JOB_BATCH_SIZE, selectJobCandidates, matchJobBatch, interleaveMatches, searchMemberHits, buildMemberCollab,
   finalizeForMeResult, finalizeContactSearchResult,
-  loadGiverContext, buildGiverBatches, matchGiverBatch, finalizeGiverResult,
+  loadGiverContext, buildGiverBatches, matchGiverBatch, finalizeGiverResult, isReverseGiver,
   type JobParams, type JobCandidate, type JobMatch, type MemberHit, type MatchCoverage,
 } from "./enishi-search.ts";
 import type { CollabIdeas } from "./member-collab.ts";
@@ -57,6 +57,10 @@ export function jobLabel(params: JobParams): string {
     const first = params.targets[0]?.description ?? "";
     const short = first.length > 18 ? `${first.slice(0, 18)}…` : first;
     return `私のご縁：${short}${params.targets.length > 1 ? ` ほか${params.targets.length - 1}件` : ""}`;
+  }
+  if (params.mode === "giver" && isReverseGiver(params)) {
+    const names = params.contactNames ?? [];
+    return `貢献のご縁：${names.slice(0, 3).join("・") || "選んだ人脈"}${names.length > 3 ? ` ほか${names.length - 3}名` : ""}が貢献できる相手`;
   }
   if (params.mode === "giver") {
     const shown = params.targetMemberNames.slice(0, 3).join("・") || "なかま";
@@ -262,14 +266,18 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   const failedBatches = summary.failed;
   const countIds = (b: { candidateIdsJson: string }) => (JSON.parse(b.candidateIdsJson) as string[]).length;
   const countable = batches.filter((b) => b.status !== "split");
-  // 貢献のご縁は、「自分の人脈」の人数で数える（同じ人脈が、貢献先ごとの束に入っているので、重ねて数えない）
-  const contactIdsOf = (b: { candidateIdsJson: string }) => (JSON.parse(b.candidateIdsJson) as string[]).map((id) => id.slice(id.indexOf("|") + 1));
+  // 貢献のご縁は、さがす対象の数で数える（同じものが、複数の束に入っているので、重ねて数えない）。
+  //  通常：「自分の人脈」の人数（束の中身は <貢献先>|<人脈>） ／ 逆向き：なかまの金の卵・金のガチョウの件数（束の中身は <卵・ガチョウ>|<人脈>）
+  const reverse = params.mode === "giver" && isReverseGiver(params);
+  const unitOf = (b: { candidateIdsJson: string }) => (JSON.parse(b.candidateIdsJson) as string[])
+    .map((id) => reverse ? id.split("|")[0] : id.slice(id.indexOf("|") + 1));
   const coverage: MatchCoverage = params.mode === "giver"
     ? {
-        totalCandidates: new Set(countable.flatMap(contactIdsOf)).size,
-        unmatchedCandidates: new Set(countable.filter((b) => b.status === "failed").flatMap(contactIdsOf)).size,
+        totalCandidates: new Set(countable.flatMap(unitOf)).size,
+        unmatchedCandidates: new Set(countable.filter((b) => b.status === "failed").flatMap(unitOf)).size,
         totalBatches: summary.total, failedBatches,
         retriedOkBatches: summary.retriedOk,
+        subject: reverse ? "なかまの金の卵・金のガチョウ" : "あなたの人脈",
       }
     : {
         totalCandidates: countable.reduce((n, b) => n + countIds(b), 0),
@@ -296,9 +304,9 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   if (params.mode === "giver") {
     const ctx = await loadGiverContext(db, job.memberId, params);
     result = await finalizeGiverResult({ apiKey, isDev: skipVerify, params, ctx, matches, aiCallFailed });
-    title = buildGiverTitle(params.targetMemberNames, created, countResults(result));
+    title = buildGiverTitle(params.targetMemberNames, created, countResults(result), isReverseGiver(params) ? (params.contactNames ?? []) : null);
     historyParams = {
-      targetMemberIds: params.targetMemberIds, specialties: params.specialties, relationships: params.relationships,
+      contactIds: params.contactIds ?? [], targetMemberIds: params.targetMemberIds, specialties: params.specialties, relationships: params.relationships,
       freeText: params.freeText, maxHop: params.maxHop, count: params.count,
     };
   } else if (params.mode === "for-me") {
@@ -370,7 +378,7 @@ async function completeJob(db: Db, env: Env, job: Job, params: JobParams, histor
     .where(eq(schema.enishiSearchHistory.id, historyId)).get().catch(() => undefined);
   let coverage: MatchCoverage | undefined;
   try { coverage = row ? (JSON.parse(row.resultJson) as { coverage?: MatchCoverage }).coverage : undefined; } catch { coverage = undefined; }
-  const subject = params.mode === "giver" ? "あなたの人脈" : "候補";
+  const subject = coverage?.subject ?? "候補";
   const note = coverage && coverage.unmatchedCandidates > 0
     ? `\n（${subject}${coverage.totalCandidates}人のうち、${coverage.unmatchedCandidates}人分は、AIの検索に時間がかかり、時間内に照合できませんでした。時間をおいて、もう一度さがすと、見つかることがあります）`
     : job.failedBatches > 0 || job.truncated ? "\n（AIの検索に時間がかかり、一部の人脈は照合できていない可能性があります。気になるときは、時間をおいて、もう一度さがしてみてください）" : "";

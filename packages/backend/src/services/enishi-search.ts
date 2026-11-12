@@ -79,6 +79,8 @@ export type MatchCoverage = {
   totalBatches: number; failedBatches: number;
   /** 1回目は失敗したが、やり直しで成功した束の数 */
   retriedOkBatches: number;
+  /** 照合した相手を、画面で何と呼ぶか（省略すると「候補」）。貢献のご縁は「あなたの人脈」「なかまの金の卵・金のガチョウ」 */
+  subject?: string;
 };
 
 export type EnishiSearchResult = {
@@ -428,11 +430,13 @@ const MEMBER_RESULT_LIMIT = 10;
 
 type GiverCandidate = { candidateId: string; kind: "egg" | "goose"; memberId: string; memberName: string; memberEmoji: string; memberBgColor: string; description: string; extra: string | null };
 
-async function collectGiverCandidates(db: Db, meId: string, targetMemberIds: string[]): Promise<GiverCandidate[]> {
-  // AIの消費量が際限なく増えないよう、候補は指定された貢献先メンバー（最大5名）の卵/ガチョウのみに絞る
+async function collectGiverCandidates(db: Db, meId: string, targetMemberIds: string[] | null): Promise<GiverCandidate[]> {
+  // 通常は、指定された貢献先メンバー（最大5名）の卵/ガチョウのみ。targetMemberIds が null のときは、自分以外の全メンバーのもの（逆向きの検索）
   const [eggs, geese] = await Promise.all([
-    db.select().from(schema.goldenEggs).where(and(inArray(schema.goldenEggs.memberId, targetMemberIds), ne(schema.goldenEggs.memberId, meId))).all(),
-    db.select().from(schema.goldenGeese).where(and(inArray(schema.goldenGeese.memberId, targetMemberIds), ne(schema.goldenGeese.memberId, meId))).all(),
+    db.select().from(schema.goldenEggs)
+      .where(targetMemberIds ? and(inArray(schema.goldenEggs.memberId, targetMemberIds), ne(schema.goldenEggs.memberId, meId)) : ne(schema.goldenEggs.memberId, meId)).all(),
+    db.select().from(schema.goldenGeese)
+      .where(targetMemberIds ? and(inArray(schema.goldenGeese.memberId, targetMemberIds), ne(schema.goldenGeese.memberId, meId)) : ne(schema.goldenGeese.memberId, meId)).all(),
   ]);
   if (eggs.length === 0 && geese.length === 0) return [];
 
@@ -443,8 +447,10 @@ async function collectGiverCandidates(db: Db, meId: string, targetMemberIds: str
     ))
   ).flat();
   const memberMap = new Map(members.map((m) => [m.id, m]));
+  // 全メンバーが対象のときは、退会・休会などで活動していないメンバーは除く
+  const isTarget = (memberId: string): boolean => targetMemberIds !== null || memberMap.get(memberId)?.status === "active";
 
-  const eggCandidates: GiverCandidate[] = eggs.map((e) => {
+  const eggCandidates: GiverCandidate[] = eggs.filter((e) => isTarget(e.memberId)).map((e) => {
     const m = memberMap.get(e.memberId);
     return {
       candidateId: e.id, kind: "egg", memberId: e.memberId,
@@ -452,7 +458,7 @@ async function collectGiverCandidates(db: Db, meId: string, targetMemberIds: str
       description: e.description, extra: e.issue,
     };
   });
-  const gooseCandidates: GiverCandidate[] = geese.map((g) => {
+  const gooseCandidates: GiverCandidate[] = geese.filter((g) => isTarget(g.memberId)).map((g) => {
     const m = memberMap.get(g.memberId);
     return {
       candidateId: g.id, kind: "goose", memberId: g.memberId,
@@ -540,7 +546,8 @@ export type JobParams =
   | { mode: "for-me"; targets: EnishiTarget[]; targetIds: string[]; maxHop: Hop; includeOwnContacts: boolean; count: number; goodMatchContext?: string }
   | { mode: "contact-search"; specialties: string[]; freeText: string; scope: ContactSearchScope; memberIds: string[]; count: number; goodMatchContext?: string }
   // 貢献のご縁：自分の人脈（絞り込み済み）× 貢献先メンバーの金の卵・金のガチョウ。自分の人脈が多くても、すべてを小分けにして照合する
-  | { mode: "giver"; targetMemberIds: string[]; targetMemberNames: string[]; specialties: string[]; relationships: string[]; freeText: string; maxHop: Hop; count: number; goodMatchContext?: string };
+  // contactIds が空でないときは「逆向き」：選んだ外部人脈（自分の人脈）が、メンバーの誰に貢献できそうかをさがす（貢献先は、全メンバー）
+  | { mode: "giver"; targetMemberIds: string[]; targetMemberNames: string[]; contactIds?: string[]; contactNames?: string[]; specialties: string[]; relationships: string[]; freeText: string; maxHop: Hop; count: number; goodMatchContext?: string };
 
 /** 候補（なかまの人脈）を束に分けて照合する検索（私のご縁・人脈をさがす）のパラメータ */
 export type CandidateJobParams = Exclude<JobParams, { mode: "giver" }>;
@@ -830,25 +837,40 @@ export type GiverContext = {
   introduced: { myContactId: string; candidateId: string }[];
 };
 
+/** 逆向きの検索（選んだ外部人脈が、メンバーの誰に貢献できそうか）か */
+export function isReverseGiver(params: GiverJobParams): boolean { return (params.contactIds?.length ?? 0) > 0; }
+
+/** 逆向きの検索で、1つの束に入れる、金の卵・金のガチョウの数と、自分の人脈の数 */
+const REVERSE_BATCH_CANDIDATES = 30;
+const REVERSE_BATCH_CONTACTS = 10;
+
 /** 貢献のご縁の検索に使う、自分の人脈と、貢献先の卵・ガチョウを集める */
 export async function loadGiverContext(db: Db, meId: string, params: GiverJobParams): Promise<GiverContext> {
+  const reverse = isReverseGiver(params);
   let contacts = await db.select().from(schema.externalContacts)
     .where(and(eq(schema.externalContacts.ownerMemberId, meId), ne(schema.externalContacts.visibility, "private"))).all();
-  const { specialties, relationships, freeText } = params;
-  if (specialties.length > 0) contacts = contacts.filter((c) => c.specialty && specialties.some((sp) => c.specialty!.includes(sp)));
-  if (relationships.length > 0) {
-    const relMap = await attachRelationships(db, contacts.map((c) => c.id));
-    contacts = contacts.filter((c) => (relMap.get(c.id) ?? []).some((r) => relationships.includes(r)));
+  let truncated = false;
+  if (reverse) {
+    // 逆向き：選んだ外部人脈だけ（絞り込みや抜粋はしない）
+    const wanted = new Set(params.contactIds);
+    contacts = contacts.filter((c) => wanted.has(c.id));
+  } else {
+    const { specialties, relationships, freeText } = params;
+    if (specialties.length > 0) contacts = contacts.filter((c) => c.specialty && specialties.some((sp) => c.specialty!.includes(sp)));
+    if (relationships.length > 0) {
+      const relMap = await attachRelationships(db, contacts.map((c) => c.id));
+      contacts = contacts.filter((c) => (relMap.get(c.id) ?? []).some((r) => relationships.includes(r)));
+    }
+    if (freeText) {
+      const needle = freeText.toLowerCase();
+      contacts = contacts.filter((c) => [c.name, c.company, c.note, c.specialty, c.businessSummary].some((v) => v?.toLowerCase().includes(needle)));
+    }
+    truncated = contacts.length > GIVER_MAX_CONTACTS;
+    if (truncated) contacts = sampleContactsFairlyBySpecialty(contacts, GIVER_MAX_CONTACTS);
   }
-  if (freeText) {
-    const needle = freeText.toLowerCase();
-    contacts = contacts.filter((c) => [c.name, c.company, c.note, c.specialty, c.businessSummary].some((v) => v?.toLowerCase().includes(needle)));
-  }
-  const truncated = contacts.length > GIVER_MAX_CONTACTS;
-  if (truncated) contacts = sampleContactsFairlyBySpecialty(contacts, GIVER_MAX_CONTACTS);
 
   const candidatesByMember = new Map<string, GiverCandidate[]>();
-  for (const cand of await collectGiverCandidates(db, meId, params.targetMemberIds)) {
+  for (const cand of await collectGiverCandidates(db, meId, reverse ? null : params.targetMemberIds)) {
     const list = candidatesByMember.get(cand.memberId) ?? [];
     if (list.length < GIVER_MAX_CANDIDATES_PER_MEMBER) list.push(cand);
     candidatesByMember.set(cand.memberId, list);
@@ -860,9 +882,26 @@ export async function loadGiverContext(db: Db, meId: string, params: GiverJobPar
   return { contacts, truncated, candidatesByMember, introduced };
 }
 
-/** 束の分け方：貢献先ごとに、自分の人脈を GIVER_BATCH_CONTACTS 人ずつに分ける（卵・ガチョウのない貢献先は、照合しようがないので飛ばす） */
+/**
+ * 束の分け方
+ *  ・通常：貢献先ごとに、自分の人脈を GIVER_BATCH_CONTACTS 人ずつに分ける（束の中身は「<貢献先のメンバーID>|<人脈ID>」）
+ *  ・逆向き：全メンバーの卵・ガチョウを REVERSE_BATCH_CANDIDATES 件ずつ、選んだ人脈を REVERSE_BATCH_CONTACTS 人ずつに分ける（束の中身は「<卵・ガチョウのID>|<人脈ID>」）
+ * （卵・ガチョウのない貢献先は、照合しようがないので飛ばす）
+ */
 export function buildGiverBatches(params: GiverJobParams, ctx: GiverContext): string[][] {
   const batches: string[][] = [];
+  if (isReverseGiver(params)) {
+    const all = [...ctx.candidatesByMember.values()].flat();
+    for (let i = 0; i < all.length; i += REVERSE_BATCH_CANDIDATES) {
+      const candChunk = all.slice(i, i + REVERSE_BATCH_CANDIDATES);
+      for (let k = 0; k < ctx.contacts.length; k += REVERSE_BATCH_CONTACTS) {
+        const contactChunk = ctx.contacts.slice(k, k + REVERSE_BATCH_CONTACTS);
+        // 卵・ガチョウごとに人脈を並べる（やり直しで半分に分けるとき、卵・ガチョウの側が半分になる）
+        batches.push(candChunk.flatMap((cand) => contactChunk.map((c) => `${cand.candidateId}|${c.id}`)));
+      }
+    }
+    return batches;
+  }
   for (const memberId of params.targetMemberIds) {
     if ((ctx.candidatesByMember.get(memberId) ?? []).length === 0) continue;
     for (let i = 0; i < ctx.contacts.length; i += GIVER_BATCH_CONTACTS) {
@@ -882,15 +921,36 @@ function parseGiverBatchIds(ids: string[]): { memberId: string; contactIds: stri
 export async function matchGiverBatch(
   apiKey: string | undefined, isDev: boolean, params: GiverJobParams, ctx: GiverContext, ids: string[],
 ): Promise<BatchOutcome> {
-  const { memberId, contactIds } = parseGiverBatchIds(ids);
-  const cands = ctx.candidatesByMember.get(memberId) ?? [];
   const contactMap = new Map(ctx.contacts.map((c) => [c.id, c]));
-  const contacts = contactIds.map((id) => contactMap.get(id)).filter((c): c is MyContact => !!c);
+  let cands: GiverCandidate[];
+  let contacts: MyContact[];
+  if (isReverseGiver(params)) {
+    // 逆向き：束の中身は「<卵・ガチョウのID>|<人脈ID>」。重ならないように、それぞれの一覧を取り出す
+    const candById = new Map([...ctx.candidatesByMember.values()].flat().map((c) => [c.candidateId, c]));
+    const candIds = [...new Set(ids.map((id) => id.split("|")[0]))];
+    const contactIds = [...new Set(ids.map((id) => id.slice(id.indexOf("|") + 1)))];
+    cands = candIds.map((id) => candById.get(id)).filter((c): c is GiverCandidate => !!c);
+    contacts = contactIds.map((id) => contactMap.get(id)).filter((c): c is MyContact => !!c);
+  } else {
+    const { memberId, contactIds } = parseGiverBatchIds(ids);
+    cands = ctx.candidatesByMember.get(memberId) ?? [];
+    contacts = contactIds.map((id) => contactMap.get(id)).filter((c): c is MyContact => !!c);
+  }
   if (contacts.length === 0 || cands.length === 0) return { ok: true, matches: [] };
 
   if (isDev || !apiKey || apiKey === "dev-not-set") {
     if (JSON.stringify(params).includes("[dev-fail]")) return { ok: false, error: "開発用の失敗の再現" };
-    // 開発環境用: 束の先頭2人を「合致」として返す（束の分割・合算・通知の流れを確かめるため）
+    // 開発環境用: 束の先頭2人を「合致」として返す（束の分割・合算・通知の流れを確かめるため）。逆向きは、先頭の人脈と、先頭の2件の卵・ガチョウ
+    if (isReverseGiver(params)) {
+      return {
+        ok: true,
+        matches: cands.slice(0, 2).map((cand): JobMatch => ({
+          candidateId: cand.candidateId, matchedTargetId: contacts[0].id,
+          hop: cand.kind === "goose" ? "2hop" : "direct", type: cand.kind,
+          dealDescription: "開発環境用のモックです。", why: "開発モックのため根拠は生成されていません。",
+        })),
+      };
+    }
     const cand = cands[0];
     return {
       ok: true,
