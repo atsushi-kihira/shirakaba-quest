@@ -39,7 +39,7 @@ type TargetMember = { id: string; name: string; emoji: string; bgColor: string; 
 type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null; conferenceUrl: string | null };
 type SeriesDetail = {
   id: string; title: string; description: string | null;
-  titleColor?: string | null; // イベント種別で指定された、タイトル文字の色
+  titleColor?: string | null; typeEmoji?: string | null; // イベント種別で指定された、タイトル文字の色
   customFields: CustomField[]; // 主催者が追加した入力項目（講師・定員など）
   descriptionDoc: RichDoc | null;
   attachments: Attachment[];
@@ -273,7 +273,7 @@ export function MeetingSeriesDetailScreen() {
         </button>
         <div className="flex-1 min-w-0">
           <h1 className="text-xl font-semibold truncate" style={{ fontFamily: "var(--font-klee)", color: series.titleColor ?? "var(--color-ink-900)" }}>
-            🔁 {series.title}
+            🔁 {series.typeEmoji ? `${series.typeEmoji} ` : ""}{series.title}
           </h1>
         </div>
       </div>

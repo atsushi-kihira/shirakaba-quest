@@ -31,7 +31,7 @@ import { computeOccurrences, computeOccurrencesWithRules, parseExcludedDates, is
 import { getAvailableConferenceTypes, createSharedSeriesConference, cancelAutoConference, blockHostCalendarForDate, deleteHostCalendarEvent, renameHostCalendarEvent, refreshHostMeetingCalendarEvents, pickConferenceUrl } from "../services/conferenceService.ts";
 import { deleteOwnersAttachments, listAttachments, pruneInlineAttachments, syncOwnerAttachments } from "../services/meeting-attachments.ts";
 import { parseStoredDoc, resolveDescriptionInput } from "../services/rich-doc.ts";
-import { loadTitleColors, titleColorOfType } from "../services/meeting-event.ts";
+import { loadTypeStyles, typeStyleOf, typeStyleOfType } from "../services/meeting-event.ts";
 import { parseCustomFields, parseStoredCustomFields, withCustomFieldLines } from "../services/custom-fields.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -589,7 +589,7 @@ meetingSeriesRoutes.get("/hosting-voting-summary", async (c) => {
     respondedMemberIdsBySeriesId.set(r.seriesId, set);
   }
 
-  const hostingTitleColors = await loadTitleColors(db, hosting.map((s) => s.eventTypeDefId));
+  const hostingTitleColors = await loadTypeStyles(db, hosting.map((s) => s.eventTypeDefId));
   const data = await Promise.all(hosting.map(async (s) => {
     const targetIds = (await resolveSeriesMemberIds(db, s)).filter((tid) => tid !== memberId);
     const respondedIds = respondedMemberIdsBySeriesId.get(s.id) ?? new Set<string>();
@@ -597,7 +597,7 @@ meetingSeriesRoutes.get("/hosting-voting-summary", async (c) => {
     return {
       id: s.id,
       title: s.title,
-      titleColor: hostingTitleColors.get(s.eventTypeDefId ?? "") ?? null,
+      ...typeStyleOf(hostingTitleColors, s.eventTypeDefId),
       candidateCount: candidateCountBySeriesId.get(s.id) ?? 0,
       targetCount: targetIds.length,
       respondedCount,
@@ -689,12 +689,12 @@ meetingSeriesRoutes.get("/", async (c) => {
     }
   }
 
-  const listTitleColors = await loadTitleColors(db, mine.map((s) => s.eventTypeDefId));
+  const listTitleColors = await loadTypeStyles(db, mine.map((s) => s.eventTypeDefId));
   const data = mine
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((s) => ({
       id: s.id, title: s.title, status: s.status,
-      titleColor: listTitleColors.get(s.eventTypeDefId ?? "") ?? null,
+      ...typeStyleOf(listTitleColors, s.eventTypeDefId),
       noAttendanceCheck: s.noAttendanceCheck === 1,
       isPaid: s.isPaid === 1,
       feeAmount: s.isPaid === 1 ? s.feeAmount : null,
@@ -813,7 +813,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
   return c.json({
     data: {
       id: series.id, title: series.title, description: series.description,
-      titleColor: await titleColorOfType(db, series.eventTypeDefId),
+      ...(await typeStyleOfType(db, series.eventTypeDefId)),
       descriptionDoc: parseStoredDoc(series.descriptionDoc),
       customFields: parseStoredCustomFields(series.customFieldsJson),
       attachments: await listAttachments(db, "series", series.id),

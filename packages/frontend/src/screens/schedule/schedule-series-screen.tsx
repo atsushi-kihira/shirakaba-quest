@@ -25,7 +25,7 @@ type Candidate = {
 };
 type View = {
   inviteeName: string; inviteeEmail: string | null; inviteeCompany?: string;
-  series: { id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; customFields?: CustomField[]; titleColor?: string | null; status: string; host: { id: string; name: string; emoji: string } | null };
+  series: { id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; customFields?: CustomField[]; titleColor?: string | null; typeEmoji?: string | null; status: string; host: { id: string; name: string; emoji: string } | null };
   candidates: Candidate[];
   myAnswers: Record<string, Availability>;
   myComment?: string;
@@ -159,7 +159,7 @@ function SeriesGuestPage({ mode, token }: { mode: "personal" | "shared"; token: 
         <div className="text-center mb-6">
           <div className="text-3xl mb-1">🔁</div>
           <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>{appTitle} · 定例会の日程調整</p>
-          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: series.titleColor ?? "var(--color-ink-900)" }}>{series.title}</h1>
+          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: series.titleColor ?? "var(--color-ink-900)" }}>{series.typeEmoji ? `${series.typeEmoji} ` : ""}{series.title}</h1>
           {series.host && <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>{series.host.emoji} {series.host.name}さんから招待されています</p>}
 <GuestDescriptionBody className="text-left mt-3 mx-1" token={token} doc={series.descriptionDoc} plain={series.description} attachments={series.attachments} />
           <CustomFieldsView className="text-left mt-3 mx-1" fields={series.customFields} />

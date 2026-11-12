@@ -215,7 +215,7 @@ export function WeekTimeGrid({ days, tz, today, selected, onPick, appByDay, goog
                         style={{ ...pos, background: ev.titleColor ?? KIND_COLOR[ev.kind], opacity: isMuted(ev) ? 0.45 : 1, zIndex: 5 }}
                       >
                         {/* 幅がせまいとき（予定が重なっているとき）は、タイトルを折り返して、読める範囲を増やす */}
-                        <span className={`block text-[10px] leading-tight ${it.lanes > 1 ? "break-all" : "truncate"}`}>{KIND_INFO[ev.kind].icon} {ev.title}</span>
+                        <span className={`block text-[10px] leading-tight ${it.lanes > 1 ? "break-all" : "truncate"}`}>{ev.typeEmoji ?? KIND_INFO[ev.kind].icon} {ev.title}</span>
                         {height >= 34 && it.lanes === 1 && (
                           <span className="block text-[9px] leading-tight tabular-nums opacity-90 truncate">
                             {fmtTime(ev.startsAt, tz)}〜{fmtTime(ev.endsAt, tz)}

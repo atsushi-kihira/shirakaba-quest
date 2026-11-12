@@ -43,7 +43,7 @@ type ExternalInvitee = { id: string; name: string; email: string | null; token: 
 type Meeting = {
   id: string; title: string; description: string | null;
   /** イベント種別で指定された、タイトル文字の色（セミナーなどの強調表示）。なければ null */
-  titleColor?: string | null;
+  titleColor?: string | null; typeEmoji?: string | null;
   /** 主催者が追加した入力項目（講師・定員など） */
   customFields: CustomField[];
   /** 書式つきの説明（なければ null。description は、その文章だけの版） */
@@ -605,7 +605,7 @@ export function MeetingDetailScreen() {
         </button>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-semibold truncate" style={{ fontFamily: "var(--font-klee)", color: meeting.titleColor ?? "var(--color-ink-900)" }}>
-            {meeting.title}
+            {meeting.typeEmoji ? `${meeting.typeEmoji} ` : ""}{meeting.title}
           </h1>
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
             {meeting.host?.emoji} {meeting.host?.name}さん主催 ・{" "}

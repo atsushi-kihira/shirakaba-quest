@@ -99,20 +99,29 @@ export function parseTitleColor(v: unknown): string | null | undefined {
   return typeof v === "string" && TITLE_COLOR_RE.test(v) ? v.toLowerCase() : undefined;
 }
 
-/** イベント種別IDごとの、タイトル文字の色（色のある種別だけ） */
-export async function loadTitleColors(db: Db, typeDefIds: Array<string | null | undefined>): Promise<Map<string, string>> {
+/** イベント種別の見た目（タイトル文字の色・目印の絵文字） */
+export type TypeStyle = { titleColor: string | null; typeEmoji: string };
+
+/** イベント種別IDごとの見た目（種別が見つかったものだけ） */
+export async function loadTypeStyles(db: Db, typeDefIds: Array<string | null | undefined>): Promise<Map<string, TypeStyle>> {
   const ids = [...new Set(typeDefIds.filter((x): x is string => !!x))];
-  const out = new Map<string, string>();
+  const out = new Map<string, TypeStyle>();
   for (let i = 0; i < ids.length; i += 50) {
-    const rows = await db.select({ id: schema.eventTypeDefinitions.id, color: schema.eventTypeDefinitions.titleColor })
+    const rows = await db.select({ id: schema.eventTypeDefinitions.id, color: schema.eventTypeDefinitions.titleColor, emoji: schema.eventTypeDefinitions.emoji })
       .from(schema.eventTypeDefinitions).where(inArray(schema.eventTypeDefinitions.id, ids.slice(i, i + 50))).all();
-    for (const r of rows) if (r.color) out.set(r.id, r.color);
+    for (const r of rows) out.set(r.id, { titleColor: r.color || null, typeEmoji: r.emoji });
   }
   return out;
 }
 
-/** 1つの種別のタイトル文字の色（なければ null） */
-export async function titleColorOfType(db: Db, typeDefId: string | null | undefined): Promise<string | null> {
-  if (!typeDefId) return null;
-  return (await loadTitleColors(db, [typeDefId])).get(typeDefId) ?? null;
+/** 一覧などの1件ぶん。種別がなければ「色なし・絵文字なし」 */
+export function typeStyleOf(styles: Map<string, TypeStyle>, typeDefId: string | null | undefined): { titleColor: string | null; typeEmoji: string | null } {
+  const st = typeDefId ? styles.get(typeDefId) : undefined;
+  return { titleColor: st?.titleColor ?? null, typeEmoji: st?.typeEmoji ?? null };
+}
+
+/** 1つの種別の見た目 */
+export async function typeStyleOfType(db: Db, typeDefId: string | null | undefined): Promise<{ titleColor: string | null; typeEmoji: string | null }> {
+  if (!typeDefId) return { titleColor: null, typeEmoji: null };
+  return typeStyleOf(await loadTypeStyles(db, [typeDefId]), typeDefId);
 }

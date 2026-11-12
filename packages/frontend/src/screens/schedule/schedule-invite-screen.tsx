@@ -24,7 +24,7 @@ type Candidate = { id: string; startsAt: number; endsAt: number | null; note: st
 type ApiResponse = {
   data: {
     meeting: {
-      id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; customFields?: CustomField[]; titleColor?: string | null; status: string;
+      id: string; title: string; description: string | null; descriptionDoc: RichDoc | null; attachments: Attachment[]; customFields?: CustomField[]; titleColor?: string | null; typeEmoji?: string | null; status: string;
       confirmedCandidateId: string | null;
       noAttendanceCheck?: boolean; isPaid?: boolean; feeAmount?: number | null; feeNote?: string | null;
       host: { id: string; name: string; emoji: string } | null;
@@ -211,7 +211,7 @@ export function ScheduleInviteScreen() {
         <div className="px-4 py-6 pb-24 max-w-lg mx-auto text-center">
           <div className="text-3xl mb-1">📢</div>
           <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>{appTitle} · ミーティングのお知らせ</p>
-          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: meeting.titleColor ?? "var(--color-ink-900)" }}>{meeting.title}</h1>
+          <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: meeting.titleColor ?? "var(--color-ink-900)" }}>{meeting.typeEmoji ? `${meeting.typeEmoji} ` : ""}{meeting.title}</h1>
           {meeting.host && (
             <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>{meeting.host.emoji} {meeting.host.name}さんからのお知らせです</p>
           )}
@@ -238,7 +238,7 @@ export function ScheduleInviteScreen() {
           <div className="text-3xl mb-1">📅</div>
           <p className="text-xs mb-2" style={{ color: "var(--color-ink-400)" }}>{appTitle} · 日程調整</p>
           <h1 className="text-xl font-bold" style={{ fontFamily: "var(--font-klee)", color: meeting.titleColor ?? "var(--color-ink-900)" }}>
-            {meeting.title}
+            {meeting.typeEmoji ? `${meeting.typeEmoji} ` : ""}{meeting.title}
           </h1>
           {meeting.host && (
             <p className="text-sm mt-1" style={{ color: "var(--color-ink-500)" }}>

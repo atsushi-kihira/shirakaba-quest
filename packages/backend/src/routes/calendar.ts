@@ -13,7 +13,7 @@ import { and, eq, gte, inArray, lte, or } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
-import { loadTitleColors } from "../services/meeting-event.ts";
+import { loadTypeStyles, typeStyleOf } from "../services/meeting-event.ts";
 import type { Env, Variables } from "../types.ts";
 import type { CalendarEvent, CalendarEventMyStatus } from "@shared/types";
 
@@ -170,7 +170,7 @@ calendarRoutes.get("/events", async (c) => {
 
     if (rows.length > 0) {
       const meetingIds = [...new Set(rows.map((r) => r.m.id))];
-      const calTitleColors = await loadTitleColors(db, rows.map((r) => r.m.eventTypeDefId));
+      const calTitleColors = await loadTypeStyles(db, rows.map((r) => r.m.eventTypeDefId));
       const [teamRows, collabRows, inviteRows, declineRows, attendanceRows, responseRows] = await Promise.all([
         db.select({ teamId: schema.teamMembers.teamId }).from(schema.teamMembers).where(eq(schema.teamMembers.memberId, memberId)).all(),
         db.select({ teamId: schema.collabTeamMembers.teamId }).from(schema.collabTeamMembers)
@@ -216,7 +216,7 @@ calendarRoutes.get("/events", async (c) => {
           kind: m.seriesId ? "series" : "meeting",
           id: m.id,
           title: m.title,
-          titleColor: calTitleColors.get(m.eventTypeDefId ?? "") ?? null,
+          ...typeStyleOf(calTitleColors, m.eventTypeDefId),
           startsAt: cand.startsAt,
           endsAt: cand.endsAt ?? cand.startsAt + 3600,
           isHost,

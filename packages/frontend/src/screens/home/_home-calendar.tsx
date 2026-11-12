@@ -362,7 +362,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
                               className={`${i === 2 ? "hidden sm:flex" : "flex"} items-center gap-px min-w-0 text-[9px] leading-tight text-left`}
                               style={{ opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55, color: ev.titleColor ?? "var(--color-ink-700)", fontWeight: ev.titleColor ? 700 : undefined }}
                             >
-                              <span className="shrink-0 text-[10px] leading-none">{KIND_INFO[ev.kind].icon}</span>
+                              <span className="shrink-0 text-[10px] leading-none">{ev.typeEmoji ?? KIND_INFO[ev.kind].icon}</span>
                               <span className="truncate">{ev.title}</span>
                             </span>
                           ))}
@@ -479,7 +479,7 @@ export function HomeCalendar({ tz }: { tz: string }) {
                   style={{ opacity: isMuted(ev) ? 0.7 : 1 }}
                 >
                   <div className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: "var(--color-paper-200)" }}>
-                    {KIND_INFO[ev.kind].icon}
+                    {ev.typeEmoji ?? KIND_INFO[ev.kind].icon}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate" style={{ color: ev.titleColor ?? "var(--color-ink-800)", fontWeight: ev.titleColor ? 700 : undefined }}>{ev.title}</p>

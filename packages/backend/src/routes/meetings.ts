@@ -60,7 +60,7 @@ import { parseMeetingOptions, withFeeLine, feeLine, type MeetingOptionsInput } f
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { deleteOwnerAttachments, listAttachments, pruneInlineAttachments, syncOwnerAttachments } from "../services/meeting-attachments.ts";
 import { parseStoredDoc, resolveDescriptionInput } from "../services/rich-doc.ts";
-import { loadTitleColors, titleColorOfType } from "../services/meeting-event.ts";
+import { loadTypeStyles, typeStyleOf, typeStyleOfType } from "../services/meeting-event.ts";
 import { parseCustomFields, parseStoredCustomFields, withCustomFieldLines } from "../services/custom-fields.ts";
 import { resolveGuests, type GuestInput } from "../services/meeting-guests.ts";
 import { loadGroupForCreate, mergeGuestInputs } from "../services/meeting-groups.ts";
@@ -740,14 +740,14 @@ meetingRoutes.get("/upcoming", async (c) => {
     : [];
   const hostMap = new Map(hosts.map((h) => [h.id, h]));
 
-  const titleColors = await loadTitleColors(db, relevant.map((m) => m.eventTypeDefId));
+  const titleColors = await loadTypeStyles(db, relevant.map((m) => m.eventTypeDefId));
   return c.json({
     data: relevant.map((m) => {
       const cand = repMap.get(m.id);
       return {
         id: m.id,
         title: m.title,
-        titleColor: titleColors.get(m.eventTypeDefId ?? "") ?? null,
+        ...typeStyleOf(titleColors, m.eventTypeDefId),
         description: m.description,
         host: hostMap.get(m.hostMemberId) ?? null,
         isHost: m.hostMemberId === memberId,
@@ -821,7 +821,7 @@ meetingRoutes.get("/hosting-open-summary", async (c) => {
     externalByMeeting.set(e.meetingId, list);
   }
 
-  const hostingTitleColors = await loadTitleColors(db, hosting.map((m) => m.eventTypeDefId));
+  const hostingTitleColors = await loadTypeStyles(db, hosting.map((m) => m.eventTypeDefId));
   const data = await Promise.all(hosting.map(async (m) => {
     // 主催者自身は回答対象から除く（対象者リストを取得するのはここでは候補日提示方式の集計のためだけ）
     const targetMembers = (await getTargetMembers(db, m)).filter((tm) => tm.id !== memberId);
@@ -835,7 +835,7 @@ meetingRoutes.get("/hosting-open-summary", async (c) => {
     return {
       id: m.id,
       title: m.title,
-      titleColor: hostingTitleColors.get(m.eventTypeDefId ?? "") ?? null,
+      ...typeStyleOf(hostingTitleColors, m.eventTypeDefId),
       candidateCount: candidateCountMap.get(m.id) ?? 0,
       targetCount: targetMembers.length + externalIds.length,
       respondedCount: respondedMemberCount + respondedExternalCount,
@@ -1022,7 +1022,7 @@ meetingRoutes.get("/", async (c) => {
   ]);
 
   const unnumberedSeriesIds = await loadUnnumberedSeriesIds(db, all.map((m) => m.seriesId));
-  const listTitleColors = await loadTitleColors(db, all.map((m) => m.eventTypeDefId));
+  const listTitleColors = await loadTypeStyles(db, all.map((m) => m.eventTypeDefId));
   const result = all
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((m) => {
@@ -1030,7 +1030,7 @@ meetingRoutes.get("/", async (c) => {
       return {
         id: m.id,
         title: m.title,
-        titleColor: listTitleColors.get(m.eventTypeDefId ?? "") ?? null,
+        ...typeStyleOf(listTitleColors, m.eventTypeDefId),
         description: m.description,
         host: hostMap.get(m.hostMemberId) ?? null,
         isHost: m.hostMemberId === memberId,
@@ -1198,7 +1198,7 @@ meetingRoutes.get("/pending-attendance", async (c) => {
     const isTarget = targets.some((m) => m.id === memberId) || meeting.hostMemberId === memberId;
     if (!isTarget) continue;
 
-    result.push({ id: meeting.id, title: meeting.title, titleColor: await titleColorOfType(db, meeting.eventTypeDefId), confirmedStartsAt: earliest.startsAt });
+    result.push({ id: meeting.id, title: meeting.title, ...(await typeStyleOfType(db, meeting.eventTypeDefId)), confirmedStartsAt: earliest.startsAt });
   }
 
   return c.json({ data: result });
@@ -1472,7 +1472,7 @@ meetingRoutes.get("/:id", async (c) => {
       meeting: {
         id: meeting.id,
         title: meeting.title,
-        titleColor: await titleColorOfType(db, meeting.eventTypeDefId),
+        ...(await typeStyleOfType(db, meeting.eventTypeDefId)),
         description: meeting.description,
         descriptionDoc: parseStoredDoc(meeting.descriptionDoc),
         customFields: parseStoredCustomFields(meeting.customFieldsJson),

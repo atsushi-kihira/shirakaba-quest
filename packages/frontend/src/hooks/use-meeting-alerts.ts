@@ -9,7 +9,7 @@ import { getMeetingEffectiveStatus, isActionableStatus } from "@/lib/meeting-sta
 export type MeetingListItem = {
   id: string;
   title: string;
-  titleColor?: string | null; // イベント種別で指定された、タイトル文字の色
+  titleColor?: string | null; typeEmoji?: string | null; // イベント種別で指定された、タイトル文字の色
   host: { id: string; name: string; emoji: string } | null;
   isHost: boolean;
   status: string;
@@ -19,9 +19,9 @@ export type MeetingListItem = {
   confirmedDate: { startsAt: number; endsAt: number | null } | null;
 };
 export type MeetingNotification = { id: string; meetingId: string; type: string; message: string | null; createdAt: number };
-export type PendingAttendance = { id: string; title: string; titleColor?: string | null; confirmedStartsAt: number };
+export type PendingAttendance = { id: string; title: string; titleColor?: string | null; typeEmoji?: string | null; confirmedStartsAt: number };
 export type SeriesListItem = {
-  id: string; title: string; titleColor?: string | null; status: "voting" | "confirmed" | "ended" | "cancelled";
+  id: string; title: string; titleColor?: string | null; typeEmoji?: string | null; status: "voting" | "confirmed" | "ended" | "cancelled";
   isHost: boolean; hasResponded: boolean;
   host: { id: string; name: string; emoji: string } | null;
 };
