@@ -7,7 +7,7 @@
 // POST   /api/collab/team-drafts/:id/promote              — 緩いチーム／パワーチームにする（中核のメンバーを選ぶ。選ばなかった人は「候補」としてチームに残る）
 // DELETE /api/collab/team-drafts/:id                      — チーム案を削除する
 // チーム案の詳細・プロフィール・メンバーの追加／削除・AIによる再検討は、チーム育成の共通の画面用 API（/api/collab/workspace/draft/:id）で行う。
-// 構成は、自分自身（常に含む）＋メンバー＋自分の外部人脈＋募集人材で、合計10名まで。他のユーザーには見えない。
+// 構成は、自分自身（常に含む）＋メンバー案。メンバー案は、AIが提案した人（最大10名）と、自分で追加した人（最大10名）を別枠で数える。他のユーザーには見えない。
 // =============================================================
 import { Hono } from "hono";
 import { and, desc, eq, inArray } from "drizzle-orm";
@@ -16,9 +16,9 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { isMemberApproved, resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import { loadProfiles } from "../services/member-collab.ts";
-import { generateTeamDraftIdeas, proposeTeamFromIdea, type DraftParticipant, type TeamDraftIdeas } from "../services/team-draft-ideas.ts";
+import { MAX_AI_MEMBERS, MAX_DESIRED_TALENTS, generateTeamDraftIdeas, proposeTeamFromIdea, type DraftParticipant, type TeamDraftIdeas } from "../services/team-draft-ideas.ts";
 import {
-  MAX_PEOPLE, buildAiPeople, deleteTeamWorkspaceData, hasProfileContent, getProfile, loadRoster, loadSuggestionPool, onTeamCreated, resolveSubject, saveProfile,
+  MAX_MANUAL_PEOPLE, buildAiPeople, deleteTeamWorkspaceData, hasProfileContent, getProfile, loadRoster, loadSuggestionPool, onTeamCreated, resolveSubject, saveProfile,
 } from "../services/team-workspace.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -42,8 +42,8 @@ async function resolveMe(c: { get: (k: "userId" | "userType") => never | string 
 const uniqueIds = (v: unknown): string[] => [...new Set((Array.isArray(v) ? v : []).filter((x): x is string => typeof x === "string" && x.length > 0))];
 
 /** 指定されたメンバー・外部人脈が有効か確認する（メンバーは承認済みで本人以外、人脈は本人のもの）。問題があれば利用者向けのメッセージを返す */
-async function validateSelection(db: Db, meId: string, memberIds: string[], contactIds: string[]): Promise<string | null> {
-  if (1 + memberIds.length + contactIds.length > MAX_PEOPLE) return `チーム案は、自分を含めて最大${MAX_PEOPLE}名までです`;
+async function validateSelection(db: Db, meId: string, memberIds: string[], contactIds: string[], max: number): Promise<string | null> {
+  if (memberIds.length + contactIds.length > max) return `自分で選べるのは、自分のほかに最大${max}名までです`;
   if (memberIds.length > 0) {
     const rows = await db.select({ id: schema.members.id }).from(schema.members)
       .where(and(inArray(schema.members.id, memberIds), eq(schema.members.status, "active"))).all();
@@ -57,14 +57,14 @@ async function validateSelection(db: Db, meId: string, memberIds: string[], cont
   return null;
 }
 
-async function insertProspects(db: Db, draftId: string, meId: string, memberIds: string[], contactIds: string[], now: number): Promise<void> {
+async function insertProspects(db: Db, draftId: string, meId: string, memberIds: string[], contactIds: string[], now: number, source: "ai" | "manual"): Promise<void> {
   const rows = [
     ...memberIds.map((refId) => ({ kind: "member" as const, refId, ownerMemberId: null as string | null })),
     ...contactIds.map((refId) => ({ kind: "contact" as const, refId, ownerMemberId: meId as string | null })),
   ];
   for (const r of rows) {
     await db.insert(schema.teamProspects).values({
-      id: newId(), subjectType: "draft", subjectId: draftId, kind: r.kind, refId: r.refId, ownerMemberId: r.ownerMemberId, locked: 0, published: 0, addedBy: meId, createdAt: now,
+      id: newId(), subjectType: "draft", subjectId: draftId, kind: r.kind, refId: r.refId, ownerMemberId: r.ownerMemberId, locked: 0, published: 0, source, addedBy: meId, createdAt: now,
     }).onConflictDoNothing();
   }
 }
@@ -75,14 +75,14 @@ async function insertProspects(db: Db, draftId: string, meId: string, memberIds:
  */
 async function adoptInitialIdeas(db: Db, draftId: string, meId: string, ideas: TeamDraftIdeas, validKeys: Set<string>, now: number): Promise<void> {
   const roles = Object.fromEntries(ideas.roles.filter((r) => validKeys.has(r.key)).map((r) => [r.key, r.role]));
-  const talents = (ideas.desiredTalents ?? []).slice(0, 3);
+  const talents = (ideas.desiredTalents ?? []).slice(0, MAX_DESIRED_TALENTS);
   const talentIds: string[] = [];
   for (const t of talents) {
     const id = newId();
     talentIds.push(id);
     await db.insert(schema.teamProspects).values({
       id, subjectType: "draft", subjectId: draftId, kind: "talent", refId: null, locked: 0, talentTitle: t.title, talentProfile: t.profile, talentReason: t.reason,
-      published: 0, addedBy: meId, createdAt: now,
+      published: 0, source: "ai", addedBy: meId, createdAt: now,
     });
     if (t.role) roles[`t:${id}`] = t.role;
   }
@@ -127,13 +127,13 @@ collabTeamDraftRoutes.post("/", async (c) => {
   if (goal.length > GOAL_MAX) return c.json(err("invalid_input", `考えたいことは${GOAL_MAX}文字以内で入力してください`), 400);
   const memberIds = uniqueIds(body.memberIds).filter((id) => id !== meId);
   const contactIds = uniqueIds(body.contactIds);
-  const problem = await validateSelection(db, meId, memberIds, contactIds);
+  const problem = await validateSelection(db, meId, memberIds, contactIds, MAX_MANUAL_PEOPLE);
   if (problem) return c.json(err("invalid_input", problem), 400);
 
   const now = nowSec();
   const id = newId();
   await db.insert(schema.teamDrafts).values({ id, ownerMemberId: meId, title, goal, ideasJson: null, ideasGeneratedAt: null, createdAt: now, updatedAt: now });
-  await insertProspects(db, id, meId, memberIds, contactIds, now);
+  await insertProspects(db, id, meId, memberIds, contactIds, now, "manual");
   return c.json({ data: { id } }, 201);
 });
 
@@ -148,20 +148,20 @@ collabTeamDraftRoutes.post("/create-from-members", async (c) => {
   const memberIds = uniqueIds(b.memberIds).filter((id) => id !== meId);
   const contactIds = uniqueIds(b.contactIds);
   if (memberIds.length + contactIds.length < 1) return c.json(err("invalid_input", "自分のほかに、メンバーまたは外部人脈を1名以上選んでください"), 400);
-  const problem = await validateSelection(db, meId, memberIds, contactIds);
+  const problem = await validateSelection(db, meId, memberIds, contactIds, MAX_MANUAL_PEOPLE);
   if (problem) return c.json(err("invalid_input", problem), 400);
 
   const now = nowSec();
   const id = newId();
   await db.insert(schema.teamDrafts).values({ id, ownerMemberId: meId, title: DEFAULT_DRAFT_TITLE, goal, ideasJson: null, ideasGeneratedAt: null, createdAt: now, updatedAt: now });
-  await insertProspects(db, id, meId, memberIds, contactIds, now);
+  await insertProspects(db, id, meId, memberIds, contactIds, now, "manual");
 
   const resolved = (await resolveSubject(db, "draft", id, meId))!;
   const roster = await loadRoster(db, resolved.subject, resolved.access, meId);
   const people = await buildAiPeople(db, resolved.subject, roster);
   // タイトル・協業内容・役割はAIに考えてもらう。うまくいかなくてもチーム案は残し、画面から「再検討」ができる
   const ideas = await generateTeamDraftIdeas({
-    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: "", goal, people, maxTalents: Math.max(0, MAX_PEOPLE - people.length),
+    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: "", goal, people, maxTalents: MAX_DESIRED_TALENTS,
   });
   if (ideas) {
     await db.update(schema.teamDrafts).set({ title: (ideas.teamTitle || ideas.businessTitle || DEFAULT_DRAFT_TITLE).slice(0, TITLE_MAX), updatedAt: now }).where(eq(schema.teamDrafts.id, id));
@@ -192,19 +192,19 @@ collabTeamDraftRoutes.post("/create-from-idea", async (c) => {
       mine && mine.skills.length > 0 && `USP: ${mine.skills.map((s) => (s.description ? `${s.name}（${s.description}）` : s.name)).join(" ／ ")}`].filter(Boolean).join(" / ") || "（情報の登録なし）",
   };
   const proposal = await proposeTeamFromIdea({
-    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title, goal, me, candidates, maxOthers: MAX_PEOPLE - 1,
+    apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title, goal, me, candidates, maxOthers: MAX_AI_MEMBERS,
   });
   if (!proposal) return c.json(err("ai_failed", "チームメンバー案を考えられませんでした。少し時間をおいて、もう一度お試しください"), 502);
 
   const memberIds = proposal.otherKeys.filter((k) => k.startsWith("m:")).map((k) => k.slice(2));
   const contactIds = proposal.otherKeys.filter((k) => k.startsWith("c:")).map((k) => k.slice(2));
-  const problem = await validateSelection(db, meId, memberIds, contactIds);
+  const problem = await validateSelection(db, meId, memberIds, contactIds, MAX_AI_MEMBERS);
   if (problem) return c.json(err("ai_failed", "チームメンバー案を考えられませんでした。もう一度お試しください"), 502);
 
   const now = nowSec();
   const id = newId();
   await db.insert(schema.teamDrafts).values({ id, ownerMemberId: meId, title, goal, ideasJson: null, ideasGeneratedAt: null, createdAt: now, updatedAt: now });
-  await insertProspects(db, id, meId, memberIds, contactIds, now);
+  await insertProspects(db, id, meId, memberIds, contactIds, now, "ai");
   await adoptInitialIdeas(db, id, meId, proposal.ideas, new Set([`m:${meId}`, ...proposal.otherKeys]), now);
   return c.json({ data: { id } }, 201);
 });

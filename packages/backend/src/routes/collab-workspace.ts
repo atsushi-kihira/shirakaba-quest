@@ -9,7 +9,7 @@
 // POST   /api/collab/workspace/:type/:id/profile/confirm  — 仮のプロフィールを「この内容でよい」と確認する（リーダー）
 // PUT    /api/collab/workspace/:type/:id/roles            — 役割の編集（自分の役割は誰でも。他の人の役割は、リーダー以外は承認待ちの提案になる）
 // POST   /api/collab/workspace/team/:id/role-requests/:rid/approve|reject — 役割の変更提案の承認・却下（リーダー）
-// POST   /api/collab/workspace/:type/:id/prospects        — 候補・募集人材の追加（リーダー）
+// POST   /api/collab/workspace/:type/:id/prospects        — 候補・募集人材の追加（リーダー）。役割を書いたり、AIに役割を考えてもらったりもできる
 // PATCH  /api/collab/workspace/:type/:id/prospects/:pid   — 確定・公開・募集人材の内容の更新（リーダー）
 // DELETE /api/collab/workspace/:type/:id/prospects/:pid   — 候補・募集人材を外す（リーダー）
 // POST   /api/collab/workspace/team/:id/prospects/:pid/invite   — 候補のメンバーに声をかける（招待。リーダー）
@@ -25,12 +25,12 @@ import { newId } from "../services/auth.ts";
 import { MailService } from "../services/mailer.ts";
 import { isMemberApproved, resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import {
-  REGENERATE_NOTE_MAX, REGENERATE_PERSPECTIVES, generateTeamDraftIdeas, type RegeneratePerspective, type TeamDraftIdeas,
+  REGENERATE_NOTE_MAX, REGENERATE_PERSPECTIVES, ROLE_MAX, generateTeamDraftIdeas, suggestRolesForTargets, type RegeneratePerspective, type TeamDraftIdeas,
 } from "../services/team-draft-ideas.ts";
 import {
-  DAILY_AI_RUNS, MAX_PEOPLE, adoptLegacyDraftIdeas, buildNextSteps, MILESTONE_LABEL, PROPOSAL_HISTORY, addMilestone, applyProposal, buildAiPeople, computeHealth, getProfile,
+  DAILY_AI_RUNS, MAX_MANUAL_PEOPLE, MAX_PEOPLE, adoptLegacyDraftIdeas, draftLimits, buildNextSteps, MILESTONE_LABEL, PROPOSAL_HISTORY, addMilestone, applyProposal, buildAiPeople, computeHealth, getProfile,
   hasProfileContent, isProfileComplete, loadRoster, loadSuggestionPool, parseApplied, parseRoles, parseSteps, profileAsPrevious,
-  remainingItems, resolveSubject, saveProfile, setRole, type Access, type ApplySelection, type MilestoneType, type Subject, type SubjectType,
+  remainingItems, resolveSubject, saveProfile, setRole, setRoles, type Access, type ApplySelection, type MilestoneType, type Subject, type SubjectType,
 } from "../services/team-workspace.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -101,6 +101,8 @@ async function buildDetail(db: Db, meId: string, subject: Subject, access: Acces
     type: subject.type, id: subject.id, stage: subject.stage, title: subject.title, archived: subject.archived, leaderId: subject.leaderId,
     access: { ...access, canRun: access.isActive, canApply: access.isLeader, canEditProfile: access.isLeader },
     profile: profileView, complete, members: roster.members, prospects: roster.prospects, maxPeople: MAX_PEOPLE,
+    // チーム案の人数の枠（AIが提案した人・自分で追加した人を別々に数える）。正式なチームでは使わない
+    limits: subject.type === "draft" && seeAll ? draftLimits(roster) : null,
   };
   if (!seeAll) {
     return { ...base, roleRequests: [], proposals: [], nextSteps: [], milestones: [], health: null, aiRunsLeft: 0 };
@@ -402,9 +404,18 @@ collabWorkspaceRoutes.post("/team/:id/role-requests/:rid/:decision", async (c) =
 // ---- 候補・募集人材 ----
 async function peopleRoom(db: Db, subject: Subject, access: Access, meId: string): Promise<number> {
   const roster = await loadRoster(db, subject, access, meId);
-  const used = subject.type === "draft" ? roster.members.length + roster.prospects.length : roster.prospects.length;
-  return MAX_PEOPLE - used;
+  // チーム案は「自分で追加した人」の枠（AIが提案した人は別枠）。正式なチームは、候補と募集人材を合わせた枠
+  if (subject.type === "draft") { const l = draftLimits(roster).manual; return l.max - l.used; }
+  return MAX_PEOPLE - roster.prospects.length;
 }
+
+type AddProspectsBody = {
+  memberIds?: unknown; contactIds?: unknown; talent?: { title?: string; profile?: string; reason?: string; role?: string };
+  /** 追加する人の役割（任意）。キーは "m:<メンバーID>" / "c:<外部人脈ID>" */
+  roles?: unknown;
+  /** true：追加した人の役割を、AIに考えてもらう（書いた役割は整える。空欄の人は、強み・USPから考える） */
+  aiRoles?: unknown;
+};
 
 collabWorkspaceRoutes.post("/:type/:id/prospects", async (c) => {
   const db = createDb(c.env.DB);
@@ -412,15 +423,25 @@ collabWorkspaceRoutes.post("/:type/:id/prospects", async (c) => {
   if ("error" in o) return c.json(o.error, o.status);
   const denied = needLeader(o.access);
   if (denied) return c.json(denied, 403);
-  const b = await c.req.json<{ memberIds?: unknown; contactIds?: unknown; talent?: { title?: string; profile?: string; reason?: string } }>().catch(() => ({} as { memberIds?: unknown }));
+  const b = await c.req.json<AddProspectsBody>().catch(() => ({} as AddProspectsBody));
   const uniq = (v: unknown): string[] => [...new Set((Array.isArray(v) ? v : []).filter((x): x is string => typeof x === "string" && x.length > 0))];
-  const memberIds = uniq((b as { memberIds?: unknown }).memberIds);
-  const contactIds = uniq((b as { contactIds?: unknown }).contactIds);
-  const talent = (b as { talent?: { title?: string; profile?: string; reason?: string } }).talent;
+  const memberIds = uniq(b.memberIds);
+  const contactIds = uniq(b.contactIds);
+  const talent = b.talent;
+  const aiRoles = b.aiRoles === true;
+  const roleInput: Record<string, string> = {};
+  if (b.roles && typeof b.roles === "object" && !Array.isArray(b.roles)) {
+    for (const [k, v] of Object.entries(b.roles as Record<string, unknown>)) {
+      if (typeof v !== "string" || !v.trim()) continue;
+      if (v.trim().length > ROLE_MAX) return c.json(err("invalid_input", `役割は${ROLE_MAX}文字以内で入力してください`), 400);
+      roleInput[k] = v.trim();
+    }
+  }
+  if (talent?.role && talent.role.trim().length > ROLE_MAX) return c.json(err("invalid_input", `役割は${ROLE_MAX}文字以内で入力してください`), 400);
   const roster = await loadRoster(db, o.subject, o.access, o.meId);
   const room = await peopleRoom(db, o.subject, o.access, o.meId);
   if (memberIds.length + contactIds.length + (talent ? 1 : 0) > room) {
-    return c.json(err("invalid_input", o.subject.type === "draft" ? `チーム案は、自分を含めて最大${MAX_PEOPLE}名までです` : `候補と募集人材は、合わせて最大${MAX_PEOPLE}名までです`), 400);
+    return c.json(err("invalid_input", o.subject.type === "draft" ? `自分で追加できるのは、最大${MAX_MANUAL_PEOPLE}名までです（AIが提案した人は、別に数えます）` : `候補と募集人材は、合わせて最大${MAX_PEOPLE}名までです`), 400);
   }
   const now = nowSec();
   const taken = new Set([...roster.members.map((m) => m.key), ...roster.prospects.map((p) => p.key)]);
@@ -438,18 +459,42 @@ collabWorkspaceRoutes.post("/:type/:id/prospects", async (c) => {
     ...memberIds.filter((id) => !taken.has(`m:${id}`)).map((id) => ({ kind: "member" as const, refId: id, ownerMemberId: null as string | null })),
     ...contactIds.filter((id) => !taken.has(`c:${id}`)).map((id) => ({ kind: "contact" as const, refId: id, ownerMemberId: o.meId as string | null })),
   ];
+  // 役割を考える対象（今回追加した人）。キー → 利用者が書いた役割の案
+  const added: Record<string, string> = {};
   for (const r of rows) {
-    await db.insert(schema.teamProspects).values({ id: newId(), subjectType: o.subject.type, subjectId: o.subject.id, kind: r.kind, refId: r.refId, ownerMemberId: r.ownerMemberId, locked: 0, published: 0, addedBy: o.meId, createdAt: now }).onConflictDoNothing();
+    await db.insert(schema.teamProspects).values({ id: newId(), subjectType: o.subject.type, subjectId: o.subject.id, kind: r.kind, refId: r.refId, ownerMemberId: r.ownerMemberId, locked: 0, published: 0, source: "manual", addedBy: o.meId, createdAt: now }).onConflictDoNothing();
+    const key = `${r.kind === "member" ? "m" : "c"}:${r.refId}`;
+    added[key] = roleInput[key] ?? "";
   }
   if (talent) {
     const title = (talent.title ?? "").trim();
     if (!title) return c.json(err("invalid_input", "募集したい人材の業種・職種を入力してください"), 400);
+    const talentId = newId();
     await db.insert(schema.teamProspects).values({
-      id: newId(), subjectType: o.subject.type, subjectId: o.subject.id, kind: "talent", refId: null, locked: 0,
-      talentTitle: title.slice(0, 100), talentProfile: (talent.profile ?? "").trim().slice(0, TEXT_MAX), talentReason: (talent.reason ?? "").trim().slice(0, TEXT_MAX), published: 0, addedBy: o.meId, createdAt: now,
+      id: talentId, subjectType: o.subject.type, subjectId: o.subject.id, kind: "talent", refId: null, locked: 0,
+      talentTitle: title.slice(0, 100), talentProfile: (talent.profile ?? "").trim().slice(0, TEXT_MAX), talentReason: (talent.reason ?? "").trim().slice(0, TEXT_MAX), published: 0, source: "manual", addedBy: o.meId, createdAt: now,
     });
+    added[`t:${talentId}`] = (talent.role ?? "").trim();
   }
-  return c.json({ data: await buildDetail(db, o.meId, o.subject, o.access) }, 201);
+
+  // 役割：書いてあればそのまま保存する。「AIに考えてもらう」を選んだときは、書いた内容を整える／空欄の人は強み・USPから考える
+  let warning: string | null = null;
+  const newRoles: Record<string, string> = Object.fromEntries(Object.entries(added).filter(([, hint]) => hint));
+  if (aiRoles && Object.keys(added).length > 0) {
+    const roster2 = await loadRoster(db, o.subject, o.access, o.meId);
+    const people = await buildAiPeople(db, o.subject, roster2);
+    const profile = await getProfile(db, o.subject.type, o.subject.id);
+    const result = await suggestRolesForTargets({
+      apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: o.subject.title,
+      goal: o.subject.type === "draft" ? o.subject.goal : profile?.goal ?? "",
+      businessTitle: profile?.businessTitle ?? "", summary: profile?.summary ?? "", people,
+      targets: Object.entries(added).filter(([k]) => people.some((p) => p.key === k)).map(([key, hint]) => ({ key, hint })),
+    });
+    if (result) Object.assign(newRoles, result);
+    else warning = "AIで役割を考えられませんでした。追加はできています。書いた役割はそのまま保存しました。あとから「AIで再検討する」でも、役割を考えられます";
+  }
+  if (Object.keys(newRoles).length > 0) await setRoles(db, o.subject, newRoles, o.meId);
+  return c.json({ data: await buildDetail(db, o.meId, o.subject, o.access), warning }, 201);
 });
 
 collabWorkspaceRoutes.patch("/:type/:id/prospects/:pid", async (c) => {
@@ -581,21 +626,29 @@ collabWorkspaceRoutes.post("/:type/:id/proposals", async (c) => {
   if (people.length < 2) return c.json(err("invalid_input", "メンバーのほかに、候補または募集人材を1つ以上入れると、再検討できます"), 400);
   const profile = await getProfile(db, o.subject.type, o.subject.id);
 
-  const used = o.subject.type === "draft" ? roster.members.length + roster.prospects.length : roster.prospects.length;
-  const room = Math.max(0, MAX_PEOPLE - used);
-  const wantSuggest = perspectives.includes("suggest_members") && room > 0;
+  // 追加メンバー・人材の提案の枠。チーム案は、AIが提案した人の枠（最大10名）の空き。正式なチームは、候補と募集人材を合わせた枠の空き
+  const lim = o.subject.type === "draft" ? draftLimits(roster) : null;
+  const teamRoom = Math.max(0, MAX_PEOPLE - roster.prospects.length);
+  const memberRoom = lim ? Math.max(0, lim.ai.max - lim.ai.used) : teamRoom;
+  const talentRoom = lim ? Math.max(0, lim.ai.talentsMax - lim.ai.talentsUsed) : teamRoom;
+  const wantSuggest = perspectives.includes("suggest_members") && memberRoom > 0;
   const candidates = wantSuggest ? await loadSuggestionPool(db, o.meId, new Set(people.map((p) => p.key))) : [];
+  // 「自分で追加した人の役割を考える」の対象（チーム案で、自分で追加した人。募集人材は充足済みを除く）
+  const refineTargets = lim
+    ? roster.prospects.filter((p) => p.source === "manual" && !p.filled).map((p) => ({ key: p.key, currentRole: p.role ?? "" }))
+    : [];
+  const effective = perspectives.filter((p) => (p !== "refine_roles" || refineTargets.length > 0));
 
   const ideas = await generateTeamDraftIdeas({
     apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development", title: o.subject.title,
     goal: o.subject.type === "draft" ? o.subject.goal : profile?.goal ?? "", people,
-    regenerate: { perspectives, note, previous: profileAsPrevious(profile, roster), candidates, maxSuggest: Math.min(3, room) },
-    maxTalents: room,
+    regenerate: { perspectives: effective, note, previous: profileAsPrevious(profile, roster), candidates, maxSuggest: lim ? memberRoom : Math.min(3, teamRoom), refineTargets },
+    maxTalents: talentRoom,
   });
   if (!ideas) return c.json(err("ai_failed", "AIで再検討できませんでした。少し時間をおいて、もう一度お試しください"), 502);
 
   await db.insert(schema.teamProfileProposals).values({
-    id: newId(), subjectType: o.subject.type, subjectId: o.subject.id, createdBy: o.meId, perspectivesJson: JSON.stringify(perspectives), note,
+    id: newId(), subjectType: o.subject.type, subjectId: o.subject.id, createdBy: o.meId, perspectivesJson: JSON.stringify(effective), note,
     proposalJson: JSON.stringify(ideas), appliedJson: "{}", status: "open", baseUpdatedAt: profile?.updatedAt ?? 0, createdAt: nowSec(),
   });
   return c.json({ data: await buildDetail(db, o.meId, o.subject, o.access) }, 201);

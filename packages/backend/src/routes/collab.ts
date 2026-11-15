@@ -27,7 +27,7 @@ import { findPrefecture } from "@shared/prefectures";
 import type { Env, Variables } from "../types.ts";
 
 // 1人あたりの外部人脈の登録上限（1件登録・CSV取込の合計）
-const EXTERNAL_CONTACTS_LIMIT = 300;
+export const EXTERNAL_CONTACTS_LIMIT = 300;
 // 「人脈をさがす」等の遅延生成トリガーで対象にできる上限（検索結果ページ数に合わせる）
 const LAZY_SUMMARY_BATCH_LIMIT = 30;
 // 遅延生成トリガー1回あたり、実際にAI生成まで進める件数（waitUntilの実行時間制限内に収まるように少なく保つ）
@@ -2420,6 +2420,7 @@ collabRoutes.delete("/contacts/bulk", async (c) => {
   const ownIds = ownRows.map((r) => r.id);
 
   for (const idsChunk of chunkIds(ownIds)) {
+    await db.delete(schema.profileSheets).where(and(eq(schema.profileSheets.subjectType, "contact"), inArray(schema.profileSheets.subjectId, idsChunk)));
     await db.delete(schema.externalContacts).where(inArray(schema.externalContacts.id, idsChunk));
     await db.delete(schema.collabIntroRequests).where(inArray(schema.collabIntroRequests.contactId, idsChunk));
     await db.delete(schema.externalContactRelationships).where(inArray(schema.externalContactRelationships.contactId, idsChunk));
@@ -2618,6 +2619,7 @@ collabRoutes.delete("/contacts/:id", async (c) => {
 
   await db.delete(schema.externalContacts).where(eq(schema.externalContacts.id, contactId));
   await db.delete(schema.collabIntroRequests).where(eq(schema.collabIntroRequests.contactId, contactId));
+  await db.delete(schema.profileSheets).where(and(eq(schema.profileSheets.subjectType, "contact"), eq(schema.profileSheets.subjectId, contactId)));
   await db.delete(schema.externalContactRelationships).where(eq(schema.externalContactRelationships.contactId, contactId));
   await db.delete(schema.externalContactFavorites).where(eq(schema.externalContactFavorites.contactId, contactId));
   await db.delete(schema.enishiTransactedContacts).where(eq(schema.enishiTransactedContacts.contactId, contactId));

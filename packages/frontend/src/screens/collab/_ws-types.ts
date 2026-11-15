@@ -6,7 +6,7 @@ import { ApiError } from "@/lib/api";
 
 export type WsType = "draft" | "team";
 export type Stage = "draft" | "loose" | "power";
-export type Perspective = "broaden" | "suggest_members" | "new_member_roles" | "reassign_roles";
+export type Perspective = "broaden" | "suggest_members" | "new_member_roles" | "reassign_roles" | "refine_roles";
 
 export type WsMember = {
   key: string; id: string; name: string; emoji: string; bgColor: string; avatarImageKey: string | null; headline: string;
@@ -46,6 +46,8 @@ export type WsDetail = {
     businessTitle: string; summary: string; targetCustomers: string; goal: string; firstSteps: string[]; isProvisional: boolean; backfillStatus: string | null; updatedAt: number;
   } | null;
   complete: boolean; members: WsMember[]; prospects: WsProspect[]; maxPeople: number;
+  /** チーム案の人数の枠（AIが提案した人・自分で追加した人を別々に数える）。正式なチームでは null */
+  limits: { ai: { max: number; used: number; talentsMax: number; talentsUsed: number }; manual: { max: number; used: number } } | null;
   roleRequests: RoleRequest[]; proposals: Proposal[]; nextSteps: NextStep[];
   milestones: { id: string; type: string; label: string; at: number }[];
   health: { status: "active" | "rest" | "follow"; lastActivityAt: number } | null;
@@ -57,6 +59,7 @@ export const PERSPECTIVE_LABEL: Record<Perspective, string> = {
   suggest_members: "追加するメンバーの提案",
   new_member_roles: "追加したメンバーの役割",
   reassign_roles: "役割の割り振り直し",
+  refine_roles: "自分で追加した人の役割",
 };
 
 export const STAGE_LABEL: Record<Stage, { emoji: string; label: string; color: string }> = {
@@ -79,3 +82,6 @@ export type WsCtx = {
   fail: (e: unknown, fallback: string) => void;
   clearError: () => void;
 };
+
+/** 追加したときの「提案した人」の区別を表すラベル */
+export const SOURCE_LABEL = { ai: "AI提案", manual: "自分で追加" } as const;

@@ -9,6 +9,9 @@ import { Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { DialogCloseButton } from "@/components/dialog-close-button";
+import { ProfileSheetImportModal } from "@/components/profile-sheet/profile-sheet-import-modal";
+import { todayIso, useProfileSheet } from "@/components/profile-sheet/profile-sheet-shared";
+import { useTimezone } from "@/hooks/use-timezone";
 
 export function CompleteOneOnOneModal({
   sessionId,
@@ -27,6 +30,10 @@ export function CompleteOneOnOneModal({
   const [showPostPrompt, setShowPostPrompt] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [completedOnServer, setCompletedOnServer] = useState(false);
+  // もらった資料（略歴シート・GAINSシートなど）の取り込み
+  const tz = useTimezone();
+  const { data: existingSheet } = useProfileSheet("member", partnerId);
+  const [sheetOpenDate, setSheetOpenDate] = useState<string | null>(null);
 
   const submit = useMutation({
     mutationFn: async () => {
@@ -103,6 +110,19 @@ export function CompleteOneOnOneModal({
           </span>
         </label>
 
+        <div className="flex items-center justify-between gap-2 py-2.5 px-3 rounded-2xl mb-4" style={{ background: existingSheet ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
+          <span className="text-sm" style={{ color: "var(--color-ink-700)" }}>
+            {existingSheet ? "📎 もらった資料を、取り込み済みです" : "📎 もらった資料はありますか？"}
+            <span className="block text-[11px] mt-0.5" style={{ color: "var(--color-ink-500)" }}>
+              略歴シート・GAINSシート・1to1シートなど。あなただけが見られます（任意）
+            </span>
+          </span>
+          <button onClick={() => setSheetOpenDate(todayIso(tz))} disabled={submit.isPending}
+            className="shrink-0 px-3 py-2 rounded-xl text-xs font-medium disabled:opacity-50" style={{ background: "var(--color-brand)", color: "white" }}>
+            {existingSheet ? "見る・直す" : "取り込む"}
+          </button>
+        </div>
+
         {error && (
           <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>
             1to1の完了は記録されています。{error}
@@ -130,6 +150,18 @@ export function CompleteOneOnOneModal({
           </button>
         </div>
       </div>
+      {sheetOpenDate !== null && (
+        <div onClick={(e) => e.stopPropagation()}>
+        <ProfileSheetImportModal
+          subject={{ type: "member", id: partnerId, name: partnerName }}
+          existing={existingSheet ?? null}
+          defaultDate={sheetOpenDate}
+          startAtEdit={!!existingSheet}
+          onClose={() => setSheetOpenDate(null)}
+          onDone={() => setSheetOpenDate(null)}
+        />
+        </div>
+      )}
     </div>
   );
 }

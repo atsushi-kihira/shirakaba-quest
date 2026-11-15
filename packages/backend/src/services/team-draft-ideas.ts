@@ -20,8 +20,8 @@ export type DraftParticipant = {
 };
 
 /** 「まとめ直す」で、システムの指示に加えて AI に与える観点 */
-export type RegeneratePerspective = "broaden" | "suggest_members" | "new_member_roles" | "reassign_roles";
-export const REGENERATE_PERSPECTIVES: RegeneratePerspective[] = ["broaden", "suggest_members", "new_member_roles", "reassign_roles"];
+export type RegeneratePerspective = "broaden" | "suggest_members" | "new_member_roles" | "reassign_roles" | "refine_roles";
+export const REGENERATE_PERSPECTIVES: RegeneratePerspective[] = ["broaden", "suggest_members", "new_member_roles", "reassign_roles", "refine_roles"];
 export const REGENERATE_NOTE_MAX = 500;
 
 export type RegenerateOptions = {
@@ -34,7 +34,12 @@ export type RegenerateOptions = {
   candidates: DraftParticipant[];
   /** 提案するメンバーの最大数（チームの人数の上限までの空き） */
   maxSuggest: number;
+  /** 「自分で追加した人の役割を考える」の対象（書いてある役割は利用者の案。空欄の人は強みから考える） */
+  refineTargets?: { key: string; currentRole: string }[];
 };
+
+/** AIがメンバー案として提案する人数の上限（自分は含まない）。関係が薄ければ、これに満たなくてよい */
+export const MAX_AI_MEMBERS = 10;
 
 /** チームをパワーアップするために加えられるとよい人材（実在の人ではなく、業種・職種とビジネス面での人物像） */
 export type DesiredTalent = {
@@ -132,13 +137,20 @@ function buildExtras(people: DraftParticipant[], opt: RegenerateOptions | undefi
       : "- 新しく追加されたメンバーの役割を考える：前回のまとめのあとに追加された人はいないので、この観点は考慮しなくてよい。");
   }
   if (has("reassign_roles")) lines.push("- 役割の割り振り直し：前回の役割にとらわれず、全員の強みがより活きるように、役割を割り振り直す。");
+  if (has("refine_roles")) {
+    const targets = opt?.refineTargets ?? [];
+    lines.push(targets.length > 0
+      ? `- 自分で追加した人の役割を考える：次の人は、利用者が自分で追加した人。書いてある役割は利用者の案なので、その意図を尊重しつつ、事業との関係や具体性が伝わるよう整える（書いていないことを大きく足さない）。役割の記載がない人は、その人の強み（職種・事業内容・USPなど）から、この事業での役割を具体的に考える。roles には、この対象の全員分を必ず含める。
+${targets.map((t) => `  ・${nameOf.get(t.key) ?? t.key}（${t.key}）：${t.currentRole ? `利用者の案＝${t.currentRole}` : "役割の記載なし"}`).join("\n")}`
+      : "- 自分で追加した人の役割を考える：対象の人がいないので、この観点は考慮しなくてよい。");
+  }
   const note = (opt?.note ?? "").trim();
   if (note) lines.push(`- ユーザーからの追加の観点（そのまま尊重する）：${note}`);
 
   const perspectiveSection = lines.length === 0 ? "" : `
 # 今回の追加の観点（ユーザーが指定した、ここを重視してまとめ直す）
 ${lines.join("\n")}
-${previous && !has("reassign_roles") && !has("new_member_roles") ? "- 役割は、メンバーに変更がなければ前回の内容を基本的に保ちつつ、事業の変更に合わせて調整する。\n" : ""}`;
+${previous && !has("reassign_roles") && !has("new_member_roles") && !has("refine_roles") ? "- 役割は、メンバーに変更がなければ前回の内容を基本的に保ちつつ、事業の変更に合わせて調整する。\n" : ""}`;
 
   const previousSection = previous ? `
 # 前回のまとめ（これをもとに、上の観点を取り入れて作り直す）
@@ -213,7 +225,8 @@ function buildProposePrompt(title: string, goal: string, me: DraftParticipant, c
 
 # 進め方
 - 「あなた（依頼した本人）」は、必ずチームに含まれます。本人の強みも活かすように考える。
-- 候補一覧から、本人のほかに1〜${maxOthers}名を選ぶ。強みが補い合い、事業を実現するのに必要な役割がそろうメンバーを優先する。人数を無理に増やさない。
+- 候補一覧から、本人のほかに最大${maxOthers}名を選ぶ（1名以上）。強みが補い合い、事業を実現するのに必要な役割がそろうメンバーを優先する。
+- ${maxOthers}名にそろえる必要はない。事業との関係が薄そうな人まで無理に入れず、関係が深い人だけを選んで、${maxOthers}名に満たなくてよい。
 - 外部人脈の方も選んでよい。ただし、まだお声がけ前の候補なので、参加の意思が未確認であることを前提にする。
 - 考えたい協業の内容は、そのまま写さず、対象のお客様・提供するサービス・強みの掛け合わせが具体的になるようにブラッシュアップする。
 
@@ -372,9 +385,8 @@ export async function proposeTeamFromIdea(args: {
   const finish = (otherKeys: string[], parsed: Omit<ParsedIdeas, "memberKeys" | "suggested">, isMock?: boolean) => {
     const keys = [me.key, ...otherKeys];
     const roles = parsed.roles.filter((r) => keys.includes(r.key));
-    // 「追加できるとよい人材」は、チームの人数の上限までの空きの分だけ
-    const talentSlots = Math.max(0, Math.min(MAX_DESIRED_TALENTS, maxOthers + 1 - keys.length));
-    const desiredTalents = (parsed.desiredTalents ?? []).slice(0, talentSlots);
+    // 「追加できるとよい人材」は、メンバー案の人数とは別に、最大 MAX_DESIRED_TALENTS 名
+    const desiredTalents = (parsed.desiredTalents ?? []).slice(0, MAX_DESIRED_TALENTS);
     return {
       otherKeys,
       ideas: { ...parsed, roles, desiredTalents: desiredTalents.length > 0 ? desiredTalents : undefined, participantKeys: [...keys].sort(), goal, generatedAt: Math.floor(Date.now() / 1000), ...(isMock ? { isMock: true } : {}) } as TeamDraftIdeas,
@@ -382,18 +394,90 @@ export async function proposeTeamFromIdea(args: {
   };
   if (candidates.length === 0) return null;
   if (isDev || !apiKey || apiKey === "dev-not-set") {
-    const picked = candidates.slice(0, Math.min(3, maxOthers));
+    const picked = candidates.slice(0, Math.min(4, maxOthers));
     return finish(picked.map((p) => p.key), mockIdeas(title, goal, [me, ...picked]), true);
   }
   const valid = new Set([me.key, ...candidates.map((c) => c.key)]);
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const parsed = parse(await callClaude(apiKey, buildProposePrompt(title, goal, me, candidates, maxOthers, Math.min(MAX_DESIRED_TALENTS, Math.max(0, maxOthers - 1)))), valid);
+      const parsed = parse(await callClaude(apiKey, buildProposePrompt(title, goal, me, candidates, maxOthers, MAX_DESIRED_TALENTS)), valid);
       const otherKeys = (parsed?.memberKeys ?? []).filter((k) => k !== me.key).slice(0, maxOthers);
       if (parsed && otherKeys.length >= 1) { const { memberKeys: _unused, suggested: _s, ...rest } = parsed; void _unused; void _s; return finish(otherKeys, rest); }
       console.error(`[team-draft-ideas] メンバー案の応答の解析に失敗（試行${attempt}/2）`);
     } catch (e) {
       console.error(`[team-draft-ideas] メンバー案の呼び出し失敗（試行${attempt}/2）`, e);
+    }
+  }
+  return null;
+}
+
+// =============================================================
+// 自分で追加した人の役割を、AIに考えてもらう（追加のときに使う）
+//   ・利用者が書いた役割の案があれば、その意図を尊重して整える
+//   ・書いていなければ、その人の強み（職種・事業内容・USPなど）から考える
+// =============================================================
+export type RoleTarget = { key: string; /** 利用者が書いた役割の案（空欄なら、強みから考える） */ hint: string };
+export const ROLE_MAX = 200;
+
+function buildRolePrompt(args: { title: string; goal: string; businessTitle: string; summary: string; people: DraftParticipant[]; targets: RoleTarget[] }): string {
+  const { title, goal, businessTitle, summary, people, targets } = args;
+  const nameOf = new Map(people.map((p) => [p.key, p.name]));
+  return `あなたはBNIチャプターのメンバー同士の協働事業（共同での事業・サービスづくり）を企画するAIです。
+下の「検討中のチーム案」に、利用者が自分で追加した人がいます。その人たちが、この協働事業でどんな役割を担うとよいかを考えてください。
+
+# 進め方
+- 役割の案（利用者が書いたもの）がある人は、その意図・内容を尊重して、事業との関係や具体性が伝わるように整える。書いていないことを大きく足したり、別の内容に変えたりしない。
+- 役割の案がない人は、その人の強み（職種・事業内容・USPなど）と、事業の内容から、この事業での役割を具体的に考える。
+- 外部人脈の方・まだいない人の人物像は、参加の意思が未確認なので、「お声がけできれば〜を担当してもらう」という書き方にする。
+- 役割は、1人あたり1文（${ROLE_MAX}文字以内）。
+
+# 出力する内容
+- roles：下の「役割を考える対象」の全員分の役割（key と role）。key は対象の key をそのまま使う
+
+${RULES}
+{"roles":[{"key":"...","role":"..."}]}
+
+# チーム案のタイトル
+${title.trim() || "（未定）"}
+
+# このチームで考えたいこと
+${goal.trim() || "（指定なし）"}
+
+# 協働事業（いまの内容）
+${businessTitle.trim() ? `${businessTitle.trim()}：${summary.trim()}` : "（まだ決まっていません。メンバーの強みを活かせる事業を想定してください）"}
+
+# 役割を考える対象
+${targets.map((t) => `- key: ${t.key} / 名前: ${nameOf.get(t.key) ?? t.key} / 利用者が書いた役割の案: ${t.hint.trim() || "（なし）"}`).join("\n")}
+
+# チーム全員（ほかの人との関係を考える参考。対象の人も含む）
+${listPeople(people)}`;
+}
+
+/** 戻り値は、対象の key → 役割。失敗したときは null（呼び出し側で、書いた内容をそのまま使う） */
+export async function suggestRolesForTargets(args: {
+  apiKey: string | undefined; isDev: boolean; title: string; goal: string; businessTitle: string; summary: string; people: DraftParticipant[]; targets: RoleTarget[];
+}): Promise<Record<string, string> | null> {
+  const { apiKey, isDev, people, targets } = args;
+  if (targets.length === 0) return {};
+  if (isDev || !apiKey || apiKey === "dev-not-set") {
+    const nameOf = new Map(people.map((p) => [p.key, p.name]));
+    return Object.fromEntries(targets.map((t) => [t.key, t.hint.trim() ? `${t.hint.trim()}（AIが整えた見本）` : `${nameOf.get(t.key) ?? "この方"}の強みを活かして関わります（AIが考えた見本）`]));
+  }
+  const valid = new Set(targets.map((t) => t.key));
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const content = await callClaude(apiKey, buildRolePrompt(args));
+      const m = content.match(/\{[\s\S]*\}/);
+      const parsed = m ? (JSON.parse(m[0]) as { roles?: unknown }) : null;
+      const out: Record<string, string> = {};
+      for (const r of Array.isArray(parsed?.roles) ? parsed.roles : []) {
+        const x = r as { key?: unknown; role?: unknown };
+        if (typeof x?.key === "string" && valid.has(x.key) && str(x.role)) out[x.key] = str(x.role).slice(0, ROLE_MAX);
+      }
+      if (Object.keys(out).length > 0) return out;
+      console.error(`[team-draft-ideas] 役割の応答の解析に失敗（試行${attempt}/2）`);
+    } catch (e) {
+      console.error(`[team-draft-ideas] 役割の呼び出し失敗（試行${attempt}/2）`, e);
     }
   }
   return null;

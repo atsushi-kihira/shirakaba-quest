@@ -17,19 +17,23 @@ const OPTIONS: { key: Perspective; emoji: string; label: string; hint: string }[
   { key: "suggest_members", emoji: "👥", label: "追加するメンバーを提案してもらう", hint: "メンバーや自分の外部人脈の中から、加えるとよさそうな人を提案します。" },
   { key: "new_member_roles", emoji: "➕", label: "役割が未入力の人の役割を考えてもらう", hint: "あとから加えた人など、役割がまだない人の役割を、ほかのメンバーとのつながりも踏まえて考えます。" },
   { key: "reassign_roles", emoji: "🔄", label: "役割の割り振りを見直す", hint: "確定した人は必ず含め、全員の強みがより活きるように役割を組み直します。" },
+  { key: "refine_roles", emoji: "✍️", label: "自分で追加した人の役割を考えてもらう", hint: "書いた役割は意図を残して整え、空欄の人は、その人の強み・USPから考えます。" },
 ];
 
 // ---- 再検討を実行するダイアログ ----
 export function RunModal({ ctx, onClose, onDone }: { ctx: WsCtx; onClose: () => void; onDone: (res: { data: WsDetail }) => void }) {
   const { d } = ctx;
-  const used = d.type === "draft" ? d.members.length + d.prospects.length : d.prospects.length;
-  const full = used >= d.maxPeople;
+  // チーム案は、AIが提案する人の枠（最大10名）の空き。正式なチームは、候補と募集人材を合わせた枠の空き
+  const full = d.limits ? d.limits.ai.used >= d.limits.ai.max : d.prospects.length >= d.maxPeople;
+  const fullMax = d.limits ? d.limits.ai.max : d.maxPeople;
+  const manualCount = d.limits ? d.prospects.filter((p) => p.source === "manual" && !p.filled).length : 0;
   const noRole = [...d.members.filter((m) => m.status === "active"), ...d.prospects.filter((p) => !p.filled)].filter((x) => !x.role).length;
   const [sel, setSel] = useState<Set<Perspective>>(() => new Set(noRole > 0 ? (["new_member_roles"] as Perspective[]) : []));
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const off = (k: Perspective): string | null => {
-    if (k === "suggest_members" && full) return `人数が上限（${d.maxPeople}名）のため、提案できません`;
+    if (k === "suggest_members" && full) return d.limits ? `AIが提案する人の枠（最大${fullMax}名）がいっぱいのため、提案できません` : `人数が上限（${fullMax}名）のため、提案できません`;
+    if (k === "refine_roles" && manualCount === 0) return d.type === "draft" ? "自分で追加した人がいません" : "チーム案だけで使えます";
     if (k === "new_member_roles" && noRole === 0) return "役割が未入力の人はいません";
     return null;
   };
@@ -50,7 +54,7 @@ export function RunModal({ ctx, onClose, onDone }: { ctx: WsCtx; onClose: () => 
           AIに伝える「追加の観点」を選べます（いくつでも）。結果は<b>提案</b>として残り、反映するかどうかは<b>{d.stage === "draft" ? "あなたが" : "リーダーが"}</b>選びます。何も選ばなければ、いまの内容をもとに考え直します。
         </p>
         <div className="space-y-2 mb-3">
-          {OPTIONS.map((o) => {
+          {OPTIONS.filter((o) => o.key !== "refine_roles" || d.type === "draft").map((o) => {
             const reason = off(o.key);
             const on = sel.has(o.key) && !reason;
             return (

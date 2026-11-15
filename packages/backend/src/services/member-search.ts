@@ -1,11 +1,14 @@
 // =============================================================
 // メンバー検索（AI）：「さがしたい人の条件」に近いメンバーを、メンバーの業種・事業内容・各USPの説明から見つける
 // ・人脈検索の「メンバーのUSPから絞り込む」で使う。USPを選んでいれば、そのUSPを持つメンバーの中からさがす
-// ・AIに渡すのは、全員に公開されている項目（名前・職種・事業内容・USPとその説明）のみ。会社名・連絡先などの名刺情報は渡さない
+// ・AIに渡すのは、全員に公開されている項目（名前・職種・事業内容・USPとその説明）と、検索した本人自身が登録した
+//   「もらった資料のメモ」（専門・強み・紹介してほしい相手・人柄・タグ）のみ。会社名・連絡先などの名刺情報は渡さない
+//   （資料のメモは、検索した本人のぶんだけを使う。ほかのメンバーが登録したメモは、決して使わない）
 // =============================================================
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
+import { loadOwnSheetMap, sheetSearchText } from "./profile-sheet.ts";
 
 /** score: 条件との合致度（0〜100）。isSelf: 検索した本人 */
 export type MemberHit = { memberId: string; why: string; score: number; isSelf: boolean };
@@ -24,7 +27,11 @@ export function memberMatchesSpecialties(category: string, specialties: string[]
 
 export const uspKeyOf = (name: string): string => name.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 
-type Candidate = { id: string; name: string; category: string; businessDescription: string; skills: { name: string; description: string }[] };
+type Candidate = {
+  id: string; name: string; category: string; businessDescription: string; skills: { name: string; description: string }[];
+  /** 検索した本人が、この人について登録した資料のメモ（なければ空） */
+  sheetNote: string;
+};
 
 function parseSkills(raw: string | null): Candidate["skills"] {
   try {
@@ -46,11 +53,15 @@ async function collectCandidates(db: Db, meId: string, usps: string[], specialti
   const rows = await db.select().from(schema.members)
     .where(eq(schema.members.status, "active")).all();
   const wanted = new Set(usps.map(uspKeyOf));
+  const ownSheets = await loadOwnSheetMap(db, meId, "member");
   return rows
-    .map((m) => ({ id: m.id, name: m.name, category: m.category, businessDescription: m.businessDescription, skills: parseSkills(m.skills) }))
+    .map((m) => ({
+      id: m.id, name: m.name, category: m.category, businessDescription: m.businessDescription, skills: parseSkills(m.skills),
+      sheetNote: m.id === meId ? "" : sheetSearchText(ownSheets.get(m.id)),
+    }))
     .filter((m) => wanted.size === 0 || m.skills.some((sk) => wanted.has(uspKeyOf(sk.name))))
     // 職種・事業内容・USPのどれも未入力のメンバーは、手がかりがなく検索の対象にならない
-    .filter((m) => m.category || m.businessDescription || m.skills.length > 0)
+    .filter((m) => m.category || m.businessDescription || m.skills.length > 0 || m.sheetNote)
     .filter((m) => specialties.length === 0 || memberMatchesSpecialties(m.category, specialties))
     // 候補が多いときも、検索した本人が先頭に来るようにして、件数の上限で外れないようにする
     .sort((a, b) => (a.id === meId ? -1 : 0) - (b.id === meId ? -1 : 0))
@@ -63,6 +74,7 @@ function formatCandidates(cands: Candidate[]): string {
     if (c.category) parts.push(`職種: ${c.category}`);
     if (c.businessDescription) parts.push(`事業内容: ${c.businessDescription}`);
     if (c.skills.length > 0) parts.push(`USP: ${c.skills.map((s) => (s.description ? `${s.name}（${s.description}）` : s.name)).join(" ／ ")}`);
+    if (c.sheetNote) parts.push(`あなたがもらった資料のメモ: ${c.sheetNote}`);
     return `- ${parts.join(" / ")}`;
   }).join("\n");
 }
@@ -72,7 +84,7 @@ function buildPrompt(freeText: string, cands: Candidate[]): string {
 「さがしたい人の条件」に近いメンバーを、下の「メンバー一覧」の中から、関連性が高い順に最大${MAX_RESULTS}件選んでください。
 
 # 判断のしかた
-- 各メンバーの「職種」「事業内容」「USP（強み）とその説明」を読み、条件に合う・近い人を選ぶ。言葉が完全に一致しなくても、意味が近ければ選んでよい（例：「広報に強い人」→ PR・ブランディング・発信支援を掲げる人）。
+- 各メンバーの「職種」「事業内容」「USP（強み）とその説明」、および「あなたがもらった資料のメモ」（あれば。専門・強み・タグなど）を読み、条件に合う・近い人を選ぶ。言葉が完全に一致しなくても、意味が近ければ選んでよい（例：「広報に強い人」→ PR・ブランディング・発信支援を掲げる人）。
 - 条件に明確に合わないメンバーは選ばない（無理に${MAX_RESULTS}件まで埋めなくてよい）。
 - 一覧にない情報（連絡先・会社名など）は推測しない。存在しないIDや名前を作らない。
 
@@ -135,7 +147,7 @@ function keywordFallback(freeText: string, cands: Candidate[], meId: string): Me
   if (terms.length === 0) return [];
   return cands
     .map((c) => {
-      const hay = [c.category, c.businessDescription, ...c.skills.map((s) => `${s.name}${s.description}`)].join(" ").toLowerCase();
+      const hay = [c.category, c.businessDescription, c.sheetNote, ...c.skills.map((s) => `${s.name}${s.description}`)].join(" ").toLowerCase();
       const hits = terms.filter((t) => hay.includes(t.toLowerCase()));
       return { c, hits };
     })
@@ -147,7 +159,7 @@ function keywordFallback(freeText: string, cands: Candidate[], meId: string): Me
       // 条件の言葉のうち、いくつが含まれているかの割合（開発環境・AIが使えないときの簡易的な合致度）
       score: Math.min(95, Math.round(30 + (x.hits.length / terms.length) * 65)),
       isSelf: x.c.id === meId,
-      why: `業種・事業内容・USPの説明に「${x.hits.slice(0, 3).join("」「")}」が含まれています`,
+      why: `業種・事業内容・USP・資料のメモに「${x.hits.slice(0, 3).join("」「")}」が含まれています`,
     }));
 }
 

@@ -8,6 +8,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X, Sparkles, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { NotFoundPrivateNote } from "@/components/not-found-private-note";
+import { DeferredSheetField } from "@/components/profile-sheet/deferred-sheet-field";
+import { saveDeferredSheet } from "@/components/profile-sheet/profile-sheet-shared";
+import type { ProfileSheetFields } from "@shared/types";
 
 type Visibility = "private" | "existence" | "full";
 const VISIBILITY_LABEL: Record<Visibility, string> = {
@@ -35,6 +38,7 @@ export function AddContactFromBookingModal({ bookingId, guestName, guestCompany,
   const [error, setError] = useState("");
   const [aiSummary, setAiSummary] = useState<{ summary: string; detail: string } | null>(null);
   const [aiError, setAiError] = useState("");
+  const [sheet, setSheet] = useState<ProfileSheetFields | null>(null);
 
   const generateSummary = useMutation({
     mutationFn: () => api.post<{ data: SummaryPreview }>("/collab/contacts/generate-summary-preview", {
@@ -60,16 +64,22 @@ export function AddContactFromBookingModal({ bookingId, guestName, guestCompany,
   }
 
   const create = useMutation({
-    mutationFn: () => api.post("/collab/contacts", {
-      name: name.trim(),
-      specialty: specialty.trim() || undefined,
-      company: company.trim() || undefined,
-      note: note.trim() || undefined,
-      visibility,
-      sourceBookingId: bookingId,
-      ...(aiSummary ? { businessSummary: aiSummary.summary, businessSummaryDetail: aiSummary.detail } : {}),
-    }),
+    mutationFn: async () => {
+      const res = await api.post<{ data: { id: string } }>("/collab/contacts", {
+        name: name.trim(),
+        specialty: specialty.trim() || undefined,
+        company: company.trim() || undefined,
+        note: note.trim() || undefined,
+        visibility,
+        sourceBookingId: bookingId,
+        ...(aiSummary ? { businessSummary: aiSummary.summary, businessSummaryDetail: aiSummary.detail } : {}),
+      });
+      // もらった資料のメモは、人脈ができたあとで保存する。失敗しても、人脈の登録は取り消さない
+      const sheetSaved = await saveDeferredSheet(res.data.id, sheet);
+      if (!sheetSaved) window.alert("人脈は登録しました。ただ、もらった資料のメモは保存できませんでした。外部人脈の一覧から名前を押して、もう一度取り込んでください。");
+    },
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["profile-sheet"] });
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
       qc.invalidateQueries({ queryKey: ["collab", "graph"] });
       // "scheduler","bookings" 配下すべて（一覧・人脈登録待ち・直近予約・詳細）をまとめて無効化する
@@ -97,6 +107,12 @@ export function AddContactFromBookingModal({ bookingId, guestName, guestCompany,
         <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
           会社名を入れておくと、会社概要は後から自動で生成されます。連絡先（メール・電話番号など）は保存されません。
         </p>
+
+        <DeferredSheetField name={name} value={sheet} defaultToday
+          onChange={(v) => {
+            setSheet(v);
+            if (v?.company && !company.trim()) setCompany(v.company);
+          }} />
 
         <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>名前 *</label>
         <input value={name} onChange={(e) => setName(e.target.value)}

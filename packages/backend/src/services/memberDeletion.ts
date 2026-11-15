@@ -86,6 +86,11 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
   }
   await db.delete(m.shareStoryMembers).where(eq(m.shareStoryMembers.memberId, memberId));
 
+  // ---- 相手の紹介シート（本人が登録したもの、および本人についてほかの人が登録したもの）----
+  await db.delete(m.profileSheets).where(eq(m.profileSheets.ownerMemberId, memberId));
+  await db.delete(m.profileSheets).where(and(eq(m.profileSheets.subjectType, "member"), eq(m.profileSheets.subjectId, memberId)));
+  await db.delete(m.profileSheetExtractions).where(eq(m.profileSheetExtractions.memberId, memberId));
+
   // ---- 外部人脈（連絡先情報は元々保持しない設計）----
   const ownContactRows = await db.select({ id: m.externalContacts.id })
     .from(m.externalContacts).where(eq(m.externalContacts.ownerMemberId, memberId)).all();

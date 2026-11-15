@@ -10,6 +10,7 @@ import { EmailChangeVerifyScreen } from "@/screens/auth/email-change-verify-scre
 import { HomeScreen } from "@/screens/home/home-screen";
 import { MembersScreen } from "@/screens/members/members-screen";
 import { MemberDetailScreen } from "@/screens/members/member-detail-screen";
+import { ContactDetailScreen } from "@/screens/members/contact-detail-screen";
 import { QuestsScreen } from "@/screens/quests/quests-screen";
 import { RankingScreen } from "@/screens/ranking/ranking-screen";
 import { MypageScreen } from "@/screens/mypage/mypage-screen";
@@ -144,6 +145,7 @@ export default function App() {
                 <Route path="home" element={<HomeScreen />} />
                 <Route element={<ApprovedMemberGuard />}>
                   <Route path="members" element={<MembersScreen />} />
+                  <Route path="members/contacts/:id" element={<ContactDetailScreen />} />
                   <Route path="members/:id" element={<MemberDetailScreen />} />
                   <Route path="quests" element={<QuestsScreen />} />
                   <Route path="collab" element={<CollabScreen />} />

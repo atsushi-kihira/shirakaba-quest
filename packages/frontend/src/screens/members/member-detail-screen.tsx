@@ -17,6 +17,7 @@ import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 import { api, ApiError } from "@/lib/api";
 import { MemberAvatar } from "@/components/member-avatar";
 import { PointsSummary } from "@/components/points-summary";
+import { ProfileSheetCard } from "@/components/profile-sheet/profile-sheet-card";
 import { useAuthStore } from "@/stores/auth-store";
 import { useSettings } from "@/hooks/use-settings";
 import { useTimezone } from "@/hooks/use-timezone";
@@ -684,6 +685,9 @@ export function MemberDetailScreen() {
           )}
         </div>
       )}
+
+      {/* もらった資料（略歴シート・GAINSシートなど）のメモ。登録した本人だけが見られる */}
+      {member && !isSelf && <div className="mt-4"><ProfileSheetCard type="member" subjectId={member.id} subjectName={member.name} /></div>}
 
       {/* この人が登録した外部人脈の検索（登録がある場合のみ表示） */}
       {member && <MemberContactsPanel memberId={member.id} />}

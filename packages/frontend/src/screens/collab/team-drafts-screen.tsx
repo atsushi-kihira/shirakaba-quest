@@ -76,7 +76,7 @@ export function TeamDraftsScreen() {
 }
 
 type Step = "choose" | "members" | "idea";
-const MAX_OTHERS = 9; // 自分を含めて最大10名
+const MAX_OTHERS = 10; // 自分で選べるのは、自分のほかに最大10名（AIが提案する人は別枠で最大10名）
 
 function CreateDraftModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string, aiFailed: boolean) => void }) {
   const qc = useQueryClient();
@@ -121,7 +121,7 @@ function CreateDraftModal({ onClose, onCreated }: { onClose: () => void; onCreat
               </button>
               <button onClick={() => { setError(null); setStep("idea"); }} className="w-full text-left p-4 rounded-2xl transition active:opacity-80" style={{ background: "var(--color-paper-100)", border: "1.5px solid var(--color-paper-300)" }}>
                 <p className="text-sm font-bold mb-1" style={{ color: "var(--color-ink-800)" }}>② タイトルと協業の内容を入力する</p>
-                <p className="text-xs leading-relaxed" style={{ color: "var(--color-ink-500)" }}>やりたい協業を入力します。その内容に合うチームメンバー案（自分を含む）を、メンバーと自分の外部人脈の中から、AIが考えます。協業の内容のブラッシュアップと、それぞれの役割もまとめます。</p>
+                <p className="text-xs leading-relaxed" style={{ color: "var(--color-ink-500)" }}>やりたい協業を入力します。その内容に合うチームメンバー案を、メンバーと自分の外部人脈の中から、AIが最大10名まで考えます（関係が薄ければ、少なくなります）。協業の内容のブラッシュアップと、それぞれの役割もまとめます。作成後に、自分で最大10名まで追加もできます。</p>
               </button>
             </div>
             <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>🔒 できあがったチーム案は、あなただけに見えます（結成するまで、他のメンバーには見えません）。</p>

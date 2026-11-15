@@ -520,3 +520,27 @@ export type CalendarEvent = {
   isExternalGuest: boolean;   // 1to1の相手がビジター（チャプター外）か
   linkPath: string;         // タップしたときに開く画面のパス
 };
+
+// ---- 相手の紹介シート（略歴シート・GAINSシート・1to1シートの内容。登録した本人だけが見られる）----
+export type ProfileSheetSubjectType = "member" | "contact";
+
+export type ProfileSheetFields = {
+  name: string;            // 名前
+  furigana: string;        // ふりがな
+  company: string;         // 会社・屋号
+  title: string;           // 業種・肩書き
+  oneononeDate: string;    // 1to1した日（"YYYY-MM-DD"。わからないときは空）
+  expertise: string;       // 専門・強み
+  wantedReferrals: string; // 紹介してほしい相手（理想のお客様）
+  personality: string;     // 人柄・話題メモ
+  contactInfo: string;     // 連絡手段
+  tags: string[];          // タグ（「#」なしで保存）
+};
+
+export type ProfileSheet = ProfileSheetFields & {
+  id: string;
+  subjectType: ProfileSheetSubjectType;
+  subjectId: string;
+  createdAt: number;
+  updatedAt: number;
+};

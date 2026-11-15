@@ -1,0 +1,95 @@
+// =============================================================
+// 相手の詳細画面に出す「もらった資料（自分だけが見える）」のカード
+//   登録がなければ取り込みの案内、あれば表で表示（編集・資料から読み取り直し・削除ができる）
+// =============================================================
+import { useState } from "react";
+import { Loader2, Pencil, FileUp, Trash2 } from "lucide-react";
+import { ApiError } from "@/lib/api";
+import type { ProfileSheetSubjectType } from "@shared/types";
+import { ProfileSheetImportModal } from "./profile-sheet-import-modal";
+import { ProfileSheetTable } from "./profile-sheet-table";
+import { useDeleteSheet, useProfileSheet } from "./profile-sheet-shared";
+
+type Props = { type: ProfileSheetSubjectType; subjectId: string; subjectName: string };
+
+export function ProfileSheetCard({ type, subjectId, subjectName }: Props) {
+  const { data: sheet, isLoading, isError } = useProfileSheet(type, subjectId);
+  const del = useDeleteSheet();
+  const [modal, setModal] = useState<null | "import" | "edit">(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <section className="card-paper rounded-3xl p-5" aria-label="もらった資料">
+      <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1 mb-1">
+        <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
+          📎 もらった資料のメモ
+        </h2>
+        <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full" style={{ background: "rgba(90,140,92,0.14)", color: "var(--color-ink-700)" }}>
+          🔒 あなただけが見られます
+        </span>
+      </div>
+
+      {isLoading ? (
+        <div className="flex justify-center py-6"><Loader2 className="animate-spin" style={{ color: "var(--color-brand)" }} /></div>
+      ) : isError ? (
+        <p className="text-sm py-4" style={{ color: "var(--color-ink-500)" }}>読み込めませんでした。少し待ってから、もう一度開いてください。</p>
+      ) : !sheet ? (
+        <div>
+          <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+            {subjectName}さんからもらった略歴シート・GAINSシート・1to1シートがあれば、取り込んで残せます。リファーラルさがしや、協働の相手さがしにも使われます。
+          </p>
+          <button onClick={() => setModal("import")}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium text-white" style={{ background: "var(--color-brand)" }}>
+            <FileUp size={16} /> 資料を取り込む
+          </button>
+        </div>
+      ) : (
+        <div className="mt-2">
+          <ProfileSheetTable sheet={sheet} />
+          <div className="flex flex-wrap items-center gap-2 mt-3">
+            <button onClick={() => setModal("edit")} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-medium"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+              <Pencil size={13} /> 編集する
+            </button>
+            <button onClick={() => setModal("import")} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-2xl text-xs font-medium"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+              <FileUp size={13} /> 資料から読み取り直す
+            </button>
+            {confirmDelete ? (
+              <span className="inline-flex items-center gap-2 text-xs" style={{ color: "var(--color-ink-700)" }}>
+                削除しますか？
+                <button disabled={del.isPending}
+                  onClick={() => del.mutate({ type, id: subjectId }, {
+                    onSuccess: () => setConfirmDelete(false),
+                    onError: (e) => { setConfirmDelete(false); setError(e instanceof ApiError ? e.message : "削除に失敗しました"); },
+                  })}
+                  className="px-3 py-1.5 rounded-xl text-xs font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+                  {del.isPending ? "削除中…" : "削除する"}
+                </button>
+                <button onClick={() => setConfirmDelete(false)} className="px-3 py-1.5 rounded-xl text-xs" style={{ background: "var(--color-paper-200)" }}>やめる</button>
+              </span>
+            ) : (
+              <button onClick={() => { setError(null); setConfirmDelete(true); }} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs"
+                style={{ color: "var(--color-ink-500)" }}>
+                <Trash2 size={13} /> 削除
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] mt-2" style={{ color: "var(--color-ink-400)" }}>最終更新: {new Date(sheet.updatedAt * 1000).toLocaleDateString("ja-JP")}</p>
+          {error && <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
+        </div>
+      )}
+
+      {modal && (
+        <ProfileSheetImportModal
+          subject={{ type, id: subjectId, name: subjectName }}
+          existing={sheet ?? null}
+          startAtEdit={modal === "edit"}
+          onClose={() => setModal(null)}
+          onDone={() => setModal(null)}
+        />
+      )}
+    </section>
+  );
+}

@@ -6,7 +6,7 @@
 // =============================================================
 import { LOCATION_VALUES } from "@shared/prefectures";
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Trash2, Upload, X } from "lucide-react";
 import { api } from "@/lib/api";
@@ -14,6 +14,10 @@ import { ShareButton } from "@/components/share-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { matchesSearchQuery } from "@/lib/contact-search";
 import { NotFoundPrivateNote } from "@/components/not-found-private-note";
+import { DeferredSheetField } from "@/components/profile-sheet/deferred-sheet-field";
+import { ProfileSheetCsvImportModal } from "@/components/profile-sheet/profile-sheet-csv-import";
+import { saveDeferredSheet, useSheetIndex, useSheetSearchText } from "@/components/profile-sheet/profile-sheet-shared";
+import type { ProfileSheetFields } from "@shared/types";
 
 type Visibility = "private" | "existence" | "full";
 type BusinessSummaryStatus = "pending" | "processing" | "done" | "not_found" | "skipped" | "error";
@@ -105,54 +109,6 @@ const GENERIC_HINTS: Record<MappedField, string[]> = {
 
 const SPECIALTY_DATALIST_ID = "external-contacts-specialty-options";
 const RELATIONSHIP_DATALIST_ID = "external-contacts-relationship-options";
-
-/** UTF-8として読み、文字化け（置換文字）が多ければShift-JISとして読み直す */
-async function decodeFile(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const utf8 = new TextDecoder("utf-8", { fatal: false }).decode(buf);
-  const brokenCount = (utf8.match(/�/g) ?? []).length;
-  if (brokenCount > 0) {
-    try {
-      return new TextDecoder("shift_jis" as never).decode(buf);
-    } catch {
-      return utf8;
-    }
-  }
-  return utf8;
-}
-
-/** カンマ／タブ区切り・引用符対応の簡易パーサー */
-function parseDelimited(text: string): string[][] {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/^﻿/, "");
-  const firstLine = normalized.split("\n")[0] ?? "";
-  const tabCount = (firstLine.match(/\t/g) ?? []).length;
-  const commaCount = (firstLine.match(/,/g) ?? []).length;
-  const delimiter = tabCount > commaCount ? "\t" : ",";
-
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuotes = false;
-  for (let i = 0; i < normalized.length; i++) {
-    const ch = normalized[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (normalized[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
-      } else field += ch;
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === delimiter) {
-      row.push(field); field = "";
-    } else if (ch === "\n") {
-      row.push(field); rows.push(row); row = []; field = "";
-    } else {
-      field += ch;
-    }
-  }
-  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
-  return rows.filter((r) => r.some((c) => c.trim() !== ""));
-}
 
 /**
  * Eightのエクスポートファイルは本文の前に「◯件生成されました」等の説明行が
@@ -335,11 +291,13 @@ function useRelationshipOptions(): string[] {
 }
 
 import { GuestProposalsCard } from "./_guest-proposals-card";
+import { decodeFile, parseDelimited } from "@/lib/csv-parse";
 
 export function ExternalContactsTab() {
   const me = useAuthStore((st) => st.user);
   const specialtyOptions = useSpecialtyOptions();
   const relationshipOptions = useRelationshipOptions();
+  const [sheetCsvOpen, setSheetCsvOpen] = useState(false);
 
   return (
     <div>
@@ -367,6 +325,21 @@ export function ExternalContactsTab() {
       <GuestProposalsCard />
 
       <ImportSection />
+
+      {/* もらった資料のメモ（略歴シート・GAINSシートなど）のCSV一括取り込み。登録した本人だけが見られる */}
+      <div className="card-paper p-4 mb-6">
+        <h2 className="text-sm font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+          📎 もらった資料のメモを、CSVでまとめて取り込む
+        </h2>
+        <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+          名前・専門・強み・紹介してほしい相手・タグなどを書いたCSVから、人脈ごとにメモを登録します。あなただけが見られます。1件ずつ取り込むときは、下の一覧の名前を押してください。
+        </p>
+        <button onClick={() => setSheetCsvOpen(true)} className="text-xs px-3 py-1.5 rounded-full font-medium text-white" style={{ background: "var(--color-brand)" }}>
+          CSVを取り込む
+        </button>
+      </div>
+      {sheetCsvOpen && <ProfileSheetCsvImportModal type="contact" onClose={() => setSheetCsvOpen(false)} />}
+
       <IntroRequestsSection />
       <MyContactsSection />
     </div>
@@ -516,6 +489,8 @@ function ManualAddSection() {
   const [visibility, setVisibility] = useState<Visibility>("existence");
   const [businessSummary, setBusinessSummary] = useState("");
   const [businessSummaryDetail, setBusinessSummaryDetail] = useState("");
+  const [sheet, setSheet] = useState<ProfileSheetFields | null>(null);
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
   const { data: contactsData } = useQuery({
@@ -527,16 +502,21 @@ function ManualAddSection() {
   const atLimit = nonPrivateCount >= EXTERNAL_CONTACTS_LIMIT;
 
   const create = useMutation({
-    mutationFn: () => api.post("/collab/contacts", {
-      name: name.trim(), specialty: specialty.trim() || undefined, company: company.trim() || undefined,
-      relationships, note: note.trim() || undefined, email: email.trim() || undefined, visibility,
-      businessSummary: businessSummary.trim() || undefined, businessSummaryDetail: businessSummaryDetail.trim() || undefined,
-    }),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const res = await api.post<{ data: { id: string } }>("/collab/contacts", {
+        name: name.trim(), specialty: specialty.trim() || undefined, company: company.trim() || undefined,
+        relationships, note: note.trim() || undefined, email: email.trim() || undefined, visibility,
+        businessSummary: businessSummary.trim() || undefined, businessSummaryDetail: businessSummaryDetail.trim() || undefined,
+      });
+      return { sheetSaved: await saveDeferredSheet(res.data.id, sheet) };
+    },
+    onSuccess: ({ sheetSaved }) => {
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
       qc.invalidateQueries({ queryKey: ["collab", "graph"] });
+      qc.invalidateQueries({ queryKey: ["profile-sheet"] });
+      setNotice(sheetSaved ? "" : "人脈は登録しました。ただ、もらった資料のメモは保存できませんでした。一覧の名前を押して、もう一度取り込んでください。");
       setName(""); setSpecialty(""); setCompany(""); setRelationships([]); setNote(""); setEmail(""); setVisibility("existence");
-      setBusinessSummary(""); setBusinessSummaryDetail("");
+      setBusinessSummary(""); setBusinessSummaryDetail(""); setSheet(null);
       setOpen(false);
     },
     onError: (e: Error) => setError(e.message || "登録に失敗しました"),
@@ -567,8 +547,17 @@ function ManualAddSection() {
         </p>
       )}
 
+      {notice && !open && <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>{notice}</p>}
+
       {open && (
         <div className="mt-3">
+          <DeferredSheetField name={name} value={sheet}
+            onChange={(v) => {
+              setSheet(v);
+              if (v && !name.trim() && v.name) setName(v.name);
+              if (v && !company.trim() && v.company) setCompany(v.company);
+            }} />
+
           <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>名前 *</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: 高橋 健一"
             className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
@@ -933,6 +922,8 @@ function IntroRequestsSection() {
 
 function MyContactsSection() {
   const qc = useQueryClient();
+  const { data: sheetIds } = useSheetIndex("contact");
+  const { data: sheetTexts } = useSheetSearchText("contact"); // もらった資料のメモも、検索の対象にする
   const { data, isLoading } = useQuery({
     queryKey: ["collab", "contacts"],
     queryFn: () => api.get<{ data: Contact[] }>("/collab/contacts"),
@@ -1012,7 +1003,7 @@ function MyContactsSection() {
       if (specialties.size > 0 && (!ct.specialty || !specialties.has(ct.specialty))) return false;
       if (relationships.size > 0 && !ct.relationships.some((r) => relationships.has(r))) return false;
       if (visibilities.size > 0 && !visibilities.has(ct.visibility)) return false;
-      if (q.trim() && !matchesSearchQuery([ct.name, ct.specialty, ct.company, ...ct.relationships], q)) return false;
+      if (q.trim() && !matchesSearchQuery([ct.name, ct.specialty, ct.company, ...ct.relationships, sheetTexts?.[ct.id]], q)) return false;
       return true;
     });
   }
@@ -1404,7 +1395,11 @@ function MyContactsSection() {
                   <div className="flex items-start justify-between gap-2 mb-1.5">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{ct.name}</p>
+                        <Link to={`/members/contacts/${ct.id}`} className="text-sm font-medium truncate underline-offset-2 hover:underline" style={{ color: "var(--color-ink-800)" }}>{ct.name}</Link>
+                        {sheetIds?.has(ct.id) && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" title="もらった資料のメモがあります（あなただけに見えます）"
+                            style={{ background: "rgba(181,56,75,0.12)", color: "var(--color-brand)" }}>📎 資料あり</span>
+                        )}
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
                           style={{ background: style.badgeBg, color: style.badgeColor }}>
                           {VISIBILITY_LABEL[ct.visibility]}

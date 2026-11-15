@@ -17,6 +17,7 @@ import { generateCollabIdeas, type CollabIdeas } from "./member-collab.ts";
 import { and, eq, inArray, ne, or } from "drizzle-orm";
 import { schema } from "../db/index.ts";
 import type { createDb } from "../db/index.ts";
+import { loadOwnSheetMap, sheetSearchText } from "./profile-sheet.ts";
 
 type Db = ReturnType<typeof createDb>;
 export type Hop = "direct" | "2hop" | "3hop";
@@ -359,6 +360,8 @@ type ForMeCandidate = {
   specialty: string | null; relationships: string[]; businessSummary: string | null;
   visibility: string; name: string | null; company: string | null;
   isOwn: boolean; // 自分自身が登録した人脈かどうか（自分の人脈も忘れずに検索対象へ含めるため）
+  /** 自分がもらった資料のメモ（専門・強み・紹介してほしい相手・人柄・タグ）。自分の人脈にだけ付く。他のメンバーの人脈には、決して付けない */
+  sheetNote?: string | null;
 };
 
 async function collectForMeCandidates(db: Db, meId: string): Promise<ForMeCandidate[]> {
@@ -397,6 +400,8 @@ async function collectForMeCandidates(db: Db, meId: string): Promise<ForMeCandid
     : [];
   const ownerMap = new Map(owners.map((m) => [m.id, m]));
   const relMap = await attachRelationships(db, contactRows.map((c) => c.id));
+  // 自分がもらった資料のメモ（自分の人脈のぶんだけ読む。連絡手段は含めない）
+  const ownSheets = await loadOwnSheetMap(db, meId, "contact");
 
   const candidates = contactRows.map((c) => {
     const isOwn = c.ownerMemberId === meId;
@@ -416,13 +421,14 @@ async function collectForMeCandidates(db: Db, meId: string): Promise<ForMeCandid
       name: showDetail ? c.name : null,
       company: showDetail ? c.company : null,
       isOwn,
+      sheetNote: isOwn ? (sheetSearchText(ownSheets.get(c.id)) || null) : null,
     };
   });
   // AIに渡して意味のある情報（氏名・会社名・専門分野・事業概要・関係性）が1つもない人脈は、候補から外す。
   // 他のメンバーの人脈は、公開範囲が「存在のみ」だと氏名・会社名を伏せるため、説明の生成が終わるまでは
   // 「所属メンバー名」しか残らず、見つけようがない。そのまま混ぜると、上限（候補数）を占めて、
   // 説明のある人脈が候補から押し出されてしまう。
-  return candidates.filter((c) => c.name || c.company || c.specialty || c.businessSummary || c.relationships.length > 0);
+  return candidates.filter((c) => c.name || c.company || c.specialty || c.businessSummary || c.sheetNote || c.relationships.length > 0);
 }
 
 // 人脈検索「すべて」で、メンバー本人として結果に並べる最大件数（外部人脈の結果も十分に表示されるよう、上限を設ける）
@@ -489,6 +495,7 @@ function formatForMeCandidates(candidates: ForMeCandidate[]): string {
     if (c.specialty) parts.push(`専門分野: ${c.specialty}`);
     if (c.relationships.length > 0) parts.push(`関係性: ${c.relationships.join("・")}`);
     if (c.businessSummary) parts.push(`事業概要: ${c.businessSummary}`);
+    if (c.sheetNote) parts.push(`あなたがもらった資料のメモ: ${c.sheetNote}`);
     return `- ${parts.join(" / ")}`;
   }).join("\n");
 }
@@ -847,6 +854,8 @@ export type GiverContext = {
   candidatesByMember: Map<string, GiverCandidate[]>;
   /** 「紹介しました」済みの組み合わせ */
   introduced: { myContactId: string; candidateId: string }[];
+  /** 自分がもらった資料のメモ（人脈IDごと。連絡手段は含めない） */
+  sheetNotes: Map<string, string>;
 };
 
 /** 逆向きの検索（選んだ外部人脈が、メンバーの誰に貢献できそうか）か */
@@ -861,6 +870,11 @@ export async function loadGiverContext(db: Db, meId: string, params: GiverJobPar
   const reverse = isReverseGiver(params);
   let contacts = await db.select().from(schema.externalContacts)
     .where(and(eq(schema.externalContacts.ownerMemberId, meId), ne(schema.externalContacts.visibility, "private"))).all();
+  const sheetNotes = new Map<string, string>();
+  for (const [id, sheet] of await loadOwnSheetMap(db, meId, "contact")) {
+    const t = sheetSearchText(sheet);
+    if (t) sheetNotes.set(id, t);
+  }
   let truncated = false;
   if (reverse) {
     // 逆向き：選んだ外部人脈だけ（絞り込みや抜粋はしない）
@@ -875,7 +889,7 @@ export async function loadGiverContext(db: Db, meId: string, params: GiverJobPar
     }
     if (freeText) {
       const needle = freeText.toLowerCase();
-      contacts = contacts.filter((c) => [c.name, c.company, c.note, c.specialty, c.businessSummary].some((v) => v?.toLowerCase().includes(needle)));
+      contacts = contacts.filter((c) => [c.name, c.company, c.note, c.specialty, c.businessSummary, sheetNotes.get(c.id)].some((v) => v?.toLowerCase().includes(needle)));
     }
     truncated = contacts.length > GIVER_MAX_CONTACTS;
     if (truncated) contacts = sampleContactsFairlyBySpecialty(contacts, GIVER_MAX_CONTACTS);
@@ -891,7 +905,7 @@ export async function loadGiverContext(db: Db, meId: string, params: GiverJobPar
     myContactId: schema.enishiIntroducedContacts.myContactId,
     candidateId: schema.enishiIntroducedContacts.candidateId,
   }).from(schema.enishiIntroducedContacts).where(eq(schema.enishiIntroducedContacts.memberId, meId)).all();
-  return { contacts, truncated, candidatesByMember, introduced };
+  return { contacts, truncated, candidatesByMember, introduced, sheetNotes };
 }
 
 /**
@@ -1014,7 +1028,7 @@ export async function matchGiverBatch(
   const prompt = `${reverse ? buildReverseGiverInstructions(params.count, params.maxHop) : buildInstructions(params.count, params.maxHop, "giver")}
 
 # さがす対象（${reverse ? "あなたが選んだ外部人脈" : "あなたの人脈。絞り込み済み"}）
-${contacts.map((c) => `- id: ${c.id} / 説明: ${[c.name, c.company, c.specialty, c.businessSummary].filter(Boolean).join(" / ")}`).join("\n")}
+${contacts.map((c) => `- id: ${c.id} / 説明: ${[c.name, c.company, c.specialty, c.businessSummary, ctx.sheetNotes.get(c.id) ? `あなたがもらった資料のメモ: ${ctx.sheetNotes.get(c.id)}` : null].filter(Boolean).join(" / ")}`).join("\n")}
 
 # 候補一覧（なかまの金の卵・金のガチョウ）
 ${formatGiverCandidates(cands, reverse)}${excludedPairsSection}${params.goodMatchContext ?? ""}`;

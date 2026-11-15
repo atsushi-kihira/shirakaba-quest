@@ -17,6 +17,8 @@ import { matchesSearchQuery } from "@/lib/contact-search";
 import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActive, type JoinedRange } from "@/components/joined-range-filter";
 import { MemberListOptions, MemberSectionHeader, groupMembers, sortMembers, useMemberListOptions, type MemberFieldAccessors } from "@/components/member-list-options";
 import { ExternalContactsTab } from "./_external-contacts-tab";
+import { ProfileSheetCsvImportModal } from "@/components/profile-sheet/profile-sheet-csv-import";
+import { useSheetSearchText } from "@/components/profile-sheet/profile-sheet-shared";
 import type { PublicMember } from "@shared/types";
 
 // ---- 型定義 ----
@@ -208,6 +210,8 @@ export function MembersScreen() {
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<Tab>(searchParams.get("tab") === "contacts" ? "contacts" : "all");
   const introRequestCount = useIntroRequestCount();
+  const [sheetCsvOpen, setSheetCsvOpen] = useState(false);
+  const { data: sheetTexts } = useSheetSearchText("member"); // 自分がもらった資料のメモ（検索の対象に入れる。あなただけのもの）
 
   const { data: membersData, isLoading: membersLoading, error } = useQuery({
     queryKey: ["members"],
@@ -233,7 +237,7 @@ export function MembersScreen() {
   const filteredMembers = members.filter((m) => {
     // キーワード：名前・ふりがな・職種・事業内容・スキル名・会社名（1to1後に見えるもの）。スペース区切り=AND、OR・括弧にも対応
     const matchSearch = matchesSearchQuery(
-      [m.name, m.furigana, m.category, m.businessDescription, m.company, m.role, ...m.skills.map((sk) => sk.name)],
+      [m.name, m.furigana, m.category, m.businessDescription, m.company, m.role, ...m.skills.map((sk) => sk.name), sheetTexts?.[m.id]],
       search
     );
     if (!matchSearch) return false;
@@ -316,6 +320,18 @@ export function MembersScreen() {
       {activeTab !== "team" && activeTab !== "contacts" && (
         <MemberListOptions sort={sort} group={group} onSort={setSort} onGroup={setGroup} />
       )}
+
+      {/* もらった資料のメモ（略歴シート・GAINSシートなど）のCSV一括取り込み。登録した本人だけが見られる */}
+      {activeTab === "all" && (
+        <div className="mb-3 flex items-center gap-2 flex-wrap">
+          <button onClick={() => setSheetCsvOpen(true)} className="text-xs px-3 py-1.5 rounded-full font-medium"
+            style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+            📎 もらった資料のメモを、CSVで取り込む
+          </button>
+          <span className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>あなただけが見られます</span>
+        </div>
+      )}
+      {sheetCsvOpen && <ProfileSheetCsvImportModal type="member" onClose={() => setSheetCsvOpen(false)} />}
 
       {/* ローディング */}
       {isLoading && (

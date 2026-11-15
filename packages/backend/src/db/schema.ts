@@ -538,6 +538,7 @@ export const teamProspects = sqliteTable(
     filledByMemberId: text("filled_by_member_id"),
     filledAt:         integer("filled_at"),
     addedBy:          text("added_by"),
+    source:           text("source").notNull().default("manual"), // 'ai'（AIが提案した人）| 'manual'（自分で追加した人）
     createdAt:        integer("created_at").notNull(),
   },
   (t) => [uniqueIndex("uniq_team_prospect_ref").on(t.subjectType, t.subjectId, t.kind, t.refId)]
@@ -1551,4 +1552,34 @@ export const meetingAttachments = sqliteTable("meeting_attachments", {
   sortOrder:   integer("sort_order").notNull().default(0),
   inline:      integer("inline").notNull().default(0), // 1 = 説明の文章の中に差し込んだ画像（マイグレーション 0112）
   createdAt:   integer("created_at").notNull(),
+});
+
+// 相手の紹介シート（マイグレーション 0116）。登録した本人（ownerMemberId）だけが見られる。
+export const profileSheets = sqliteTable(
+  "profile_sheets",
+  {
+    id:              text("id").primaryKey(),
+    ownerMemberId:   text("owner_member_id").notNull(),
+    subjectType:     text("subject_type").notNull(),   // 'member' | 'contact'
+    subjectId:       text("subject_id").notNull(),
+    name:            text("name").notNull().default(""),
+    furigana:        text("furigana").notNull().default(""),
+    company:         text("company").notNull().default(""),
+    title:           text("title").notNull().default(""),
+    oneononeDate:    text("oneonone_date").notNull().default(""),
+    expertise:       text("expertise").notNull().default(""),
+    wantedReferrals: text("wanted_referrals").notNull().default(""),
+    personality:     text("personality").notNull().default(""),
+    contactInfo:     text("contact_info").notNull().default(""),
+    tags:            text("tags").notNull().default("[]"), // JSON配列
+    createdAt:       integer("created_at").notNull(),
+    updatedAt:       integer("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_profile_sheet_subject").on(t.ownerMemberId, t.subjectType, t.subjectId)]
+);
+
+export const profileSheetExtractions = sqliteTable("profile_sheet_extractions", {
+  id:        text("id").primaryKey(),
+  memberId:  text("member_id").notNull(),
+  createdAt: integer("created_at").notNull(),
 });

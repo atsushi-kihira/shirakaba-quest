@@ -14,13 +14,20 @@ import { schema } from "../db/index.ts";
 import { newId } from "./auth.ts";
 import { computeStalled } from "./collab-stage.ts";
 import { loadProfiles, type Profile } from "./member-collab.ts";
-import type { DraftParticipant, TeamDraftIdeas } from "./team-draft-ideas.ts";
+import { MAX_AI_MEMBERS, MAX_DESIRED_TALENTS, type DraftParticipant, type TeamDraftIdeas } from "./team-draft-ideas.ts";
 
 export type SubjectType = "draft" | "team";
 export type Stage = "draft" | "loose" | "power";
 
-/** チーム案は自分を含めて10名まで。正式なチームの候補＋募集人材は合わせて10名まで */
+/** 正式なチームの候補＋募集人材は合わせて10名まで */
 export const MAX_PEOPLE = 10;
+/**
+ * チーム案の人数の枠（自分は含まない）。AIが提案した人と、自分で追加した人は、別々に数える。
+ *   ・AIが提案したメンバー・外部人脈：最大 MAX_AI_MEMBERS 名（関係が薄ければ、満たなくてよい）。「追加できるとよい人材」は別に最大 MAX_DESIRED_TALENTS 名
+ *   ・自分で追加した人（メンバー・外部人脈・人材像）：最大 MAX_MANUAL_PEOPLE 名
+ */
+export const MAX_MANUAL_PEOPLE = 10;
+export { MAX_AI_MEMBERS };
 /** AIによる再検討の、チームごとの1日あたりの上限 */
 export const DAILY_AI_RUNS = 5;
 export const PROPOSAL_HISTORY = 10;
@@ -175,6 +182,8 @@ export type RosterMember = {
 export type RosterProspect = {
   key: string; prospectId: string; kind: "member" | "contact" | "talent";
   locked: boolean; role: string | null; published: boolean; filled: boolean; filledByName: string | null;
+  /** AIが提案した人か、自分で追加した人か */
+  source: "ai" | "manual";
   // メンバー
   memberId?: string; name?: string | null; emoji?: string; bgColor?: string; avatarImageKey?: string | null; headline?: string;
   // 外部人脈：登録者本人には名前・社名も出す。それ以外には、名前・社名・備考を出さず、専門分野・事業の概要・関係性だけを出す
@@ -277,7 +286,7 @@ export async function loadRoster(db: Db, subject: Subject, access: Access, meId:
       nameByKey.set(key, p.talentTitle ?? "募集人材");
       if (!seeAll && !(p.published === 1 && !filled)) continue;
       prospects.push({
-        key, prospectId: p.id, kind: "talent", locked: p.locked === 1, role: seeAll ? roles[key] ?? null : null, published: p.published === 1,
+        key, prospectId: p.id, kind: "talent", locked: p.locked === 1, role: seeAll ? roles[key] ?? null : null, published: p.published === 1, source: p.source === "ai" ? "ai" : "manual",
         filled, filledByName: p.filledByMemberId ? infos.get(p.filledByMemberId)?.name ?? null : null,
         title: p.talentTitle ?? "", profile: p.talentProfile ?? "", reason: p.talentReason ?? "",
       });
@@ -291,7 +300,7 @@ export async function loadRoster(db: Db, subject: Subject, access: Access, meId:
       const key = `m:${p.refId}`;
       nameByKey.set(key, info.name);
       prospects.push({
-        key, prospectId: p.id, kind: "member", locked: p.locked === 1, role: roles[key] ?? null, published: false, filled: false, filledByName: null,
+        key, prospectId: p.id, kind: "member", locked: p.locked === 1, role: roles[key] ?? null, published: false, filled: false, filledByName: null, source: p.source === "ai" ? "ai" : "manual",
         memberId: info.id, name: info.name, emoji: info.emoji, bgColor: info.bgColor, avatarImageKey: info.avatarImageKey, headline: info.category,
       });
     } else if (p.kind === "contact" && p.refId) {
@@ -302,13 +311,29 @@ export async function loadRoster(db: Db, subject: Subject, access: Access, meId:
       const key = `c:${ct.id}`;
       nameByKey.set(key, mine ? ct.name : "外部人脈の候補");
       prospects.push({
-        key, prospectId: p.id, kind: "contact", locked: p.locked === 1, role: roles[key] ?? null, published: false, filled: false, filledByName: null,
+        key, prospectId: p.id, kind: "contact", locked: p.locked === 1, role: roles[key] ?? null, published: false, filled: false, filledByName: null, source: p.source === "ai" ? "ai" : "manual",
         isOwnerView: mine, name: mine ? ct.name : null, company: mine ? ct.company : null, specialty: ct.specialty,
         summary: ct.businessSummaryStatus === "done" ? ct.businessSummary : null, relationships: rels.get(ct.id) ?? [],
       });
     }
   }
   return { members, prospects, nameByKey };
+}
+
+/** チーム案の人数の枠と、いまの人数（AI提案・自分で追加を別々に数える） */
+export type DraftLimits = {
+  ai: { max: number; used: number; talentsMax: number; talentsUsed: number };
+  manual: { max: number; used: number };
+};
+export function draftLimits(roster: Roster): DraftLimits {
+  const ps = roster.prospects;
+  return {
+    ai: {
+      max: MAX_AI_MEMBERS, used: ps.filter((p) => p.source === "ai" && p.kind !== "talent").length,
+      talentsMax: MAX_DESIRED_TALENTS, talentsUsed: ps.filter((p) => p.source === "ai" && p.kind === "talent").length,
+    },
+    manual: { max: MAX_MANUAL_PEOPLE, used: ps.filter((p) => p.source === "manual").length },
+  };
 }
 
 // ---- AIに渡す参加者 ----
@@ -494,10 +519,21 @@ export async function applyProposal(
   }
 
   // ④ 追加メンバー候補
-  const prospectCount = roster.prospects.length;
-  const memberCount = roster.members.length;
-  const capacity = subject.type === "draft" ? MAX_PEOPLE - memberCount - prospectCount : MAX_PEOPLE - prospectCount;
-  let room = capacity;
+  // チーム案は、AIが提案した人の枠（メンバー・外部人脈と、人材像で別々）で数える。正式なチームは、候補と募集人材を合わせた枠
+  const lim = subject.type === "draft" ? draftLimits(roster) : null;
+  let teamRoom = MAX_PEOPLE - roster.prospects.length;
+  let memberRoom = lim ? lim.ai.max - lim.ai.used : teamRoom;
+  let talentRoom = lim ? lim.ai.talentsMax - lim.ai.talentsUsed : teamRoom;
+  const takeMember = (): boolean => {
+    if (memberRoom <= 0 || (!lim && teamRoom <= 0)) return false;
+    memberRoom--; if (!lim) teamRoom--;
+    return true;
+  };
+  const takeTalent = (): boolean => {
+    if (talentRoom <= 0 || (!lim && teamRoom <= 0)) return false;
+    talentRoom--; if (!lim) teamRoom--;
+    return true;
+  };
   const skipped: string[] = [];
   if (sel.addCandidates?.length) {
     const taken = new Set([...roster.members.map((m) => m.key), ...roster.prospects.map((p) => p.key)]);
@@ -505,7 +541,6 @@ export async function applyProposal(
     for (const key of sel.addCandidates) {
       const s = ideas.suggestedMembers?.find((m) => m.key === key);
       if (!s || taken.has(key) || (key[0] !== "m" && key[0] !== "c")) continue;
-      if (room <= 0) { skipped.push(key); continue; }
       const kind = key.startsWith("m:") ? "member" : "contact";
       const refId = key.slice(2);
       let ownerMemberId: string | null = null;
@@ -517,10 +552,11 @@ export async function applyProposal(
         const m = await db.select({ status: schema.members.status }).from(schema.members).where(eq(schema.members.id, refId)).get();
         if (m?.status !== "active") continue;
       }
+      if (!takeMember()) { skipped.push(key); continue; }
       await db.insert(schema.teamProspects).values({
-        id: newId(), subjectType: subject.type, subjectId: subject.id, kind, refId, ownerMemberId, locked: 0, published: 0, addedBy: meId, createdAt: now,
+        id: newId(), subjectType: subject.type, subjectId: subject.id, kind, refId, ownerMemberId, locked: 0, published: 0, source: "ai", addedBy: meId, createdAt: now,
       }).onConflictDoNothing();
-      room--; taken.add(key); done.push(key);
+      taken.add(key); done.push(key);
     }
     if (done.length > 0) applied.addCandidates = merge(applied.addCandidates, done);
   }
@@ -531,12 +567,12 @@ export async function applyProposal(
     for (const i of sel.addTalents) {
       const t = ideas.desiredTalents?.[i];
       if (!t || (applied.addTalents ?? []).includes(i)) continue;
-      if (room <= 0) continue;
+      if (!takeTalent()) continue;
       await db.insert(schema.teamProspects).values({
         id: newId(), subjectType: subject.type, subjectId: subject.id, kind: "talent", refId: null, locked: 0,
-        talentTitle: t.title, talentProfile: t.profile, talentReason: t.reason, published: 0, addedBy: meId, createdAt: now,
+        talentTitle: t.title, talentProfile: t.profile, talentReason: t.reason, published: 0, source: "ai", addedBy: meId, createdAt: now,
       });
-      room--; done.push(i);
+      done.push(i);
     }
     if (done.length > 0) applied.addTalents = merge(applied.addTalents, done);
   }
@@ -560,7 +596,7 @@ export async function applyProposal(
     // 反映して仮の内容でなくなるのは、リーダーが内容を確認して反映したため
     await saveProfile(db, subject.type, subject.id, { ...patch, isProvisional: 0, confirmedAt: now }, meId);
   }
-  return { applied, ...(skipped.length > 0 ? { error: "候補・募集人材の人数の上限のため、追加できなかった人がいます" } : {}) };
+  return { applied, ...(skipped.length > 0 ? { error: subject.type === "draft" ? `AIが提案する人の枠（最大${MAX_AI_MEMBERS}名）がいっぱいのため、追加できなかった人がいます` : "候補・募集人材の人数の上限のため、追加できなかった人がいます" } : {}) };
 }
 
 /** プロフィールから、AIの「前回のまとめ」に渡す形を作る */
@@ -581,6 +617,16 @@ export async function setRole(db: Db, subject: Subject, key: string, role: strin
   const profile = await getProfile(db, subject.type, subject.id);
   const roles = parseRoles(profile?.rolesJson);
   if (role.trim()) roles[key] = role.trim(); else delete roles[key];
+  await saveProfile(db, subject.type, subject.id, { rolesJson: JSON.stringify(roles) }, updatedBy);
+}
+
+/** 複数の人の役割をまとめて書き換える（空文字の人は役割を消す） */
+export async function setRoles(db: Db, subject: Subject, patch: Record<string, string>, updatedBy: string): Promise<void> {
+  const profile = await getProfile(db, subject.type, subject.id);
+  const roles = parseRoles(profile?.rolesJson);
+  for (const [key, role] of Object.entries(patch)) {
+    if (role.trim()) roles[key] = role.trim(); else delete roles[key];
+  }
   await saveProfile(db, subject.type, subject.id, { rolesJson: JSON.stringify(roles) }, updatedBy);
 }
 
@@ -666,7 +712,7 @@ export async function adoptLegacyDraftIdeas(db: Db, draftId: string, meId: strin
     const id = newId();
     await db.insert(schema.teamProspects).values({
       id, subjectType: "draft", subjectId: draftId, kind: "talent", refId: null, locked: 0, talentTitle: t.title, talentProfile: t.profile, talentReason: t.reason,
-      published: 0, addedBy: meId, createdAt: now,
+      published: 0, source: "ai", addedBy: meId, createdAt: now,
     });
     if (t.role) roles[`t:${id}`] = t.role;
   }

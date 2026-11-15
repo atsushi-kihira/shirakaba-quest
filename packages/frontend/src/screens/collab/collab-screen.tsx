@@ -23,6 +23,7 @@ import { CreateCollabTeamModal } from "./_create-team-modal";
 import { TeamDraftCards } from "./_team-draft-cards";
 import { TalentBoard } from "./_talent-board";
 import { ActivityAndRecords } from "./_activity-and-records";
+import { useSheetSearchText } from "@/components/profile-sheet/profile-sheet-shared";
 
 type GraphNode = { id: string; name: string; emoji: string; bgColor: string; isMe: boolean; hasActivity: boolean };
 type Stage = "one" | "seed" | "loose";
@@ -1229,6 +1230,8 @@ function ContactSearchPanel({
   // 検索ボックスの自由入力（AND/OR構文対応）はさらにANDで重ねがけする。
   const hasFacetOrQuery = query.trim().length > 0 || selectedSpecialties.size > 0 || selectedRelationships.size > 0;
 
+  // 自分がもらった資料のメモ（専門・強み・タグなど）も、検索の対象にする。メモは、登録したあなたの人脈にだけあるもの
+  const { data: sheetTexts } = useSheetSearchText("contact");
   const searchResults = useMemo(() => {
     if (!hasFacetOrQuery) return [];
     // 非公開の人脈は「人脈をさがす」の対象外（件数・一覧のどちらにも出さない）
@@ -1236,11 +1239,11 @@ function ContactSearchPanel({
       if (ct.visibility === "private") return false;
       if (selectedSpecialties.size > 0 && (!ct.specialty || !selectedSpecialties.has(ct.specialty))) return false;
       if (selectedRelationships.size > 0 && !ct.relationships.some((r) => selectedRelationships.has(r))) return false;
-      if (query.trim() && !matchesSearchQuery([ct.specialty, ct.company, ct.name, ...ct.relationships], query)) return false;
+      if (query.trim() && !matchesSearchQuery([ct.specialty, ct.company, ct.name, ...ct.relationships, sheetTexts?.[ct.id]], query)) return false;
       return true;
     });
     return sortContacts(matched, sortOrder);
-  }, [graph.contacts, query, sortOrder, selectedSpecialties, selectedRelationships, hasFacetOrQuery]);
+  }, [graph.contacts, query, sortOrder, selectedSpecialties, selectedRelationships, hasFacetOrQuery, sheetTexts]);
 
   // 通常検索 or お気に入り絞り込み、どちらの一覧を表示中か
   const resultList = favoritesOnly ? favoriteContacts : searchResults;

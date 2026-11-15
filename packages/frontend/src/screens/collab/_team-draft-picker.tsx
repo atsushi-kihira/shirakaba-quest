@@ -1,5 +1,5 @@
 // =============================================================
-// チーム案のメンバー選び（メンバー／自分の外部人脈。自分を含めて最大10名）
+// チーム案のメンバー選び（メンバー／自分の外部人脈。自分のほかに最大 maxOthers 名）
 // ・MemberPickerPanel：選択の部分だけの部品（作成のダイアログと、メンバー追加のダイアログで共通利用）
 // =============================================================
 import { useState } from "react";
@@ -38,7 +38,7 @@ export function MemberPickerPanel({ maxOthers, selMembers, selContacts, onChange
 
   return (
     <div>
-      <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>自分を含めて最大{maxOthers + 1}名まで（いま自分以外に {total}/{maxOthers} 名を選択中）</p>
+      <p className="text-xs mb-2" style={{ color: "var(--color-ink-500)" }}>自分のほかに最大{maxOthers}名まで（いま {total}/{maxOthers} 名を選択中）</p>
       <div className="flex gap-2 mb-2">
         {(["member", "contact"] as const).map((t) => (
           <button key={t} type="button" onClick={() => setTab(t)} className="flex-1 py-2 rounded-2xl text-sm font-medium"
