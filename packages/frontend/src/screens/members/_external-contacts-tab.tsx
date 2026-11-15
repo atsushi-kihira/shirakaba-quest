@@ -13,6 +13,7 @@ import { api } from "@/lib/api";
 import { ShareButton } from "@/components/share-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { matchesSearchQuery } from "@/lib/contact-search";
+import { TagFilterBar } from "@/components/profile-sheet/tag-filter-bar";
 import { NotFoundPrivateNote } from "@/components/not-found-private-note";
 import { ProfileSheetImportModal } from "@/components/profile-sheet/profile-sheet-import-modal";
 import { ProfileSheetTable } from "@/components/profile-sheet/profile-sheet-table";
@@ -20,7 +21,7 @@ import { ProfileSheetCsvImportModal } from "@/components/profile-sheet/profile-s
 import { SheetFormatGuide } from "@/components/profile-sheet/sheet-format-guide";
 import { readTableFile, TABLE_FILE_ACCEPT } from "@/lib/csv-parse";
 import { useSettings } from "@/hooks/use-settings";
-import { EMPTY_BASICS, hasSheetContent, saveDeferredSheet, useSheetIndex, useSheetSearchText, type ContactBasics } from "@/components/profile-sheet/profile-sheet-shared";
+import { EMPTY_BASICS, hasSheetContent, normTag, saveDeferredSheet, useSheetIndex, useSheetSearchText, useSheetTags, type ContactBasics } from "@/components/profile-sheet/profile-sheet-shared";
 import type { ProfileSheetFields } from "@shared/types";
 
 type Visibility = "private" | "existence" | "full";
@@ -1042,6 +1043,7 @@ function MyContactsSection() {
   const { termSheetMemo } = useSettings();
   const { data: sheetIds } = useSheetIndex("contact");
   const { data: sheetTexts } = useSheetSearchText("contact"); // もらった資料のメモも、検索の対象にする
+  const { data: sheetTags } = useSheetTags(); // 資料メモのタグ（絞り込みに使う。あなただけのもの）
   const { data, isLoading } = useQuery({
     queryKey: ["collab", "contacts"],
     queryFn: () => api.get<{ data: Contact[] }>("/collab/contacts"),
@@ -1063,6 +1065,8 @@ function MyContactsSection() {
   const [selectedVisibilities, setSelectedVisibilities] = useState<Set<Visibility>>(new Set());
   // ホーム画面の「会社概要を生成できませんでした」通知からのリンク（?summaryIssues=1）で開いた場合、最初から絞り込んだ状態にする
   const [summaryIssueOnly, setSummaryIssueOnly] = useState(() => searchParams.get("summaryIssues") === "1");
+  // 詳細画面の「同じタグの外部人脈」のリンク（?tag=…）で開いた場合、最初からそのタグで絞り込んだ状態にする
+  const [selectedTag, setSelectedTag] = useState<string | null>(() => searchParams.get("tag"));
   const [sortOrder, setSortOrder] = useState<ContactSortOrder>("newest");
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
 
@@ -1114,9 +1118,11 @@ function MyContactsSection() {
   // 検索ボックスの自由入力はさらにAND。「会社概要に問題あり」はさらに別軸のANDで、
   // 生成が「見つからず」「エラー」だったものだけに絞り込む。
   function computeFilteredContacts(
-    baseContacts: Contact[], q: string, specialties: Set<string>, relationships: Set<string>, visibilities: Set<Visibility>, issueOnly: boolean
+    baseContacts: Contact[], q: string, specialties: Set<string>, relationships: Set<string>, visibilities: Set<Visibility>, issueOnly: boolean,
+    tag: string | null = selectedTag
   ): Contact[] {
     return baseContacts.filter((ct) => {
+      if (tag && !(sheetTags?.contact[ct.id] ?? []).some((t) => normTag(t) === normTag(tag))) return false;
       if (issueOnly && ct.businessSummaryStatus !== "not_found" && ct.businessSummaryStatus !== "error") return false;
       if (specialties.size > 0 && (!ct.specialty || !specialties.has(ct.specialty))) return false;
       if (relationships.size > 0 && !ct.relationships.some((r) => relationships.has(r))) return false;
@@ -1128,7 +1134,8 @@ function MyContactsSection() {
 
   const filteredContacts = useMemo(
     () => sortContacts(computeFilteredContacts(contacts, searchQuery, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly), sortOrder),
-    [contacts, searchQuery, sortOrder, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [contacts, searchQuery, sortOrder, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly, selectedTag, sheetTags]
   );
 
   const visibilityCounts = useMemo(() => {
@@ -1162,21 +1169,21 @@ function MyContactsSection() {
     [visibleCountContacts]
   );
 
-  const hasActiveFilter = searchQuery.trim() !== "" || selectedSpecialties.size > 0 || selectedRelationships.size > 0 || selectedVisibilities.size > 0 || summaryIssueOnly;
+  const hasActiveFilter = searchQuery.trim() !== "" || selectedSpecialties.size > 0 || selectedRelationships.size > 0 || selectedVisibilities.size > 0 || summaryIssueOnly || selectedTag !== null;
 
   // フィルタ条件が変わるたびに、一致した人脈を自動選択する（一括操作用）。
   // 手動でチェックを外した状態は、フィルタ自体を変えない限り保持される。
-  function applyFilterAndAutoSelect(q: string, specialties: Set<string>, relationships: Set<string>, visibilities: Set<Visibility>, issueOnly: boolean) {
-    if (!q.trim() && specialties.size === 0 && relationships.size === 0 && visibilities.size === 0 && !issueOnly) { setSelected(new Set()); return; }
-    const matched = computeFilteredContacts(contacts, q, specialties, relationships, visibilities, issueOnly);
+  function applyFilterAndAutoSelect(q: string, specialties: Set<string>, relationships: Set<string>, visibilities: Set<Visibility>, issueOnly: boolean, tag: string | null = selectedTag) {
+    if (!q.trim() && specialties.size === 0 && relationships.size === 0 && visibilities.size === 0 && !issueOnly && !tag) { setSelected(new Set()); return; }
+    const matched = computeFilteredContacts(contacts, q, specialties, relationships, visibilities, issueOnly, tag);
     setSelected(new Set(matched.map((c) => c.id)));
   }
 
   // ホーム画面の通知リンク（?summaryIssues=1）で開いた直後にも、絞り込み結果を自動選択しておく
   useEffect(() => {
-    if (summaryIssueOnly) applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, selectedVisibilities, true);
+    if (summaryIssueOnly || selectedTag) applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contacts.length]);
+  }, [contacts.length, sheetTags]);
 
   function handleSearchChange(value: string) {
     setSearchQuery(value);
@@ -1218,7 +1225,13 @@ function MyContactsSection() {
     });
   }
 
+  function changeTag(tag: string | null) {
+    setSelectedTag(tag);
+    applyFilterAndAutoSelect(searchQuery, selectedSpecialties, selectedRelationships, selectedVisibilities, summaryIssueOnly, tag);
+  }
+
   function clearAllFilters() {
+    setSelectedTag(null);
     setSearchQuery("");
     setSelectedSpecialties(new Set());
     setSelectedRelationships(new Set());
@@ -1346,6 +1359,8 @@ function MyContactsSection() {
               </div>
             </div>
           )}
+
+          <TagFilterBar tagMap={sheetTags?.contact} ids={contacts.map((ct) => ct.id)} selected={selectedTag} onSelect={changeTag} />
 
           {summaryIssueCount > 0 && (
             <div className="mb-2">

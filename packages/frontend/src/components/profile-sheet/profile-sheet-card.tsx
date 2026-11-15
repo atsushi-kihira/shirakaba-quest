@@ -10,6 +10,7 @@ import type { ProfileSheet, ProfileSheetSubjectType } from "@shared/types";
 import { ProfileSheetImportModal } from "./profile-sheet-import-modal";
 import { ProfileSheetTable } from "./profile-sheet-table";
 import { ReferralLinksPanel } from "./referral-links-panel";
+import { TagLinks } from "./tag-links";
 import { useCompanyLookup, useDeleteSheet, useProfileSheet } from "./profile-sheet-shared";
 
 type Props = { type: ProfileSheetSubjectType; subjectId: string; subjectName: string };
@@ -86,6 +87,7 @@ export function ProfileSheetCard({ type, subjectId, subjectName }: Props) {
       ) : (
         <div className="mt-2">
           <ProfileSheetTable sheet={sheet}
+            tagsNode={<TagLinks type={type} subjectId={subjectId} tags={sheet.tags} />}
             companyDescriptionNode={<CompanyDescription sheet={sheet} type={type} subjectId={subjectId} onError={setError} />}
             extraRows={[{
               after: "wantedReferrals",

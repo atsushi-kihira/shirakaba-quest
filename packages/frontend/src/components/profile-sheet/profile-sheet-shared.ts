@@ -133,6 +133,23 @@ export function useSheetSearchText(type: ProfileSheetSubjectType) {
   });
 }
 
+/** 自分が登録したシートのタグ（相手のIDごと）。なかまと外部人脈の両方。絞り込み・「同じタグの人」・共通タグの表示に使う */
+export type SheetTagMap = { member: Record<string, string[]>; contact: Record<string, string[]> };
+
+export function useSheetTags() {
+  return useQuery({
+    queryKey: ["profile-sheet", "tags"],
+    queryFn: () => api.get<{ data: SheetTagMap }>("/profile-sheets/tags"),
+    select: (r) => r.data,
+    staleTime: 60_000,
+  });
+}
+
+/** タグの比較用（全角半角・大文字小文字・前後の空白をそろえる） */
+export function normTag(t: string): string {
+  return t.normalize("NFKC").trim().toLowerCase();
+}
+
 export function useSaveSheet() {
   const qc = useQueryClient();
   return useMutation({
@@ -141,6 +158,8 @@ export function useSaveSheet() {
     onSuccess: (_r, v) => {
       qc.invalidateQueries({ queryKey: sheetKey(v.type, v.id) });
       qc.invalidateQueries({ queryKey: sheetIndexKey(v.type) });
+      qc.invalidateQueries({ queryKey: ["profile-sheet", "tags"] });
+      qc.invalidateQueries({ queryKey: ["profile-sheet", "search-index"] });
     },
   });
 }
@@ -153,6 +172,8 @@ export function useDeleteSheet() {
     onSuccess: (_r, v) => {
       qc.invalidateQueries({ queryKey: sheetKey(v.type, v.id) });
       qc.invalidateQueries({ queryKey: sheetIndexKey(v.type) });
+      qc.invalidateQueries({ queryKey: ["profile-sheet", "tags"] });
+      qc.invalidateQueries({ queryKey: ["profile-sheet", "search-index"] });
     },
   });
 }

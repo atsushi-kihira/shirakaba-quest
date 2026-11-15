@@ -18,7 +18,8 @@ import { JoinedRangeFilter, EMPTY_JOINED_RANGE, inJoinedRange, isJoinedRangeActi
 import { MemberListOptions, MemberSectionHeader, groupMembers, sortMembers, useMemberListOptions, type MemberFieldAccessors } from "@/components/member-list-options";
 import { ExternalContactsTab } from "./_external-contacts-tab";
 import { ProfileSheetCsvImportModal } from "@/components/profile-sheet/profile-sheet-csv-import";
-import { useSheetSearchText } from "@/components/profile-sheet/profile-sheet-shared";
+import { normTag, useSheetSearchText, useSheetTags } from "@/components/profile-sheet/profile-sheet-shared";
+import { TagFilterBar } from "@/components/profile-sheet/tag-filter-bar";
 import type { PublicMember } from "@shared/types";
 
 // ---- 型定義 ----
@@ -213,6 +214,8 @@ export function MembersScreen() {
   const [sheetCsvOpen, setSheetCsvOpen] = useState(false);
   const { termSheetMemo } = useSettings();
   const { data: sheetTexts } = useSheetSearchText("member"); // 自分がもらった資料のメモ（検索の対象に入れる。あなただけのもの）
+  const { data: sheetTags } = useSheetTags(); // 自分がもらった資料のメモのタグ（絞り込みに使う。あなただけのもの）
+  const [tagFilter, setTagFilter] = useState<string | null>(() => (searchParams.get("tab") === "contacts" ? null : searchParams.get("tag")));
 
   const { data: membersData, isLoading: membersLoading, error } = useQuery({
     queryKey: ["members"],
@@ -243,6 +246,7 @@ export function MembersScreen() {
     );
     if (!matchSearch) return false;
     if (!inJoinedRange(m.businessCommunityJoinedDate, joinedRange)) return false;
+    if (tagFilter && !(sheetTags?.member[m.id] ?? []).some((t) => normTag(t) === normTag(tagFilter))) return false;
     if (activeTab === "all") return true;
     if (activeTab === "done") return m.connectionStatus === "digital" || m.connectionStatus === "real";
     if (activeTab === "undone") return m.connectionStatus === "none";
@@ -312,6 +316,10 @@ export function MembersScreen() {
             </button>
           )}
         </div>
+      )}
+
+      {activeTab !== "team" && activeTab !== "contacts" && (
+        <TagFilterBar tagMap={sheetTags?.member} ids={members.map((m) => m.id)} selected={tagFilter} onSelect={setTagFilter} />
       )}
 
       {activeTab !== "team" && activeTab !== "contacts" && (
@@ -411,7 +419,7 @@ export function MembersScreen() {
         <div className="space-y-3">
           {filteredMembers.length === 0 && (
             <p className="text-center py-8 text-sm" style={{ color: "var(--color-ink-400)" }}>
-              {search !== "" || isJoinedRangeActive(joinedRange) ? "条件に合うメンバーが見つかりませんでした" :
+              {search !== "" || tagFilter || isJoinedRangeActive(joinedRange) ? "条件に合うメンバーが見つかりませんでした" :
                activeTab === "done" ? "1to1を実施した仲間がいません" :
                activeTab === "undone" ? "1to1未実施のメンバーはいません" :
                "見つかりませんでした"}

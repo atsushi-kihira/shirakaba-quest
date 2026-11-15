@@ -1,6 +1,7 @@
 // =============================================================
 // 相手の紹介シート（認証必要）。登録した本人だけが読み書きできる。
 // GET    /api/profile-sheets/search-index?subjectType — 一覧の検索用：相手のIDごとの、自分のメモの検索用テキスト（連絡手段は含めない）
+// GET    /api/profile-sheets/tags                   — 自分が登録したシートのタグ（なかま・外部人脈の両方。相手のIDごと）
 // GET    /api/profile-sheets?subjectType&subjectId  — 自分が登録したシート（なければ null）
 // GET    /api/profile-sheets/index?subjectType      — シートを登録済みの相手のID一覧（一覧の印用）
 // PUT    /api/profile-sheets                        — 登録・編集（上書き）
@@ -87,6 +88,22 @@ profileSheetRoutes.get("/search-index", async (c) => {
     if (text) out[id] = text;
   }
   return c.json({ data: out });
+});
+
+// 自分が登録したシートのタグ（なかま・外部人脈の両方）。絞り込み・「同じタグの人」・共通タグの表示用。自分のシートの分だけ
+profileSheetRoutes.get("/tags", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json(NO_MEMBER, 403);
+  const [members, contacts] = await Promise.all([
+    loadOwnSheetMap(db, meId, "member"), loadOwnSheetMap(db, meId, "contact"),
+  ]);
+  const pick = (map: Awaited<ReturnType<typeof loadOwnSheetMap>>): Record<string, string[]> => {
+    const out: Record<string, string[]> = {};
+    for (const [id, sheet] of map) if (sheet.tags.length > 0) out[id] = sheet.tags;
+    return out;
+  };
+  return c.json({ data: { member: pick(members), contact: pick(contacts) } });
 });
 
 profileSheetRoutes.get("/", async (c) => {

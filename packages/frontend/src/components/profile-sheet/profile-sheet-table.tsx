@@ -18,6 +18,8 @@ type Props = {
   companyDescriptionNode?: ReactNode;
   /** 項目の下に差し込む行 */
   extraRows?: SheetExtraRow[];
+  /** 「タグ」の行の中身を差し替える（同じタグの人へのリンクなど）。省略時は、タグを並べるだけ */
+  tagsNode?: ReactNode;
 };
 
 const NONE = <span style={{ color: "var(--color-ink-300)" }}>記載なし</span>;
@@ -31,7 +33,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function ProfileSheetTable({ sheet, companyDescriptionNode, extraRows = [] }: Props) {
+export function ProfileSheetTable({ sheet, companyDescriptionNode, extraRows = [], tagsNode }: Props) {
   return (
     <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid var(--color-paper-300)" }}>
       <table className="w-full text-sm border-collapse">
@@ -71,13 +73,13 @@ export function ProfileSheetTable({ sheet, companyDescriptionNode, extraRows = [
           <tr style={{ borderTop: "1px solid var(--color-paper-300)" }}>
             <th className="text-left font-semibold text-xs px-3 py-2.5 align-top" style={{ color: "var(--color-ink-700)" }}>タグ</th>
             <td className="px-3 py-2.5 align-top">
-              {sheet.tags.length > 0 ? (
+              {tagsNode ?? (sheet.tags.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
                   {sheet.tags.map((t) => (
                     <span key={t} className="px-2 py-0.5 rounded-full text-[11px]" style={{ background: "rgba(212,160,59,0.18)", color: "var(--color-ink-700)" }}>#{t}</span>
                   ))}
                 </div>
-              ) : NONE}
+              ) : NONE)}
             </td>
           </tr>
         </tbody>
