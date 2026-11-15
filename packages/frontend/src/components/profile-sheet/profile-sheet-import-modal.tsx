@@ -3,15 +3,17 @@
 //   1) 資料のファイル（PDF・画像・テキスト）を選ぶ → AIが10項目に読み取る
 //   2) 読み取り結果を確認して、直したいところを直す
 //   3) 保存（deferSave のときは、保存せずに内容だけ呼び出し元へ返す）
-//   手で入力することも、すでにある内容を直すこともできる
+//   手動で入力することも、すでにある内容を直すこともできる
+//   basics を渡すと「新しい外部人脈の登録」用になり、人脈の基本情報（名前・会社・専門分野など）も同じ画面で入力できる
 // =============================================================
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import { Loader2, FileUp, PenLine, Plus } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { DialogCloseButton } from "@/components/dialog-close-button";
+import { useSettings } from "@/hooks/use-settings";
 import type { ProfileSheet, ProfileSheetFields } from "@shared/types";
 import {
-  SHEET_FIELDS, SHEET_FILE_ACCEPT, SHEET_FILE_MAX_MB, combineFields, extractSheet, hasSheetContent, sheetToFields, tagsToText, textToTags, useSaveSheet,
+  type ContactBasics, SHEET_FIELDS, SHEET_FILE_ACCEPT, SHEET_FILE_MAX_MB, combineFields, extractSheet, hasSheetContent, sheetToFields, tagsToText, textToTags, useSaveSheet,
 } from "./profile-sheet-shared";
 
 type Step = "choose" | "reading" | "edit";
@@ -33,16 +35,24 @@ type Props = {
   initialFields?: ProfileSheetFields | null;
   /** true なら、保存せずに、内容だけ onDone に返す（人脈をこれから作るとき） */
   deferSave?: boolean;
+  /** 新しい外部人脈の登録用：人脈の基本情報の初期値と、その入力欄の描き方（呼び出し側が持つ入力部品を使うため） */
+  basics?: { initial: ContactBasics; render: (b: ContactBasics, set: (patch: Partial<ContactBasics>) => void) => ReactNode };
   onClose: () => void;
-  onDone: (fields: ProfileSheetFields, saved: ProfileSheet | null) => void;
+  onDone: (fields: ProfileSheetFields, saved: ProfileSheet | null, basics?: ContactBasics) => void;
 };
 
 const inputStyle = { background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)", color: "var(--color-ink-800)" } as const;
 
-export function ProfileSheetImportModal({ subject, existing, defaultDate, startAtEdit, deferSave, initialFields, onClose, onDone }: Props) {
+export function ProfileSheetImportModal({ subject, existing, defaultDate, startAtEdit, deferSave, initialFields, basics, onClose, onDone }: Props) {
   const save = useSaveSheet();
+  const { termSheetMemo } = useSettings();
+  const contactMode = !!basics;
+  const [basicsState, setBasicsState] = useState<ContactBasics | null>(basics?.initial ?? null);
+  const setBasics = (patch: Partial<ContactBasics>) => setBasicsState((b) => (b ? { ...b, ...patch } : b));
+  /** 相手の名前（新しい人脈のときは、入力中の名前） */
+  const subjectName = basicsState ? basicsState.name : subject.name;
   const fileRef = useRef<HTMLInputElement>(null);
-  const initial = initialFields ?? sheetToFields(existing, subject.name);
+  const initial = initialFields ?? sheetToFields(existing, subjectName);
   const [step, setStep] = useState<Step>(startAtEdit || initialFields ? "edit" : "choose");
   const [fields, setFields] = useState<ProfileSheetFields>(() => ({
     ...initial, oneononeDate: initial.oneononeDate || defaultDate || "",
@@ -57,9 +67,13 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
   const [dragging, setDragging] = useState(false);
   const [memoText, setMemoText] = useState("");
   const busy = step === "reading" || save.isPending;
-  const current: ProfileSheetFields = { ...fields, tags: textToTags(tagText) };
+  // 新しい人脈のときは、名前・会社は、基本情報の入力欄のものを使う
+  const current: ProfileSheetFields = {
+    ...fields, tags: textToTags(tagText),
+    ...(basicsState ? { name: basicsState.name, company: basicsState.company } : {}),
+  };
   /** すでに内容がある（登録済み・読み取り済み・入力済み）ときは、読み込み方を選べる */
-  const hasCurrent = hasSheetContent(current);
+  const hasCurrent = hasSheetContent(basicsState ? { ...current, company: "" } : current);
 
   /** 資料のファイルや貼り付けたメモを（複数でも）読み取って、いまの内容に足す／リセットして入れ替える */
   async function handleSources(input: { file: File; memo?: boolean }[]) {
@@ -77,7 +91,7 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
 
     setStep("reading");
     setProgress({ done: 0, total: targets.length });
-    const subj = subject.id ? { type: subject.type, id: subject.id } : { hintName: subject.name || undefined };
+    const subj = subject.id ? { type: subject.type, id: subject.id } : { hintName: subjectName || undefined };
     const results = await Promise.allSettled(targets.map(async (t) => {
       try { return await extractSheet(t.file, subj, { memo: t.memo }); }
       finally { setProgress((p) => (p ? { ...p, done: p.done + 1 } : p)); }
@@ -102,13 +116,15 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
 
     // 「リセット」のときは、いまの内容を空にしてから読み込む（名前の初期値と1to1した日は残す）
     const base: ProfileSheetFields = mode === "reset" && hasCurrent
-      ? { ...sheetToFields(null, subject.name), oneononeDate: defaultDate || "" }
+      ? { ...sheetToFields(null, subjectName), oneononeDate: defaultDate || "", ...(basicsState ? { company: basicsState.company } : {}) }
       : current;
     let merged = okFields.reduce((acc, f) => combineFields(acc, f), base);
     if (!merged.oneononeDate && defaultDate) merged = { ...merged, oneononeDate: defaultDate };
 
     setFields(merged);
     setTagText(tagsToText(merged.tags));
+    // 新しい人脈のときは、読み取れた名前・会社を、基本情報の空のところに入れる
+    if (basicsState) setBasics({ name: basicsState.name || merged.name, company: basicsState.company || merged.company });
     setHasCurrentBeforeRead(hasCurrent);
     setFromFiles(okNames);
     setReadNote(notes.length > 0 ? notes.join("\n") : null);
@@ -137,7 +153,13 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
 
   function submit() {
     setError(null);
-    const finalFields: ProfileSheetFields = { ...fields, tags: textToTags(tagText) };
+    const finalFields: ProfileSheetFields = { ...current };
+    if (basicsState) {
+      // 新しい人脈：名前だけ必須。資料メモの項目は、空でもよい
+      if (!basicsState.name.trim()) { setError("名前を入力してください"); return; }
+      onDone({ ...finalFields, name: basicsState.name.trim(), company: basicsState.company.trim() }, null, { ...basicsState, name: basicsState.name.trim(), company: basicsState.company.trim() });
+      return;
+    }
     const hasContent = SHEET_FIELDS.some((f) => f.key !== "oneononeDate" && finalFields[f.key].trim()) || finalFields.tags.length > 0;
     if (!hasContent) { setError("どれか1つ以上の項目を入力してください"); return; }
     if (deferSave || !subject.id) { onDone(finalFields, null); return; }
@@ -154,12 +176,14 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
       <div className="card-paper w-full max-w-lg rounded-3xl p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-2 mb-1">
           <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-            📎 {subject.name || "相手"}さんの資料を取り込む
+            {contactMode ? "📎 新しい人脈の登録（資料の取り込み・手動入力）" : `📎 ${subjectName || "相手"}さんの資料を取り込む`}
           </h2>
           <DialogCloseButton onClick={close} disabled={busy} />
         </div>
         <p className="text-xs mb-4" style={{ color: "var(--color-ink-500)" }}>
-          もらった略歴シート・GAINSシート・1to1シートを、決まった項目に整理して残せます。<b>登録したあなただけが見られ</b>、ほかのメンバーには見えません。
+          {contactMode
+            ? "もらった資料（略歴シート・GAINSシート・1to1シートなど）やメモを読み取るか、手動で入力して、人脈を登録します。この画面で決めたあと、内容を確認してから登録します。"
+            : <>もらった略歴シート・GAINSシート・1to1シートを、決まった項目に整理して残せます。<b>登録したあなただけが見られ</b>、ほかのメンバーには見えません。</>}
         </p>
 
         {step === "choose" && (
@@ -222,8 +246,8 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
               style={{ background: "var(--color-paper-200)" }}>
               <PenLine size={22} style={{ color: "var(--color-ink-500)" }} />
               <span>
-                <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>手で入力する</span>
-                <span className="block text-[11px] mt-0.5" style={{ color: "var(--color-ink-500)" }}>資料がなくても、聞いた内容を残せます</span>
+                <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>手動で入力する</span>
+                <span className="block text-[11px] mt-0.5" style={{ color: "var(--color-ink-500)" }}>{contactMode ? "資料がなくても、名前や会社などを入力して登録できます" : "資料がなくても、聞いた内容を残せます"}</span>
               </span>
             </button>}
             {error && <p className="text-xs whitespace-pre-line" style={{ color: "var(--color-brand)" }}>{error}</p>}
@@ -261,7 +285,16 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
                 ⚠️ {readNote}
               </p>
             )}
-            {SHEET_FIELDS.map((f) => (
+            {basics && basicsState && (
+              <div className="rounded-2xl p-3" style={{ background: "var(--color-paper-200)" }}>
+                <p className="text-xs font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>👤 人脈の基本情報</p>
+                {basics.render(basicsState, setBasics)}
+              </div>
+            )}
+            {contactMode && (
+              <p className="text-xs font-semibold pt-1" style={{ color: "var(--color-ink-700)" }}>📎 {termSheetMemo}（任意）</p>
+            )}
+            {SHEET_FIELDS.filter((f) => !(contactMode && (f.key === "name" || f.key === "company"))).map((f) => (
               <Fragment key={f.key}>
               <label className="block">
                 <span className="block text-xs font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>{f.label}</span>
@@ -276,7 +309,7 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
                     className="w-full rounded-xl px-3 py-2 text-sm" style={inputStyle} />
                 )}
               </label>
-              {f.key === "company" && (
+              {f.key === "company" && !contactMode && (
                 <div className="space-y-3 pl-3" style={{ borderLeft: "3px solid var(--color-paper-300)" }}>
                   <label className="block">
                     <span className="block text-xs font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>会社のホームページ</span>
@@ -309,7 +342,7 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
                 className="flex-1 py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50"
                 style={{ background: "var(--color-brand)" }}>
                 {save.isPending && <Loader2 size={14} className="animate-spin" />}
-                {deferSave ? "この内容で決める" : "保存する"}
+                {deferSave || contactMode ? "この内容で決める" : "保存する"}
               </button>
             </div>
             <button onClick={() => { setError(null); setStep("choose"); }} disabled={busy}

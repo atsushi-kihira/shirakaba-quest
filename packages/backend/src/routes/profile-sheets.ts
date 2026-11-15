@@ -181,7 +181,7 @@ profileSheetRoutes.post("/extract", async (c) => {
 
   const now = Math.floor(Date.now() / 1000);
   if (!(await takeExtractionSlot(db, meId, now))) {
-    return c.json({ error: { code: "rate_limited", message: "今日は、資料の読み取りを使いすぎています。明日また、お試しください（手で入力することはできます）" } }, 429);
+    return c.json({ error: { code: "rate_limited", message: "今日は、資料の読み取りを使いすぎています。明日また、お試しください（手動で入力することはできます）" } }, 429);
   }
   try {
     const fields = await extractSheetFromFile({
@@ -193,7 +193,7 @@ profileSheetRoutes.post("/extract", async (c) => {
   } catch (e) {
     console.error("profile sheet extract failed", e instanceof Error ? e.message : e);
     const msg = e instanceof ExtractionError && e.message.includes("解釈")
-      ? "資料から項目を読み取れませんでした。別のファイルをお試しいただくか、手で入力してください"
+      ? "資料から項目を読み取れませんでした。別のファイルをお試しいただくか、手動で入力してください"
       : "資料の読み取りに失敗しました。少し待ってから、もう一度お試しください";
     return c.json({ error: { code: "extract_failed", message: msg } }, 502);
   }

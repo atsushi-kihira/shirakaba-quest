@@ -29,6 +29,15 @@ export const EMPTY_FIELDS: ProfileSheetFields = {
   impression: "", supplement: "", companyUrl: "", companyDescription: "",
 };
 
+/** 新しい外部人脈を登録するときの、人脈そのものの基本情報（資料メモとは別に、人脈として登録する項目） */
+export type ContactBasics = {
+  name: string; company: string; specialty: string; relationships: string[]; note: string; email: string;
+  visibility: "private" | "existence" | "full"; businessSummary: string; businessSummaryDetail: string;
+};
+export const EMPTY_BASICS: ContactBasics = {
+  name: "", company: "", specialty: "", relationships: [], note: "", email: "", visibility: "existence", businessSummary: "", businessSummaryDetail: "",
+};
+
 export function sheetToFields(s: ProfileSheet | null | undefined, fallbackName = ""): ProfileSheetFields {
   if (!s) return { ...EMPTY_FIELDS, name: fallbackName };
   const { name, furigana, company, title, oneononeDate, expertise, wantedReferrals, personality, contactInfo, tags, impression, supplement, companyUrl, companyDescription } = s;

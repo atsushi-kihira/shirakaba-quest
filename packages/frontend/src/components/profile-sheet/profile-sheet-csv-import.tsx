@@ -9,6 +9,7 @@ import { api, ApiError } from "@/lib/api";
 import { readTableFile, TABLE_FILE_ACCEPT } from "@/lib/csv-parse";
 import { DialogCloseButton } from "@/components/dialog-close-button";
 import { COLUMNS, downloadSheetTemplate } from "./profile-sheet-csv-columns";
+import { SheetFormatGuide } from "./sheet-format-guide";
 import type { ProfileSheetSubjectType } from "@shared/types";
 
 type ColKey = (typeof COLUMNS)[number]["key"];
@@ -44,9 +45,9 @@ function toRows(table: string[][]): CsvRow[] | null {
   }).filter((r) => COLUMNS.some((c) => r[c.key]));
 }
 
-type Props = { type: ProfileSheetSubjectType; onClose: () => void };
+type Props = { type: ProfileSheetSubjectType; onClose: () => void; /** 書式の説明を、この画面の中に出すか（すでに別の場所で見せているときは false） */ guide?: boolean };
 
-export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
+export function ProfileSheetCsvImportModal({ type, onClose, guide = true }: Props) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -154,9 +155,7 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
               </button>
             </div>
             </div>
-            <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>
-              1行目は見出し：{COLUMNS.map((c) => c.header).join("／")}。Excelで作った場合は、そのまま「.xlsx」で選べます（最初のシートを読み取ります）。
-            </p>
+            {guide && <SheetFormatGuide type={type} />}
 
             {type === "contact" && (
               <label className="block">

@@ -8,18 +8,19 @@ import { LOCATION_VALUES } from "@shared/prefectures";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Trash2, Upload, X } from "lucide-react";
+import { FileUp, Pencil, Trash2, Upload, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { ShareButton } from "@/components/share-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { matchesSearchQuery } from "@/lib/contact-search";
 import { NotFoundPrivateNote } from "@/components/not-found-private-note";
-import { DeferredSheetField } from "@/components/profile-sheet/deferred-sheet-field";
+import { ProfileSheetImportModal } from "@/components/profile-sheet/profile-sheet-import-modal";
+import { ProfileSheetTable } from "@/components/profile-sheet/profile-sheet-table";
 import { ProfileSheetCsvImportModal } from "@/components/profile-sheet/profile-sheet-csv-import";
-import { downloadSheetTemplate } from "@/components/profile-sheet/profile-sheet-csv-columns";
+import { SheetFormatGuide } from "@/components/profile-sheet/sheet-format-guide";
 import { readTableFile, TABLE_FILE_ACCEPT } from "@/lib/csv-parse";
 import { useSettings } from "@/hooks/use-settings";
-import { saveDeferredSheet, useSheetIndex, useSheetSearchText } from "@/components/profile-sheet/profile-sheet-shared";
+import { EMPTY_BASICS, hasSheetContent, saveDeferredSheet, useSheetIndex, useSheetSearchText, type ContactBasics } from "@/components/profile-sheet/profile-sheet-shared";
 import type { ProfileSheetFields } from "@shared/types";
 
 type Visibility = "private" | "existence" | "full";
@@ -334,10 +335,11 @@ export function ExternalContactsTab() {
 
 /** 人脈を追加する入口（1か所にまとめた）。「1件ずつ」と「一覧表（CSV・Excel）でまとめて」を切り替える */
 function AddContactsCard() {
-  const [mode, setMode] = useState<"one" | "bulk">("one");
+  // 最初は「一覧表でまとめて登録」を表示する（入力フォームがいきなり出ないように）
+  const [mode, setMode] = useState<"one" | "bulk">("bulk");
   const tabs: { key: "one" | "bulk"; label: string }[] = [
-    { key: "one", label: "✍️ 1件ずつ登録" },
     { key: "bulk", label: "📊 一覧表でまとめて登録" },
+    { key: "one", label: "✍️ 1件ずつ登録" },
   ];
   return (
     <div className="card-paper p-4 mb-6">
@@ -367,7 +369,7 @@ function BulkAddSection() {
   const [kind, setKind] = useState<"cards" | "sheets">("cards");
   const [sheetCsvOpen, setSheetCsvOpen] = useState(false);
   const kinds: { key: "cards" | "sheets"; title: string; desc: string }[] = [
-    { key: "cards", title: "名刺ソフト（Eightなど）や、名前・会社・専門の一覧", desc: "名前・専門分野・会社・備考・メールの列がある表" },
+    { key: "cards", title: "名刺ソフト(Eight)などでの一覧出力", desc: "Eightなどからダウンロードした一覧、または名前・専門分野・会社・備考・メールの列がある表" },
     { key: "sheets", title: `${termSheetMemo}の一覧（10項目）`, desc: "名前・専門・強み・紹介してほしい相手・タグなど、資料の内容をまとめた表" },
   ];
   return (
@@ -392,16 +394,13 @@ function BulkAddSection() {
           <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
             名前・専門・強み・紹介してほしい相手・タグなどを書いたCSV・Excelの表から、人脈ごとにメモを登録します。登録済みの人は内容を更新し、まだ登録していない人は、新しい人脈として登録します。あなただけが見られます。
           </p>
+          <SheetFormatGuide type="contact" />
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setSheetCsvOpen(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium text-white" style={{ background: "var(--color-brand)" }}>
               <Upload size={16} /> CSV・Excelを選んで取り込む
             </button>
-            <button onClick={downloadSheetTemplate} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium"
-              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-              ひな形をダウンロード
-            </button>
           </div>
-          {sheetCsvOpen && <ProfileSheetCsvImportModal type="contact" onClose={() => setSheetCsvOpen(false)} />}
+          {sheetCsvOpen && <ProfileSheetCsvImportModal type="contact" guide={false} onClose={() => setSheetCsvOpen(false)} />}
         </div>
       )}
     </div>
@@ -538,20 +537,17 @@ function RelationshipTagsInput({ relationships, setRelationships }: {
   );
 }
 
+/**
+ * 1件ずつ登録。最初は「資料を取り込む」ボタンだけを出す。
+ * ボタンを押すと、資料の読み取り・メモの貼り付け・手動入力（人脈の基本情報も同じ画面）ができる。
+ * 決めた内容は、このボタンの下に「登録前の確認」として表示し、「この内容で登録する」を押して初めて登録する。
+ */
 function ManualAddSection() {
   const qc = useQueryClient();
   const { termSheetMemo } = useSettings();
   const [justAdded, setJustAdded] = useState(false);
-  const [name, setName] = useState("");
-  const [specialty, setSpecialty] = useState("");
-  const [company, setCompany] = useState("");
-  const [relationships, setRelationships] = useState<string[]>([]);
-  const [note, setNote] = useState("");
-  const [email, setEmail] = useState("");
-  const [visibility, setVisibility] = useState<Visibility>("existence");
-  const [businessSummary, setBusinessSummary] = useState("");
-  const [businessSummaryDetail, setBusinessSummaryDetail] = useState("");
-  const [sheet, setSheet] = useState<ProfileSheetFields | null>(null);
+  const [modal, setModal] = useState<null | "choose" | "edit">(null);
+  const [draft, setDraft] = useState<{ basics: ContactBasics; fields: ProfileSheetFields } | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -564,31 +560,86 @@ function ManualAddSection() {
   const atLimit = nonPrivateCount >= EXTERNAL_CONTACTS_LIMIT;
 
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (d: { basics: ContactBasics; fields: ProfileSheetFields }) => {
+      const b = d.basics;
       const res = await api.post<{ data: { id: string } }>("/collab/contacts", {
-        name: name.trim(), specialty: specialty.trim() || undefined, company: company.trim() || undefined,
-        relationships, note: note.trim() || undefined, email: email.trim() || undefined, visibility,
-        businessSummary: businessSummary.trim() || undefined, businessSummaryDetail: businessSummaryDetail.trim() || undefined,
+        name: b.name.trim(), specialty: b.specialty.trim() || undefined, company: b.company.trim() || undefined,
+        relationships: b.relationships, note: b.note.trim() || undefined, email: b.email.trim() || undefined, visibility: b.visibility,
+        businessSummary: b.businessSummary.trim() || undefined, businessSummaryDetail: b.businessSummaryDetail.trim() || undefined,
       });
-      return { sheetSaved: await saveDeferredSheet(res.data.id, sheet) };
+      // 資料メモの項目が何も入っていないときは、メモは作らない
+      return { sheetSaved: await saveDeferredSheet(res.data.id, hasSheetContent(d.fields) ? d.fields : null) };
     },
     onSuccess: ({ sheetSaved }) => {
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
       qc.invalidateQueries({ queryKey: ["collab", "graph"] });
       qc.invalidateQueries({ queryKey: ["profile-sheet"] });
       setNotice(sheetSaved ? "" : `人脈は登録しました。ただ、${termSheetMemo}は保存できませんでした。一覧の名前を押して、もう一度取り込んでください。`);
-      setName(""); setSpecialty(""); setCompany(""); setRelationships([]); setNote(""); setEmail(""); setVisibility("existence");
-      setBusinessSummary(""); setBusinessSummaryDetail(""); setSheet(null);
+      setDraft(null);
       setJustAdded(true);
     },
     onError: (e: Error) => setError(e.message || "登録に失敗しました"),
   });
 
-  function handleSubmit() {
+  function register() {
+    if (!draft) return;
     setError(""); setJustAdded(false);
-    if (!name.trim()) { setError("名前を入力してください"); return; }
-    create.mutate();
+    create.mutate(draft);
   }
+
+  /** 取り込み画面の中に出す、人脈の基本情報の入力欄（以前の「1件ずつ登録」のフォームの内容） */
+  function renderBasics(b: ContactBasics, set: (patch: Partial<ContactBasics>) => void) {
+    return (
+      <div>
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>名前 *</label>
+        <input value={b.name} onChange={(e) => set({ name: e.target.value })} placeholder="例: 高橋 健一"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>会社名/屋号</label>
+        <input value={b.company} onChange={(e) => set({ company: e.target.value })} placeholder="例: 高橋会計事務所"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+        <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
+          ここまでは名刺の情報を手動で入力してください。この先はAIで自動入力できます
+        </p>
+
+        <BusinessSummaryFields company={b.company} name={b.name} summary={b.businessSummary} setSummary={(v) => set({ businessSummary: v })}
+          detail={b.businessSummaryDetail} setDetail={(v) => set({ businessSummaryDetail: v })}
+          specialty={b.specialty} setSpecialty={(v) => set({ specialty: v })} />
+
+        <RelationshipTagsInput relationships={b.relationships} setRelationships={(v) => set({ relationships: v })} />
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>備考</label>
+        <input value={b.note} onChange={(e) => set({ note: e.target.value })} placeholder="例: 展示会で名刺交換"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス（任意）</label>
+        <input type="email" value={b.email} onChange={(e) => set({ email: e.target.value })} placeholder="例: takahashi@example.com"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
+        <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
+          🔒 あなただけに見えます（他のメンバーには表示されません）。ミーティングや定例会に招待するときの、メールの送り先にだけ使います
+        </p>
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>公開範囲</label>
+        <select value={b.visibility} onChange={(e) => set({ visibility: e.target.value as Visibility })}
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }}>
+          {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
+        </select>
+        <NotFoundPrivateNote />
+      </div>
+    );
+  }
+
+  const limitBlocked = !!draft && atLimit && draft.basics.visibility !== "private";
+  const basicRows: [string, string][] = draft ? [
+    ["名前", draft.basics.name],
+    ["会社名/屋号", draft.basics.company],
+    ["専門分野", draft.basics.specialty],
+    ["関係性", draft.basics.relationships.join("・")],
+    ["事業の概要", draft.basics.businessSummary],
+    ["備考", draft.basics.note],
+    ["メールアドレス", draft.basics.email],
+    ["公開範囲", VISIBILITY_LABEL[draft.basics.visibility]],
+  ] : [];
 
   return (
     <div>
@@ -597,60 +648,81 @@ function ManualAddSection() {
           登録できる人脈は非公開を除いて{EXTERNAL_CONTACTS_LIMIT}件までです。新しく登録するには、既存の人脈を削除するか、非公開に変更してください。
         </p>
       )}
-
       {notice && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{notice}</p>}
       {justAdded && !notice && <p className="text-xs mb-3" style={{ color: "var(--color-success)" }}>✅ 登録しました。続けて、次の人も登録できます。</p>}
 
-      <div>
-        <DeferredSheetField name={name} value={sheet}
-          onChange={(v) => {
-            setSheet(v);
-            if (v && !name.trim() && v.name) setName(v.name);
-            if (v && !company.trim() && v.company) setCompany(v.company);
-          }} />
-
-        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>名前 *</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: 高橋 健一"
-          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
-
-        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>会社名/屋号</label>
-        <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="例: 高橋会計事務所"
-          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
-        <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
-          ここまでは名刺の情報を手入力してください。この先はAIで自動入力できます
+      <button onClick={() => setModal(draft ? "edit" : "choose")}
+        className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-medium text-white" style={{ background: "var(--color-brand)" }}>
+        <FileUp size={16} /> {draft ? "資料を追加で取り込む・内容を直す" : "もらった資料を取り込む"}
+      </button>
+      {!draft && (
+        <p className="text-[11px] mt-2" style={{ color: "var(--color-ink-500)" }}>
+          略歴シート・GAINSシート・1to1シート・議事メモなどを読み取って、1人ぶんの内容をまとめます。資料がないときは、取り込み画面の「手動で入力する」から登録できます。取り込んだあと、内容を確認してから登録します。
         </p>
+      )}
 
-        <BusinessSummaryFields company={company} name={name} summary={businessSummary} setSummary={setBusinessSummary}
-          detail={businessSummaryDetail} setDetail={setBusinessSummaryDetail}
-          specialty={specialty} setSpecialty={setSpecialty} />
+      {draft && (
+        <div className="mt-4 rounded-2xl p-4" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid var(--color-success)" }}>
+          <p className="text-sm font-semibold" style={{ color: "var(--color-ink-900)" }}>✅ 登録前の確認</p>
+          <p className="text-[11px] mt-0.5 mb-3" style={{ color: "var(--color-ink-500)" }}>
+            まだ登録していません。内容を確かめて、「この内容で登録する」を押すと、外部人脈に登録されます。
+          </p>
+          <div className="rounded-xl overflow-hidden mb-3" style={{ border: "1px solid var(--color-paper-300)", background: "var(--color-paper-100)" }}>
+            <table className="w-full text-sm border-collapse">
+              <tbody>
+                {basicRows.filter(([, v]) => v).map(([label, v], i) => (
+                  <tr key={label} style={i > 0 ? { borderTop: "1px solid var(--color-paper-300)" } : undefined}>
+                    <th className="text-left font-semibold text-xs px-3 py-2 align-top w-28 sm:w-36" style={{ color: "var(--color-ink-700)" }}>{label}</th>
+                    <td className="px-3 py-2 align-top whitespace-pre-wrap break-words" style={{ color: "var(--color-ink-800)" }}>{v}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {hasSheetContent(draft.fields) && (
+            <div className="mb-3">
+              <p className="text-xs font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>📎 {termSheetMemo}（あなただけが見られます）</p>
+              <ProfileSheetTable sheet={draft.fields} />
+            </div>
+          )}
+          {limitBlocked && (
+            <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>
+              登録できる人脈の上限に達しています。「内容を直す」で公開範囲を「非公開」にするか、既存の人脈を削除してください。
+            </p>
+          )}
+          {error && <p className="text-xs mb-2" style={{ color: "var(--color-brand)" }}>{error}</p>}
+          <div className="flex flex-wrap gap-2">
+            <button onClick={register} disabled={create.isPending || limitBlocked}
+              className="flex-1 min-w-40 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+              {create.isPending ? "登録中…" : "この内容で登録する"}
+            </button>
+            <button onClick={() => setModal("edit")} disabled={create.isPending}
+              className="px-4 py-2.5 rounded-2xl text-sm font-medium disabled:opacity-50" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+              内容を直す
+            </button>
+            <button onClick={() => { setDraft(null); setError(""); }} disabled={create.isPending}
+              className="px-4 py-2.5 rounded-2xl text-sm disabled:opacity-50" style={{ color: "var(--color-ink-500)" }}>
+              やめる
+            </button>
+          </div>
+        </div>
+      )}
 
-        <RelationshipTagsInput relationships={relationships} setRelationships={setRelationships} />
-
-        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>備考</label>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例: 展示会で名刺交換"
-          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
-
-        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス（任意）</label>
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="例: takahashi@example.com"
-          className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
-        <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
-          🔒 あなただけに見えます（他のメンバーには表示されません）。ミーティングや定例会に招待するときの、メールの送り先にだけ使います
-        </p>
-
-        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>公開範囲</label>
-        <select value={visibility} onChange={(e) => setVisibility(e.target.value as Visibility)}
-          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
-          {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
-        </select>
-        <NotFoundPrivateNote />
-
-        {error && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{error}</p>}
-
-        <button onClick={handleSubmit} disabled={create.isPending || (atLimit && visibility !== "private")}
-          className="w-full py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
-          登録する
-        </button>
-      </div>
+      {modal && (
+        <ProfileSheetImportModal
+          subject={{ type: "contact", id: null, name: draft?.basics.name ?? "" }}
+          existing={null}
+          deferSave
+          startAtEdit={modal === "edit"}
+          initialFields={draft?.fields ?? null}
+          basics={{ initial: draft?.basics ?? EMPTY_BASICS, render: renderBasics }}
+          onClose={() => setModal(null)}
+          onDone={(f, _saved, b) => {
+            if (b) { setDraft({ basics: b, fields: f }); setError(""); setJustAdded(false); }
+            setModal(null);
+          }}
+        />
+      )}
     </div>
   );
 }
