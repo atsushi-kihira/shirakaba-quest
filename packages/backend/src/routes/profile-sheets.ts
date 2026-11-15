@@ -6,10 +6,16 @@
 // PUT    /api/profile-sheets                        — 登録・編集（上書き）
 // DELETE /api/profile-sheets?subjectType&subjectId  — 削除
 // POST   /api/profile-sheets/extract                — もらった資料（PDF・画像・テキスト）をAIで項目に読み取る（保存はしない）
-// POST   /api/profile-sheets/import-csv             — CSVの行をまとめて登録（dryRun:true で、結果の確認だけ）
+// POST   /api/profile-sheets/import-csv             — CSV・Excelの行をまとめて登録（dryRun:true で、結果の確認だけ）
+// POST   /api/profile-sheets/company-lookup         — 会社のホームページ・事業内容を、もう一度自動取得する
+// GET    /api/profile-sheets/links?subjectType&subjectId — 紹介できそうな人（なかま→自分の外部人脈／外部人脈→メンバー）と、AIでさがした状況
+// POST   /api/profile-sheets/links                  — 自分で紹介できそうな人を追加
+// PATCH  /api/profile-sheets/links/:id              — 重点（有望）のチェックを付ける・外す
+// DELETE /api/profile-sheets/links/:id              — 紹介できそうな人から外す
+// POST   /api/profile-sheets/match                  — 紹介できそうな人を、AIでさがす（貢献のご縁の仕組み。裏で実行）
 // =============================================================
 import { Hono } from "hono";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, gt, ne } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
@@ -20,6 +26,10 @@ import {
 } from "../services/profile-sheet.ts";
 import { EXTERNAL_CONTACTS_LIMIT, sweepPendingCompanySummaries } from "./collab.ts";
 import { sweepPendingPrefectures } from "../services/prefecture.ts";
+import {
+  addManualLink, checkLinkTarget, linkKindFor, listSheetLinks, removeLink, restartCompanyLookup, runCompanyLookup, setLinkStarred, setMatchRun,
+} from "../services/profile-sheet-extras.ts";
+import { createSearchJob, runSearchJobStep, STALE_JOB_SECONDS } from "../services/enishi-search-job.ts";
 import type { ProfileSheetFields, ProfileSheetSubjectType } from "@shared/types";
 import type { Env, Variables } from "../types.ts";
 
@@ -86,7 +96,27 @@ profileSheetRoutes.get("/", async (c) => {
   const type = parseType(c.req.query("subjectType"));
   const id = c.req.query("subjectId") ?? "";
   if (!type || !id) return c.json({ error: { code: "bad_request", message: "相手を指定してください" } }, 400);
-  return c.json({ data: await getSheet(db, meId, type, id) });
+  const sheet = await getSheet(db, meId, type, id);
+  // 会社情報の自動取得が、時間がかかりすぎて止まっているときは、「うまくいかなかった」にする（画面が「取得中」のままにならないように）
+  if (sheet && sheet.companyLookupStatus === "pending" && Math.floor(Date.now() / 1000) - sheet.companyLookupAt > 150) {
+    await db.update(schema.profileSheets).set({ companyLookupStatus: "error" }).where(eq(schema.profileSheets.id, sheet.id));
+    return c.json({ data: { ...sheet, companyLookupStatus: "error" } });
+  }
+  return c.json({ data: sheet });
+});
+
+profileSheetRoutes.post("/company-lookup", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json(NO_MEMBER, 403);
+  const body = await c.req.json<{ subjectType?: string; subjectId?: string }>().catch(() => null);
+  const type = parseType(body?.subjectType);
+  if (!body || !type || !body.subjectId) return c.json({ error: { code: "bad_request", message: "相手を指定してください" } }, 400);
+  if (!(await checkSubject(db, meId, type, body.subjectId))) return c.json(SUBJECT_NG, 404);
+  const company = await restartCompanyLookup(db, meId, type, body.subjectId);
+  if (!company) return c.json({ error: { code: "no_company", message: "会社・屋号が入っていません。先に会社・屋号を入力して、保存してください" } }, 400);
+  c.executionCtx.waitUntil(runCompanyLookup(db, c.env.ANTHROPIC_API_KEY, c.env.ENVIRONMENT === "development", meId, type, body.subjectId, company));
+  return c.json({ data: await getSheet(db, meId, type, body.subjectId) });
 });
 
 profileSheetRoutes.put("/", async (c) => {
@@ -101,7 +131,11 @@ profileSheetRoutes.put("/", async (c) => {
   if (!hasAnyContent(fields)) {
     return c.json({ error: { code: "invalid_input", message: "入力された内容がありません。どれか1つ以上の項目を入力してください" } }, 400);
   }
-  const sheet = await saveSheet(db, meId, type, body.subjectId, fields, Math.floor(Date.now() / 1000));
+  const { needLookup, ...sheet } = await saveSheet(db, meId, type, body.subjectId, fields, Math.floor(Date.now() / 1000));
+  // 会社名が新しく入った・変わったときは、ホームページと事業内容を、裏で自動取得する
+  if (needLookup) {
+    c.executionCtx.waitUntil(runCompanyLookup(db, c.env.ANTHROPIC_API_KEY, c.env.ENVIRONMENT === "development", meId, type, body.subjectId, sheet.company));
+  }
   return c.json({ data: sheet });
 });
 
@@ -153,6 +187,7 @@ profileSheetRoutes.post("/extract", async (c) => {
     const fields = await extractSheetFromFile({
       apiKey: c.env.ANTHROPIC_API_KEY, isDev: c.env.ENVIRONMENT === "development",
       bytes: new Uint8Array(await file.arrayBuffer()), fileName: file.name, kind, hintName,
+      memo: form["memo"] === "1",
     });
     return c.json({ data: fields });
   } catch (e) {
@@ -162,6 +197,130 @@ profileSheetRoutes.post("/extract", async (c) => {
       : "資料の読み取りに失敗しました。少し待ってから、もう一度お試しください";
     return c.json({ error: { code: "extract_failed", message: msg } }, 502);
   }
+});
+
+// ---- 紹介できそうな人 ----
+profileSheetRoutes.get("/links", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json(NO_MEMBER, 403);
+  const type = parseType(c.req.query("subjectType"));
+  const id = c.req.query("subjectId") ?? "";
+  if (!type || !id) return c.json({ error: { code: "bad_request", message: "相手を指定してください" } }, 400);
+  // 「さがしています」のまま進みが止まっているときは、再開する（画面を開けば進む）。ジョブが終わっているのに表示が残っているときは、直す
+  const run = await db.select().from(schema.profileSheetMatchRuns).where(and(
+    eq(schema.profileSheetMatchRuns.ownerMemberId, meId), eq(schema.profileSheetMatchRuns.subjectType, type), eq(schema.profileSheetMatchRuns.subjectId, id),
+  )).get();
+  if (run && run.status === "running") {
+    const job = await db.select().from(schema.enishiSearchJobs).where(eq(schema.enishiSearchJobs.id, run.jobId)).get();
+    const now = Math.floor(Date.now() / 1000);
+    if (!job || job.status === "error") {
+      await setMatchRun(db, meId, type, id, run.jobId, "error", job?.errorMessage ?? "さがすのに失敗しました。もう一度、さがしてみてください。");
+    } else if (job.status === "done") {
+      await setMatchRun(db, meId, type, id, run.jobId, "done", "");
+    } else if (job.updatedAt < now - STALE_JOB_SECONDS) {
+      c.executionCtx.waitUntil(runSearchJobStep(db, c.env, job.id, new URL(c.req.url).origin, 0));
+    }
+  }
+  return c.json({ data: await listSheetLinks(db, meId, type, id) });
+});
+
+profileSheetRoutes.post("/links", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json(NO_MEMBER, 403);
+  const body = await c.req.json<{ subjectType?: string; subjectId?: string; targetId?: string }>().catch(() => null);
+  const type = parseType(body?.subjectType);
+  if (!body || !type || !body.subjectId || !body.targetId) return c.json({ error: { code: "bad_request", message: "追加する人を選んでください" } }, 400);
+  if (!(await checkSubject(db, meId, type, body.subjectId))) return c.json(SUBJECT_NG, 404);
+  if (!(await checkLinkTarget(db, meId, linkKindFor(type), body.targetId))) {
+    return c.json({ error: { code: "invalid_target", message: "選んだ人を追加できません。画面を開き直して、もう一度お試しください" } }, 400);
+  }
+  const r = await addManualLink(db, meId, type, body.subjectId, body.targetId);
+  if (r === "full") return c.json({ error: { code: "too_many", message: "追加できる人数の上限に達しました。いらない人を外してから、追加してください" } }, 400);
+  if (r === "exists") return c.json({ error: { code: "exists", message: "この人は、もう追加されています" } }, 409);
+  return c.json({ data: await listSheetLinks(db, meId, type, body.subjectId) });
+});
+
+profileSheetRoutes.patch("/links/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json(NO_MEMBER, 403);
+  const body = await c.req.json<{ starred?: boolean }>().catch(() => null);
+  if (!body || typeof body.starred !== "boolean") return c.json({ error: { code: "bad_request", message: "重点にするかどうかを指定してください" } }, 400);
+  if (!(await setLinkStarred(db, meId, c.req.param("id"), body.starred))) return c.json(SUBJECT_NG, 404);
+  return c.json({ ok: true });
+});
+
+profileSheetRoutes.delete("/links/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json(NO_MEMBER, 403);
+  if (!(await removeLink(db, meId, c.req.param("id")))) return c.json(SUBJECT_NG, 404);
+  return c.json({ ok: true });
+});
+
+/** 同時に裏で動かせる検索の数（1人あたり）。貢献のご縁の検索と同じ */
+const MAX_RUNNING_JOBS = 3;
+
+profileSheetRoutes.post("/match", async (c) => {
+  const db = createDb(c.env.DB);
+  const meId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!meId) return c.json(NO_MEMBER, 403);
+  const body = await c.req.json<{ subjectType?: string; subjectId?: string }>().catch(() => null);
+  const type = parseType(body?.subjectType);
+  if (!body || !type || !body.subjectId) return c.json({ error: { code: "bad_request", message: "相手を指定してください" } }, 400);
+  const subject = await checkSubject(db, meId, type, body.subjectId);
+  if (!subject) return c.json(SUBJECT_NG, 404);
+  const now = Math.floor(Date.now() / 1000);
+
+  const run = await db.select().from(schema.profileSheetMatchRuns).where(and(
+    eq(schema.profileSheetMatchRuns.ownerMemberId, meId), eq(schema.profileSheetMatchRuns.subjectType, type), eq(schema.profileSheetMatchRuns.subjectId, body.subjectId),
+  )).get();
+  if (run && run.status === "running" && run.updatedAt > now - 15 * 60) {
+    return c.json({ error: { code: "already_running", message: "いま、さがしているところです。終わるまで、少しお待ちください" } }, 409);
+  }
+
+  const myContacts = await db.select({ id: schema.externalContacts.id, visibility: schema.externalContacts.visibility }).from(schema.externalContacts)
+    .where(eq(schema.externalContacts.ownerMemberId, meId)).all();
+  const reverse = type === "contact";
+  if (reverse) {
+    // 外部人脈 → メンバー：この人脈が、メンバーの誰に紹介できそうか
+    const me = myContacts.find((ct) => ct.id === body.subjectId);
+    if (!me || me.visibility === "private") {
+      return c.json({ error: { code: "private_contact", message: "この人脈は公開範囲が「非公開」のため、AIでさがせません。公開範囲を「存在のみ公開」などに変えると、さがせます" } }, 400);
+    }
+  } else {
+    // メンバー → 自分の外部人脈：このメンバーに、自分の人脈の誰を紹介できそうか
+    if (myContacts.filter((ct) => ct.visibility !== "private").length === 0) {
+      return c.json({ error: { code: "no_contacts", message: "紹介できそうな人をさがすには、まず外部人脈を登録してください（非公開の人脈は、さがす対象になりません）" } }, 400);
+    }
+    const [eggs, geese, sheet] = await Promise.all([
+      db.select({ id: schema.goldenEggs.id }).from(schema.goldenEggs).where(eq(schema.goldenEggs.memberId, body.subjectId)).limit(1).all(),
+      db.select({ id: schema.goldenGeese.id }).from(schema.goldenGeese).where(eq(schema.goldenGeese.memberId, body.subjectId)).limit(1).all(),
+      getSheet(db, meId, "member", body.subjectId),
+    ]);
+    if (eggs.length === 0 && geese.length === 0 && !sheet?.wantedReferrals.trim()) {
+      return c.json({ error: { code: "no_targets", message: `${subject.name}さんの「紹介してほしい相手」の記載も、金の卵・金のガチョウの登録もないため、さがせません。先に「紹介してほしい相手」を入力してください` } }, 400);
+    }
+  }
+
+  const running = await db.select({ id: schema.enishiSearchJobs.id }).from(schema.enishiSearchJobs)
+    .where(and(eq(schema.enishiSearchJobs.memberId, meId), eq(schema.enishiSearchJobs.status, "running"), gt(schema.enishiSearchJobs.createdAt, now - 60 * 60))).all();
+  if (running.length >= MAX_RUNNING_JOBS) {
+    return c.json({ error: { code: "too_many_searches", message: `いま${running.length}件の検索を実行中です。どれかが終わってから、もう一度お試しください。` } }, 429);
+  }
+
+  const jobId = await createSearchJob(db, meId, {
+    mode: "giver",
+    targetMemberIds: reverse ? [] : [body.subjectId], targetMemberNames: reverse ? [] : [subject.name],
+    contactIds: reverse ? [body.subjectId] : [], contactNames: reverse ? [subject.name] : [],
+    specialties: [], relationships: [], freeText: "", maxHop: "2hop", count: 12,
+    sheetTarget: { subjectType: type, subjectId: body.subjectId },
+  });
+  await setMatchRun(db, meId, type, body.subjectId, jobId, "running", "");
+  c.executionCtx.waitUntil(runSearchJobStep(db, c.env, jobId, new URL(c.req.url).origin, 0));
+  return c.json({ data: await listSheetLinks(db, meId, type, body.subjectId) }, 202);
 });
 
 // ---- CSV一括登録 ----
@@ -262,7 +421,18 @@ profileSheetRoutes.post("/import-csv", async (c) => {
   if (dryRun) return c.json({ data: { results, summary } });
 
   const now = Math.floor(Date.now() / 1000);
-  for (const s of toSave) await saveSheet(db, meId, type, s.subjectId, s.fields, now);
+  // 会社情報の自動取得は、取り込む人数が多いと費用・時間がかさむので、10人までのときだけ自動で行う（それ以上は、画面の「会社情報を取得」から）
+  const autoLookup = toSave.length + toCreate.length <= 10;
+  const lookups: Promise<void>[] = [];
+  const isDev = c.env.ENVIRONMENT === "development";
+  const scheduleLookup = (r: { needLookup: boolean; company: string }, subjectId: string, subjectType: ProfileSheetSubjectType) => {
+    if (!r.needLookup) return;
+    if (autoLookup) lookups.push(runCompanyLookup(db, c.env.ANTHROPIC_API_KEY, isDev, meId, subjectType, subjectId, r.company));
+  };
+  for (const s of toSave) {
+    const saved = await saveSheet(db, meId, type, s.subjectId, s.fields, now, { keepExtras: true, skipLookup: !autoLookup });
+    scheduleLookup(saved, s.subjectId, type);
+  }
 
   if (toCreate.length > 0) {
     for (const t of toCreate) {
@@ -273,7 +443,8 @@ profileSheetRoutes.post("/import-csv", async (c) => {
         visibility: createVisibility, source: "manual", createdAt: now, updatedAt: now,
         businessSummaryStatus: company && createVisibility !== "private" ? "pending" : "skipped",
       });
-      await saveSheet(db, meId, "contact", id, t.fields, now);
+      const saved = await saveSheet(db, meId, "contact", id, t.fields, now, { keepExtras: true, skipLookup: !autoLookup });
+      scheduleLookup(saved, id, "contact");
       const r = results.find((x) => x.line === t.line);
       if (r) r.subjectId = id;
     }
@@ -281,5 +452,6 @@ profileSheetRoutes.post("/import-csv", async (c) => {
     c.executionCtx.waitUntil(sweepPendingPrefectures(db, c.env, origin, 0));
     if (createVisibility !== "private") c.executionCtx.waitUntil(sweepPendingCompanySummaries(db, c.env, origin, 0));
   }
+  if (lookups.length > 0) c.executionCtx.waitUntil(Promise.all(lookups).then(() => undefined));
   return c.json({ data: { results, summary } });
 });

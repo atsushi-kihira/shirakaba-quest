@@ -4,7 +4,7 @@
 // =============================================================
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { ProfileSheet, ProfileSheetFields, ProfileSheetSubjectType } from "@shared/types";
+import type { ProfileSheet, ProfileSheetFields, ProfileSheetLinksResponse, ProfileSheetSubjectType } from "@shared/types";
 
 export type SheetSubject = { type: ProfileSheetSubjectType; id: string; name: string };
 
@@ -18,18 +18,21 @@ export const SHEET_FIELDS: { key: keyof Omit<ProfileSheetFields, "tags">; label:
   { key: "expertise", label: "専門・強み", multiline: true },
   { key: "wantedReferrals", label: "紹介してほしい相手（理想のお客様）", multiline: true },
   { key: "personality", label: "人柄・話題メモ", multiline: true },
+  { key: "impression", label: "自分から見た印象", multiline: true, hint: "1to1をしてみての印象・感想（あなただけのメモです）" },
   { key: "contactInfo", label: "連絡手段", multiline: true },
+  { key: "supplement", label: "補足情報（議事メモなど）", multiline: true, hint: "決まった項目に入らない内容（話した内容・宿題・次の一手など）" },
 ];
 
 export const EMPTY_FIELDS: ProfileSheetFields = {
   name: "", furigana: "", company: "", title: "", oneononeDate: "",
   expertise: "", wantedReferrals: "", personality: "", contactInfo: "", tags: [],
+  impression: "", supplement: "", companyUrl: "", companyDescription: "",
 };
 
 export function sheetToFields(s: ProfileSheet | null | undefined, fallbackName = ""): ProfileSheetFields {
   if (!s) return { ...EMPTY_FIELDS, name: fallbackName };
-  const { name, furigana, company, title, oneononeDate, expertise, wantedReferrals, personality, contactInfo, tags } = s;
-  return { name, furigana, company, title, oneononeDate, expertise, wantedReferrals, personality, contactInfo, tags };
+  const { name, furigana, company, title, oneononeDate, expertise, wantedReferrals, personality, contactInfo, tags, impression, supplement, companyUrl, companyDescription } = s;
+  return { name, furigana, company, title, oneononeDate, expertise, wantedReferrals, personality, contactInfo, tags, impression, supplement, companyUrl, companyDescription };
 }
 
 export const sheetKey = (type: ProfileSheetSubjectType, id: string) => ["profile-sheet", type, id] as const;
@@ -40,6 +43,65 @@ export function useProfileSheet(type: ProfileSheetSubjectType, id: string) {
     queryKey: sheetKey(type, id),
     queryFn: () => api.get<{ data: ProfileSheet | null }>(`/profile-sheets?subjectType=${type}&subjectId=${encodeURIComponent(id)}`),
     select: (r) => r.data,
+    // 会社のホームページ・事業内容を自動取得しているあいだは、数秒おきに見に行く
+    refetchInterval: (q) => (q.state.data?.data?.companyLookupStatus === "pending" ? 4000 : false),
+  });
+}
+
+/** 会社のホームページ・事業内容を、もう一度自動取得する */
+export function useCompanyLookup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ type, id }: { type: ProfileSheetSubjectType; id: string }) =>
+      api.post<{ data: ProfileSheet | null }>("/profile-sheets/company-lookup", { subjectType: type, subjectId: id }),
+    onSuccess: (_r, v) => { qc.invalidateQueries({ queryKey: sheetKey(v.type, v.id) }); },
+  });
+}
+
+// ---- 紹介できそうな人 ----
+export const linksKey = (type: ProfileSheetSubjectType, id: string) => ["profile-sheet", "links", type, id] as const;
+
+export function useSheetLinks(type: ProfileSheetSubjectType, id: string) {
+  return useQuery({
+    queryKey: linksKey(type, id),
+    queryFn: () => api.get<{ data: ProfileSheetLinksResponse }>(`/profile-sheets/links?subjectType=${type}&subjectId=${encodeURIComponent(id)}`),
+    select: (r) => r.data,
+    // AIがさがしているあいだは、数秒おきに見に行く
+    refetchInterval: (q) => (q.state.data?.data?.run?.status === "running" ? 4000 : false),
+  });
+}
+
+export function useStartMatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ type, id }: { type: ProfileSheetSubjectType; id: string }) =>
+      api.post<{ data: ProfileSheetLinksResponse }>("/profile-sheets/match", { subjectType: type, subjectId: id }),
+    onSuccess: (r, v) => { qc.setQueryData(linksKey(v.type, v.id), r); },
+  });
+}
+
+export function useAddLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ type, id, targetId }: { type: ProfileSheetSubjectType; id: string; targetId: string }) =>
+      api.post<{ data: ProfileSheetLinksResponse }>("/profile-sheets/links", { subjectType: type, subjectId: id, targetId }),
+    onSuccess: (r, v) => { qc.setQueryData(linksKey(v.type, v.id), r); },
+  });
+}
+
+export function useToggleLinkStar(type: ProfileSheetSubjectType, id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ linkId, starred }: { linkId: string; starred: boolean }) => api.patch(`/profile-sheets/links/${linkId}`, { starred }),
+    onSettled: () => { qc.invalidateQueries({ queryKey: linksKey(type, id) }); },
+  });
+}
+
+export function useRemoveLink(type: ProfileSheetSubjectType, id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (linkId: string) => api.delete(`/profile-sheets/links/${linkId}`),
+    onSettled: () => { qc.invalidateQueries({ queryKey: linksKey(type, id) }); },
   });
 }
 
@@ -87,9 +149,12 @@ export function useDeleteSheet() {
 }
 
 /** 資料のファイルを、AIで項目に読み取る（保存はしない） */
-export async function extractSheet(file: File, subject: { type: ProfileSheetSubjectType; id: string } | { hintName?: string }): Promise<ProfileSheetFields> {
+export async function extractSheet(
+  file: File, subject: { type: ProfileSheetSubjectType; id: string } | { hintName?: string }, opts: { memo?: boolean } = {},
+): Promise<ProfileSheetFields> {
   const form = new FormData();
   form.append("file", file);
+  if (opts.memo) form.append("memo", "1");
   if ("type" in subject) { form.append("subjectType", subject.type); form.append("subjectId", subject.id); }
   else if (subject.hintName) form.append("hintName", subject.hintName);
   const res = await api.upload<{ data: ProfileSheetFields }>("/profile-sheets/extract", form);
@@ -136,6 +201,8 @@ export function combineFields(base: ProfileSheetFields, next: ProfileSheetFields
   for (const f of SHEET_FIELDS) {
     out[f.key] = f.multiline ? appendLines(base[f.key], next[f.key]) : (base[f.key].trim() ? base[f.key] : next[f.key]);
   }
+  if (!base.companyUrl.trim()) out.companyUrl = next.companyUrl;
+  if (!base.companyDescription.trim()) out.companyDescription = next.companyDescription;
   const seen = new Set<string>();
   out.tags = [...base.tags, ...next.tags].filter((t) => { const k = t.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 20);
   return out;

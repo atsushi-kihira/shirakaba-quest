@@ -250,7 +250,7 @@ adminRoutes.patch("/app-settings", async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const body = await c.req.json<Partial<{
     appTitle: string; appLogo: string; appPointName: string;
-    termQuest: string; termUsp: string; termOneOnOne: string; termExternalGuest: string; termEnishi: string; termBusinessCommunity: string;
+    termQuest: string; termUsp: string; termOneOnOne: string; termExternalGuest: string; termEnishi: string; termBusinessCommunity: string; termSheetMemo: string;
     timezone: string; theme: string;
     externalContactMode: string;
     schedulerLinkValidityHours: number;
@@ -278,6 +278,7 @@ adminRoutes.patch("/app-settings", async (c) => {
     ...(body.termExternalGuest !== undefined && { termExternalGuest: body.termExternalGuest }),
     ...(body.termEnishi    !== undefined && { termEnishi: body.termEnishi }),
     ...(body.termBusinessCommunity !== undefined && { termBusinessCommunity: body.termBusinessCommunity }),
+    ...(body.termSheetMemo !== undefined && { termSheetMemo: body.termSheetMemo.trim() || "もらった資料のメモ" }),
     ...(body.timezone     !== undefined && { timezone: body.timezone }),
     ...(body.theme        !== undefined && { theme: body.theme }),
     ...(body.externalContactMode !== undefined && { externalContactMode: body.externalContactMode }),

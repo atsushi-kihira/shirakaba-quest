@@ -20,8 +20,9 @@ import {
   JOB_BATCH_SIZE, selectJobCandidates, matchJobBatch, interleaveMatches, searchMemberHits, buildMemberCollab,
   finalizeForMeResult, finalizeContactSearchResult,
   loadGiverContext, buildGiverBatches, matchGiverBatch, finalizeGiverResult, isReverseGiver,
-  type JobParams, type JobCandidate, type JobMatch, type MemberHit, type MatchCoverage,
+  type JobParams, type JobCandidate, type JobMatch, type MemberHit, type MatchCoverage, type EnishiSearchResult,
 } from "./enishi-search.ts";
+import { saveMatchResults, setMatchRun } from "./profile-sheet-extras.ts";
 import type { CollabIdeas } from "./member-collab.ts";
 import { augmentResultWithCards, buildForMeTitle, buildContactSearchTitle, buildGiverTitle, countResults, saveSearchHistory, type HistoryResult } from "./enishi-history.ts";
 import type { Env } from "../types.ts";
@@ -53,6 +54,7 @@ function parseParams(job: Job): JobParams { return JSON.parse(job.paramsJson) as
 
 /** 画面・通知に出す、検索の名前（短く） */
 export function jobLabel(params: JobParams): string {
+  if (params.mode === "giver" && params.sheetTarget) return "資料メモの「紹介できそうな人」";
   if (params.mode === "for-me") {
     const first = params.targets[0]?.description ?? "";
     const short = first.length > 18 ? `${first.slice(0, 18)}…` : first;
@@ -304,6 +306,8 @@ async function stageFinalize(db: Db, env: Env, job: Job, params: JobParams): Pro
   if (params.mode === "giver") {
     const ctx = await loadGiverContext(db, job.memberId, params);
     result = await finalizeGiverResult({ apiKey, isDev: skipVerify, params, ctx, matches, aiCallFailed });
+    // 資料メモの「紹介できそうな人」のためのさがし方：検索履歴・通知には出さず、資料メモの表に保存する
+    if (params.sheetTarget) { await completeSheetJob(db, job, params, result); return; }
     title = buildGiverTitle(params.targetMemberNames, created, countResults(result), isReverseGiver(params) ? (params.contactNames ?? []) : null);
     historyParams = {
       contactIds: params.contactIds ?? [], targetMemberIds: params.targetMemberIds, specialties: params.specialties, relationships: params.relationships,
@@ -393,8 +397,29 @@ async function completeJob(db: Db, env: Env, job: Job, params: JobParams, histor
   }
 }
 
+/** 資料メモの「紹介できそうな人」のさがし方が終わったとき：結果を表に保存する（履歴・通知は出さない） */
+async function completeSheetJob(db: Db, job: Job, params: Extract<JobParams, { mode: "giver" }>, result: EnishiSearchResult): Promise<void> {
+  const target = params.sheetTarget;
+  if (!target) return;
+  if (!await finishRunning(db, job.id, { status: "done", stage: "finalize" })) return;
+  const reverse = isReverseGiver(params);
+  const found = result.groups.flatMap((g) => g.results)
+    .map((card) => ({ targetId: reverse ? card.counterpart.memberId : (card.myContactId ?? ""), reason: (card.why || card.dealDescription || "").trim() }))
+    .filter((f) => f.targetId);
+  await saveMatchResults(db, job.memberId, target.subjectType, target.subjectId, found);
+  const message = found.length === 0
+    ? (result.aiCallFailed ? "AIの照合が一部うまくいかず、見つかりませんでした。もう一度、さがしてみてください。" : "紹介できそうな人は、見つかりませんでした。")
+    : (result.aiCallFailed ? "一部、AIの照合がうまくいかなかったため、見つかっていない人がいるかもしれません。" : "");
+  await setMatchRun(db, job.memberId, target.subjectType, target.subjectId, job.id, "done", message);
+}
+
 async function failJob(db: Db, env: Env, job: Job, params: JobParams, reason: string): Promise<void> {
   if (!await finishRunning(db, job.id, { status: "error", errorMessage: reason })) return;
+  if (params.mode === "giver" && params.sheetTarget) {
+    // 資料メモの「紹介できそうな人」のさがし方は、通知を出さず、表のところにお知らせする
+    await setMatchRun(db, job.memberId, params.sheetTarget.subjectType, params.sheetTarget.subjectId, job.id, "error", reason);
+    return;
+  }
   await notifyMember(db, env, job, {
     subject: "🔎 検索がうまくいきませんでした",
     message: `「${jobLabel(params)}」の検索を最後まで終えられませんでした。${reason}`,

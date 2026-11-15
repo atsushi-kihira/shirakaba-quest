@@ -90,6 +90,15 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
   await db.delete(m.profileSheets).where(eq(m.profileSheets.ownerMemberId, memberId));
   await db.delete(m.profileSheets).where(and(eq(m.profileSheets.subjectType, "member"), eq(m.profileSheets.subjectId, memberId)));
   await db.delete(m.profileSheetExtractions).where(eq(m.profileSheetExtractions.memberId, memberId));
+  await db.delete(m.profileSheetLinks).where(or(
+    eq(m.profileSheetLinks.ownerMemberId, memberId),
+    and(eq(m.profileSheetLinks.subjectType, "member"), eq(m.profileSheetLinks.subjectId, memberId)),
+    and(eq(m.profileSheetLinks.kind, "member"), eq(m.profileSheetLinks.targetId, memberId)),
+  ));
+  await db.delete(m.profileSheetMatchRuns).where(or(
+    eq(m.profileSheetMatchRuns.ownerMemberId, memberId),
+    and(eq(m.profileSheetMatchRuns.subjectType, "member"), eq(m.profileSheetMatchRuns.subjectId, memberId)),
+  ));
 
   // ---- 外部人脈（連絡先情報は元々保持しない設計）----
   const ownContactRows = await db.select({ id: m.externalContacts.id })

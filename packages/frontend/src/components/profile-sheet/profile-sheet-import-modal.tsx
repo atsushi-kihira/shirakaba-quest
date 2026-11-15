@@ -5,7 +5,7 @@
 //   3) 保存（deferSave のときは、保存せずに内容だけ呼び出し元へ返す）
 //   手で入力することも、すでにある内容を直すこともできる
 // =============================================================
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { Loader2, FileUp, PenLine, Plus } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { DialogCloseButton } from "@/components/dialog-close-button";
@@ -55,17 +55,18 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [memoText, setMemoText] = useState("");
   const busy = step === "reading" || save.isPending;
   const current: ProfileSheetFields = { ...fields, tags: textToTags(tagText) };
   /** すでに内容がある（登録済み・読み取り済み・入力済み）ときは、読み込み方を選べる */
   const hasCurrent = hasSheetContent(current);
 
-  /** 資料のファイルを（複数でも）読み取って、いまの内容に足す／リセットして入れ替える */
-  async function handleFiles(input: File[]) {
+  /** 資料のファイルや貼り付けたメモを（複数でも）読み取って、いまの内容に足す／リセットして入れ替える */
+  async function handleSources(input: { file: File; memo?: boolean }[]) {
     setError(null);
     const files = input.slice(0, MAX_FILES);
-    const tooBig = files.filter((f) => f.size > SHEET_FILE_MAX_MB * 1024 * 1024);
-    const targets = files.filter((f) => f.size <= SHEET_FILE_MAX_MB * 1024 * 1024);
+    const tooBig = files.filter((f) => f.file.size > SHEET_FILE_MAX_MB * 1024 * 1024).map((f) => f.file);
+    const targets = files.filter((f) => f.file.size <= SHEET_FILE_MAX_MB * 1024 * 1024);
     if (targets.length === 0) {
       setError(`ファイルが大きすぎます。1つ${SHEET_FILE_MAX_MB}MBまでです`);
       return;
@@ -77,18 +78,18 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
     setStep("reading");
     setProgress({ done: 0, total: targets.length });
     const subj = subject.id ? { type: subject.type, id: subject.id } : { hintName: subject.name || undefined };
-    const results = await Promise.allSettled(targets.map(async (f) => {
-      try { return await extractSheet(f, subj); }
+    const results = await Promise.allSettled(targets.map(async (t) => {
+      try { return await extractSheet(t.file, subj, { memo: t.memo }); }
       finally { setProgress((p) => (p ? { ...p, done: p.done + 1 } : p)); }
     }));
 
     const okFields: ProfileSheetFields[] = [];
     const okNames: string[] = [];
     results.forEach((r, i) => {
-      if (r.status === "fulfilled") { okFields.push(r.value); okNames.push(targets[i].name); }
+      if (r.status === "fulfilled") { okFields.push(r.value); okNames.push(targets[i].file.name); }
       else {
         const msg = r.reason instanceof ApiError ? r.reason.message : "読み取りに失敗しました";
-        notes.push(`「${targets[i].name}」：${msg}`);
+        notes.push(`「${targets[i].file.name}」：${msg}`);
       }
     });
     setProgress(null);
@@ -119,7 +120,15 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
     e.preventDefault();
     setDragging(false);
     const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) void handleFiles(files);
+    if (files.length > 0) void handleSources(files.map((file) => ({ file })));
+  }
+
+  /** 貼り付けたメモ（議事メモ・AIの要約・自由なメモ）を、読み取る */
+  function readMemo() {
+    const text = memoText.trim();
+    if (!text) return;
+    setMemoText("");
+    void handleSources([{ file: new File([text], "貼り付けたメモ.txt", { type: "text/plain" }), memo: true }]);
   }
 
   function setField(key: keyof Omit<ProfileSheetFields, "tags">, value: string) {
@@ -156,7 +165,7 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
         {step === "choose" && (
           <div className="space-y-3">
             <input ref={fileRef} type="file" accept={SHEET_FILE_ACCEPT} multiple className="hidden"
-              onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; if (fs.length > 0) void handleFiles(fs); }} />
+              onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; if (fs.length > 0) void handleSources(fs.map((file) => ({ file }))); }} />
             {hasCurrent && (
               <fieldset className="rounded-2xl p-3 space-y-2" style={{ background: "var(--color-paper-200)" }}>
                 <legend className="px-1 text-xs font-semibold" style={{ color: "var(--color-ink-700)" }}>いまの内容があります。どう読み込みますか？</legend>
@@ -194,6 +203,20 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
                 </span>
               </span>
             </button>
+            <div className="rounded-2xl p-3 space-y-2" style={{ background: "rgba(181,56,75,0.05)", border: "1px solid var(--color-paper-300)" }}>
+              <label className="block text-sm font-semibold" htmlFor="sheet-memo-text" style={{ color: "var(--color-ink-900)" }}>
+                📝 議事メモ・自由なメモを貼り付ける
+              </label>
+              <p className="text-[11px]" style={{ color: "var(--color-ink-500)" }}>
+                1to1の議事メモ、AIの要約、手書きメモの書き起こしなど、書き方は自由です。決まった項目に分けて入れ、入らない内容は「補足情報」に残します。
+              </p>
+              <textarea id="sheet-memo-text" value={memoText} onChange={(e) => setMemoText(e.target.value)} rows={4} maxLength={30000}
+                placeholder="ここにメモを貼り付けてください" className="w-full rounded-xl px-3 py-2 text-sm" style={inputStyle} />
+              <button onClick={readMemo} disabled={!memoText.trim()}
+                className="px-4 py-2 rounded-xl text-sm font-medium text-white disabled:opacity-40" style={{ background: "var(--color-brand)" }}>
+                このメモを読み取る
+              </button>
+            </div>
             {!hasCurrent && <button onClick={() => { setError(null); setStep("edit"); }}
               className="w-full flex items-center gap-3 p-4 rounded-2xl text-left transition active:opacity-80"
               style={{ background: "var(--color-paper-200)" }}>
@@ -239,19 +262,38 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
               </p>
             )}
             {SHEET_FIELDS.map((f) => (
-              <label key={f.key} className="block">
+              <Fragment key={f.key}>
+              <label className="block">
                 <span className="block text-xs font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>{f.label}</span>
                 {f.key === "oneononeDate" ? (
                   <input type="date" value={fields.oneononeDate} onChange={(e) => setField("oneononeDate", e.target.value)}
                     className="w-full rounded-xl px-3 py-2 text-sm" style={inputStyle} />
                 ) : f.multiline ? (
-                  <textarea value={fields[f.key]} rows={f.key === "expertise" ? 6 : 3} onChange={(e) => setField(f.key, e.target.value)}
+                  <textarea value={fields[f.key]} rows={f.key === "expertise" || f.key === "supplement" ? 6 : 3} onChange={(e) => setField(f.key, e.target.value)}
                     placeholder={f.hint} className="w-full rounded-xl px-3 py-2 text-sm" style={inputStyle} />
                 ) : (
                   <input type="text" value={fields[f.key]} onChange={(e) => setField(f.key, e.target.value)}
                     className="w-full rounded-xl px-3 py-2 text-sm" style={inputStyle} />
                 )}
               </label>
+              {f.key === "company" && (
+                <div className="space-y-3 pl-3" style={{ borderLeft: "3px solid var(--color-paper-300)" }}>
+                  <label className="block">
+                    <span className="block text-xs font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>会社のホームページ</span>
+                    <input type="text" value={fields.companyUrl} onChange={(e) => setField("companyUrl", e.target.value)} placeholder="https://"
+                      className="w-full rounded-xl px-3 py-2 text-sm" style={inputStyle} />
+                  </label>
+                  <label className="block">
+                    <span className="block text-xs font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>事業内容</span>
+                    <textarea value={fields.companyDescription} rows={2} onChange={(e) => setField("companyDescription", e.target.value)}
+                      className="w-full rounded-xl px-3 py-2 text-sm" style={inputStyle} />
+                  </label>
+                  <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>
+                    この2つは、空のままにしておくと、保存したあとに会社・屋号から自動で調べて入ります。
+                  </p>
+                </div>
+              )}
+              </Fragment>
             ))}
             <label className="block">
               <span className="block text-xs font-semibold mb-1" style={{ color: "var(--color-ink-700)" }}>タグ</span>

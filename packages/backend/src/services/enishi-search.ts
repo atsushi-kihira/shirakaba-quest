@@ -17,7 +17,7 @@ import { generateCollabIdeas, type CollabIdeas } from "./member-collab.ts";
 import { and, eq, inArray, ne, or } from "drizzle-orm";
 import { schema } from "../db/index.ts";
 import type { createDb } from "../db/index.ts";
-import { loadOwnSheetMap, sheetSearchText } from "./profile-sheet.ts";
+import { getSheet, loadOwnSheetMap, sheetSearchText } from "./profile-sheet.ts";
 
 type Db = ReturnType<typeof createDb>;
 export type Hop = "direct" | "2hop" | "3hop";
@@ -566,7 +566,9 @@ export type JobParams =
   | { mode: "contact-search"; specialties: string[]; freeText: string; scope: ContactSearchScope; memberIds: string[]; count: number; goodMatchContext?: string }
   // 貢献のご縁：自分の人脈（絞り込み済み）× 貢献先メンバーの金の卵・金のガチョウ。自分の人脈が多くても、すべてを小分けにして照合する
   // contactIds が空でないときは「逆向き」：選んだ外部人脈（自分の人脈）が、メンバーの誰に貢献できそうかをさがす（貢献先は、全メンバー）
-  | { mode: "giver"; targetMemberIds: string[]; targetMemberNames: string[]; contactIds?: string[]; contactNames?: string[]; specialties: string[]; relationships: string[]; freeText: string; maxHop: Hop; count: number; goodMatchContext?: string };
+  | { mode: "giver"; targetMemberIds: string[]; targetMemberNames: string[]; contactIds?: string[]; contactNames?: string[]; specialties: string[]; relationships: string[]; freeText: string; maxHop: Hop; count: number; goodMatchContext?: string;
+      // 「もらった資料のメモ」の「紹介できそうな人」を探す検索のとき。結果は検索履歴・通知には出さず、資料メモの表に保存する
+      sheetTarget?: { subjectType: "member" | "contact"; subjectId: string } };
 
 /** 候補（なかまの人脈）を束に分けて照合する検索（私のご縁・人脈をさがす）のパラメータ */
 export type CandidateJobParams = Exclude<JobParams, { mode: "giver" }>;
@@ -900,6 +902,22 @@ export async function loadGiverContext(db: Db, meId: string, params: GiverJobPar
     const list = candidatesByMember.get(cand.memberId) ?? [];
     if (list.length < GIVER_MAX_CANDIDATES_PER_MEMBER) list.push(cand);
     candidatesByMember.set(cand.memberId, list);
+  }
+  // 資料メモの「紹介してほしい相手」も、そのメンバーの「金の卵」のひとつとして照合に加える（自分がもらった資料の内容。自分の検索だけで使う）
+  if (!reverse && params.sheetTarget?.subjectType === "member") {
+    const memberId = params.sheetTarget.subjectId;
+    const sheet = await getSheet(db, meId, "member", memberId);
+    if (sheet?.wantedReferrals.trim()) {
+      const m = await db.select().from(schema.members).where(eq(schema.members.id, memberId)).get();
+      if (m && m.status === "active") {
+        const list = candidatesByMember.get(memberId) ?? [];
+        list.unshift({
+          candidateId: `sheet:${memberId}`, kind: "egg", memberId, memberName: m.name, memberEmoji: m.emoji ?? "🙂", memberBgColor: m.bgColor ?? "bg-stone-100",
+          description: sheet.wantedReferrals.trim().slice(0, 600), extra: null, memberBusiness: describeMemberBusiness(m),
+        });
+        candidatesByMember.set(memberId, list);
+      }
+    }
   }
   const introduced = await db.select({
     myContactId: schema.enishiIntroducedContacts.myContactId,

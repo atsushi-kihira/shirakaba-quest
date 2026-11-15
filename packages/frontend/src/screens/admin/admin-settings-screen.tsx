@@ -19,6 +19,7 @@ type AppSettings = {
   termExternalGuest: string;
   termEnishi: string;
   termBusinessCommunity: string;
+  termSheetMemo: string;
   timezone: string;
   characterImageKey: string | null;
   theme: AppTheme;
@@ -36,6 +37,7 @@ type FormState = {
   termExternalGuest: string;
   termEnishi: string;
   termBusinessCommunity: string;
+  termSheetMemo: string;
   timezone: string;
   theme: AppTheme;
   externalContactMode: "email" | "dm";
@@ -73,6 +75,7 @@ const DEFAULTS: FormState = {
   termExternalGuest: "外部ゲスト",
   termEnishi: "ご縁",
   termBusinessCommunity: "ビジネスコミュニティ",
+  termSheetMemo: "もらった資料のメモ",
   timezone: "Asia/Tokyo",
   theme: "playful",
   externalContactMode: "email",
@@ -152,6 +155,7 @@ export function AdminSettingsScreen() {
         termExternalGuest: data.data.termExternalGuest ?? DEFAULTS.termExternalGuest,
         termEnishi:   data.data.termEnishi   ?? DEFAULTS.termEnishi,
         termBusinessCommunity: data.data.termBusinessCommunity ?? DEFAULTS.termBusinessCommunity,
+        termSheetMemo: data.data.termSheetMemo ?? DEFAULTS.termSheetMemo,
         timezone:     data.data.timezone     ?? DEFAULTS.timezone,
         theme:        data.data.theme        ?? DEFAULTS.theme,
         externalContactMode: data.data.externalContactMode === "dm" ? "dm" : "email",
@@ -375,6 +379,23 @@ export function AdminSettingsScreen() {
           />
           <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
             デフォルト: 「ビジネスコミュニティ」。白樺チャプターでは「BNI」を設定すると、プロフィールの入会日欄が「BNI入会日」と表示されます。
+          </p>
+        </div>
+
+        {/* もらった資料のメモ */}
+        <div>
+          <label className="block text-sm font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>
+            📎 「もらった資料のメモ」の呼び方
+          </label>
+          <input
+            value={form.termSheetMemo}
+            onChange={(e) => set("termSheetMemo", e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)" }}
+            placeholder="もらった資料のメモ"
+          />
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-400)" }}>
+            デフォルト: 「もらった資料のメモ」。なかまの詳細画面や外部人脈の詳細画面で、1to1でもらった資料の内容をまとめる欄の名前です。白樺チャプターでは「略歴・GAINS・1to1資料の要約」を設定しています。
           </p>
         </div>
 

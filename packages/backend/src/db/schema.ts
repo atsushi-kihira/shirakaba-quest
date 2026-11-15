@@ -1276,6 +1276,7 @@ export const cardDesigns = sqliteTable("card_designs", {
   termExternalGuest:    text("term_external_guest").notNull().default("外部ゲスト"),
   termEnishi:           text("term_enishi").notNull().default("ご縁"),
   termBusinessCommunity: text("term_business_community").notNull().default("ビジネスコミュニティ"),
+  termSheetMemo: text("term_sheet_memo").notNull().default("もらった資料のメモ"),
   characterImageKey:    text("character_image_key"),
   timezone:             text("timezone").notNull().default("Asia/Tokyo"),
   theme:                text("theme").notNull().default("playful"), // VALID_THEMES (services/theme.ts) を参照
@@ -1572,10 +1573,51 @@ export const profileSheets = sqliteTable(
     personality:     text("personality").notNull().default(""),
     contactInfo:     text("contact_info").notNull().default(""),
     tags:            text("tags").notNull().default("[]"), // JSON配列
+    impression:      text("impression").notNull().default(""),     // 1to1をした自分から見た印象
+    supplement:      text("supplement").notNull().default(""),     // 補足情報（議事メモなど）
+    companyUrl:      text("company_url").notNull().default(""),    // 会社のホームページ
+    companyDescription: text("company_description").notNull().default(""), // 会社の事業内容
+    companyLookupStatus: text("company_lookup_status").notNull().default(""), // ''|'pending'|'done'|'not_found'|'error'
+    companyLookupFor:    text("company_lookup_for").notNull().default(""),
+    companyLookupAt:     integer("company_lookup_at").notNull().default(0),
     createdAt:       integer("created_at").notNull(),
     updatedAt:       integer("updated_at").notNull(),
   },
   (t) => [uniqueIndex("uniq_profile_sheet_subject").on(t.ownerMemberId, t.subjectType, t.subjectId)]
+);
+
+// 紹介できそうな人（「もらった資料のメモ」の相手ごと。登録した本人だけが見られる）
+export const profileSheetLinks = sqliteTable(
+  "profile_sheet_links",
+  {
+    id:            text("id").primaryKey(),
+    ownerMemberId: text("owner_member_id").notNull(),
+    subjectType:   text("subject_type").notNull(),   // 'member' | 'contact'
+    subjectId:     text("subject_id").notNull(),
+    kind:          text("kind").notNull(),           // 'contact' | 'member'（紹介の相手の種類）
+    targetId:      text("target_id").notNull(),
+    reason:        text("reason").notNull().default(""),
+    starred:       integer("starred").notNull().default(0),
+    source:        text("source").notNull().default("ai"), // 'ai' | 'manual'
+    createdAt:     integer("created_at").notNull(),
+    updatedAt:     integer("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_profile_sheet_link").on(t.ownerMemberId, t.subjectType, t.subjectId, t.kind, t.targetId)]
+);
+
+// 「AIでさがす」の実行の状況（相手ごとに1件）
+export const profileSheetMatchRuns = sqliteTable(
+  "profile_sheet_match_runs",
+  {
+    ownerMemberId: text("owner_member_id").notNull(),
+    subjectType:   text("subject_type").notNull(),
+    subjectId:     text("subject_id").notNull(),
+    jobId:         text("job_id").notNull(),
+    status:        text("status").notNull(),         // 'running' | 'done' | 'error'
+    message:       text("message").notNull().default(""),
+    updatedAt:     integer("updated_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.ownerMemberId, t.subjectType, t.subjectId] })]
 );
 
 export const profileSheetExtractions = sqliteTable("profile_sheet_extractions", {

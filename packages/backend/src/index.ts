@@ -223,6 +223,7 @@ app.get("/api/settings", async (c) => {
       termExternalGuest: design?.termExternalGuest ?? "外部ゲスト",
       termEnishi:        design?.termEnishi        ?? "ご縁",
       termBusinessCommunity: design?.termBusinessCommunity ?? "ビジネスコミュニティ",
+      termSheetMemo:     design?.termSheetMemo     ?? "もらった資料のメモ",
       characterImageKey: design?.characterImageKey ?? null,
       timezone:          design?.timezone          ?? "Asia/Tokyo",
       theme:             design?.theme             ?? "playful",

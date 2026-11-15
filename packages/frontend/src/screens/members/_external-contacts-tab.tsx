@@ -16,12 +16,15 @@ import { matchesSearchQuery } from "@/lib/contact-search";
 import { NotFoundPrivateNote } from "@/components/not-found-private-note";
 import { DeferredSheetField } from "@/components/profile-sheet/deferred-sheet-field";
 import { ProfileSheetCsvImportModal } from "@/components/profile-sheet/profile-sheet-csv-import";
+import { downloadSheetTemplate } from "@/components/profile-sheet/profile-sheet-csv-columns";
+import { readTableFile, TABLE_FILE_ACCEPT } from "@/lib/csv-parse";
+import { useSettings } from "@/hooks/use-settings";
 import { saveDeferredSheet, useSheetIndex, useSheetSearchText } from "@/components/profile-sheet/profile-sheet-shared";
 import type { ProfileSheetFields } from "@shared/types";
 
 type Visibility = "private" | "existence" | "full";
 type BusinessSummaryStatus = "pending" | "processing" | "done" | "not_found" | "skipped" | "error";
-type Contact = {
+export type Contact = {
   id: string;
   name: string;
   specialty: string | null;
@@ -291,13 +294,11 @@ function useRelationshipOptions(): string[] {
 }
 
 import { GuestProposalsCard } from "./_guest-proposals-card";
-import { decodeFile, parseDelimited } from "@/lib/csv-parse";
 
 export function ExternalContactsTab() {
   const me = useAuthStore((st) => st.user);
   const specialtyOptions = useSpecialtyOptions();
   const relationshipOptions = useRelationshipOptions();
-  const [sheetCsvOpen, setSheetCsvOpen] = useState(false);
 
   return (
     <div>
@@ -311,7 +312,7 @@ export function ExternalContactsTab() {
       </datalist>
 
       <p className="text-sm mb-4" style={{ color: "var(--color-ink-500)" }}>
-        Eightなどで交換した名刺情報を取り込んで、協働マップの人脈レイヤーに表示します。メール・電話番号・住所・SNSなどの連絡先は保存されません。
+        Eightなどで交換した名刺情報や、1to1でもらった資料の内容を取り込んで、協働マップの人脈レイヤーに表示します。メールや連絡手段などの連絡先は、あなただけが見られる形で保存され、他のメンバーには見えません。
       </p>
       {me && (
         <div className="flex items-center gap-2 mb-4">
@@ -320,25 +321,10 @@ export function ExternalContactsTab() {
         </div>
       )}
 
-      <ManualAddSection />
+      {/* 人脈を増やす入口は、ここ1か所（1件ずつ／一覧表でまとめて）。登録済みの人に資料を足すのは、下の一覧の名前から */}
+      <AddContactsCard />
       {/* 外部ゲストの回答からの自動登録が、登録件数の上限で保留になったものの確認 */}
       <GuestProposalsCard />
-
-      <ImportSection />
-
-      {/* もらった資料のメモ（略歴シート・GAINSシートなど）のCSV一括取り込み。登録した本人だけが見られる */}
-      <div className="card-paper p-4 mb-6">
-        <h2 className="text-sm font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
-          📎 もらった資料のメモを、CSVでまとめて取り込む
-        </h2>
-        <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
-          名前・専門・強み・紹介してほしい相手・タグなどを書いたCSVから、人脈ごとにメモを登録します。あなただけが見られます。1件ずつ取り込むときは、下の一覧の名前を押してください。
-        </p>
-        <button onClick={() => setSheetCsvOpen(true)} className="text-xs px-3 py-1.5 rounded-full font-medium text-white" style={{ background: "var(--color-brand)" }}>
-          CSVを取り込む
-        </button>
-      </div>
-      {sheetCsvOpen && <ProfileSheetCsvImportModal type="contact" onClose={() => setSheetCsvOpen(false)} />}
 
       <IntroRequestsSection />
       <MyContactsSection />
@@ -346,7 +332,82 @@ export function ExternalContactsTab() {
   );
 }
 
-/** 会社概要（一覧表示用の一言概要・詳細）の入力欄＋「AIで生成」ボタン。1件登録フォーム・編集モーダルで共用する */
+/** 人脈を追加する入口（1か所にまとめた）。「1件ずつ」と「一覧表（CSV・Excel）でまとめて」を切り替える */
+function AddContactsCard() {
+  const [mode, setMode] = useState<"one" | "bulk">("one");
+  const tabs: { key: "one" | "bulk"; label: string }[] = [
+    { key: "one", label: "✍️ 1件ずつ登録" },
+    { key: "bulk", label: "📊 一覧表でまとめて登録" },
+  ];
+  return (
+    <div className="card-paper p-4 mb-6">
+      <h2 className="text-sm font-semibold mb-1" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
+        👥 人脈を追加する
+      </h2>
+      <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+        1件ずつ入力する方法と、CSV・Excelの一覧表でまとめて登録する方法があります。1to1でもらった資料（略歴・GAINSシートなど）やメモは、どちらの方法でも一緒に登録できます。すでに登録した人に資料を足すときは、下の一覧の名前を押してください。
+      </p>
+      <div role="tablist" className="flex gap-2 mb-4">
+        {tabs.map((t) => (
+          <button key={t.key} role="tab" aria-selected={mode === t.key} onClick={() => setMode(t.key)}
+            className="flex-1 py-2 rounded-2xl text-xs font-medium transition"
+            style={{ background: mode === t.key ? "var(--color-brand)" : "var(--color-paper-200)", color: mode === t.key ? "white" : "var(--color-ink-600)" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {mode === "one" ? <ManualAddSection /> : <BulkAddSection />}
+    </div>
+  );
+}
+
+/** 一覧表でまとめて登録：どんな表かを選ぶ（名刺ソフト・名前一覧／もらった資料のメモの一覧） */
+function BulkAddSection() {
+  const { termSheetMemo } = useSettings();
+  const [kind, setKind] = useState<"cards" | "sheets">("cards");
+  const [sheetCsvOpen, setSheetCsvOpen] = useState(false);
+  const kinds: { key: "cards" | "sheets"; title: string; desc: string }[] = [
+    { key: "cards", title: "名刺ソフト（Eightなど）や、名前・会社・専門の一覧", desc: "名前・専門分野・会社・備考・メールの列がある表" },
+    { key: "sheets", title: `${termSheetMemo}の一覧（10項目）`, desc: "名前・専門・強み・紹介してほしい相手・タグなど、資料の内容をまとめた表" },
+  ];
+  return (
+    <div>
+      <fieldset className="space-y-2 mb-4">
+        <legend className="text-xs font-semibold mb-1.5" style={{ color: "var(--color-ink-700)" }}>どんな一覧表ですか？</legend>
+        {kinds.map((k) => (
+          <label key={k.key} className="flex items-start gap-2 cursor-pointer rounded-xl p-2.5"
+            style={{ background: kind === k.key ? "rgba(181,56,75,0.08)" : "var(--color-paper-200)", border: kind === k.key ? "1px solid var(--color-brand)" : "1px solid transparent" }}>
+            <input type="radio" name="bulk-kind" checked={kind === k.key} onChange={() => setKind(k.key)} className="mt-1" />
+            <span>
+              <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-900)" }}>{k.title}</span>
+              <span className="block text-[11px]" style={{ color: "var(--color-ink-500)" }}>{k.desc}</span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      {kind === "cards" ? (
+        <ImportSection />
+      ) : (
+        <div>
+          <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
+            名前・専門・強み・紹介してほしい相手・タグなどを書いたCSV・Excelの表から、人脈ごとにメモを登録します。登録済みの人は内容を更新し、まだ登録していない人は、新しい人脈として登録します。あなただけが見られます。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setSheetCsvOpen(true)} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium text-white" style={{ background: "var(--color-brand)" }}>
+              <Upload size={16} /> CSV・Excelを選んで取り込む
+            </button>
+            <button onClick={downloadSheetTemplate} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium"
+              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+              ひな形をダウンロード
+            </button>
+          </div>
+          {sheetCsvOpen && <ProfileSheetCsvImportModal type="contact" onClose={() => setSheetCsvOpen(false)} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BusinessSummaryFields({
   company, name, summary, setSummary, detail, setDetail, specialty, setSpecialty,
 }: {
@@ -479,7 +540,8 @@ function RelationshipTagsInput({ relationships, setRelationships }: {
 
 function ManualAddSection() {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const { termSheetMemo } = useSettings();
+  const [justAdded, setJustAdded] = useState(false);
   const [name, setName] = useState("");
   const [specialty, setSpecialty] = useState("");
   const [company, setCompany] = useState("");
@@ -514,93 +576,81 @@ function ManualAddSection() {
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
       qc.invalidateQueries({ queryKey: ["collab", "graph"] });
       qc.invalidateQueries({ queryKey: ["profile-sheet"] });
-      setNotice(sheetSaved ? "" : "人脈は登録しました。ただ、もらった資料のメモは保存できませんでした。一覧の名前を押して、もう一度取り込んでください。");
+      setNotice(sheetSaved ? "" : `人脈は登録しました。ただ、${termSheetMemo}は保存できませんでした。一覧の名前を押して、もう一度取り込んでください。`);
       setName(""); setSpecialty(""); setCompany(""); setRelationships([]); setNote(""); setEmail(""); setVisibility("existence");
       setBusinessSummary(""); setBusinessSummaryDetail(""); setSheet(null);
-      setOpen(false);
+      setJustAdded(true);
     },
     onError: (e: Error) => setError(e.message || "登録に失敗しました"),
   });
 
   function handleSubmit() {
-    setError("");
+    setError(""); setJustAdded(false);
     if (!name.trim()) { setError("名前を入力してください"); return; }
     create.mutate();
   }
 
   return (
-    <div className="card-paper p-4 mb-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
-          ✍️ 1件ずつ登録する
-        </h2>
-        <button onClick={() => setOpen((v) => !v)} disabled={atLimit && !open}
-          className="text-xs px-3 py-1.5 rounded-full font-medium disabled:opacity-50"
-          style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-          {open ? "閉じる" : "＋ 人脈を登録"}
-        </button>
-      </div>
-
-      {atLimit && !open && (
-        <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>
+    <div>
+      {atLimit && (
+        <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>
           登録できる人脈は非公開を除いて{EXTERNAL_CONTACTS_LIMIT}件までです。新しく登録するには、既存の人脈を削除するか、非公開に変更してください。
         </p>
       )}
 
-      {notice && !open && <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>{notice}</p>}
+      {notice && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{notice}</p>}
+      {justAdded && !notice && <p className="text-xs mb-3" style={{ color: "var(--color-success)" }}>✅ 登録しました。続けて、次の人も登録できます。</p>}
 
-      {open && (
-        <div className="mt-3">
-          <DeferredSheetField name={name} value={sheet}
-            onChange={(v) => {
-              setSheet(v);
-              if (v && !name.trim() && v.name) setName(v.name);
-              if (v && !company.trim() && v.company) setCompany(v.company);
-            }} />
+      <div>
+        <DeferredSheetField name={name} value={sheet}
+          onChange={(v) => {
+            setSheet(v);
+            if (v && !name.trim() && v.name) setName(v.name);
+            if (v && !company.trim() && v.company) setCompany(v.company);
+          }} />
 
-          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>名前 *</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: 高橋 健一"
-            className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>名前 *</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: 高橋 健一"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
 
-          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>会社名/屋号</label>
-          <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="例: 高橋会計事務所"
-            className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
-          <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
-            ここまでは名刺の情報を手入力してください。この先はAIで自動入力できます
-          </p>
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>会社名/屋号</label>
+        <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="例: 高橋会計事務所"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+        <p className="text-[11px] -mt-2 mb-3" style={{ color: "var(--color-ink-400)" }}>
+          ここまでは名刺の情報を手入力してください。この先はAIで自動入力できます
+        </p>
 
-          <BusinessSummaryFields company={company} name={name} summary={businessSummary} setSummary={setBusinessSummary}
-            detail={businessSummaryDetail} setDetail={setBusinessSummaryDetail}
-            specialty={specialty} setSpecialty={setSpecialty} />
+        <BusinessSummaryFields company={company} name={name} summary={businessSummary} setSummary={setBusinessSummary}
+          detail={businessSummaryDetail} setDetail={setBusinessSummaryDetail}
+          specialty={specialty} setSpecialty={setSpecialty} />
 
-          <RelationshipTagsInput relationships={relationships} setRelationships={setRelationships} />
+        <RelationshipTagsInput relationships={relationships} setRelationships={setRelationships} />
 
-          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>備考</label>
-          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例: 展示会で名刺交換"
-            className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>備考</label>
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例: 展示会で名刺交換"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }} />
 
-          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス（任意）</label>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="例: takahashi@example.com"
-            className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
-          <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
-            🔒 あなただけに見えます（他のメンバーには表示されません）。ミーティングや定例会に招待するときの、メールの送り先にだけ使います
-          </p>
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス（任意）</label>
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="例: takahashi@example.com"
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-1" style={{ borderColor: "var(--color-paper-300)" }} />
+        <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
+          🔒 あなただけに見えます（他のメンバーには表示されません）。ミーティングや定例会に招待するときの、メールの送り先にだけ使います
+        </p>
 
-          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>公開範囲</label>
-          <select value={visibility} onChange={(e) => setVisibility(e.target.value as Visibility)}
-            className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
-            {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
-          </select>
-          <NotFoundPrivateNote />
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>公開範囲</label>
+        <select value={visibility} onChange={(e) => setVisibility(e.target.value as Visibility)}
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)" }}>
+          {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
+        </select>
+        <NotFoundPrivateNote />
 
-          {error && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{error}</p>}
+        {error && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
-          <button onClick={handleSubmit} disabled={create.isPending}
-            className="w-full py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
-            登録する
-          </button>
-        </div>
-      )}
+        <button onClick={handleSubmit} disabled={create.isPending || (atLimit && visibility !== "private")}
+          className="w-full py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
+          登録する
+        </button>
+      </div>
     </div>
   );
 }
@@ -625,8 +675,7 @@ function ImportSection() {
     setError("");
     setFileName(file.name);
     try {
-      const text = await decodeFile(file);
-      const parsed = parseDelimited(text);
+      const parsed = await readTableFile(file);
       if (parsed.length < 2) { setError("データ行が見つかりませんでした"); return; }
       // Eightのエクスポートは冒頭に説明文が数行入っているため、実際のヘッダー行を探して読み飛ばす
       const headerIdx = format === "eight" ? findHeaderRowIndex(parsed) : 0;
@@ -636,8 +685,8 @@ function ImportSection() {
       setHeaders(head);
       setRows(body);
       setMapping(guessMapping(head, format));
-    } catch {
-      setError("ファイルを読み込めませんでした");
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : "ファイルを読み込めませんでした");
     }
   }
 
@@ -707,11 +756,7 @@ function ImportSection() {
   });
 
   return (
-    <div className="card-paper p-4 mb-6">
-      <h2 className="text-sm font-semibold mb-3" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-700)" }}>
-        📥 CSVから取り込む
-      </h2>
-
+    <div>
       <div className="flex gap-2 mb-3">
         <button onClick={() => { setFormat("generic"); if (headers.length) setMapping(guessMapping(headers, "generic")); }}
           className="flex-1 py-2 rounded-2xl text-xs font-medium transition"
@@ -729,7 +774,7 @@ function ImportSection() {
         <div className="text-xs mb-3 p-3 rounded-xl" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
           <p className="font-medium mb-1.5" style={{ color: "var(--color-ink-700)" }}>📋 汎用フォーマットについて</p>
           <p className="mb-1.5">
-            1行目に見出し（列名）が入ったCSVファイルに対応しています。次の5項目の列を用意してください（順番は自由、見出し名が多少違っても自動で認識します）。
+            1行目に見出し（列名）が入ったCSV・Excelファイルに対応しています。次の5項目の列を用意してください（順番は自由、見出し名が多少違っても自動で認識します）。
           </p>
           <ul className="list-disc pl-4 mb-1.5 space-y-0.5">
             <li><span className="font-medium">名前</span>（必須）：例）名前 / 氏名 / お名前</li>
@@ -739,7 +784,7 @@ function ImportSection() {
             <li>メールアドレス（任意）：例）メールアドレス / Email。ミーティングに招待するときの送り先にだけ使います（他のメンバーには見えません）。空欄でも取り込めます</li>
           </ul>
           <p>
-            文字コードはUTF-8・Shift_JISのどちらでも自動判定します。区切り文字はカンマ（,）またはタブに対応しています。Excelで作成した表を「CSV UTF-8」または「CSV」形式で保存したものをそのままアップロードできます。列名が完全に一致しない場合も、アップロード後に下の「列の対応づけ」欄で手動で選び直せます。
+            文字コードはUTF-8・Shift_JISのどちらでも自動判定します。区切り文字はカンマ（,）またはタブに対応しています。Excelで作成した表は、「.xlsx」のまま（最初のシートを読み取ります）でも、「CSV UTF-8」または「CSV」形式で保存したものでも、アップロードできます。列名が完全に一致しない場合も、アップロード後に下の「列の対応づけ」欄で手動で選び直せます。
           </p>
         </div>
       ) : (
@@ -756,8 +801,8 @@ function ImportSection() {
       <label className="flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-medium cursor-pointer mb-3"
         style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)", border: "1px dashed var(--color-paper-300)" }}>
         <Upload size={16} />
-        {fileName || "CSVファイルを選択"}
-        <input type="file" accept=".csv,.txt,.tsv" className="hidden"
+        {fileName || "CSV・Excelファイルを選択"}
+        <input type="file" accept={TABLE_FILE_ACCEPT} className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
       </label>
 
@@ -922,6 +967,7 @@ function IntroRequestsSection() {
 
 function MyContactsSection() {
   const qc = useQueryClient();
+  const { termSheetMemo } = useSettings();
   const { data: sheetIds } = useSheetIndex("contact");
   const { data: sheetTexts } = useSheetSearchText("contact"); // もらった資料のメモも、検索の対象にする
   const { data, isLoading } = useQuery({
@@ -1397,7 +1443,7 @@ function MyContactsSection() {
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <Link to={`/members/contacts/${ct.id}`} className="text-sm font-medium truncate underline-offset-2 hover:underline" style={{ color: "var(--color-ink-800)" }}>{ct.name}</Link>
                         {sheetIds?.has(ct.id) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" title="もらった資料のメモがあります（あなただけに見えます）"
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" title={`${termSheetMemo}があります（あなただけに見えます）`}
                             style={{ background: "rgba(181,56,75,0.12)", color: "var(--color-brand)" }}>📎 資料あり</span>
                         )}
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
@@ -1450,7 +1496,7 @@ function MyContactsSection() {
   );
 }
 
-function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () => void }) {
+export function EditContactModal({ contact, onClose }: { contact: Contact; onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState(contact.name);
   const [specialty, setSpecialty] = useState(contact.specialty ?? "");

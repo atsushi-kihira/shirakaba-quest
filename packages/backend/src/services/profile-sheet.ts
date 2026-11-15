@@ -7,7 +7,7 @@
 import { and, eq, gte } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { newId } from "./auth.ts";
-import type { ProfileSheet, ProfileSheetFields, ProfileSheetSubjectType } from "@shared/types";
+import type { CompanyLookupStatus, ProfileSheet, ProfileSheetFields, ProfileSheetSubjectType } from "@shared/types";
 
 type Db = ReturnType<typeof createDb>;
 type SheetRow = typeof schema.profileSheets.$inferSelect;
@@ -21,11 +21,13 @@ const MAX_TAG_LEN = 30;
 const LIMITS = {
   name: 100, furigana: 100, company: 200, title: 300, oneononeDate: 20,
   expertise: 3000, wantedReferrals: 2000, personality: 2000, contactInfo: 500,
+  impression: 2000, supplement: 6000, companyUrl: 500, companyDescription: 1000,
 } as const;
 
 export const EMPTY_FIELDS: ProfileSheetFields = {
   name: "", furigana: "", company: "", title: "", oneononeDate: "",
   expertise: "", wantedReferrals: "", personality: "", contactInfo: "", tags: [],
+  impression: "", supplement: "", companyUrl: "", companyDescription: "",
 };
 
 const clip = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
@@ -61,6 +63,18 @@ export function normalizeDate(v: unknown): string {
   return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
+/** 会社のホームページのURLを整える（http(s)で始まる・ドメインがあるものだけ。「example.com」は https:// を補う）。だめなら空 */
+export function normalizeUrl(v: unknown): string {
+  let t = clip(v, LIMITS.companyUrl);
+  if (!t) return "";
+  if (!/^https?:\/\//i.test(t)) t = `https://${t}`;
+  try {
+    const u = new URL(t);
+    if ((u.protocol !== "https:" && u.protocol !== "http:") || !u.hostname.includes(".")) return "";
+    return u.toString();
+  } catch { return ""; }
+}
+
 /** 送られてきた内容を、保存できる形に整える（足りない項目は空、長すぎる項目は切り詰める） */
 export function normalizeFields(input: unknown): ProfileSheetFields {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
@@ -75,11 +89,20 @@ export function normalizeFields(input: unknown): ProfileSheetFields {
     personality: clip(o.personality, LIMITS.personality),
     contactInfo: clip(o.contactInfo, LIMITS.contactInfo),
     tags: normalizeTags(o.tags),
+    impression: clip(o.impression, LIMITS.impression),
+    supplement: clip(o.supplement, LIMITS.supplement),
+    companyUrl: normalizeUrl(o.companyUrl),
+    companyDescription: clip(o.companyDescription, LIMITS.companyDescription),
   };
 }
 
 export function hasAnyContent(f: ProfileSheetFields): boolean {
   return Object.entries(f).some(([k, v]) => k !== "oneononeDate" && (Array.isArray(v) ? v.length > 0 : Boolean(v)));
+}
+
+/** 会社名の比較用（空白・全角半角・大文字小文字をそろえる） */
+function normCompany(s: string): string {
+  return s.normalize("NFKC").replace(/[\s　]+/g, "").toLowerCase();
 }
 
 export function toSheet(r: SheetRow): ProfileSheet {
@@ -89,7 +112,10 @@ export function toSheet(r: SheetRow): ProfileSheet {
     id: r.id, subjectType: r.subjectType as ProfileSheetSubjectType, subjectId: r.subjectId,
     name: r.name, furigana: r.furigana, company: r.company, title: r.title, oneononeDate: r.oneononeDate,
     expertise: r.expertise, wantedReferrals: r.wantedReferrals, personality: r.personality, contactInfo: r.contactInfo,
-    tags, createdAt: r.createdAt, updatedAt: r.updatedAt,
+    tags, impression: r.impression, supplement: r.supplement, companyUrl: r.companyUrl, companyDescription: r.companyDescription,
+    companyLookupStatus: (["pending", "done", "not_found", "error"].includes(r.companyLookupStatus) ? r.companyLookupStatus : "") as CompanyLookupStatus,
+    companyLookupAt: r.companyLookupAt,
+    createdAt: r.createdAt, updatedAt: r.updatedAt,
   };
 }
 
@@ -103,16 +129,48 @@ export async function getSheet(db: Db, ownerId: string, subjectType: ProfileShee
   return row ? toSheet(row) : null;
 }
 
-/** 保存する（すでにあれば上書き） */
+/**
+ * 保存する（すでにあれば上書き）。
+ *  ・keepExtras: 印象・補足情報・会社情報は、いまの内容のまま残す（CSVの取り込みなど、これらの列がないとき）
+ *  ・skipLookup: 会社情報の自動取得は予約しない（たくさんまとめて取り込むとき）
+ *  ・戻り値の needLookup は、会社情報を（自動で）取得し直す必要があるか（会社名が新しく入った・変わった）
+ */
 export async function saveSheet(
   db: Db, ownerId: string, subjectType: ProfileSheetSubjectType, subjectId: string, fields: ProfileSheetFields, now: number,
-): Promise<ProfileSheet> {
-  const values = { ...fields, tags: JSON.stringify(fields.tags), updatedAt: now };
-  const existing = await db.select({ id: schema.profileSheets.id }).from(schema.profileSheets).where(and(
+  opts: { keepExtras?: boolean; skipLookup?: boolean } = {},
+): Promise<ProfileSheet & { needLookup: boolean }> {
+  const existing = await db.select().from(schema.profileSheets).where(and(
     eq(schema.profileSheets.ownerMemberId, ownerId),
     eq(schema.profileSheets.subjectType, subjectType),
     eq(schema.profileSheets.subjectId, subjectId),
   )).get();
+
+  const { impression, supplement, companyUrl, companyDescription, ...core } = fields;
+  let extras = { impression, supplement, companyUrl, companyDescription };
+  if (opts.keepExtras && existing) {
+    extras = { impression: existing.impression, supplement: existing.supplement, companyUrl: existing.companyUrl, companyDescription: existing.companyDescription };
+  }
+
+  // 会社名が変わったときは、前の会社の情報（ホームページ・事業内容）を引きずらない（手で直したものは残す）
+  const company = core.company;
+  const companyChanged = normCompany(company) !== normCompany(existing?.companyLookupFor ?? "");
+  let lookupStatus: string = existing?.companyLookupStatus ?? "";
+  let lookupFor = existing?.companyLookupFor ?? "";
+  if (!company) {
+    extras = { ...extras, companyUrl: "", companyDescription: "" };
+    lookupStatus = ""; lookupFor = "";
+  } else if (existing && companyChanged && existing.companyLookupFor) {
+    if (extras.companyUrl === existing.companyUrl) extras = { ...extras, companyUrl: "" };
+    if (extras.companyDescription === existing.companyDescription) extras = { ...extras, companyDescription: "" };
+  }
+  const needLookup = !!company && companyChanged && !opts.skipLookup;
+  if (needLookup) { lookupStatus = "pending"; lookupFor = company; }
+
+  const values = {
+    ...core, ...extras, tags: JSON.stringify(core.tags), updatedAt: now,
+    companyLookupStatus: lookupStatus, companyLookupFor: lookupFor,
+    companyLookupAt: needLookup ? now : (existing?.companyLookupAt ?? 0),
+  };
   if (existing) {
     await db.update(schema.profileSheets).set(values).where(eq(schema.profileSheets.id, existing.id));
   } else {
@@ -120,7 +178,8 @@ export async function saveSheet(
       id: newId(), ownerMemberId: ownerId, subjectType, subjectId, createdAt: now, ...values,
     });
   }
-  return (await getSheet(db, ownerId, subjectType, subjectId))!;
+  const sheet = (await getSheet(db, ownerId, subjectType, subjectId))!;
+  return { ...sheet, needLookup };
 }
 
 // -------------------------------------------------------
@@ -143,6 +202,9 @@ export function sheetSearchText(s: ProfileSheet | null | undefined): string {
   if (s.expertise) parts.push(`専門・強み: ${s.expertise}`);
   if (s.wantedReferrals) parts.push(`紹介してほしい相手: ${s.wantedReferrals}`);
   if (s.personality) parts.push(`人柄・話題メモ: ${s.personality}`);
+  if (s.companyDescription) parts.push(`会社の事業内容: ${s.companyDescription}`);
+  if (s.impression) parts.push(`自分から見た印象: ${s.impression}`);
+  if (s.supplement) parts.push(`補足情報: ${s.supplement}`);
   if (s.tags.length > 0) parts.push(`タグ: ${s.tags.map((t) => `#${t}`).join(" ")}`);
   return parts.join(" / ");
 }
@@ -192,6 +254,8 @@ const EXTRACT_PROMPT = `添付の資料は、BNIなどの交流の場で、あ�
 - personality: 人柄・話題メモ（出身・趣味・家族・好きなこと・話のきっかけになりそうなこと）
 - contactInfo: 連絡手段（Webサイト・SNSのURL、メール、電話など、資料に書かれているもの。なければ ""）
 - tags: タグ。相手を探すときのキーワードになる短い言葉を5〜12個（例: "CTO代行", "ITコンサル", "ゴルフ"）。「#」は付けない
+- impression: 資料を受け取った（会った）人から見た、相手の「印象」。議事メモ・感想メモなどに、印象・感想・気づきとして書かれているときだけ。資料が相手本人の自己紹介だけのときは ""
+- supplement: 補足情報。上のどの項目にも入らないが、あとで役に立ちそうな内容（話し合った内容・決まったこと・宿題・次の一手・数字や固有名詞など）を、箇条書き（行頭は「・」）で。なければ ""
 
 守ること:
 - 資料に書かれていないことは、決して作らない。書かれていない項目は "" （tagsは []）にする
@@ -200,7 +264,15 @@ const EXTRACT_PROMPT = `添付の資料は、BNIなどの交流の場で、あ�
 - 文章は、やさしい日本語で。改行は、箇条書きにしたいときだけ使う
 
 次のJSONだけを返してください（説明やコードブロックは不要）。
-{"name":"","furigana":"","company":"","title":"","oneononeDate":"","expertise":"","wantedReferrals":"","personality":"","contactInfo":"","tags":[]}`;
+{"name":"","furigana":"","company":"","title":"","oneononeDate":"","expertise":"","wantedReferrals":"","personality":"","contactInfo":"","tags":[],"impression":"","supplement":""}`;
+
+/** 議事メモ・自由なメモを貼り付けたとき（資料ではなく、自分で書いたメモ・AIの要約など）の追加の指示 */
+const MEMO_NOTE = `\n\n【この文章について】
+これは、決まった書式の資料ではなく、1to1の議事メモ・AIによる要約・自由に書いたメモです。書式はバラバラでかまいません。
+- 相手について、上の項目（専門・強み、紹介してほしい相手、人柄・話題メモなど）に当てはまる内容は、それぞれの項目に入れてください。
+- 項目に入れられない大事な内容は、supplement（補足情報）に、箇条書きで残してください。落とさないこと。
+- 書いた人の感想・印象は impression に入れてください。
+- 自分自身（メモを書いた人）のことではなく、あくまで「相手」の情報を読み取ってください。`;
 
 export class ExtractionError extends Error {}
 
@@ -212,6 +284,8 @@ export async function extractSheetFromFile(opts: {
   kind: SheetFileKind;
   /** 相手の名前（わかっていれば。読み取りの手がかりにする） */
   hintName?: string;
+  /** 議事メモ・自由なメモとして読み取る（貼り付けたメモ） */
+  memo?: boolean;
 }): Promise<ProfileSheetFields> {
   if (opts.isDev || !opts.apiKey || opts.apiKey === "dev-not-set") {
     // 開発環境：AIを呼ばず、見本を返す
@@ -222,6 +296,8 @@ export async function extractSheetFromFile(opts: {
       wantedReferrals: "（見本）紹介してほしい相手が、ここに入ります。",
       personality: "（見本）出身・趣味などの話題メモが、ここに入ります。",
       contactInfo: "https://example.com", tags: ["見本", "ITコンサル"],
+      impression: opts.memo ? "（見本）話しやすく、誠実な印象でした。" : "",
+      supplement: opts.memo ? "・（見本）議事メモのうち、項目に入らなかった内容が、ここに入ります。" : "",
     });
   }
 
@@ -234,7 +310,7 @@ export async function extractSheetFromFile(opts: {
     const text = new TextDecoder("utf-8").decode(opts.bytes).slice(0, 60_000);
     content.push({ type: "text", text: `【資料の本文】\n${text}` });
   }
-  content.push({ type: "text", text: `${opts.hintName ? `読み取る相手の名前は「${opts.hintName}」さんです。\n` : ""}${EXTRACT_PROMPT}` });
+  content.push({ type: "text", text: `${opts.hintName ? `読み取る相手の名前は「${opts.hintName}」さんです。\n` : ""}${EXTRACT_PROMPT}${opts.memo ? MEMO_NOTE : ""}` });
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",

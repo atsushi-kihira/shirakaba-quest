@@ -6,23 +6,10 @@ import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileSpreadsheet, Loader2, Download } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { decodeFile, parseDelimited } from "@/lib/csv-parse";
+import { readTableFile, TABLE_FILE_ACCEPT } from "@/lib/csv-parse";
 import { DialogCloseButton } from "@/components/dialog-close-button";
+import { COLUMNS, downloadSheetTemplate } from "./profile-sheet-csv-columns";
 import type { ProfileSheetSubjectType } from "@shared/types";
-
-/** CSVの列（この順に並べたものを、ひな形にする） */
-const COLUMNS = [
-  { key: "name", header: "名前", match: ["名前", "氏名", "お名前"] },
-  { key: "furigana", header: "ふりがな", match: ["ふりがな", "フリガナ", "読み"] },
-  { key: "company", header: "会社・屋号", match: ["会社", "屋号"] },
-  { key: "title", header: "業種・肩書き", match: ["業種", "肩書"] },
-  { key: "oneononeDate", header: "1to1した日", match: ["1to1", "1対1", "面談日"] },
-  { key: "expertise", header: "専門・強み", match: ["専門", "強み"] },
-  { key: "wantedReferrals", header: "紹介してほしい相手（理想のお客様）", match: ["紹介してほしい", "理想のお客", "理想"] },
-  { key: "personality", header: "人柄・話題メモ", match: ["人柄", "話題"] },
-  { key: "contactInfo", header: "連絡手段", match: ["連絡"] },
-  { key: "tags", header: "タグ", match: ["タグ"] },
-] as const;
 
 type ColKey = (typeof COLUMNS)[number]["key"];
 type CsvRow = Record<ColKey, string>;
@@ -55,16 +42,6 @@ function toRows(table: string[][]): CsvRow[] | null {
     }
     return row;
   }).filter((r) => COLUMNS.some((c) => r[c.key]));
-}
-
-function downloadTemplate() {
-  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
-  const sample = ["山田 太郎", "やまだ たろう", "株式会社サンプル", "ITコンサルタント", "2026-06-03", "システム開発の相談が得意です", "システム開発に困っている経営者", "ゴルフ・コーヒー好き", "https://example.com", "#ITコンサル #ゴルフ"];
-  const csv = "\uFEFF" + [COLUMNS.map((c) => esc(c.header)).join(","), sample.map(esc).join(",")].join("\r\n") + "\r\n";
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  const a = document.createElement("a");
-  a.href = url; a.download = "紹介シート_取り込み用ひな形.csv"; a.click();
-  URL.revokeObjectURL(url);
 }
 
 type Props = { type: ProfileSheetSubjectType; onClose: () => void };
@@ -113,15 +90,15 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
     setError(null); setPreview(null); setRows(null);
     if (file.size > 5 * 1024 * 1024) { setError("ファイルが大きすぎます。5MBまでです"); return; }
     try {
-      const table = parseDelimited(await decodeFile(file));
+      const table = await readTableFile(file);
       const parsed = toRows(table);
       if (!parsed) { setError("見出し（1行目）が見つかりません。「名前」「専門・強み」などの見出しが、1行目にある形にしてください。ひな形をお使いいただくと確実です"); return; }
       if (parsed.length === 0) { setError("取り込める行がありません"); return; }
       if (parsed.length > 500) { setError("一度に取り込めるのは500行までです。ファイルを分けてお試しください"); return; }
       setFileName(file.name); setRows(parsed);
       check.mutate({ rows: parsed, visibility: createVisibility });
-    } catch {
-      setError("ファイルを読み込めませんでした。CSV形式（カンマまたはタブ区切り）か確認してください");
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : "ファイルを読み込めませんでした。CSV形式（カンマまたはタブ区切り）かExcel（.xlsx）か確認してください");
     }
   }
 
@@ -133,14 +110,14 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
       <div className="card-paper w-full max-w-lg rounded-3xl p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-2 mb-1">
           <h2 className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
-            📄 {label}の紹介シートを、CSVでまとめて取り込む
+            📄 {label}の資料メモを、一覧表（CSV・Excel）でまとめて取り込む
           </h2>
           <DialogCloseButton onClick={close} disabled={busy} />
         </div>
         <p className="text-xs mb-3" style={{ color: "var(--color-ink-500)" }}>
           取り込んだ内容は、<b>あなただけが見られます</b>。名前が一致する{type === "member" ? "メンバー" : "人脈"}に入ります
           {type === "contact" ? "（一致する人がいなければ、新しい外部人脈として登録します）" : "（白樺クエストに登録されている人だけが対象です）"}。
-          すでにシートがある人は、CSVの内容で置き換わります。
+          すでにメモがある人は、一覧表の内容で置き換わります（自分から見た印象・補足情報・会社のホームページは、そのまま残ります）。
         </p>
 
         {done ? (
@@ -156,7 +133,7 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
           </div>
         ) : (
           <div className="space-y-3">
-            <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,text/csv" className="hidden"
+            <input ref={fileRef} type="file" accept={TABLE_FILE_ACCEPT} className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleFile(f); }} />
             <div className="rounded-2xl p-3 space-y-2 transition"
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -164,21 +141,21 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
               onDrop={handleDrop}
               style={{ border: `${dragging ? 2 : 1}px dashed var(--color-brand)`, background: dragging ? "rgba(181,56,75,0.12)" : "rgba(181,56,75,0.05)" }}>
             <p className="text-xs" style={{ color: "var(--color-ink-600)" }}>
-              {dragging ? "ここにファイルを離してください" : "CSVファイルをここにドラッグ＆ドロップするか、下のボタンで選んでください"}
+              {dragging ? "ここにファイルを離してください" : "CSV・Excel（.xlsx）のファイルをここにドラッグ＆ドロップするか、下のボタンで選んでください"}
             </p>
             <div className="flex flex-wrap gap-2">
               <button onClick={() => fileRef.current?.click()} disabled={busy}
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
-                <FileSpreadsheet size={16} /> CSVファイルを選ぶ
+                <FileSpreadsheet size={16} /> CSV・Excelファイルを選ぶ
               </button>
-              <button onClick={downloadTemplate} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium"
+              <button onClick={downloadSheetTemplate} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
                 <Download size={16} /> ひな形をダウンロード
               </button>
             </div>
             </div>
             <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>
-              1行目は見出し：{COLUMNS.map((c) => c.header).join("／")}。Excelで作った場合は「CSV UTF-8」で保存してください。
+              1行目は見出し：{COLUMNS.map((c) => c.header).join("／")}。Excelで作った場合は、そのまま「.xlsx」で選べます（最初のシートを読み取ります）。
             </p>
 
             {type === "contact" && (

@@ -211,6 +211,7 @@ export function MembersScreen() {
   const [activeTab, setActiveTab] = useState<Tab>(searchParams.get("tab") === "contacts" ? "contacts" : "all");
   const introRequestCount = useIntroRequestCount();
   const [sheetCsvOpen, setSheetCsvOpen] = useState(false);
+  const { termSheetMemo } = useSettings();
   const { data: sheetTexts } = useSheetSearchText("member"); // 自分がもらった資料のメモ（検索の対象に入れる。あなただけのもの）
 
   const { data: membersData, isLoading: membersLoading, error } = useQuery({
@@ -326,7 +327,7 @@ export function MembersScreen() {
         <div className="mb-3 flex items-center gap-2 flex-wrap">
           <button onClick={() => setSheetCsvOpen(true)} className="text-xs px-3 py-1.5 rounded-full font-medium"
             style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-            📎 もらった資料のメモを、CSVで取り込む
+            📎 {termSheetMemo}を、一覧表（CSV・Excel）で取り込む
           </button>
           <span className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>あなただけが見られます</span>
         </div>

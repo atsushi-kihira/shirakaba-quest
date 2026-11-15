@@ -469,8 +469,10 @@ enishiRoutes.get("/search-jobs/active", async (c) => {
       c.executionCtx.waitUntil(runSearchJobStep(db, c.env, j.id, origin, 0));
     }
   }
+  // 資料メモの「紹介できそうな人」のためのさがし方は、ここには出さない（資料メモの表に出る）
+  const visible = rows.filter((j) => !j.paramsJson.includes('"sheetTarget"'));
   return c.json({
-    data: rows.map((j) => ({
+    data: visible.map((j) => ({
       id: j.id, mode: j.mode, label: jobLabel(JSON.parse(j.paramsJson) as JobParams),
       status: j.status, stage: j.stage, totalBatches: j.totalBatches, doneBatches: j.doneBatches + j.failedBatches,
       historyId: j.historyId, resultCount: j.resultCount, errorMessage: j.errorMessage, createdAt: j.createdAt,

@@ -23,6 +23,7 @@ import { listMapPositions, saveMapPositions, resetMapPositions, MAP_POSITION_INV
 import { generateCompanySummary } from "../services/company-summary.ts";
 import { prefecturePatch, sweepPendingPrefectures } from "../services/prefecture.ts";
 import { waitUpTo } from "../services/sweep-util.ts";
+import { deleteSheetLinksFor } from "../services/profile-sheet-extras.ts";
 import { findPrefecture } from "@shared/prefectures";
 import type { Env, Variables } from "../types.ts";
 
@@ -2421,6 +2422,9 @@ collabRoutes.delete("/contacts/bulk", async (c) => {
 
   for (const idsChunk of chunkIds(ownIds)) {
     await db.delete(schema.profileSheets).where(and(eq(schema.profileSheets.subjectType, "contact"), inArray(schema.profileSheets.subjectId, idsChunk)));
+    await db.delete(schema.profileSheetLinks).where(and(eq(schema.profileSheetLinks.subjectType, "contact"), inArray(schema.profileSheetLinks.subjectId, idsChunk)));
+    await db.delete(schema.profileSheetLinks).where(and(eq(schema.profileSheetLinks.kind, "contact"), inArray(schema.profileSheetLinks.targetId, idsChunk)));
+    await db.delete(schema.profileSheetMatchRuns).where(and(eq(schema.profileSheetMatchRuns.subjectType, "contact"), inArray(schema.profileSheetMatchRuns.subjectId, idsChunk)));
     await db.delete(schema.externalContacts).where(inArray(schema.externalContacts.id, idsChunk));
     await db.delete(schema.collabIntroRequests).where(inArray(schema.collabIntroRequests.contactId, idsChunk));
     await db.delete(schema.externalContactRelationships).where(inArray(schema.externalContactRelationships.contactId, idsChunk));
@@ -2620,6 +2624,7 @@ collabRoutes.delete("/contacts/:id", async (c) => {
   await db.delete(schema.externalContacts).where(eq(schema.externalContacts.id, contactId));
   await db.delete(schema.collabIntroRequests).where(eq(schema.collabIntroRequests.contactId, contactId));
   await db.delete(schema.profileSheets).where(and(eq(schema.profileSheets.subjectType, "contact"), eq(schema.profileSheets.subjectId, contactId)));
+  await deleteSheetLinksFor(db, null, "contact", contactId);
   await db.delete(schema.externalContactRelationships).where(eq(schema.externalContactRelationships.contactId, contactId));
   await db.delete(schema.externalContactFavorites).where(eq(schema.externalContactFavorites.contactId, contactId));
   await db.delete(schema.enishiTransactedContacts).where(eq(schema.enishiTransactedContacts.contactId, contactId));

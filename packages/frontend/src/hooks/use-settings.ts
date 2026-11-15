@@ -29,6 +29,8 @@ export type AppSettings = {
   termExternalGuest: string;
   termEnishi: string;
   termBusinessCommunity: string;
+  /** 「もらった資料のメモ」の呼び名（チャプターごとに変えられる。例: 略歴・GAINS・1to1資料の要約） */
+  termSheetMemo: string;
   characterImageKey: string | null;
   /** カスタム画像のURL。未設定またはロード前は null（デフォルト画像へのフォールバックは行わない） */
   characterImageUrl: string | null;
@@ -57,6 +59,7 @@ const DEFAULTS: AppSettings = {
   termExternalGuest: "外部ゲスト",
   termEnishi: "ご縁",
   termBusinessCommunity: "ビジネスコミュニティ",
+  termSheetMemo: "もらった資料のメモ",
   characterImageKey: null,
   characterImageUrl: null,
   timezone: "Asia/Tokyo",

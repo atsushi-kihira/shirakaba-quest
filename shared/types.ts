@@ -535,12 +535,40 @@ export type ProfileSheetFields = {
   personality: string;     // 人柄・話題メモ
   contactInfo: string;     // 連絡手段
   tags: string[];          // タグ（「#」なしで保存）
+  impression: string;      // 1to1をした自分から見た印象
+  supplement: string;      // 補足情報（議事メモなど、決まった項目に入らないもの）
+  companyUrl: string;      // 会社のホームページ（自動取得。編集可）
+  companyDescription: string; // 会社の事業内容（自動取得。編集可）
 };
+
+/** 会社情報の自動取得の状況（'' = まだ） */
+export type CompanyLookupStatus = "" | "pending" | "done" | "not_found" | "error";
 
 export type ProfileSheet = ProfileSheetFields & {
   id: string;
   subjectType: ProfileSheetSubjectType;
   subjectId: string;
+  companyLookupStatus: CompanyLookupStatus;
+  companyLookupAt: number;
   createdAt: number;
   updatedAt: number;
+};
+
+/** 紹介できそうな人（相手がメンバーなら自分の外部人脈、相手が外部人脈ならメンバー）。登録した本人だけが見られる */
+export type ProfileSheetLink = {
+  id: string;
+  kind: "contact" | "member";
+  targetId: string;
+  name: string;
+  emoji: string | null;      // メンバーのときだけ
+  bgColor: string | null;
+  subtitle: string;          // 会社・専門など
+  reason: string;
+  starred: boolean;          // 重点（有望）のチェック
+  source: "ai" | "manual";
+};
+
+export type ProfileSheetLinksResponse = {
+  links: ProfileSheetLink[];
+  run: { status: "running" | "done" | "error"; message: string; updatedAt: number } | null;
 };
