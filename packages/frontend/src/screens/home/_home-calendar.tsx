@@ -163,11 +163,16 @@ export function HomeCalendar({ tz }: { tz: string }) {
     return (data?.data.types ?? []).filter((t) => !kindLabels.has(t.name));
   }, [data]);
 
-  // 種類（1to1・ミーティング・定例会）と、イベント種別の、どちらもオンのものだけ表示する
-  const visibleEvents = useMemo(
-    () => (data?.data.events ?? []).filter((ev) => !hiddenKinds.has(ev.kind) && !(ev.typeId && hiddenKinds.has(`type:${ev.typeId}`))),
-    [data, hiddenKinds],
-  );
+  // 表示のオン・オフ：セミナーなど、専用のチェックがあるイベント種別の予定は、その種別のチェックだけで決める
+  // （「ミーティング」をオフにしても、セミナーは消えない。「ミーティング」のチェックは、通常ミーティングだけが対象）。
+  // それ以外の予定は、種類（1to1・ミーティング・定例会）のチェックで決める
+  const visibleEvents = useMemo(() => {
+    const ownTypeIds = new Set(meetingTypes.map((t) => t.id));
+    return (data?.data.events ?? []).filter((ev) => {
+      if (ev.typeId && ownTypeIds.has(ev.typeId)) return !hiddenKinds.has(`type:${ev.typeId}`);
+      return !hiddenKinds.has(ev.kind);
+    });
+  }, [data, hiddenKinds, meetingTypes]);
 
   // ---- 検索（入力するとすぐ、下に結果を出す。最初は、過去の予定は含めない） ----
   const [searchText, setSearchText] = useState("");
