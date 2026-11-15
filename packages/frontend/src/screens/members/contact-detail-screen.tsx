@@ -4,18 +4,14 @@
 // =============================================================
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Loader2, Pencil } from "lucide-react";
 import { api } from "@/lib/api";
 import { ProfileSheetCard } from "@/components/profile-sheet/profile-sheet-card";
 import { EditContactModal, type Contact } from "./_external-contacts-tab";
+import { VISIBILITY_LABEL } from "./contact-visibility";
 
 type Visibility = "private" | "existence" | "full";
-const VISIBILITY_LABEL: Record<Visibility, string> = {
-  private: "🔒 非公開（自分だけ）",
-  existence: "🌫️ 存在のみ公開（詳細は非公開）",
-  full: "📖 詳細まで公開（連絡先は非公開）",
-};
 
 export function ContactDetailScreen() {
   const { id } = useParams<{ id: string }>();
@@ -26,6 +22,16 @@ export function ContactDetailScreen() {
   });
   const contact = data?.data.find((c) => c.id === id);
   const [editing, setEditing] = useState(false);
+  const qc = useQueryClient();
+  const [visError, setVisError] = useState("");
+  const changeVisibility = useMutation({
+    mutationFn: (visibility: Visibility) => api.patch(`/collab/contacts/${id}`, { visibility }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
+      qc.invalidateQueries({ queryKey: ["collab", "graph"] });
+    },
+    onError: (e: Error) => setVisError(e.message || "公開範囲を変更できませんでした。もう一度お試しください"),
+  });
 
   return (
     <div className="px-4 py-6 pb-24 max-w-xl mx-auto">
@@ -50,9 +56,19 @@ export function ContactDetailScreen() {
             <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>
               {[contact.specialty, contact.company, contact.prefecture ? `📍${contact.prefecture}` : null, ...contact.relationships].filter(Boolean).join(" ・ ") || "（詳細未入力）"}
             </p>
-            <span className="inline-block mt-2 text-[11px] px-2 py-0.5 rounded-full" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-              {VISIBILITY_LABEL[contact.visibility]}
-            </span>
+            <div className="mt-3">
+              <label className="block text-[11px] mb-1" style={{ color: "var(--color-ink-500)" }}>公開範囲</label>
+              <div className="flex items-center gap-2">
+                <select value={contact.visibility} disabled={changeVisibility.isPending}
+                  onChange={(e) => { setVisError(""); changeVisibility.mutate(e.target.value as Visibility); }}
+                  className="flex-1 min-w-0 px-2.5 py-1.5 rounded-xl border text-xs disabled:opacity-60"
+                  style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-700)" }}>
+                  {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
+                </select>
+                {changeVisibility.isPending && <Loader2 size={14} className="animate-spin shrink-0" style={{ color: "var(--color-brand)" }} />}
+              </div>
+              {visError && <p className="text-xs mt-1" style={{ color: "var(--color-brand)" }}>{visError}</p>}
+            </div>
             {contact.businessSummaryDetail || contact.businessSummary ? (
               <p className="text-sm mt-3 whitespace-pre-wrap" style={{ color: "var(--color-ink-700)" }}>{contact.businessSummaryDetail || contact.businessSummary}</p>
             ) : null}

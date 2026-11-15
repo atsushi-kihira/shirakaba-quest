@@ -13,6 +13,7 @@ import { api } from "@/lib/api";
 import { ShareButton } from "@/components/share-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { matchesSearchQuery } from "@/lib/contact-search";
+import { VISIBILITY_LABEL } from "./contact-visibility";
 import { TagFilterBar } from "@/components/profile-sheet/tag-filter-bar";
 import { NotFoundPrivateNote } from "@/components/not-found-private-note";
 import { ProfileSheetImportModal } from "@/components/profile-sheet/profile-sheet-import-modal";
@@ -97,11 +98,6 @@ type IntroRequest = {
   requester: { id: string; name: string; emoji: string; bgColor: string } | null;
 };
 
-const VISIBILITY_LABEL: Record<Visibility, string> = {
-  private: "🔒 非公開（自分だけ）",
-  existence: "🌫️ 存在のみ公開（詳細は非公開）",
-  full: "📖 詳細まで公開（連絡先は非公開）",
-};
 
 type MappedField = "name" | "specialty" | "company" | "note" | "email";
 const GENERIC_HINTS: Record<MappedField, string[]> = {
@@ -1594,6 +1590,7 @@ export function EditContactModal({ contact, onClose }: { contact: Contact; onClo
   const [prefecture, setPrefecture] = useState(contact.prefecture ?? "");
   const [businessSummary, setBusinessSummary] = useState(contact.businessSummary ?? "");
   const [businessSummaryDetail, setBusinessSummaryDetail] = useState(contact.businessSummaryDetail ?? "");
+  const [visibility, setVisibility] = useState<Visibility>(contact.visibility);
   const [error, setError] = useState("");
 
   const update = useMutation({
@@ -1603,6 +1600,8 @@ export function EditContactModal({ contact, onClose }: { contact: Contact; onClo
       businessSummary: businessSummary.trim(), businessSummaryDetail: businessSummaryDetail.trim(),
       // 所在地は、変えたときだけ送る（変えていない自動入力の値が、手入力として固定されないように）。空は「自動で入力」に戻す
       ...(prefecture !== (contact.prefecture ?? "") ? { prefecture } : {}),
+      // 公開範囲も、変えたときだけ送る
+      ...(visibility !== contact.visibility ? { visibility } : {}),
     }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["collab", "contacts"] });
@@ -1666,6 +1665,12 @@ export function EditContactModal({ contact, onClose }: { contact: Contact; onClo
         <p className="text-[11px] mb-3" style={{ color: "var(--color-ink-400)" }}>
           🔒 あなただけに見えます（他のメンバーには表示されません）。空欄にすると、メールアドレスを消せます
         </p>
+
+        <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>公開範囲</label>
+        <select value={visibility} onChange={(e) => setVisibility(e.target.value as Visibility)}
+          className="w-full px-3 py-2 rounded-xl border text-sm mb-3" style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-50)" }}>
+          {(["existence", "private", "full"] as Visibility[]).map((v) => <option key={v} value={v}>{VISIBILITY_LABEL[v]}</option>)}
+        </select>
 
         {error && <p className="text-xs mb-3" style={{ color: "var(--color-brand)" }}>{error}</p>}
 
