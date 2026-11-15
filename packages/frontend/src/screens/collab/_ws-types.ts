@@ -14,6 +14,8 @@ export type WsMember = {
 };
 export type WsProspect = {
   key: string; prospectId: string; kind: "member" | "contact" | "talent"; locked: boolean; role: string | null; published: boolean; filled: boolean; filledByName: string | null;
+  /** チーム案での区別（AIが提案した人 / 自分で追加した人） */
+  source: "ai" | "manual";
   memberId?: string; name?: string | null; emoji?: string; bgColor?: string; avatarImageKey?: string | null; headline?: string;
   isOwnerView?: boolean; company?: string | null; specialty?: string | null; summary?: string | null; relationships?: string[];
   title?: string; profile?: string; reason?: string;

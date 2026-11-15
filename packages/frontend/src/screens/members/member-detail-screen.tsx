@@ -316,6 +316,9 @@ export function MemberDetailScreen() {
         )}
       </div>
 
+      {/* もらった資料（略歴シート・GAINSシートなど）のメモ。登録した本人だけが見られる */}
+      {!isSelf && <div className="mb-4"><ProfileSheetCard type="member" subjectId={member.id} subjectName={member.name} /></div>}
+
       {/* 協働情報 */}
       {(memberTeams.length > 0 || seedPartners.length > 0) && (
         <div className="card-paper rounded-3xl p-5 mb-4">
@@ -685,9 +688,6 @@ export function MemberDetailScreen() {
           )}
         </div>
       )}
-
-      {/* もらった資料（略歴シート・GAINSシートなど）のメモ。登録した本人だけが見られる */}
-      {member && !isSelf && <div className="mt-4"><ProfileSheetCard type="member" subjectId={member.id} subjectName={member.name} /></div>}
 
       {/* この人が登録した外部人脈の検索（登録がある場合のみ表示） */}
       {member && <MemberContactsPanel memberId={member.id} />}
