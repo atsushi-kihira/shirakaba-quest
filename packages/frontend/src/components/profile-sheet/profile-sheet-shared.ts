@@ -115,6 +115,37 @@ export function textToTags(text: string): string[] {
   return out.slice(0, 20);
 }
 
+/** 複数行の項目に、新しい内容を足す（すでに同じ行があれば足さない） */
+function appendLines(base: string, next: string): string {
+  if (!next.trim()) return base;
+  if (!base.trim()) return next;
+  const norm = (t: string) => t.replace(/\s+/g, "").toLowerCase();
+  const have = new Set(base.split(/\r?\n/).map(norm).filter(Boolean));
+  const add = next.split(/\r?\n/).filter((l) => l.trim() && !have.has(norm(l)));
+  return add.length > 0 ? `${base.replace(/\s+$/, "")}\n${add.join("\n")}` : base;
+}
+
+/**
+ * 内容を足し合わせる（「追加情報として読み込む」と、複数の資料をまとめるときに使う）
+ *   ・1行の項目（名前・ふりがな・会社・日付）：すでに入っていればそのまま、空なら新しい内容で埋める
+ *   ・複数行の項目：新しい内容を後ろに足す（同じ行は足さない）
+ *   ・タグ：重ねて、重複はまとめる
+ */
+export function combineFields(base: ProfileSheetFields, next: ProfileSheetFields): ProfileSheetFields {
+  const out: ProfileSheetFields = { ...base };
+  for (const f of SHEET_FIELDS) {
+    out[f.key] = f.multiline ? appendLines(base[f.key], next[f.key]) : (base[f.key].trim() ? base[f.key] : next[f.key]);
+  }
+  const seen = new Set<string>();
+  out.tags = [...base.tags, ...next.tags].filter((t) => { const k = t.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 20);
+  return out;
+}
+
+/** 名前・日付以外に、内容が入っているか */
+export function hasSheetContent(f: ProfileSheetFields): boolean {
+  return SHEET_FIELDS.some((x) => x.key !== "name" && x.key !== "oneononeDate" && f[x.key].trim()) || f.tags.length > 0;
+}
+
 /** 今日の日付を "YYYY-MM-DD" で（指定のタイムゾーンで）。クリックなど、操作のときに呼ぶ */
 export function todayIso(tz: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());

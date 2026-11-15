@@ -6,15 +6,19 @@
 //   手で入力することも、すでにある内容を直すこともできる
 // =============================================================
 import { useRef, useState } from "react";
-import { Loader2, FileUp, PenLine } from "lucide-react";
+import { Loader2, FileUp, PenLine, Plus } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { DialogCloseButton } from "@/components/dialog-close-button";
 import type { ProfileSheet, ProfileSheetFields } from "@shared/types";
 import {
-  SHEET_FIELDS, SHEET_FILE_ACCEPT, SHEET_FILE_MAX_MB, extractSheet, sheetToFields, tagsToText, textToTags, useSaveSheet,
+  SHEET_FIELDS, SHEET_FILE_ACCEPT, SHEET_FILE_MAX_MB, combineFields, extractSheet, hasSheetContent, sheetToFields, tagsToText, textToTags, useSaveSheet,
 } from "./profile-sheet-shared";
 
 type Step = "choose" | "reading" | "edit";
+/** 読み込み方：いまの内容に足す / いまの内容を消して読み込み直す */
+type ReadMode = "add" | "reset";
+/** 一度に読み込めるファイルの数 */
+const MAX_FILES = 5;
 
 type Props = {
   /** 相手。deferSave のときは、まだ存在しなくてもよい（name だけ使う） */
@@ -35,14 +39,6 @@ type Props = {
 
 const inputStyle = { background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)", color: "var(--color-ink-800)" } as const;
 
-/** 読み取った内容を、すでにある内容に重ねる（読み取れなかった空の項目は、いまの内容を残す） */
-function mergeOver(base: ProfileSheetFields, next: ProfileSheetFields): ProfileSheetFields {
-  const out = { ...base };
-  for (const f of SHEET_FIELDS) if (next[f.key]) out[f.key] = next[f.key];
-  out.tags = next.tags.length > 0 ? next.tags : base.tags;
-  return out;
-}
-
 export function ProfileSheetImportModal({ subject, existing, defaultDate, startAtEdit, deferSave, initialFields, onClose, onDone }: Props) {
   const save = useSaveSheet();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -52,29 +48,78 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
     ...initial, oneononeDate: initial.oneononeDate || defaultDate || "",
   }));
   const [tagText, setTagText] = useState(() => tagsToText(initial.tags));
-  const [fromFile, setFromFile] = useState<string | null>(null);
+  const [fromFiles, setFromFiles] = useState<string[]>([]);
+  const [readNote, setReadNote] = useState<string | null>(null);
+  const [hasCurrentBeforeRead, setHasCurrentBeforeRead] = useState(false);
+  const [mode, setMode] = useState<ReadMode>("add");
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const busy = step === "reading" || save.isPending;
+  const current: ProfileSheetFields = { ...fields, tags: textToTags(tagText) };
+  /** すでに内容がある（登録済み・読み取り済み・入力済み）ときは、読み込み方を選べる */
+  const hasCurrent = hasSheetContent(current);
 
-  async function handleFile(file: File) {
+  /** 資料のファイルを（複数でも）読み取って、いまの内容に足す／リセットして入れ替える */
+  async function handleFiles(input: File[]) {
     setError(null);
-    if (file.size > SHEET_FILE_MAX_MB * 1024 * 1024) {
-      setError(`ファイルが大きすぎます。${SHEET_FILE_MAX_MB}MBまでです`);
+    const files = input.slice(0, MAX_FILES);
+    const tooBig = files.filter((f) => f.size > SHEET_FILE_MAX_MB * 1024 * 1024);
+    const targets = files.filter((f) => f.size <= SHEET_FILE_MAX_MB * 1024 * 1024);
+    if (targets.length === 0) {
+      setError(`ファイルが大きすぎます。1つ${SHEET_FILE_MAX_MB}MBまでです`);
       return;
     }
+    const notes: string[] = [];
+    if (input.length > MAX_FILES) notes.push(`一度に読み込めるのは${MAX_FILES}つまでなので、最初の${MAX_FILES}つだけ読み込みました。残りは、もう一度「追加で読み込む」から入れてください。`);
+    if (tooBig.length > 0) notes.push(`大きすぎて読み込めなかったファイル：${tooBig.map((f) => `「${f.name}」`).join("")}（${SHEET_FILE_MAX_MB}MBまで）`);
+
     setStep("reading");
-    try {
-      const got = await extractSheet(file, subject.id ? { type: subject.type, id: subject.id } : { hintName: subject.name || undefined });
-      const merged = mergeOver({ ...fields }, got);
-      if (!merged.oneononeDate && defaultDate) merged.oneononeDate = defaultDate;
-      setFields(merged);
-      setTagText(tagsToText(merged.tags));
-      setFromFile(file.name);
-      setStep("edit");
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "資料の読み取りに失敗しました。もう一度お試しください");
+    setProgress({ done: 0, total: targets.length });
+    const subj = subject.id ? { type: subject.type, id: subject.id } : { hintName: subject.name || undefined };
+    const results = await Promise.allSettled(targets.map(async (f) => {
+      try { return await extractSheet(f, subj); }
+      finally { setProgress((p) => (p ? { ...p, done: p.done + 1 } : p)); }
+    }));
+
+    const okFields: ProfileSheetFields[] = [];
+    const okNames: string[] = [];
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") { okFields.push(r.value); okNames.push(targets[i].name); }
+      else {
+        const msg = r.reason instanceof ApiError ? r.reason.message : "読み取りに失敗しました";
+        notes.push(`「${targets[i].name}」：${msg}`);
+      }
+    });
+    setProgress(null);
+
+    if (okFields.length === 0) {
+      setError(notes.join("\n") || "資料の読み取りに失敗しました。もう一度お試しください");
       setStep("choose");
+      return;
     }
+
+    // 「リセット」のときは、いまの内容を空にしてから読み込む（名前の初期値と1to1した日は残す）
+    const base: ProfileSheetFields = mode === "reset" && hasCurrent
+      ? { ...sheetToFields(null, subject.name), oneononeDate: defaultDate || "" }
+      : current;
+    let merged = okFields.reduce((acc, f) => combineFields(acc, f), base);
+    if (!merged.oneononeDate && defaultDate) merged = { ...merged, oneononeDate: defaultDate };
+
+    setFields(merged);
+    setTagText(tagsToText(merged.tags));
+    setHasCurrentBeforeRead(hasCurrent);
+    setFromFiles(okNames);
+    setReadNote(notes.length > 0 ? notes.join("\n") : null);
+    setStep("edit");
+  }
+
+  /** ドラッグ＆ドロップで受け取る（ファイル以外は無視） */
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) void handleFiles(files);
   }
 
   function setField(key: keyof Omit<ProfileSheetFields, "tags">, value: string) {
@@ -110,20 +155,46 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
 
         {step === "choose" && (
           <div className="space-y-3">
-            <input ref={fileRef} type="file" accept={SHEET_FILE_ACCEPT} className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleFile(f); }} />
+            <input ref={fileRef} type="file" accept={SHEET_FILE_ACCEPT} multiple className="hidden"
+              onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ""; if (fs.length > 0) void handleFiles(fs); }} />
+            {hasCurrent && (
+              <fieldset className="rounded-2xl p-3 space-y-2" style={{ background: "var(--color-paper-200)" }}>
+                <legend className="px-1 text-xs font-semibold" style={{ color: "var(--color-ink-700)" }}>いまの内容があります。どう読み込みますか？</legend>
+                {([
+                  { v: "add", title: "追加情報として読み込む", desc: "いまの内容は残し、読み取った内容を足します（別の資料を重ねるとき）" },
+                  { v: "reset", title: "リセットして読み込み直す", desc: "いまの内容をいったん消して、読み取った内容だけにします" },
+                ] as const).map((o) => (
+                  <label key={o.v} className="flex items-start gap-2 cursor-pointer">
+                    <input type="radio" name="read-mode" checked={mode === o.v} onChange={() => setMode(o.v)} className="mt-1" />
+                    <span>
+                      <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-900)" }}>{o.title}</span>
+                      <span className="block text-[11px]" style={{ color: "var(--color-ink-500)" }}>{o.desc}</span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
             <button onClick={() => fileRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragEnter={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
+              onDrop={handleDrop}
               className="w-full flex items-center gap-3 p-4 rounded-2xl text-left transition active:opacity-80"
-              style={{ background: "rgba(181,56,75,0.08)", border: "1px dashed var(--color-brand)" }}>
+              style={{
+                background: dragging ? "rgba(181,56,75,0.18)" : "rgba(181,56,75,0.08)",
+                border: dragging ? "2px dashed var(--color-brand)" : "1px dashed var(--color-brand)",
+              }}>
               <FileUp size={22} style={{ color: "var(--color-brand)" }} />
               <span>
-                <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-900)" }}>資料のファイルを選ぶ</span>
+                <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-900)" }}>
+                  {dragging ? "ここにファイルを離してください" : "資料のファイルを選ぶ（ドラッグ＆ドロップもできます）"}
+                </span>
                 <span className="block text-[11px] mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-                  PDF・画像（写真・スクリーンショット）・テキスト／{SHEET_FILE_MAX_MB}MBまで。AIが読み取ります
+                  PDF・画像（写真・スクリーンショット）・テキスト。略歴シート・GAINSシート・1to1シートなど、{MAX_FILES}つまで一緒に読み込めます（1つ{SHEET_FILE_MAX_MB}MBまで）
                 </span>
               </span>
             </button>
-            <button onClick={() => { setError(null); setStep("edit"); }}
+            {!hasCurrent && <button onClick={() => { setError(null); setStep("edit"); }}
               className="w-full flex items-center gap-3 p-4 rounded-2xl text-left transition active:opacity-80"
               style={{ background: "var(--color-paper-200)" }}>
               <PenLine size={22} style={{ color: "var(--color-ink-500)" }} />
@@ -131,8 +202,13 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
                 <span className="block text-sm font-semibold" style={{ color: "var(--color-ink-800)" }}>手で入力する</span>
                 <span className="block text-[11px] mt-0.5" style={{ color: "var(--color-ink-500)" }}>資料がなくても、聞いた内容を残せます</span>
               </span>
-            </button>
-            {error && <p className="text-xs" style={{ color: "var(--color-brand)" }}>{error}</p>}
+            </button>}
+            {error && <p className="text-xs whitespace-pre-line" style={{ color: "var(--color-brand)" }}>{error}</p>}
+            {hasCurrent && (
+              <button onClick={() => { setError(null); setStep("edit"); }} className="text-xs underline" style={{ color: "var(--color-ink-500)" }}>
+                ← 読み込まずに、編集画面に戻る
+              </button>
+            )}
             <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>
               ※ 資料のファイルそのものは保存しません。読み取った項目だけを残します。WordやPowerPointの資料は、PDFにしてから選んでください。
             </p>
@@ -142,16 +218,24 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
         {step === "reading" && (
           <div className="py-10 flex flex-col items-center gap-3">
             <Loader2 className="animate-spin" style={{ color: "var(--color-brand)" }} />
-            <p className="text-sm" style={{ color: "var(--color-ink-600)" }}>資料を読み取っています…（30秒ほどかかることがあります）</p>
+            <p className="text-sm" style={{ color: "var(--color-ink-600)" }}>
+              資料を読み取っています…{progress && progress.total > 1 ? `（${progress.done}/${progress.total}）` : ""}（30秒ほどかかることがあります）
+            </p>
           </div>
         )}
 
         {step === "edit" && (
           <div className="space-y-3">
-            {fromFile && (
+            {fromFiles.length > 0 && (
               <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-ink-700)" }}>
-                ✅ 「{fromFile}」から読み取りました。内容を確かめて、違うところは直してください。
-                {existing ? "すでにある内容のうち、資料から読み取れた項目は置き換わります。" : ""}
+                ✅ {fromFiles.map((n) => `「${n}」`).join("")}から読み取りました。
+                {mode === "reset" && hasCurrentBeforeRead ? "いまの内容をリセットして、読み取った内容に入れ替えました。" : hasCurrentBeforeRead ? "いまの内容に、読み取った内容を追加しました。" : fromFiles.length > 1 ? "複数の資料の内容をまとめています。" : ""}
+                内容を確かめて、違うところは直してください。
+              </p>
+            )}
+            {readNote && (
+              <p className="text-xs px-3 py-2 rounded-xl whitespace-pre-line" style={{ background: "rgba(212,160,59,0.14)", color: "var(--color-ink-700)" }}>
+                ⚠️ {readNote}
               </p>
             )}
             {SHEET_FIELDS.map((f) => (
@@ -186,11 +270,10 @@ export function ProfileSheetImportModal({ subject, existing, defaultDate, startA
                 {deferSave ? "この内容で決める" : "保存する"}
               </button>
             </div>
-            {!existing && !fromFile && (
-              <button onClick={() => setStep("choose")} className="text-xs underline" style={{ color: "var(--color-ink-500)" }}>
-                ← 資料のファイルから読み取る
-              </button>
-            )}
+            <button onClick={() => { setError(null); setStep("choose"); }} disabled={busy}
+              className="inline-flex items-center gap-1.5 text-xs underline disabled:opacity-50" style={{ color: "var(--color-ink-600)" }}>
+              <Plus size={12} /> {hasCurrent ? "別の資料を読み込む（追加／リセットを選べます）" : "資料のファイルから読み取る"}
+            </button>
           </div>
         )}
       </div>

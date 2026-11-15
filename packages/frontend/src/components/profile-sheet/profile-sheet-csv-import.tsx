@@ -77,6 +77,7 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [createVisibility, setCreateVisibility] = useState<"existence" | "private" | "full">("existence");
   const [error, setError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [done, setDone] = useState<Preview | null>(null);
   const label = type === "member" ? "メンバー" : "外部人脈";
 
@@ -97,6 +98,16 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
     onError: (e) => setError(e instanceof ApiError ? e.message : "取り込みに失敗しました。もう一度お試しください"),
   });
   const busy = check.isPending || run.isPending;
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragging(false);
+    if (busy) return;
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+    if (files.length > 1) { setError("ファイルは1つずつ入れてください"); return; }
+    void handleFile(files[0]);
+  }
 
   async function handleFile(file: File) {
     setError(null); setPreview(null); setRows(null);
@@ -147,6 +158,14 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
           <div className="space-y-3">
             <input ref={fileRef} type="file" accept=".csv,.tsv,.txt,text/csv" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void handleFile(f); }} />
+            <div className="rounded-2xl p-3 space-y-2 transition"
+              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
+              onDrop={handleDrop}
+              style={{ border: `${dragging ? 2 : 1}px dashed var(--color-brand)`, background: dragging ? "rgba(181,56,75,0.12)" : "rgba(181,56,75,0.05)" }}>
+            <p className="text-xs" style={{ color: "var(--color-ink-600)" }}>
+              {dragging ? "ここにファイルを離してください" : "CSVファイルをここにドラッグ＆ドロップするか、下のボタンで選んでください"}
+            </p>
             <div className="flex flex-wrap gap-2">
               <button onClick={() => fileRef.current?.click()} disabled={busy}
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium text-white disabled:opacity-50" style={{ background: "var(--color-brand)" }}>
@@ -156,6 +175,7 @@ export function ProfileSheetCsvImportModal({ type, onClose }: Props) {
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
                 <Download size={16} /> ひな形をダウンロード
               </button>
+            </div>
             </div>
             <p className="text-[11px]" style={{ color: "var(--color-ink-400)" }}>
               1行目は見出し：{COLUMNS.map((c) => c.header).join("／")}。Excelで作った場合は「CSV UTF-8」で保存してください。
