@@ -1,10 +1,10 @@
 // =============================================================
 // 管理画面レイアウト
 // =============================================================
-import { useEffect } from "react";
-import { Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History, BarChart3, Send, TrafficCone, Loader2 } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History, BarChart3, Send, TrafficCone, Loader2, LogOut } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 import { useAuthStore } from "@/stores/auth-store";
@@ -33,6 +33,9 @@ function useAdminBadgeCounts(enabled: boolean) {
 export function AdminLayout() {
   const { termQuest, appTitle } = useSettings();
   const adminRole = useAuthStore((s) => s.user?.adminRole);
+  const clearAuth = useAuthStore((s) => s.clearAuth);
+  const navigate = useNavigate();
+  const [loggingOut, setLoggingOut] = useState(false);
   // 「統計レポート」タイプの管理者は、統計レポートだけを使える（種類が分かるまでは、何も出さずに待つ）
   const isStatsAdmin = adminRole === "stats";
   const badgeCounts = useAdminBadgeCounts(adminRole != null && !isStatsAdmin);
@@ -60,6 +63,14 @@ export function AdminLayout() {
     { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
   ] as const;
   const ADMIN_NAV = isStatsAdmin ? FULL_NAV.filter((n) => n.to === "/admin/stats") : FULL_NAV;
+
+  async function handleLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    await api.post("/auth/logout").catch(() => {});
+    clearAuth();
+    navigate("/login");
+  }
 
   useEffect(() => {
     document.title = `${appTitle}-管理者ダッシュボード`;
@@ -124,15 +135,27 @@ export function AdminLayout() {
         ))}
 
         {/* フッター */}
-        {!isStatsAdmin && <div className="mt-auto pb-6 pt-4 px-3 border-t" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
-          <NavLink
-            to="/"
-            className="flex items-center gap-1.5 text-xs transition"
-            style={{ color: "rgba(255,255,255,0.35)" }}
+        <div className="mt-auto pb-6 pt-4 px-3 border-t flex flex-col gap-3" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+          {!isStatsAdmin && (
+            <NavLink
+              to="/"
+              className="flex items-center gap-1.5 text-xs transition"
+              style={{ color: "rgba(255,255,255,0.35)" }}
+            >
+              ← メンバー画面へ戻る
+            </NavLink>
+          )}
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={loggingOut}
+            className="flex items-center gap-3 px-3 py-2.5 -mx-3 rounded-xl text-sm font-medium transition disabled:opacity-60 hover:bg-white/10"
+            style={{ color: "rgba(255,255,255,0.7)" }}
           >
-            ← メンバー画面へ戻る
-          </NavLink>
-        </div>}
+            {loggingOut ? <Loader2 size={18} className="animate-spin" /> : <LogOut size={18} />}
+            ログアウト
+          </button>
+        </div>
       </nav>
 
       {/* メインコンテンツ */}
@@ -169,6 +192,16 @@ export function AdminLayout() {
             <span className="whitespace-nowrap" style={{ fontSize: "10px" }}>{label.replace("管理", "")}</span>
           </NavLink>
         ))}
+        <button
+          type="button"
+          onClick={handleLogout}
+          disabled={loggingOut}
+          className="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition min-w-[52px] text-xs disabled:opacity-60"
+          style={{ color: "rgba(255,255,255,0.45)" }}
+        >
+          {loggingOut ? <Loader2 size={20} className="animate-spin" /> : <LogOut size={20} />}
+          <span className="whitespace-nowrap" style={{ fontSize: "10px" }}>ログアウト</span>
+        </button>
       </div>
     </div>
   );
