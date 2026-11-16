@@ -101,13 +101,13 @@ export function AdminStatsScreen() {
         </div>
       ) : tab === "table" ? (
         <div className="space-y-3">
-          <MtlrTable report={report} />
+          <MtlrTable key={report.ym} report={report} />
           <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
             名前を押すと、そのメンバーの推移グラフとアドバイスを見られます。色は、MTLR新基準（2025年10月〜）の 緑・黄・赤・グレー です。数字は「直近6か月」の合計です。
           </p>
         </div>
       ) : (
-        <MtlrChapterAnalysis reports={reports} ym={ym} />
+        <MtlrChapterAnalysis key={ym} reports={reports} ym={ym} />
       )}
     </div>
   );

@@ -25,6 +25,12 @@ type TrendChartProps = {
   bands?: ChartBand[];
   fmt?: (n: number) => string;
   height?: number;
+  /** 棒（積み上げの1色ぶん）を押したとき（系列の番号, 月の番号）。指定すると、棒が押せるようになる */
+  onBarClick?: (seriesIndex: number, pointIndex: number) => void;
+  /** 凡例の色を押したとき（系列の番号） */
+  onLegendClick?: (seriesIndex: number) => void;
+  /** 選ばれている棒（系列の番号, 月の番号）。ほかの棒を薄くして、目立たせる */
+  selected?: { seriesIndex: number; pointIndex: number } | null;
 };
 
 const W = 640;
@@ -38,7 +44,7 @@ function niceStep(raw: number): number {
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * pow;
 }
 
-export function TrendChart({ labels, kind, series, overlays = [], yMin = 0, yMax, bands = [], fmt = (n) => String(n), height = 240 }: TrendChartProps) {
+export function TrendChart({ labels, kind, series, overlays = [], yMin = 0, yMax, bands = [], fmt = (n) => String(n), height = 240, onBarClick, onLegendClick, selected }: TrendChartProps) {
   const n = labels.length;
   const innerW = W - M.l - M.r;
   const innerH = height - M.t - M.b;
@@ -112,11 +118,20 @@ export function TrendChart({ labels, kind, series, overlays = [], yMin = 0, yMax
                 const y1 = yOf(acc + v);
                 const y0 = yOf(acc);
                 acc += v;
-                return v > 0 ? (
-                  <rect key={s.name} x={xOf(i) - barW / 2} width={barW} y={y1} height={Math.max(0, y0 - y1)} style={{ fill: s.color }}>
-                    <title>{`${l} ${s.name}：${fmt(v)}`}</title>
+                if (v <= 0) return null;
+                const isSel = selected?.seriesIndex === si && selected.pointIndex === i;
+                const dim = selected != null && !isSel;
+                return (
+                  <rect key={s.name} x={xOf(i) - barW / 2} width={barW} y={y1} height={Math.max(0, y0 - y1)}
+                    style={{ fill: s.color, opacity: dim ? 0.4 : 1, stroke: isSel ? "var(--color-ink-900)" : "none", strokeWidth: isSel ? 2 : 0, cursor: onBarClick ? "pointer" : undefined }}
+                    {...(onBarClick ? {
+                      role: "button", tabIndex: 0, "aria-label": `${l}の${s.name}の人（${fmt(v)}人）を一覧で見る`,
+                      onClick: () => onBarClick(si, i),
+                      onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onBarClick(si, i); } },
+                    } : {})}>
+                    <title>{`${l} ${s.name}：${fmt(v)}${onBarClick ? "（押すと、該当する人の一覧を表示）" : ""}`}</title>
                   </rect>
-                ) : null;
+                );
               })}
               {showValues && (kind === "stack" ? stackTotals[i] > 0 : series.some((s) => (s.values[i] ?? 0) > 0)) &&
                 text(
@@ -149,7 +164,13 @@ export function TrendChart({ labels, kind, series, overlays = [], yMin = 0, yMax
       </svg>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs" style={{ color: "var(--color-ink-600)" }}>
-        {series.map((s) => (
+        {series.map((s, si) => onLegendClick ? (
+          <button key={s.name} type="button" onClick={() => onLegendClick(si)}
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg hover:bg-black/5 transition"
+            style={{ border: "1px solid var(--color-paper-300)" }} title={`${s.name}の人の一覧を表示`}>
+            <span className="inline-block w-3 h-3 rounded-sm" style={{ background: s.color }} />{s.name}
+          </button>
+        ) : (
           <span key={s.name} className="inline-flex items-center gap-1.5">
             <span className="inline-block w-3 h-3 rounded-sm" style={{ background: s.color }} />{s.name}
           </span>
