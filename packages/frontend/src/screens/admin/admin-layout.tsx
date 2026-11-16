@@ -2,25 +2,28 @@
 // 管理画面レイアウト
 // =============================================================
 import { useEffect } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History, BarChart3, Send, TrafficCone } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History, BarChart3, Send, TrafficCone, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
+import { useAuthStore } from "@/stores/auth-store";
 
 // 未読・要対応の件数を表示するメニューは「メンバー管理（未承認ユーザー）」と
 // 「カード作成（注文リクエスト）」のみに限定する。ミーティング等は日々変動が多く、
 // バッジを付けると溜まり続けて確認疲れになるため、あえて表示しない。
-function useAdminBadgeCounts() {
+function useAdminBadgeCounts(enabled: boolean) {
   const { data: membersData } = useQuery({
     queryKey: ["admin", "members"],
     queryFn: () => api.get<{ data: { status: string }[] }>("/admin/members"),
     staleTime: 30_000,
+    enabled,
   });
   const { data: cardOrdersData } = useQuery({
     queryKey: ["admin", "card-print", "orders"],
     queryFn: () => api.get<{ data: { status: string }[] }>("/admin/card-print/orders"),
     staleTime: 30_000,
+    enabled,
   });
   const pendingMembers = (membersData?.data ?? []).filter((m) => m.status === "pending").length;
   const pendingCardOrders = (cardOrdersData?.data ?? []).filter((o) => o.status === "pending").length;
@@ -29,11 +32,15 @@ function useAdminBadgeCounts() {
 
 export function AdminLayout() {
   const { termQuest, appTitle } = useSettings();
-  const badgeCounts = useAdminBadgeCounts();
+  const adminRole = useAuthStore((s) => s.user?.adminRole);
+  // 「統計レポート」タイプの管理者は、統計レポートだけを使える（種類が分かるまでは、何も出さずに待つ）
+  const isStatsAdmin = adminRole === "stats";
+  const badgeCounts = useAdminBadgeCounts(adminRole != null && !isStatsAdmin);
   // 統計レポートは、列の多い表を見せるので、ほかの画面より横幅を広げる
-  const wide = useLocation().pathname.startsWith("/admin/stats");
+  const { pathname } = useLocation();
+  const wide = pathname.startsWith("/admin/stats");
 
-  const ADMIN_NAV = [
+  const FULL_NAV = [
     { to: "/admin",          icon: LayoutDashboard, label: "ダッシュボード",          end: true },
     { to: "/admin/members",  icon: Users,           label: "メンバー管理",            end: false },
     { to: "/admin/usps",     icon: Star,            label: "USP管理",                 end: false },
@@ -52,6 +59,7 @@ export function AdminLayout() {
     { to: "/admin/email-templates", icon: Mail,      label: "メール配信",              end: false },
     { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
   ] as const;
+  const ADMIN_NAV = isStatsAdmin ? FULL_NAV.filter((n) => n.to === "/admin/stats") : FULL_NAV;
 
   useEffect(() => {
     document.title = `${appTitle}-管理者ダッシュボード`;
@@ -60,6 +68,11 @@ export function AdminLayout() {
       document.title = appTitle;
     };
   }, [appTitle]);
+
+  if (adminRole == null) {
+    return <div className="flex h-dvh items-center justify-center"><Loader2 size={24} className="animate-spin" style={{ color: "var(--color-ink-400)" }} /></div>;
+  }
+  if (isStatsAdmin && !pathname.startsWith("/admin/stats")) return <Navigate to="/admin/stats" replace />;
 
   return (
     <div className="admin-theme flex h-dvh overflow-hidden" style={{ background: "var(--color-paper-100)" }}>
@@ -111,7 +124,7 @@ export function AdminLayout() {
         ))}
 
         {/* フッター */}
-        <div className="mt-auto pb-6 pt-4 px-3 border-t" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
+        {!isStatsAdmin && <div className="mt-auto pb-6 pt-4 px-3 border-t" style={{ borderColor: "rgba(255,255,255,0.08)" }}>
           <NavLink
             to="/"
             className="flex items-center gap-1.5 text-xs transition"
@@ -119,7 +132,7 @@ export function AdminLayout() {
           >
             ← メンバー画面へ戻る
           </NavLink>
-        </div>
+        </div>}
       </nav>
 
       {/* メインコンテンツ */}

@@ -44,6 +44,7 @@ export function useMe() {
         id: u.id,
         adminId: u.adminId ?? null,
         userType: u.userType,
+        adminRole: u.userType === "admin" ? (u.role ?? null) : null,
         name: u.name,
         email: u.email,
         emoji: u.emoji,

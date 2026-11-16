@@ -8,7 +8,7 @@ import { api, ApiError } from "@/lib/api";
 import { mtlrYmLabel } from "@shared/mtlr";
 import { MTLR_QUERY_KEY, fmtImportedAt, fmtJpDate, type MtlrAll } from "./_stats-shared";
 
-export function MtlrReportList({ data }: { data: MtlrAll }) {
+export function MtlrReportList({ data, canDelete = true }: { data: MtlrAll; canDelete?: boolean }) {
   const qc = useQueryClient();
   const [confirmYm, setConfirmYm] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +32,7 @@ export function MtlrReportList({ data }: { data: MtlrAll }) {
               <span className="text-xs flex-1 min-w-[200px]" style={{ color: "var(--color-ink-600)" }}>
                 {fmtJpDate(r.periodFrom)} 〜 {fmtJpDate(r.periodTo)}&emsp;{r.rows.length}人&emsp;（{fmtImportedAt(r.importedAt)}に取り込み）
               </span>
-              {confirmYm === r.ym ? (
+              {!canDelete ? null : confirmYm === r.ym ? (
                 <span className="flex items-center gap-2 text-sm">
                   <span style={{ color: "var(--color-brand-dk)" }}>削除すると元に戻せません。</span>
                   <button type="button" onClick={() => remove.mutate(r.ym)} disabled={remove.isPending}
@@ -93,11 +93,15 @@ export function MtlrLinkPanel({ data }: { data: MtlrAll }) {
       <h2 className="font-semibold text-base mb-1" style={{ color: "var(--color-ink-800)" }}>🔗 名前のひも付け</h2>
       <p className="text-sm mb-3" style={{ color: "var(--color-ink-600)" }}>
         レポートの名前と、アプリのメンバーを結びつけます。名前が同じなら自動で結びつきます。一度ひも付けると、次の月からも引き継がれます。
-        メンバーではない人（退会した人など）は、「メンバーではない」を選んでください。
       </p>
+      <ul className="text-xs mb-3 space-y-1 list-disc pl-5" style={{ color: "var(--color-ink-600)" }}>
+        <li><b>まだアカウント登録をしていない人</b>は、そのままで大丈夫です（「自動」のまま）。数字は今から保存され、あとで登録・承認されて名前が同じなら、自動で結びつきます。</li>
+        <li>登録された名前の書き方がレポートと違うとき（旧字体・ニックネームなど）は、登録後にここで、そのメンバーを選んでください。</li>
+        <li>「メンバーではない」は、退会した人など、今後も登録されない人だけに使ってください（自動の結びつけをしなくなります）。</li>
+      </ul>
       <label className="flex items-center gap-2 text-sm mb-3" style={{ color: "var(--color-ink-700)" }}>
         <input type="checkbox" checked={onlyUnlinked} onChange={(e) => setOnlyUnlinked(e.target.checked)} />
-        まだ結びついていない人だけを表示（{unlinkedCount}人）
+        まだ結びついていない人だけを表示（{unlinkedCount}人。登録前の人を含みます）
       </label>
       {shown.length === 0 ? (
         <p className="text-sm" style={{ color: "var(--color-success-dk)" }}>✅ 結びついていない人はいません。</p>
@@ -112,7 +116,7 @@ export function MtlrLinkPanel({ data }: { data: MtlrAll }) {
                 onChange={(e) => save.mutate({ personKey: p.personKey, value: e.target.value })}
                 className="rounded-xl px-3 py-1.5 text-sm flex-1 min-w-[200px] max-w-xs" style={{ border: "1px solid var(--color-paper-300)", background: "var(--color-paper-50)", color: "var(--color-ink-900)" }}
               >
-                <option value="">{p.memberId && !linkMap.has(p.personKey) ? "（自動：名前が一致しています）" : "（自動：名前が同じメンバー）"}</option>
+                <option value="">{p.memberId && !linkMap.has(p.personKey) ? "（自動：名前が一致しています）" : "（自動：まだ登録がない／登録されたら結びつきます）"}</option>
                 <option value={NONE}>メンバーではない</option>
                 {members.map((m) => <option key={m.id} value={m.id}>{m.name}{m.status === "on_leave" ? "（休会中）" : ""}</option>)}
               </select>

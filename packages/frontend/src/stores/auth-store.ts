@@ -10,6 +10,8 @@ type AuthUser = {
   /** 管理者でログインしていて、同じメールアドレスのメンバー登録がある場合の管理者ID（このとき id はメンバーID） */
   adminId?: string | null;
   userType: UserType;
+  /** 管理者のタイプ（"super_admin" | "admin" | "stats"）。管理者のときだけ入る。"stats" は統計レポートだけを使える管理者 */
+  adminRole?: string | null;
   name: string;
   email: string;
   emoji: string;

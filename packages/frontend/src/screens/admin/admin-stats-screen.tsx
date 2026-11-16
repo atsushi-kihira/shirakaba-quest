@@ -6,7 +6,7 @@
 import { useSearchParams } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { mtlrYmLabel } from "@shared/mtlr";
-import { useMtlrData } from "./_stats-shared";
+import { useIsStatsAdmin, useMtlrData } from "./_stats-shared";
 import { MtlrTable } from "./_stats-table";
 import { MtlrChapterAnalysis } from "./_stats-chapter";
 import { MtlrImportPanel } from "./_stats-import";
@@ -21,6 +21,7 @@ const TABS: { key: Tab; label: string }[] = [
 
 export function AdminStatsScreen() {
   const { data, isLoading, isError } = useMtlrData();
+  const statsAdmin = useIsStatsAdmin();
   const [params, setParams] = useSearchParams();
 
   const reports = data?.reports ?? [];
@@ -88,8 +89,8 @@ export function AdminStatsScreen() {
       ) : tab === "import" ? (
         <div className="space-y-5">
           <MtlrImportPanel onImported={(y) => update({ ym: y })} />
-          <MtlrReportList data={data} />
-          {reports.length > 0 && <MtlrLinkPanel data={data} />}
+          <MtlrReportList data={data} canDelete={!statsAdmin} />
+          {reports.length > 0 && !statsAdmin && <MtlrLinkPanel data={data} />}
         </div>
       ) : !report ? (
         <div className="card-paper p-8 text-center">

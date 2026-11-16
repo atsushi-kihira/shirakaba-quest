@@ -9,7 +9,7 @@
 // 失敗した束は、1回だけ自動でやり直す（無限に繰り返さない）。それでも失敗した束が多いときは、システム管理者にメールで知らせる。
 // 途中の結果は、照合が終わった束の分だけで、いつでも組み立てて見られる（buildPartialResult）。
 // =============================================================
-import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { createDb, schema } from "../db/index.ts";
 import { newId } from "./auth.ts";
 import { MailService } from "./mailer.ts";
@@ -454,7 +454,7 @@ async function alertAdminsIfManyFailures(db: Db, env: Env, job: Job, params: Job
   if (!isManyFailures(summary.failed, summary.total)) return;
 
   const supers = await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).where(eq(schema.admins.role, "super_admin")).all();
-  const admins = supers.length > 0 ? supers : await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).all();
+  const admins = supers.length > 0 ? supers : await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).where(ne(schema.admins.role, "stats")).all();
   if (admins.length === 0) return;
 
   const [member, design] = await Promise.all([

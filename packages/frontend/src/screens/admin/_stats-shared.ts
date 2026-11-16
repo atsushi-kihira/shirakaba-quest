@@ -4,6 +4,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/stores/auth-store";
 import {
   MTLR_CATEGORY_ORDER, buildMemberAdvice, computeMtlr, summarizeChapter, totalColor,
   type ChapterContext, type MtlrColor, type MtlrHistoryPoint, type MtlrRaw,
@@ -123,4 +124,9 @@ export function fmtImportedAt(sec: number): string {
 export function fmtJpDate(iso: string): string {
   const [y, m, d] = iso.split("-");
   return `${y}年${Number(m)}月${Number(d)}日`;
+}
+
+/** 「統計レポート」タイプの管理者か（レポートの削除・名前のひも付けの変更はできない） */
+export function useIsStatsAdmin(): boolean {
+  return useAuthStore((s) => s.user?.adminRole === "stats");
 }

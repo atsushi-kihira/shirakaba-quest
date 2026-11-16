@@ -39,4 +39,6 @@ export type Env = {
 export type Variables = {
   userId: string;
   userType: "member" | "admin";
+  /** 管理者のタイプ（'super_admin' | 'admin' | 'stats'）。adminMiddleware を通ったあとだけ入る */
+  adminRole?: string;
 };

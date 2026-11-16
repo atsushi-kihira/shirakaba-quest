@@ -163,6 +163,7 @@ authRoutes.post("/verify-otp", async (c) => {
         email: (found.user as typeof schema.admins.$inferSelect).email,
         emoji: "⚙️",
         bgColor: "bg-stone-100",
+        role: (found.user as typeof schema.admins.$inferSelect).role,
       };
 
   return c.json({

@@ -14,7 +14,7 @@ import {
 } from "@shared/mtlr";
 import { ChartCard, TrendChart } from "./_stats-charts";
 import {
-  COLOR_CLASS, MTLR_QUERY_KEY, cellColor, fmtJpDate, personHistory, rankInReport, useMemberAdvice, useMtlrData, ymShort,
+  COLOR_CLASS, MTLR_QUERY_KEY, cellColor, fmtJpDate, personHistory, rankInReport, useIsStatsAdmin, useMemberAdvice, useMtlrData, ymShort,
 } from "./_stats-shared";
 
 const COLOR_WORD: Record<MtlrColor, string> = { green: "緑", yellow: "黄", red: "赤", gray: "グレー" };
@@ -37,6 +37,7 @@ export function AdminStatsMemberScreen() {
   const personKey = decodeURIComponent(encoded);
   const { data, isLoading, isError } = useMtlrData();
   const reports = data?.reports;
+  const statsAdmin = useIsStatsAdmin();
   const advice = useMemberAdvice(reports ?? [], personKey);
   const hist = useMemo(() => personHistory(reports ?? [], personKey), [reports, personKey]);
 
@@ -91,7 +92,7 @@ export function AdminStatsMemberScreen() {
             {hist.length}か月分の記録（{mtlrYmLabel(hist[0].report.ym)}〜{mtlrYmLabel(last.report.ym)}）
             {linkedMember ? `\u3000／\u3000アプリのメンバー：${linkedMember.name}` : "\u3000／\u3000アプリのメンバーとは、まだ結びついていません"}
           </p>
-          <MemberLinkEditor personKey={personKey} currentMemberId={last.row.memberId} data={data} />
+          {!statsAdmin && <MemberLinkEditor personKey={personKey} currentMemberId={last.row.memberId} data={data} />}
         </div>
         <div className="flex items-center gap-4">
           <div className="text-center">

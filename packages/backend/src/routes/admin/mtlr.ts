@@ -14,7 +14,7 @@ import { Hono } from "hono";
 import { eq, inArray } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
-import { resolvePeople, validateImportRows } from "../../services/mtlr.ts";
+import { autoLinkUnmatchedRows, resolvePeople, validateImportRows } from "../../services/mtlr.ts";
 import { MTLR_STANDARD, mtlrDisplayName, mtlrPersonKey, mtlrYmOf } from "@shared/mtlr";
 import type { Env, Variables } from "../../types.ts";
 
@@ -33,6 +33,8 @@ function validDate(s: unknown): s is string {
 // ---- GET /all ----
 adminMtlrRoutes.get("/all", async (c) => {
   const db = createDb(c.env.DB);
+  // 取り込み後に登録・承認されたメンバーがいれば、名前が同じ行を自動で結びつける
+  await autoLinkUnmatchedRows(db).catch(() => 0);
   const [reports, rows, links, members] = await Promise.all([
     db.select().from(schema.mtlrReports).all(),
     db.select().from(schema.mtlrRows).all(),

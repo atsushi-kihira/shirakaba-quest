@@ -22,6 +22,7 @@ import { adminBroadcastRoutes } from "./broadcasts.ts";
 import { adminMtlrRoutes } from "./mtlr.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
+import { normalizeAdminRole } from "../../services/admin-roles.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -377,15 +378,16 @@ adminRoutes.post("/admins", async (c) => {
   }
 
   const id = newId();
+  const role = normalizeAdminRole(body.role);
   await db.insert(schema.admins).values({
     id,
     email,
     name: body.name.trim(),
-    role: body.role === "super_admin" ? "super_admin" : "admin",
+    role,
     createdAt: now,
   });
 
-  return c.json({ data: { id, email, name: body.name.trim(), role: body.role ?? "admin", createdAt: now } });
+  return c.json({ data: { id, email, name: body.name.trim(), role, createdAt: now } });
 });
 
 // ---- DELETE /api/admin/admins/:id — 管理者削除 ----

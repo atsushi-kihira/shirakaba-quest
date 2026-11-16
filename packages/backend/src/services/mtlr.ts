@@ -3,7 +3,7 @@
 // ・PDF上の名前を、アプリのメンバーに当てはめる（手でひも付けた結果 → 名前の一致 → ローマ字の一致 の順）
 // ・取り込む行の確認（数字の範囲、同じ名前の重複）
 // =============================================================
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 import { MTLR_COLUMNS, MTLR_HEADERS, mtlrDisplayName, mtlrLatinKey, mtlrPersonKey, type MtlrRaw } from "@shared/mtlr";
@@ -97,4 +97,29 @@ export function validateImportRows(input: unknown): { rows: ImportRowInput[] } |
     rows.push({ rawName, raw });
   }
   return { rows };
+}
+
+/**
+ * まだメンバーと結びついていない行を、いまのメンバー一覧と照らして、結びつけ直す。
+ * レポートに載っているが、アカウント登録はこれからの人が、あとで登録・承認されたときに、
+ * 名前が同じなら自動で結びつくようにするため（手で「メンバーではない」と決めた人は、そのまま）。
+ * 画面でデータを読み込むたびに呼ぶ。人数は数十人なので軽い。
+ */
+export async function autoLinkUnmatchedRows(db: Db): Promise<number> {
+  const rows = await db.select({ personKey: schema.mtlrRows.personKey, rawName: schema.mtlrRows.rawName })
+    .from(schema.mtlrRows).where(isNull(schema.mtlrRows.memberId)).all();
+  if (rows.length === 0) return 0;
+  const byKey = new Map<string, string>();
+  for (const r of rows) if (!byKey.has(r.personKey)) byKey.set(r.personKey, r.rawName);
+  const keys = [...byKey.keys()];
+  const matches = await resolvePeople(db, keys.map((k) => byKey.get(k) as string));
+  const updates = matches
+    .map((m, i) => ({ key: keys[i], memberId: m.memberId }))
+    .filter((u): u is { key: string; memberId: string } => u.memberId !== null);
+  for (let i = 0; i < updates.length; i += 25) {
+    const chunk = updates.slice(i, i + 25).map((u) =>
+      db.update(schema.mtlrRows).set({ memberId: u.memberId }).where(eq(schema.mtlrRows.personKey, u.key)));
+    await db.batch(chunk as [typeof chunk[number], ...typeof chunk]);
+  }
+  return updates.length;
 }

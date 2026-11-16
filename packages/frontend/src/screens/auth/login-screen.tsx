@@ -18,6 +18,8 @@ type VerifyResponse = {
   userType: "member" | "admin";
   user: Pick<PublicMember, "id" | "name" | "email" | "emoji" | "bgColor"> & {
     status?: string | null;
+    /** 管理者のタイプ（管理者ログインのときだけ） */
+    role?: string;
   };
 };
 
@@ -105,6 +107,7 @@ export function LoginScreen() {
       setAuth(res.token, {
         id: res.user.id,
         userType: res.userType,
+        adminRole: res.userType === "admin" ? (res.user.role ?? null) : null,
         name: res.user.name ?? "",
         email: res.user.email ?? "",
         emoji: res.user.emoji,

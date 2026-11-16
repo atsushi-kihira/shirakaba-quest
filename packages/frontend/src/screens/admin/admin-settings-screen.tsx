@@ -636,7 +636,7 @@ function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc:
   const [showForm, setShowForm] = useState(false);
   const [newEmail, setNewEmail] = useState("");
   const [newName, setNewName] = useState("");
-  const [newRole, setNewRole] = useState<"admin" | "super_admin">("admin");
+  const [newRole, setNewRole] = useState<"admin" | "super_admin" | "stats">("admin");
   const [formError, setFormError] = useState("");
 
   const { data, isLoading } = useQuery({
@@ -666,6 +666,7 @@ function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc:
   const ROLE_LABELS: Record<string, string> = {
     admin: "管理者",
     super_admin: "スーパー管理者",
+    stats: "統計レポート",
   };
 
   return (
@@ -723,13 +724,19 @@ function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc:
             <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>権限</label>
             <select
               value={newRole}
-              onChange={(e) => setNewRole(e.target.value as "admin" | "super_admin")}
+              onChange={(e) => setNewRole(e.target.value as "admin" | "super_admin" | "stats")}
               className="w-full px-3 py-2 rounded-xl border text-sm"
               style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}
             >
               <option value="admin">管理者</option>
               <option value="super_admin">スーパー管理者</option>
+              <option value="stats">統計レポート（統計レポートの閲覧・取り込みだけ）</option>
             </select>
+            {newRole === "stats" && (
+              <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>
+                管理ダッシュボードの「統計レポート」だけを使えます（レポートを見る・取り込む）。メンバー管理や設定など、ほかの機能は使えません。
+              </p>
+            )}
           </div>
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
             ※ 登録後、そのメールアドレスでOTPログインが可能になります。
@@ -772,7 +779,7 @@ function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc:
                   <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{admin.name}</p>
                   <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
                     style={{
-                      background: admin.role === "super_admin" ? "rgba(181,56,75,0.1)" : "var(--color-paper-200)",
+                      background: admin.role === "super_admin" ? "rgba(181,56,75,0.1)" : admin.role === "stats" ? "rgba(99,102,241,0.12)" : "var(--color-paper-200)",
                       color: admin.role === "super_admin" ? "var(--color-brand)" : "var(--color-ink-500)",
                     }}>
                     {ROLE_LABELS[admin.role] ?? admin.role}

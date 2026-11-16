@@ -2,7 +2,9 @@
 // 認証ミドルウェア — Bearer token 検証
 // =============================================================
 import { createMiddleware } from "hono/factory";
-import { createDb } from "../db/index.ts";
+import { eq } from "drizzle-orm";
+import { createDb, schema } from "../db/index.ts";
+import { isAllowedForStatsAdmin } from "../services/admin-roles.ts";
 import { verifySession } from "../services/auth.ts";
 import { resolveEffectiveMemberId } from "../services/resolve-member.ts";
 import type { Env, Variables } from "../types.ts";
@@ -44,6 +46,12 @@ export const authMiddleware = createMiddleware<{
       if (memberId) {
         c.set("userId", memberId);
         c.set("userType", "member");
+      } else {
+        // メンバー登録のない「統計レポート」タイプの管理者は、メンバー向けの機能（なかま・プロフィールなど）を使えない
+        const admin = await db.select({ role: schema.admins.role }).from(schema.admins).where(eq(schema.admins.id, result.userId)).get();
+        if (admin?.role === "stats") {
+          return c.json({ error: { code: "forbidden", message: "この管理者の権限では、この操作はできません。" } }, 403);
+        }
       }
     }
   }
@@ -61,6 +69,16 @@ export const adminMiddleware = createMiddleware<{
       { error: { code: "forbidden", message: "管理者権限が必要です" } },
       403
     );
+  }
+  // 管理者のタイプを確認する。「統計レポート」タイプは、決められたAPIしか使えない
+  const db = createDb(c.env.DB);
+  const admin = await db.select({ role: schema.admins.role }).from(schema.admins).where(eq(schema.admins.id, c.get("userId"))).get();
+  if (!admin) {
+    return c.json({ error: { code: "forbidden", message: "管理者権限が必要です" } }, 403);
+  }
+  c.set("adminRole", admin.role);
+  if (admin.role === "stats" && !isAllowedForStatsAdmin(c.req.method, c.req.path)) {
+    return c.json({ error: { code: "forbidden", message: "この管理者の権限では、この操作はできません。" } }, 403);
   }
   await next();
 });

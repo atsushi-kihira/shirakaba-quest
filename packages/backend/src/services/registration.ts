@@ -8,7 +8,7 @@
 // ・メール確認の完了待ちのまま放置されている人は、下書きの一覧から管理画面で確認できる。
 // =============================================================
 import { sweepPendingPrefectures } from "./prefecture.ts";
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import type { Db } from "../db/index.ts";
 import { schema } from "../db/index.ts";
 import { newId, generateUrlSafeToken } from "./auth.ts";
@@ -197,7 +197,7 @@ export async function createPendingMember(
       });
     }
 
-    const admins = await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).all();
+    const admins = await db.select({ email: schema.admins.email, name: schema.admins.name }).from(schema.admins).where(ne(schema.admins.role, "stats")).all();
     const appDesign = await db.select({ appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
     const appTitle = appDesign?.appTitle ?? "白樺クエスト";
     const mailer = new MailService(db, env);

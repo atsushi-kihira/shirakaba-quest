@@ -25,7 +25,7 @@ const VIA_LABEL: Record<PersonMatch["via"], string> = {
   link: "✅ ひも付け済み",
   auto: "✅ 名前が一致",
   excluded: "－ メンバーではない",
-  none: "❓ 見つかりません",
+  none: "❓ 見つかりません（登録前の人は、登録後に自動で結びつきます）",
 };
 
 export function MtlrImportPanel({ onImported }: { onImported: (ym: string) => void }) {
@@ -154,7 +154,7 @@ export function MtlrImportPanel({ onImported }: { onImported: (ym: string) => vo
             <CheckCircle2 size={16} className="shrink-0 mt-0.5" />
             <span>
               {mtlrYmLabel(done.ym)}のレポート（{done.rowCount}人）を{done.replaced ? "置き換えて" : ""}取り込みました。
-              {done.unmatched.length > 0 && `メンバーと結びつかなかった人が${done.unmatched.length}人います（下の「名前のひも付け」で設定できます）。`}
+              {done.unmatched.length > 0 && `メンバーと結びつかなかった人が${done.unmatched.length}人います（登録前の人は、登録後に自動で結びつきます。名前が違う場合は、下の「名前のひも付け」で設定できます）。`}
             </span>
           </div>
         )}
@@ -210,7 +210,7 @@ export function MtlrImportPanel({ onImported }: { onImported: (ym: string) => vo
           ) : unmatched.length > 0 ? (
             <p className="text-sm" style={{ color: "var(--color-ink-700)" }}>
               ❓ メンバーと結びつかない人が{unmatched.length}人います（{unmatched.slice(0, 6).map((p) => p.displayName).join("、")}{unmatched.length > 6 ? " ほか" : ""}）。
-              取り込んだあとに、「名前のひも付け」で設定できます。数字は、結びつかなくても保存されます。
+              アカウント登録がまだの人は、そのままで大丈夫です。数字は先に保存され、あとで登録・承認されて名前が同じなら、自動で結びつきます。名前の書き方が違うときは、取り込んだあとに「名前のひも付け」で設定できます。
             </p>
           ) : null}
 
