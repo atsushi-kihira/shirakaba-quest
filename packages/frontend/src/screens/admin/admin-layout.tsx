@@ -2,9 +2,9 @@
 // 管理画面レイアウト
 // =============================================================
 import { useEffect } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History, BarChart3, Send } from "lucide-react";
+import { Users, ScrollText, Settings, LayoutDashboard, RotateCcw, Star, CalendarDays, Megaphone, UsersRound, Calendar, CreditCard, Mail, Handshake, History, BarChart3, Send, TrafficCone } from "lucide-react";
 import { api } from "@/lib/api";
 import { useSettings } from "@/hooks/use-settings";
 
@@ -30,6 +30,8 @@ function useAdminBadgeCounts() {
 export function AdminLayout() {
   const { termQuest, appTitle } = useSettings();
   const badgeCounts = useAdminBadgeCounts();
+  // 統計レポートは、列の多い表を見せるので、ほかの画面より横幅を広げる
+  const wide = useLocation().pathname.startsWith("/admin/stats");
 
   const ADMIN_NAV = [
     { to: "/admin",          icon: LayoutDashboard, label: "ダッシュボード",          end: true },
@@ -45,6 +47,7 @@ export function AdminLayout() {
     { to: "/admin/points",   icon: RotateCcw,       label: "ポイント管理",        end: false },
     { to: "/admin/oneonone-history", icon: History, label: "1to1履歴管理",        end: false },
     { to: "/admin/usage-report", icon: BarChart3, label: "利用状況",             end: false },
+    { to: "/admin/stats",    icon: TrafficCone,     label: "統計レポート",            end: false },
     { to: "/admin/broadcasts", icon: Send,      label: "通知配信",                end: false },
     { to: "/admin/email-templates", icon: Mail,      label: "メール配信",              end: false },
     { to: "/admin/settings", icon: Settings,        label: "アプリ設定",              end: false },
@@ -120,7 +123,7 @@ export function AdminLayout() {
       </nav>
 
       {/* メインコンテンツ */}
-      <main className="flex-1 main-with-tabbar max-w-4xl w-full px-0 lg:px-8 lg:py-6 overflow-y-auto"
+      <main className={`flex-1 main-with-tabbar ${wide ? "max-w-6xl" : "max-w-4xl"} w-full px-0 lg:px-8 lg:py-6 overflow-y-auto`}
         style={{ "--sidebar-w": "256px" } as React.CSSProperties}>
         <Outlet />
       </main>

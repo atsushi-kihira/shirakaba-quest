@@ -56,6 +56,8 @@ import { AdminMeetingsScreen } from "@/screens/admin/admin-meetings-screen";
 import { AdminCollabScreen } from "@/screens/admin/admin-collab-screen";
 import { AdminCardSettingsScreen } from "@/screens/admin/admin-card-settings-screen";
 import { AdminUsageReportScreen } from "@/screens/admin/admin-usage-report-screen";
+import { AdminStatsScreen } from "@/screens/admin/admin-stats-screen";
+import { AdminStatsMemberScreen } from "@/screens/admin/admin-stats-member-screen";
 import { DialogEscapeSupport } from "@/components/dialog-escape-support";
 import { AppErrorBoundary } from "@/components/error-boundary";
 import { UpdateNotice } from "@/components/update-notice";
@@ -208,6 +210,8 @@ export default function App() {
                 <Route path="points" element={<AdminPointsScreen />} />
                 <Route path="oneonone-history" element={<AdminOneOnOneHistoryScreen />} />
                 <Route path="usage-report" element={<AdminUsageReportScreen />} />
+                <Route path="stats" element={<AdminStatsScreen />} />
+                <Route path="stats/members/:personKey" element={<AdminStatsMemberScreen />} />
                 <Route path="email-templates" element={<AdminEmailTemplatesScreen />} />
                 <Route path="broadcasts" element={<AdminBroadcastsScreen />} />
                 <Route path="settings" element={<AdminSettingsScreen />} />

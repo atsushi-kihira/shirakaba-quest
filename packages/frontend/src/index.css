@@ -504,3 +504,32 @@ label:has(> input.sr-only) {
   suffix: " ";
   fallback: decimal;
 }
+
+/* ======================================================
+   統計レポート（MTLR）の信号の色。レポートの表と同じ「緑・黄・赤・グレー」
+   ====================================================== */
+:root {
+  --mtlr-green: #bfe6b6;
+  --mtlr-yellow: #fbe68f;
+  --mtlr-red: #f5b9b9;
+  --mtlr-gray: #d6d6d6;
+  --mtlr-green-strong: #4f9a5a;
+  --mtlr-yellow-strong: #e0b227;
+  --mtlr-red-strong: #d65a5a;
+  --mtlr-gray-strong: #8f8f8f;
+}
+.mtlr-green { background: var(--mtlr-green); }
+.mtlr-yellow { background: var(--mtlr-yellow); }
+.mtlr-red { background: var(--mtlr-red); }
+.mtlr-gray { background: var(--mtlr-gray); }
+
+/* 統計レポートのグラフで、項目ごとに分けて見せる色（出席・ビジター・サンキュー・1to1・リファーラル・CEU・スポンサー） */
+:root {
+  --mtlr-cat-attendance: #6b7fd6;
+  --mtlr-cat-visitors: #e0b227;
+  --mtlr-cat-tyfcb: #4f9a5a;
+  --mtlr-cat-oneToOne: #d6764b;
+  --mtlr-cat-referrals: #b5384b;
+  --mtlr-cat-ceu: #3aa6b9;
+  --mtlr-cat-sponsors: #9a6fc4;
+}

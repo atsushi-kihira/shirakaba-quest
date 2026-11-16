@@ -87,6 +87,9 @@ export async function hardDeleteMember(db: Db, env: AutoConferenceEnv, memberId:
   await db.delete(m.shareStoryMembers).where(eq(m.shareStoryMembers.memberId, memberId));
 
   // ---- 相手の紹介シート（本人が登録したもの、および本人についてほかの人が登録したもの）----
+  // 統計レポート（MTLR）の記録はチャプターのものなので消さず、このメンバーとのひも付けだけを外す
+  await db.update(m.mtlrRows).set({ memberId: null }).where(eq(m.mtlrRows.memberId, memberId));
+  await db.delete(m.mtlrPersonLinks).where(eq(m.mtlrPersonLinks.memberId, memberId));
   await db.delete(m.profileSheets).where(eq(m.profileSheets.ownerMemberId, memberId));
   await db.delete(m.profileSheets).where(and(eq(m.profileSheets.subjectType, "member"), eq(m.profileSheets.subjectId, memberId)));
   await db.delete(m.profileSheetExtractions).where(eq(m.profileSheetExtractions.memberId, memberId));

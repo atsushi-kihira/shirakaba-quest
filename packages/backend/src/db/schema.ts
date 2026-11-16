@@ -1625,3 +1625,53 @@ export const profileSheetExtractions = sqliteTable("profile_sheet_extractions", 
   memberId:  text("member_id").notNull(),
   createdAt: integer("created_at").notNull(),
 });
+
+// ---- メンバー・トラフィック・ライト・レポート（MTLR。管理ダッシュボード「統計レポート」） ----
+export const mtlrReports = sqliteTable(
+  "mtlr_reports",
+  {
+    id:             text("id").primaryKey(),
+    ym:             text("ym").notNull(),                 // 'YYYY-MM'（期間の終わりの年月）
+    periodFrom:     text("period_from").notNull(),
+    periodTo:       text("period_to").notNull(),
+    createdOn:      text("created_on").notNull().default(""),
+    standard:       text("standard").notNull().default("2025-10"),
+    sourceFilename: text("source_filename").notNull().default(""),
+    importedBy:     text("imported_by").notNull().default(""),
+    importedAt:     integer("imported_at").notNull(),
+  },
+  (t) => [uniqueIndex("uniq_mtlr_reports_ym").on(t.ym)]
+);
+
+export const mtlrRows = sqliteTable("mtlr_rows", {
+  id:             text("id").primaryKey(),
+  reportId:       text("report_id").notNull(),
+  sortIndex:      integer("sort_index").notNull().default(0),
+  personKey:      text("person_key").notNull(),
+  displayName:    text("display_name").notNull(),
+  rawName:        text("raw_name").notNull(),
+  memberId:       text("member_id"),
+  attended:       integer("attended").notNull().default(0),
+  absent:         integer("absent").notNull().default(0),
+  late:           integer("late").notNull().default(0),
+  medical:        integer("medical").notNull().default(0),
+  substitute:     integer("substitute").notNull().default(0),
+  refInGiven:     integer("ref_in_given").notNull().default(0),
+  refOutGiven:    integer("ref_out_given").notNull().default(0),
+  refOutRate:     integer("ref_out_rate").notNull().default(0),
+  refInReceived:  integer("ref_in_received").notNull().default(0),
+  refOutReceived: integer("ref_out_received").notNull().default(0),
+  visitors:       integer("visitors").notNull().default(0),
+  oneToOne:       integer("one_to_one").notNull().default(0),
+  tyfcb:          integer("tyfcb").notNull().default(0),
+  ceu:            integer("ceu").notNull().default(0),
+  recommend:      integer("recommend").notNull().default(0),
+  sponsor:        integer("sponsor").notNull().default(0),
+  score:          integer("score").notNull().default(0),
+});
+
+export const mtlrPersonLinks = sqliteTable("mtlr_person_links", {
+  personKey: text("person_key").primaryKey(),
+  memberId:  text("member_id"),                 // NULL = アプリのメンバーではない
+  updatedAt: integer("updated_at").notNull(),
+});
