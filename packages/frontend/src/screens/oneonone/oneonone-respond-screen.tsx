@@ -6,7 +6,7 @@
 // =============================================================
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
-import { Loader2, Check, X, AlertCircle, Link2, User, Building2, Briefcase, Mail } from "lucide-react";
+import { Loader2, Check, X, AlertCircle, Link2, User, Building2, Briefcase, Mail, RotateCcw } from "lucide-react";
 import { useSettings } from "@/hooks/use-settings";
 import { API_BASE_URL } from "@/lib/api";
 import { fmtDateTime, fmtDateTimeFull, fmtTime } from "@/lib/date";
@@ -32,6 +32,8 @@ type RespondData = {
   conferenceUrl: string | null;
   candidateSlots: CandidateSlot[];
   availableConferenceTypes: ("google_meet" | "zoom")[];
+  // 確定済みの日時を取り消して、候補日から選び直せるか
+  canReselect?: boolean;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -49,13 +51,14 @@ export function OneOnOneRespondScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [data, setData] = useState<RespondData | null>(null);
-  const [submitting, setSubmitting] = useState<"reject" | "select" | null>(null);
+  const [submitting, setSubmitting] = useState<"reject" | "select" | "reopen" | null>(null);
   const [resultStatus, setResultStatus] = useState<"accepted" | "rejected" | null>(null);
   const [resultScheduledFor, setResultScheduledFor] = useState<number | null>(null);
   const [resultConference, setResultConference] = useState<{ type: string | null; url: string | null } | null>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>("");
   const [showCalendar, setShowCalendar] = useState(false);
   const [comment, setComment] = useState("");
+  const [actionError, setActionError] = useState("");
   const [conferenceType, setConferenceType] = useState<"google_meet" | "zoom" | undefined>(undefined);
 
   // 自分のカレンダーで候補日時が空いているかの確認。ログイン中のアカウントが、この申込の宛先本人の場合だけ行う
@@ -76,6 +79,31 @@ export function OneOnOneRespondScreen() {
       .catch(() => setError("読み込みに失敗しました"))
       .finally(() => setLoading(false));
   }, [token]);
+
+  // 選び間違えたときに、確定済みの日時を取り消して、候補日の選択画面に戻す
+  async function reselect() {
+    if (!confirm("いまの日時と会議URLをいったん取り消して、選び直しますか？\n\n取り消したあと、候補日の一覧からもう一度お選びいただけます。")) return;
+    setSubmitting("reopen");
+    setActionError("");
+    try {
+      const r = await fetch(`${API_BASE_URL}/oneonone/public/${token}/reopen-schedule`, { method: "POST" });
+      const json = await r.json();
+      if (!r.ok) { setActionError(json.error?.message ?? "選び直しに失敗しました"); return; }
+      const r2 = await fetch(`${API_BASE_URL}/oneonone/public/${token}`);
+      const json2 = await r2.json();
+      if (json2.error) { setActionError(json2.error.message); return; }
+      setData(json2.data);
+      setSelectedCandidateId(json2.data.candidateSlots?.[0]?.id ?? "");
+      // 先ほど確定した結果の画面から、選択画面に戻る
+      setResultStatus(null);
+      setResultScheduledFor(null);
+      setResultConference(null);
+    } catch {
+      setActionError("選び直しに失敗しました。時間をおいて、もう一度お試しください。");
+    } finally {
+      setSubmitting(null);
+    }
+  }
 
   async function decline() {
     setSubmitting("reject");
@@ -168,6 +196,21 @@ export function OneOnOneRespondScreen() {
             ? `${d.requesterName}さんに通知されます。当日はよろしくお願いします。`
             : `${d.requesterName}さんに通知されます。`}
         </p>
+        {resultStatus === "accepted" && d.arrangementMethod === "candidates" && (
+          <div className="mt-6">
+            <button
+              type="button"
+              onClick={reselect}
+              disabled={submitting !== null}
+              className="text-sm flex items-center gap-1.5 px-4 py-2.5 rounded-2xl font-medium disabled:opacity-50 mx-auto"
+              style={{ background: "white", color: "var(--color-ink-700)", border: "1px solid var(--color-paper-300)" }}
+            >
+              {submitting === "reopen" ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+              日時を間違えた場合は、選び直す
+            </button>
+            {actionError && <p className="text-xs mt-2" style={{ color: "var(--color-brand)" }}>{actionError}</p>}
+          </div>
+        )}
       </div>
     );
   }
@@ -176,7 +219,8 @@ export function OneOnOneRespondScreen() {
   // 「まだ処理されていない」の判定はステータスが確定系（rejected/cancelled/completed）で
   // ないかどうかで行う。候補日提示方式で、まだ誰も候補を選んでいない場合のみ pending になる。
   const isTerminal = d.status === "rejected" || d.status === "cancelled" || d.status === "completed";
-  const needsCandidatePicker = d.status === "pending" && d.arrangementMethod === "candidates" && d.candidateSlots.length > 0;
+  // 選び直しのために日時を取り消した直後は、承諾済み（accepted）のまま、候補日の選択画面に戻る
+  const needsCandidatePicker = (d.status === "pending" || d.status === "accepted") && d.arrangementMethod === "candidates" && d.candidateSlots.length > 0;
 
   return (
     <div className="min-h-screen" style={{ background: "var(--color-paper-100)" }}>
@@ -353,6 +397,21 @@ export function OneOnOneRespondScreen() {
               <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
                 都合が悪くなった場合のみ、下のボタンから辞退してください。
               </p>
+              {d.canReselect && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={reselect}
+                    disabled={submitting !== null}
+                    className="w-full py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 disabled:opacity-50"
+                    style={{ background: "white", color: "var(--color-ink-700)", border: "1px solid var(--color-paper-300)" }}
+                  >
+                    {submitting === "reopen" ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+                    日時を間違えた場合は、選び直す
+                  </button>
+                  {actionError && <p className="text-xs mt-2 text-center" style={{ color: "var(--color-brand)" }}>{actionError}</p>}
+                </div>
+              )}
               <button
                 onClick={decline}
                 disabled={submitting !== null}

@@ -438,7 +438,7 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
           .get();
         if (existingBooking) {
           return c.json({
-            error: { code: "already_booked", message: "この1to1はすでに日程が確定しています。予約をやり直す場合は、一度予約をキャンセルしてください。" },
+            error: { code: "already_booked", message: "この1to1はすでに日程が確定しています。日時を選び直す場合は、アプリの「1to1」画面で「日時を選び直す」を押してから、もう一度予約してください。" },
           }, 409);
         }
       }

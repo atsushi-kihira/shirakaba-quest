@@ -3,6 +3,7 @@
 // GET  /api/oneonone/public/:token                   → 申込内容の確認（認証不要）
 // POST /api/oneonone/public/:token/reject             → 辞退（認証不要。承認という操作は廃止済み）
 // POST /api/oneonone/public/:token/select-candidate  → 候補日から選んで確定（認証不要・候補日提示方式のみ）
+// POST /api/oneonone/public/:token/reopen-schedule    → 確定した日時を取り消して選び直す（認証不要・候補日提示方式のみ）
 // =============================================================
 import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
@@ -11,6 +12,7 @@ import { queueOneOnOneCalendarSync } from "../services/memberCalendarSync.ts";
 import { getAvailableConferenceTypes } from "../services/conferenceService.ts";
 import { createConferenceForOneOnOneSession } from "../services/oneOnOneConference.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
+import { reopenOneOnOneSchedule } from "../services/oneOnOneReopen.ts";
 import { normalizeComment } from "../services/response-comments.ts";
 import type { Env, Variables } from "../types.ts";
 
@@ -39,7 +41,8 @@ async function loadByToken(db: ReturnType<typeof createDb>, token: string) {
   const booking = await db
     .select({ conferenceType: schema.bookings.conferenceType, conferenceUrl: schema.bookings.conferenceUrl })
     .from(schema.bookings)
-    .where(eq(schema.bookings.oneOnOneSessionId, session.id))
+    // 取り消した（選び直す前の）予約の会議URLを見せないよう、確定中の予約だけを見る
+    .where(and(eq(schema.bookings.oneOnOneSessionId, session.id), eq(schema.bookings.status, "confirmed")))
     .get();
 
   return { session, requester, responder, booking };
@@ -53,7 +56,10 @@ oneOnOnePublicRoutes.get("/:token", async (c) => {
 
   const { session, requester, responder, booking } = result;
 
-  const isPendingCandidateSelection = session.arrangementMethod === "candidates" && session.status === "pending" && !session.selectedCandidateSlotId;
+  // 選び直しのために日時を取り消した直後は、承諾済み（accepted）のまま候補日が未選択になるので、それも選べるようにする
+  const isPendingCandidateSelection = session.arrangementMethod === "candidates"
+    && (session.status === "pending" || session.status === "accepted")
+    && !session.selectedCandidateSlotId;
   const [candidateSlots, availableConferenceTypes] = await Promise.all([
     isPendingCandidateSelection
       ? db
@@ -81,6 +87,11 @@ oneOnOnePublicRoutes.get("/:token", async (c) => {
       conferenceType: booking?.conferenceType ?? null,
       conferenceUrl: booking?.conferenceUrl ?? null,
       candidateSlots: candidateSlots.map((s) => ({ id: s.id, startAt: s.startsAt, endAt: s.endsAt })),
+      // 確定済みの日時を取り消して選び直せるか（候補日提示方式で、日時が決まっていて、まだ完了していないとき）
+      canReselect: session.arrangementMethod === "candidates"
+        && (session.status === "pending" || session.status === "accepted")
+        && !!session.scheduledFor
+        && !session.requesterCompletedAt && !session.responderCompletedAt,
       availableConferenceTypes,
     },
   });
@@ -133,7 +144,7 @@ oneOnOnePublicRoutes.post("/:token/select-candidate", async (c) => {
   if (session.arrangementMethod !== "candidates") {
     return c.json({ error: { code: "bad_request", message: "この1to1は候補日提示方式ではありません" } }, 400);
   }
-  if (session.status !== "pending") {
+  if (session.status !== "pending" && session.status !== "accepted") {
     return c.json({ data: { status: session.status, alreadyResolved: true } });
   }
   if (session.selectedCandidateSlotId) {
@@ -164,7 +175,8 @@ oneOnOnePublicRoutes.post("/:token/select-candidate", async (c) => {
 
   const now = Math.floor(Date.now() / 1000);
   const update: { selectedCandidateSlotId: string; scheduledFor: number; status: "accepted"; respondedAt: number; conferenceUrlStatus?: string | null; selectedComment: string | null } = {
-    selectedCandidateSlotId: slot.id, scheduledFor: slot.startsAt, status: "accepted", respondedAt: now,
+    // 選び直しの場合は、すでに承諾済み。最初の承諾の時刻はそのまま残す
+    selectedCandidateSlotId: slot.id, scheduledFor: slot.startsAt, status: "accepted", respondedAt: session.respondedAt ?? now,
     // 日時を選んだときに添えた一言コメント（申込者に表示する。空欄なら、なし）
     selectedComment: normalizeComment(body.comment) ?? null,
   };
@@ -206,4 +218,23 @@ oneOnOnePublicRoutes.post("/:token/select-candidate", async (c) => {
 
   queueOneOnOneCalendarSync(c.executionCtx, db, c.env, session.id);
   return c.json({ data: { status: "accepted", alreadyResolved: false, scheduledFor: slot.startsAt, conferenceType: resultConferenceType, conferenceUrl } });
+});
+
+oneOnOnePublicRoutes.post("/:token/reopen-schedule", async (c) => {
+  const db = createDb(c.env.DB);
+  const token = c.req.param("token");
+  const result = await loadByToken(db, token);
+  if (!result) return c.json({ error: { code: "not_found", message: "申込が見つかりません" } }, 404);
+
+  const { session } = result;
+  // メールの回答ページで選び直せるのは、候補日提示方式のものだけ
+  if (session.arrangementMethod !== "candidates") {
+    return c.json({ error: { code: "bad_request", message: "この1to1は候補日提示方式ではありません" } }, 400);
+  }
+
+  const reopened = await reopenOneOnOneSchedule(db, c.env, session, session.responderId);
+  if (!reopened.ok) return c.json({ error: { code: reopened.code, message: reopened.message } }, reopened.status);
+
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, session.id);
+  return c.json({ data: { reopened: true } });
 });

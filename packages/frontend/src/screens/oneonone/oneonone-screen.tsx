@@ -14,6 +14,8 @@ import { ImportCardModal } from "./import-card-modal";
 import { CompleteOneOnOneModal } from "../meetings/_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-modal";
 import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candidate-selection-panel";
+import { ReselectScheduleButton } from "../meetings/_reselect-schedule-button";
+import { canReselectSchedule } from "@/lib/oneonone-reselect";
 import { ResponseUrlCopyRow } from "../meetings/_oneonone-sections";
 import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
 import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
@@ -194,7 +196,7 @@ export function OneOnOneScreen() {
                     return (
                       <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                         {s.scheduledFor ? (
-                          <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                          <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} reselect />
                         ) : candidatesToPick ? (
                           <CandidateSelectionPanel sessionId={s.id} candidates={s.candidates!} availableConferenceTypes={s.availableConferenceTypes} onConfirmed={() => qc.invalidateQueries({ queryKey: ["oneonone"] })} />
                         ) : (
@@ -236,7 +238,7 @@ export function OneOnOneScreen() {
                   {pendingSent.map((s) => (
                     <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       {s.scheduledFor ? (
-                        <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
+                        <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} reselect />
                       ) : s.arrangementMethod === "candidates" ? (
                         <div className="mt-3 p-3 rounded-2xl" style={{ background: "var(--color-paper-200)" }}>
                           <p className="text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-600)" }}>
@@ -300,9 +302,26 @@ export function OneOnOneScreen() {
                   return (
                     <SessionCard key={s.id} session={s} myId={myId} tz={tz}>
                       {s.scheduledFor ? (
-                        <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} />
-                      ) : hasCandidatesToPick(s) ? (
+                        <ScheduledInfo session={s} tz={tz} onEdit={() => setEditingSchedule(s)} reselect />
+                      ) : hasCandidatesToPick(s) && s.myRole === "responder" ? (
                         <CandidateSelectionPanel sessionId={s.id} candidates={s.candidates!} availableConferenceTypes={s.availableConferenceTypes} onConfirmed={() => qc.invalidateQueries({ queryKey: ["oneonone"] })} />
+                      ) : hasCandidatesToPick(s) ? (
+                        // 相手が日時を選び直している最中（申込者から見たとき）
+                        <div className="mt-3 p-3 rounded-2xl text-xs" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                          🔄 {s.partner?.name ?? "相手"}さんが、日時を選び直しています。決まると、こちらに表示されます。
+                        </div>
+                      ) : s.myRole === "responder" && s.arrangementMethod !== "candidates" && s.requesterSchedulerUrl ? (
+                        // 日時を選び直すために取り消した直後：相手の予約ページから、あらためて選べるようにする
+                        <a
+                          href={s.requesterSchedulerUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="mt-3 flex items-center justify-center gap-1.5 py-2.5 rounded-2xl text-sm font-medium"
+                          style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)", border: "1px solid rgba(90,140,92,0.25)" }}
+                        >
+                          <Calendar size={14} />
+                          {s.partner?.name ?? "相手"}さんの予約ページで日程を選ぶ
+                        </a>
                       ) : (
                         <button
                           onClick={() => setEditingSchedule(s)}
@@ -481,7 +500,7 @@ function SessionCard({ session, tz, children }: {
 }
 
 // ---- 確定済み日時・会議URL表示 ----
-function ScheduledInfo({ session, tz, onEdit }: { session: Session; tz?: string; onEdit?: () => void }) {
+function ScheduledInfo({ session, tz, onEdit, reselect }: { session: Session; tz?: string; onEdit?: () => void; reselect?: boolean }) {
   const label = session.conferenceType === "zoom" ? "Zoom" : session.conferenceType === "google_meet" ? "Google Meet" : "会議";
   return (
     <div className="mt-3 p-3 rounded-2xl" style={{ background: "rgba(90,140,92,0.08)", border: "1px solid rgba(90,140,92,0.2)" }}>
@@ -510,6 +529,14 @@ function ScheduledInfo({ session, tz, onEdit }: { session: Session; tz?: string;
           <Pencil size={11} />
           編集
         </button>
+      )}
+      {reselect && canReselectSchedule(session) && (
+        <ReselectScheduleButton
+          sessionId={session.id}
+          method={session.arrangementMethod === "candidates" ? "candidates" : "public_url"}
+          partnerName={session.partner?.name}
+          className="mt-2.5"
+        />
       )}
     </div>
   );

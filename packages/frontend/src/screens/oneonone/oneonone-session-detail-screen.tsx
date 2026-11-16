@@ -13,6 +13,8 @@ import { fmtDateISO } from "@/lib/date";
 import { CompleteOneOnOneModal } from "../meetings/_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "../meetings/_edit-oneonone-schedule-modal";
 import { CandidateSelectionPanel, type CandidateSlot } from "../meetings/_candidate-selection-panel";
+import { ReselectScheduleButton } from "../meetings/_reselect-schedule-button";
+import { canReselectSchedule } from "@/lib/oneonone-reselect";
 import { EventReminderSetting } from "@/components/reminder-settings";
 import { SelectedCommentNote } from "@/components/response-comment";
 
@@ -112,7 +114,12 @@ export function OneOnOneSessionDetailScreen() {
   const partnerCompleted = session.myRole === "requester" ? session.responderCompletedAt : session.requesterCompletedAt;
   const isPendingForMe = session.status === "pending" && session.myRole === "responder";
   const candidatesToPick = session.myRole === "responder" && session.arrangementMethod === "candidates" && !session.selectedCandidateSlotId && (session.candidates?.length ?? 0) > 0;
-  const canScheduleInstead = isPendingForMe && !session.scheduledFor && (candidatesToPick || !!session.requesterSchedulerUrl);
+  // 日時を選び直すために取り消した直後は、承諾済み（accepted）のまま日時が未定になるため、承諾済みでも予約ページを案内する
+  const isOpenForMe = (session.status === "pending" || session.status === "accepted") && session.myRole === "responder";
+  const canScheduleInstead = isOpenForMe && !session.scheduledFor && (candidatesToPick || !!session.requesterSchedulerUrl);
+  // 相手（回答者）が日時を選び直している最中（申込者から見たとき）
+  const partnerReselecting = session.myRole === "requester" && session.status === "accepted" && !session.scheduledFor
+    && session.arrangementMethod === "candidates" && !session.selectedCandidateSlotId;
   const conferenceLabel = session.conferenceType === "zoom" ? "Zoom" : session.conferenceType === "google_meet" ? "Google Meet" : "会議";
 
   return (
@@ -175,6 +182,15 @@ export function OneOnOneSessionDetailScreen() {
                 編集
               </button>
             )}
+            {canReselectSchedule(session) && (
+              <ReselectScheduleButton
+                sessionId={session.id}
+                method={session.arrangementMethod === "candidates" ? "candidates" : "public_url"}
+                partnerName={partner?.name}
+                onDone={() => showToast("日時を取り消しました。あらためてお選びください", true)}
+                className="mt-2.5"
+              />
+            )}
           </div>
         ) : (
           candidatesToPick ? (
@@ -186,6 +202,10 @@ export function OneOnOneSessionDetailScreen() {
               <Calendar size={14} />
               {partner?.name ?? "相手"}さんの予約ページで日程を選ぶ
             </a>
+          ) : partnerReselecting ? (
+            <div className="mt-3 p-3 rounded-2xl text-xs" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+              🔄 {partner?.name ?? "相手"}さんが、日時を選び直しています。決まると、こちらに表示されます。
+            </div>
           ) : (session.status === "pending" || session.status === "accepted") && (
             <button onClick={() => setShowEditSchedule(true)}
               className="mt-3 flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium"

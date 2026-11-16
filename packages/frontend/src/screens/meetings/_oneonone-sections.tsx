@@ -16,6 +16,8 @@ import {
 import { CompleteOneOnOneModal } from "./_complete-oneonone-modal";
 import { EditOneOnOneScheduleModal } from "./_edit-oneonone-schedule-modal";
 import { CandidateSelectionPanel } from "./_candidate-selection-panel";
+import { ReselectScheduleButton } from "./_reselect-schedule-button";
+import { canReselectSchedule } from "@/lib/oneonone-reselect";
 import { AutoSchedulerShareLinkPanel } from "@/components/scheduler-share-link-panel";
 import { OneOnOneDmMessage } from "@/components/oneonone-dm-message";
 import { SelectedCommentNote } from "@/components/response-comment";
@@ -127,6 +129,14 @@ export function InProgressOneOnOneSection() {
                         <Pencil size={11} />
                         日時・会議URLを編集
                       </button>
+                      {canReselectSchedule(s) && (
+                        <ReselectScheduleButton
+                          sessionId={s.id}
+                          method={s.arrangementMethod === "candidates" ? "candidates" : "public_url"}
+                          partnerName={s.partner?.name}
+                          className="mt-2"
+                        />
+                      )}
                     </>
                   ) : (
                     <button

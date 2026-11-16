@@ -26,6 +26,7 @@ import { touchCollaborationLink } from "../services/collab-link.ts";
 import { generateRawToken } from "../services/auth.ts";
 import { createConference, getAvailableConferenceTypes, cancelAutoConference, isGoogleCalendarConnected, calendarDescription, updateHostCalendarEventFields } from "../services/conferenceService.ts";
 import { createConferenceForOneOnOneSession } from "../services/oneOnOneConference.ts";
+import { reopenOneOnOneSchedule } from "../services/oneOnOneReopen.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
 import { normalizeComment } from "../services/response-comments.ts";
 import type { Env, Variables } from "../types.ts";
@@ -697,6 +698,32 @@ oneOnOneRoutes.patch("/:id/select-candidate", async (c) => {
   // 選んだ日時を、双方のGoogleカレンダー（連携済みの方）に登録する
   queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
   return c.json({ data: { status: update.status ?? session.status, scheduledFor: slot.startsAt, conferenceType: resultConferenceType, conferenceUrl } });
+});
+
+// ---- PATCH /api/oneonone/:id/reopen-schedule ----
+// 日時を選び間違えたとき、相手（responder）が確定済みの日時・会議URLをいったん取り消して、
+// 「日時がまだ決まっていない状態」に戻す。戻したあとは、候補日提示方式なら候補日から、
+// 公開予約URL方式なら予約ページから、あらためて選び直せる。
+oneOnOneRoutes.patch("/:id/reopen-schedule", async (c) => {
+  const db = createDb(c.env.DB);
+  const userId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  const sessionId = c.req.param("id");
+  if (!userId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+
+  const session = await db
+    .select()
+    .from(schema.oneOnOneSessions)
+    .where(eq(schema.oneOnOneSessions.id, sessionId))
+    .get();
+  if (!session) return c.json({ error: { code: "not_found", message: "セッションが見つかりません" } }, 404);
+  if (session.responderId !== userId) return c.json({ error: { code: "forbidden", message: "権限がありません" } }, 403);
+
+  const result = await reopenOneOnOneSchedule(db, c.env, session, userId);
+  if (!result.ok) return c.json({ error: { code: result.code, message: result.message } }, result.status);
+
+  // Googleカレンダーに登録済みの予定を、取り消した状態に合わせる
+  queueOneOnOneCalendarSync(c.executionCtx, db, c.env, sessionId);
+  return c.json({ data: { id: sessionId, reopened: true } });
 });
 
 // ---- POST /api/oneonone ----
