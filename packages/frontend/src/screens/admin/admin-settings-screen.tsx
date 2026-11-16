@@ -3,7 +3,7 @@
 // =============================================================
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Upload, RotateCcw, ImageIcon, Trash2, Plus, Loader2, Check } from "lucide-react";
+import { Save, Upload, RotateCcw, ImageIcon, Trash2, Plus, Loader2, Check, Pencil } from "lucide-react";
 import { api, API_BASE_URL } from "@/lib/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { THEME_OPTIONS, type AppTheme } from "@/hooks/use-settings";
@@ -629,6 +629,157 @@ export function AdminSettingsScreen() {
   );
 }
 
+type AdminRoleKey = "admin" | "super_admin" | "stats";
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: "管理者",
+  super_admin: "スーパー管理者",
+  stats: "統計レポート",
+};
+
+function RoleSelect({ value, onChange, disabled }: { value: AdminRoleKey; onChange: (v: AdminRoleKey) => void; disabled?: boolean }) {
+  return (
+    <>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as AdminRoleKey)}
+        disabled={disabled}
+        className="w-full px-3 py-2 rounded-xl border text-sm disabled:opacity-60"
+        style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}
+      >
+        <option value="admin">管理者</option>
+        <option value="super_admin">スーパー管理者</option>
+        <option value="stats">統計レポート（統計レポートの閲覧・取り込みだけ）</option>
+      </select>
+      {value === "stats" && (
+        <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>
+          管理ダッシュボードの「統計レポート」だけを使えます（レポートを見る・取り込む）。メンバー管理や設定など、ほかの機能は使えません。
+        </p>
+      )}
+    </>
+  );
+}
+
+/** 管理者1人ぶんの行。鉛筆ボタンで、名前・メールアドレス・権限をその場で編集できる */
+function AdminUserRow({ admin, isSelf, deleting, onDelete, qc }: {
+  admin: AdminUser; isSelf: boolean; deleting: boolean; onDelete: () => void; qc: ReturnType<typeof useQueryClient>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(admin.name);
+  const [email, setEmail] = useState(admin.email);
+  const [role, setRole] = useState<AdminRoleKey>((admin.role as AdminRoleKey) in ROLE_LABELS ? (admin.role as AdminRoleKey) : "admin");
+  const [error, setError] = useState("");
+
+  function startEdit() {
+    setName(admin.name);
+    setEmail(admin.email);
+    setRole((admin.role as AdminRoleKey) in ROLE_LABELS ? (admin.role as AdminRoleKey) : "admin");
+    setError("");
+    setEditing(true);
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => api.patch(`/admin/admins/${admin.id}`, { name: name.trim(), email: email.trim(), role }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "admins"] });
+      setEditing(false);
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const changed = name.trim() !== admin.name || email.trim().toLowerCase() !== admin.email || role !== admin.role;
+
+  if (editing) {
+    return (
+      <div className="p-4 rounded-2xl space-y-3" style={{ background: "var(--color-paper-200)", border: "1px solid var(--color-paper-300)" }}>
+        <p className="text-xs font-semibold" style={{ color: "var(--color-ink-700)" }}>
+          管理者の情報を編集{isSelf ? "（あなた）" : ""}
+        </p>
+        {error && (
+          <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.1)", color: "var(--color-brand)" }}>
+            ⚠️ {error}
+          </p>
+        )}
+        <div>
+          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>氏名 *</label>
+          <input value={name} onChange={(e) => setName(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)", fontSize: "16px" }} />
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>メールアドレス *</label>
+          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email"
+            className="w-full px-3 py-2 rounded-xl border text-sm"
+            style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)", fontSize: "16px" }} />
+          <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>
+            変更すると、次回から新しいメールアドレスでログインします。メンバーとしても同じメールアドレスを使っている場合は、メンバー画面とのつながりが外れるので、ご注意ください。
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>権限</label>
+          <RoleSelect value={role} onChange={setRole} disabled={isSelf} />
+          {isSelf && (
+            <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>
+              自分自身の権限は変更できません（ログインできなくなるのを防ぐためです）。
+            </p>
+          )}
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={() => setEditing(false)}
+            className="flex-1 py-2 rounded-xl text-sm"
+            style={{ background: "var(--color-paper-300)", color: "var(--color-ink-600)" }}>
+            キャンセル
+          </button>
+          <button onClick={() => saveMutation.mutate()}
+            disabled={!name.trim() || !email.trim() || !changed || saveMutation.isPending}
+            className="flex-1 py-2 rounded-xl text-sm font-medium text-white flex items-center justify-center gap-1.5 disabled:opacity-50"
+            style={{ background: "var(--color-brand)" }}>
+            {saveMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+            保存する
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 py-2.5 px-3 rounded-2xl"
+      style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{admin.name}</p>
+          <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
+            style={{
+              background: admin.role === "super_admin" ? "rgba(181,56,75,0.1)" : admin.role === "stats" ? "rgba(99,102,241,0.12)" : "var(--color-paper-200)",
+              color: admin.role === "super_admin" ? "var(--color-brand)" : "var(--color-ink-500)",
+            }}>
+            {ROLE_LABELS[admin.role] ?? admin.role}
+          </span>
+          {isSelf && (
+            <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
+              style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
+              あなた
+            </span>
+          )}
+        </div>
+        <p className="text-xs mt-0.5 truncate" style={{ color: "var(--color-ink-400)" }}>{admin.email}</p>
+      </div>
+      <button onClick={startEdit}
+        className="p-1.5 rounded-lg transition hover:opacity-70 shrink-0"
+        style={{ color: "var(--color-ink-500)" }} title="編集" aria-label={`${admin.name}さんの情報を編集`}>
+        <Pencil size={15} />
+      </button>
+      {!isSelf && (
+        <button onClick={onDelete} disabled={deleting}
+          className="p-1.5 rounded-lg transition hover:opacity-70 disabled:opacity-40 shrink-0"
+          style={{ color: "var(--color-brand)" }} title="削除" aria-label={`${admin.name}さんを削除`}>
+          <Trash2 size={15} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ================================================================
 // 管理者ユーザー管理セクション
 // ================================================================
@@ -662,12 +813,6 @@ function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc:
     mutationFn: (id: string) => api.delete(`/admin/admins/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "admins"] }),
   });
-
-  const ROLE_LABELS: Record<string, string> = {
-    admin: "管理者",
-    super_admin: "スーパー管理者",
-    stats: "統計レポート",
-  };
 
   return (
     <div className="card-paper p-6 space-y-4 mt-5">
@@ -722,21 +867,7 @@ function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc:
           </div>
           <div>
             <label className="block text-xs font-medium mb-1" style={{ color: "var(--color-ink-600)" }}>権限</label>
-            <select
-              value={newRole}
-              onChange={(e) => setNewRole(e.target.value as "admin" | "super_admin" | "stats")}
-              className="w-full px-3 py-2 rounded-xl border text-sm"
-              style={{ borderColor: "var(--color-paper-300)", background: "var(--color-paper-100)" }}
-            >
-              <option value="admin">管理者</option>
-              <option value="super_admin">スーパー管理者</option>
-              <option value="stats">統計レポート（統計レポートの閲覧・取り込みだけ）</option>
-            </select>
-            {newRole === "stats" && (
-              <p className="text-xs mt-1" style={{ color: "var(--color-ink-500)" }}>
-                管理ダッシュボードの「統計レポート」だけを使えます（レポートを見る・取り込む）。メンバー管理や設定など、ほかの機能は使えません。
-              </p>
-            )}
+            <RoleSelect value={newRole} onChange={setNewRole} />
           </div>
           <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
             ※ 登録後、そのメールアドレスでOTPログインが可能になります。
@@ -772,43 +903,18 @@ function AdminUsersSection({ currentAdminId, qc }: { currentAdminId: string; qc:
       ) : (
         <div className="space-y-2">
           {admins.map((admin) => (
-            <div key={admin.id} className="flex items-center gap-3 py-2.5 px-3 rounded-2xl"
-              style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-sm font-medium truncate" style={{ color: "var(--color-ink-800)" }}>{admin.name}</p>
-                  <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
-                    style={{
-                      background: admin.role === "super_admin" ? "rgba(181,56,75,0.1)" : admin.role === "stats" ? "rgba(99,102,241,0.12)" : "var(--color-paper-200)",
-                      color: admin.role === "super_admin" ? "var(--color-brand)" : "var(--color-ink-500)",
-                    }}>
-                    {ROLE_LABELS[admin.role] ?? admin.role}
-                  </span>
-                  {admin.id === currentAdminId && (
-                    <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
-                      style={{ background: "rgba(90,140,92,0.1)", color: "var(--color-success)" }}>
-                      あなた
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs mt-0.5 truncate" style={{ color: "var(--color-ink-400)" }}>{admin.email}</p>
-              </div>
-              {admin.id !== currentAdminId && (
-                <button
-                  onClick={() => {
-                    if (window.confirm(`「${admin.name}」を管理者から削除しますか？`)) {
-                      deleteMutation.mutate(admin.id);
-                    }
-                  }}
-                  disabled={deleteMutation.isPending}
-                  className="p-1.5 rounded-lg transition hover:opacity-70 disabled:opacity-40 shrink-0"
-                  style={{ color: "var(--color-brand)" }}
-                  title="削除"
-                >
-                  <Trash2 size={15} />
-                </button>
-              )}
-            </div>
+            <AdminUserRow
+              key={admin.id}
+              admin={admin}
+              isSelf={admin.id === currentAdminId}
+              deleting={deleteMutation.isPending}
+              qc={qc}
+              onDelete={() => {
+                if (window.confirm(`「${admin.name}」を管理者から削除しますか？`)) {
+                  deleteMutation.mutate(admin.id);
+                }
+              }}
+            />
           ))}
         </div>
       )}

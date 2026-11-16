@@ -2,7 +2,7 @@
 // 管理者ルート集約
 // =============================================================
 import { Hono } from "hono";
-import { eq, and, gte, lte, inArray, sql } from "drizzle-orm";
+import { eq, and, ne, gte, lte, inArray, sql } from "drizzle-orm";
 import { VALID_THEMES } from "../../services/theme.ts";
 import { adminMemberRoutes } from "./members.ts";
 import { adminQuestRoutes } from "./quests.ts";
@@ -22,7 +22,8 @@ import { adminBroadcastRoutes } from "./broadcasts.ts";
 import { adminMtlrRoutes } from "./mtlr.ts";
 import { createDb, schema } from "../../db/index.ts";
 import { newId } from "../../services/auth.ts";
-import { normalizeAdminRole } from "../../services/admin-roles.ts";
+import { ADMIN_ROLES, normalizeAdminRole, type AdminRole } from "../../services/admin-roles.ts";
+import { isValidEmailFormat } from "../../services/email-change.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -388,6 +389,73 @@ adminRoutes.post("/admins", async (c) => {
   });
 
   return c.json({ data: { id, email, name: body.name.trim(), role, createdAt: now } });
+});
+
+// ---- PATCH /api/admin/admins/:id — 管理者の情報（名前・メールアドレス・権限）を編集 ----
+adminRoutes.patch("/admins/:id", async (c) => {
+  const db = createDb(c.env.DB);
+  const id = c.req.param("id");
+  const currentAdminId = c.get("userId");
+  const body = await c.req.json<{ name?: unknown; email?: unknown; role?: unknown }>().catch(() => null);
+  if (!body) {
+    return c.json({ error: { code: "bad_request", message: "入力内容を読み取れませんでした。もう一度お試しください" } }, 400);
+  }
+
+  const target = await db.select().from(schema.admins).where(eq(schema.admins.id, id)).get();
+  if (!target) {
+    return c.json({ error: { code: "not_found", message: "管理者が見つかりません" } }, 404);
+  }
+
+  const updates: { name?: string; email?: string; role?: AdminRole } = {};
+
+  if (body.name !== undefined) {
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) return c.json({ error: { code: "bad_request", message: "氏名を入力してください" } }, 400);
+    if (name.length > 100) return c.json({ error: { code: "bad_request", message: "氏名が長すぎます（100文字まで）" } }, 400);
+    if (name !== target.name) updates.name = name;
+  }
+
+  if (body.email !== undefined) {
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    if (!email || !isValidEmailFormat(email)) {
+      return c.json({ error: { code: "bad_request", message: "メールアドレスの形式が正しくありません" } }, 400);
+    }
+    if (email !== target.email) {
+      const dup = await db.select({ id: schema.admins.id }).from(schema.admins)
+        .where(and(sql`lower(${schema.admins.email}) = ${email}`, ne(schema.admins.id, id))).get();
+      if (dup) {
+        return c.json({ error: { code: "conflict", message: "このメールアドレスは、ほかの管理者がすでに使っています" } }, 409);
+      }
+      updates.email = email;
+    }
+  }
+
+  if (body.role !== undefined) {
+    if (typeof body.role !== "string" || !ADMIN_ROLES.includes(body.role as AdminRole)) {
+      return c.json({ error: { code: "bad_request", message: "権限の種類が正しくありません" } }, 400);
+    }
+    const role = body.role as AdminRole;
+    if (role !== target.role) {
+      if (id === currentAdminId) {
+        return c.json({ error: { code: "forbidden", message: "自分自身の権限は変更できません。ほかの管理者に変更してもらってください" } }, 403);
+      }
+      if (target.role === "super_admin") {
+        const others = await db.select({ id: schema.admins.id }).from(schema.admins)
+          .where(and(eq(schema.admins.role, "super_admin"), ne(schema.admins.id, id))).get();
+        if (!others) {
+          return c.json({ error: { code: "conflict", message: "スーパー管理者が1人もいなくなってしまうため、変更できません。先にほかの人をスーパー管理者にしてください" } }, 409);
+        }
+      }
+      updates.role = role;
+    }
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await db.update(schema.admins).set(updates).where(eq(schema.admins.id, id));
+  }
+
+  const row = { id, email: updates.email ?? target.email, name: updates.name ?? target.name, role: updates.role ?? target.role, createdAt: target.createdAt };
+  return c.json({ data: row });
 });
 
 // ---- DELETE /api/admin/admins/:id — 管理者削除 ----
