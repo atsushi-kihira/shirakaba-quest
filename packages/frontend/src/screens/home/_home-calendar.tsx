@@ -18,7 +18,7 @@ import {
   type DayKey,
 } from "@/lib/calendar-grid";
 import type { CalendarEvent, CalendarEventKind, CalendarEventMyStatus, CalendarTypeInfo } from "@shared/types";
-import { KIND_INFO, WEEKDAY_LABELS, isMuted, type GoogleEvent } from "./_home-calendar-shared";
+import { KIND_INFO, WEEKDAY_LABELS, isMaybe, isMuted, isParticipating, isReference, type GoogleEvent } from "./_home-calendar-shared";
 import { WeekTimeGrid } from "./_home-calendar-week";
 
 type ViewMode = "month" | "week";
@@ -78,14 +78,15 @@ function dayColor(key: DayKey, dimmed = false): string {
   return dimmed ? `color-mix(in srgb, ${color} 45%, transparent)` : color;
 }
 
-/** 自分の出欠を表すバッジ（参加予定は目立たせず、辞退・欠席・未回答を分かりやすく） */
+/** 自分の出欠を表すバッジ（参加する予定か、日程が確定しているだけの参考の表示かを、はっきり区別する） */
 function statusBadge(ev: CalendarEvent): { text: string; bg: string; color: string } | null {
   if (ev.kind === "oneonone") return null;
   const map: Record<CalendarEventMyStatus, { text: string; bg: string; color: string } | null> = {
     attending: { text: "✅ 参加予定", bg: "rgba(90,140,92,0.14)", color: "var(--color-success-dk)" },
+    maybe: ev.isHost ? null : { text: "△ たぶん参加", bg: "rgba(212,160,59,0.22)", color: "var(--color-accent-dk)" },
     absent: { text: "欠席", bg: "var(--color-paper-200)", color: "var(--color-ink-600)" },
     declined: { text: "辞退", bg: "var(--color-paper-200)", color: "var(--color-ink-600)" },
-    none: ev.isHost ? null : { text: "未回答", bg: "rgba(212,160,59,0.18)", color: "var(--color-accent-dk)" },
+    none: ev.isHost ? null : { text: "未回答（参考表示）", bg: "var(--color-paper-200)", color: "var(--color-ink-600)" },
   };
   return map[ev.myStatus];
 }
@@ -97,7 +98,14 @@ function EventRow({ ev, tz, showDate = false }: { ev: CalendarEvent; tz: string;
     <Link
       to={ev.linkPath}
       className="card-paper rounded-2xl px-4 py-3 flex items-center gap-3 transition active:opacity-80"
-      style={{ opacity: isMuted(ev) ? 0.7 : 1 }}
+      style={{
+        opacity: isMuted(ev) ? 0.7 : isReference(ev) ? 0.85 : 1,
+        // ○（参加する予定）は、左に緑の太い線。△は、左に金色の太い線。無回答で日程が確定しているだけの参考の表示は、点線の枠
+        ...(isParticipating(ev)
+          ? { borderLeft: "4px solid var(--color-success)" }
+          : isMaybe(ev) ? { borderLeft: "4px solid var(--color-accent)" }
+          : isReference(ev) ? { border: "1px dashed var(--color-paper-300)" } : {}),
+      }}
     >
       <div className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-xl" style={{ background: "var(--color-paper-200)" }}>
         {ev.typeEmoji ?? KIND_INFO[ev.kind].icon}
@@ -471,8 +479,17 @@ export function HomeCalendar({ tz }: { tz: string }) {
                           {evs.slice(0, 3).map((ev, i) => (
                             <span
                               key={ev.key}
-                              className={`${i === 2 ? "hidden sm:flex" : "flex"} items-center gap-px min-w-0 text-[9px] leading-tight text-left`}
-                              style={{ opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55, color: ev.titleColor ?? "var(--color-ink-700)", fontWeight: ev.titleColor ? 700 : undefined }}
+                              className={`${i === 2 ? "hidden sm:flex" : "flex"} items-center gap-px min-w-0 text-[9px] leading-tight text-left rounded-sm`}
+                              style={{
+                                opacity: isMuted(ev) ? 0.4 : inMonth ? 1 : 0.55,
+                                color: ev.titleColor ?? "var(--color-ink-700)",
+                                fontWeight: ev.titleColor || isParticipating(ev) ? 700 : undefined,
+                                // ○（参加する予定）は緑の背景、△は金色の背景、無回答の参考の表示は点線の枠だけ
+                                ...(isParticipating(ev)
+                                  ? { background: "rgba(90,140,92,0.18)", boxShadow: "inset 2px 0 0 var(--color-success)", paddingLeft: "2px" }
+                                  : isMaybe(ev) ? { background: "rgba(212,160,59,0.22)", boxShadow: "inset 2px 0 0 var(--color-accent)", paddingLeft: "2px" }
+                                  : isReference(ev) ? { outline: "1px dashed var(--color-paper-300)", outlineOffset: "-1px", paddingLeft: "1px" } : {}),
+                              }}
                             >
                               <span className="shrink-0 text-[10px] leading-none">{ev.typeEmoji ?? KIND_INFO[ev.kind].icon}</span>
                               <span className="truncate">{ev.title}</span>
@@ -547,6 +564,20 @@ export function HomeCalendar({ tz }: { tz: string }) {
                 <Link to="/scheduler/settings" className="font-medium underline" style={{ color: "var(--color-brand)" }}>連携する →</Link>
               </span>
             ) : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5" style={{ color: "var(--color-ink-600)" }}>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block w-4 h-3 rounded-sm" style={{ background: "rgba(90,140,92,0.18)", boxShadow: "inset 2px 0 0 var(--color-success)" }} />
+              ○ 参加する予定（主催・1to1を含む）
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block w-4 h-3 rounded-sm" style={{ background: "rgba(212,160,59,0.22)", boxShadow: "inset 2px 0 0 var(--color-accent)" }} />
+              △ たぶん参加
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block w-4 h-3 rounded-sm" style={{ outline: "1px dashed var(--color-ink-400)", outlineOffset: "-1px" }} />
+              未回答（日程が確定しているだけの参考表示）
+            </span>
           </div>
           <div className="flex flex-wrap items-center gap-x-3 mt-1.5" style={{ color: "var(--color-ink-500)" }}>
             <span style={{ color: "var(--color-brand)" }}>● 日曜・祝日</span>

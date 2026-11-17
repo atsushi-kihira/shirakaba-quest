@@ -21,6 +21,24 @@ export function isMuted(ev: CalendarEvent): boolean {
   return ev.myStatus === "absent" || ev.myStatus === "declined";
 }
 
+/**
+ * 自分が参加する予定か（1to1・自分が主催の会・○と答えた／出席予定で「参加」にした会）。
+ * △は「たぶん参加」、無回答は日程が確定しているだけの「参考」の表示（欠席・辞退は、薄く表示する）
+ */
+export function isParticipating(ev: CalendarEvent): boolean {
+  return ev.kind === "oneonone" || ev.isHost || ev.myStatus === "attending";
+}
+
+/** △（たぶん参加）と答えた予定（自分が主催の会は、含まない） */
+export function isMaybe(ev: CalendarEvent): boolean {
+  return !isParticipating(ev) && ev.myStatus === "maybe";
+}
+
+/** 無回答で、日程が確定しているだけの予定（△・欠席・辞退は、含まない） */
+export function isReference(ev: CalendarEvent): boolean {
+  return !isParticipating(ev) && ev.myStatus === "none";
+}
+
 /** 重ねて表示する、自分のGoogleカレンダーの予定 */
 export type GoogleEvent = {
   id: string;

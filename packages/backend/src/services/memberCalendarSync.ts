@@ -7,7 +7,7 @@
 // Googleアカウントのメールが違っていても登録される。
 //
 // 仕組み：メンバーごとに「登録されているべき予定」を求め、記録済みの予定との差分を埋める（reconcile）。
-//   ・新しく確定した → 登録
+//   ・新しく確定し、本人が参加表明した（○・出席予定で参加）→ 登録。無回答・△・×は登録しない
 //   ・日時・件名・会議URLが変わった → 作り直す
 //   ・キャンセル・不参加・辞退・対象から外れた → 削除（まだ始まっていない予定のみ。過去の予定は消さない）
 // 何度実行しても同じ結果になるため、変更の直後（push）と、アプリを開いたとき（取りこぼしの補正）の両方から呼ぶ。
@@ -95,15 +95,12 @@ export async function buildDesired(db: Db, env: Env, memberId: string, googleEma
     const absent = new Set(absentRows.map((r) => `${r.meetingId}|${r.candidateId ?? ""}`));
     const absentAll = new Set(absentRows.filter((r) => !r.candidateId).map((r) => r.meetingId));
 
-    // 確定した日が複数あるミーティングでは、自分が参加する日（○・△をつけた日、または出席予定で「参加」にした日）だけを登録する。
-    // 無回答・×の日は登録しない（自分の予定でない日が、カレンダーの枠をふさがないようにするため）。確定した日が1日だけなら、従来どおり（×の人を除く）
+    // Googleカレンダーには、自分が参加表明した日（○をつけた日、または出席予定で「参加」にした日）だけを登録する。
+    // 無回答・△・×の日は、確定した日が1日だけでも、出欠を確認しない（お知らせのみ）会でも登録しない
+    // （出席の意思を示していない予定が、本人のカレンダーに勝手に入らないようにするため）。
+    // 開催予定は、白樺クエストのホーム画面のカレンダーには、参加の有無にかかわらず全部表示される（routes/calendar.ts）。
     const meetingIds = [...new Set(rows.map((r) => r.m.id))];
-    const [confirmedCounts, myResponses, myAttended] = await Promise.all([
-      db.select({ meetingId: schema.meetingDateCandidates.meetingId, id: schema.meetingDateCandidates.id })
-        .from(schema.meetingDateCandidates)
-        .innerJoin(schema.meetings, eq(schema.meetings.id, schema.meetingDateCandidates.meetingId))
-        .where(and(inArray(schema.meetingDateCandidates.meetingId, meetingIds),
-          or(eq(schema.meetingDateCandidates.isConfirmed, 1), eq(schema.meetings.confirmedCandidateId, schema.meetingDateCandidates.id)))).all(),
+    const [myResponses, myAttended] = await Promise.all([
       db.select({ meetingId: schema.meetingResponses.meetingId, candidateId: schema.meetingResponses.candidateId, availability: schema.meetingResponses.availability })
         .from(schema.meetingResponses)
         .where(and(inArray(schema.meetingResponses.meetingId, meetingIds), eq(schema.meetingResponses.memberId, memberId))).all(),
@@ -111,8 +108,6 @@ export async function buildDesired(db: Db, env: Env, memberId: string, googleEma
         .from(schema.meetingAttendances)
         .where(and(inArray(schema.meetingAttendances.meetingId, meetingIds), eq(schema.meetingAttendances.memberId, memberId), eq(schema.meetingAttendances.status, "attended"))).all(),
     ]);
-    const confirmedCountByMeeting = new Map<string, number>();
-    for (const r of confirmedCounts) confirmedCountByMeeting.set(r.meetingId, (confirmedCountByMeeting.get(r.meetingId) ?? 0) + 1);
     const answerOf = new Map(myResponses.map((r) => [`${r.meetingId}|${r.candidateId}`, r.availability]));
     const attendedKeys = new Set(myAttended.filter((r) => r.candidateId).map((r) => `${r.meetingId}|${r.candidateId}`));
 
@@ -125,12 +120,8 @@ export async function buildDesired(db: Db, env: Env, memberId: string, googleEma
         (m.scope === "selected" && invited.has(m.id));
       if (!isTarget || declined.has(m.id) || absentAll.has(m.id) || absent.has(`${m.id}|${cand.id}`)) continue;
       const answer = answerOf.get(`${m.id}|${cand.id}`);
-      if (answer === "no" && !attendedKeys.has(`${m.id}|${cand.id}`)) continue;
-      // 出欠を確認しない（お知らせのみの）会は、回答がないので、確定した日をすべて登録する
-      if (m.noAttendanceCheck !== 1 && (confirmedCountByMeeting.get(m.id) ?? 1) > 1) {
-        const joining = answer === "yes" || answer === "maybe" || attendedKeys.has(`${m.id}|${cand.id}`);
-        if (!joining) continue;
-      }
+      const joining = answer === "yes" || attendedKeys.has(`${m.id}|${cand.id}`);
+      if (!joining) continue;
       desired.push({
         kind: "meeting", refId: m.id, slotId: cand.id,
         title: m.title,
@@ -366,10 +357,11 @@ export function queueSelfCalendarSync(ctx: Ctx, db: Db, env: Env, memberId: stri
 }
 
 
-// ---- 1回だけの整理（複数日確定のミーティングで、参加しない日まで登録されていた予定を、まとめて直す） ----
+// ---- 1回だけの整理（参加表明していない日まで登録されていた予定を、まとめて直す） ----
 // 毎時の定期実行から呼ぶ。Googleカレンダーを連携しているメンバーを順に、カレンダーをあるべき状態にそろえる（不要な予定は削除される）。
-// 進み具合は KV に記録し、全員が済んだら、以後は何もしない
-const CLEANUP_KEY = "maint:calendar-cleanup:multi-date-v1";
+// 進み具合は KV に記録し、全員が済んだら、以後は何もしない。
+// 登録の条件を変えたときは、キーの版（v2 など）を上げると、もう一度全員分を整理する
+const CLEANUP_KEY = "maint:calendar-cleanup:join-only-v2";
 const CLEANUP_TIME_BUDGET_MS = 15_000;
 const CLEANUP_GROUP = 4;
 

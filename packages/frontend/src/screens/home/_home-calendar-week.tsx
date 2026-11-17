@@ -11,7 +11,7 @@ import { fmtTime } from "@/lib/date";
 import { addDays, dayStartSec, parseKey, weekdayOf, type DayKey } from "@/lib/calendar-grid";
 import { layoutLanes, segmentInDay } from "@/lib/calendar-layout";
 import type { CalendarEvent } from "@shared/types";
-import { KIND_COLOR, KIND_INFO, WEEKDAY_LABELS, isMuted, type GoogleEvent } from "./_home-calendar-shared";
+import { KIND_COLOR, KIND_INFO, WEEKDAY_LABELS, isMaybe, isMuted, isReference, type GoogleEvent } from "./_home-calendar-shared";
 
 const CELL_HEIGHT_PX = 44; // 1時間あたりの高さ
 const TIME_COL_PX = 36;
@@ -205,14 +205,27 @@ export function WeekTimeGrid({ days, tz, today, selected, onPick, appByDay, goog
                       );
                     }
                     const ev = it.ev;
+                    const evColor = ev.titleColor ?? KIND_COLOR[ev.kind];
+                    // ○は塗りつぶし、△はうすい色＋実線の枠、無回答で日程が確定しているだけの参考の表示は、もっとうすい色＋点線の枠
+                    const reference = isReference(ev);
+                    const maybe = isMaybe(ev);
                     return (
                       <Link
                         key={it.key}
                         to={ev.linkPath}
                         title={`${ev.title}（${fmtTime(ev.startsAt, tz)}〜${fmtTime(ev.endsAt, tz)}）`}
                         onClick={(e) => e.stopPropagation()}
-                        className="absolute rounded overflow-hidden px-0.5 text-white"
-                        style={{ ...pos, background: ev.titleColor ?? KIND_COLOR[ev.kind], opacity: isMuted(ev) ? 0.45 : 1, zIndex: 5 }}
+                        className={`absolute rounded overflow-hidden px-0.5 ${reference || maybe ? "" : "text-white"}`}
+                        style={{
+                          ...pos,
+                          opacity: isMuted(ev) ? 0.45 : 1,
+                          zIndex: 5,
+                          ...(maybe
+                            ? { background: `color-mix(in srgb, ${evColor} 32%, var(--color-paper-50, white))`, border: `1.5px solid ${evColor}`, color: "var(--color-ink-800)" }
+                            : reference
+                            ? { background: `color-mix(in srgb, ${evColor} 12%, var(--color-paper-50, white))`, border: `1.5px dashed ${evColor}`, color: "var(--color-ink-800)" }
+                            : { background: evColor }),
+                        }}
                       >
                         {/* 幅がせまいとき（予定が重なっているとき）は、タイトルを折り返して、読める範囲を増やす */}
                         <span className={`block text-[10px] leading-tight ${it.lanes > 1 ? "break-all" : "truncate"}`}>{ev.typeEmoji ?? KIND_INFO[ev.kind].icon} {ev.title}</span>

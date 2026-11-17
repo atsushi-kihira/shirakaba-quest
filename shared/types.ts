@@ -500,7 +500,7 @@ export type AvatarBgColor = (typeof AVATAR_BG_OPTIONS)[number];
 
 export type CalendarEventKind = "oneonone" | "meeting" | "series";
 /** 自分の出欠。attending=参加予定 / absent=欠席 / declined=辞退 / none=未回答 */
-export type CalendarEventMyStatus = "attending" | "absent" | "declined" | "none";
+export type CalendarEventMyStatus = "attending" | "maybe" | "absent" | "declined" | "none";
 
 /** カレンダーの表示を絞る対象になる、ミーティング連携のイベント種別 */
 export type CalendarTypeInfo = { id: string; name: string; emoji: string };

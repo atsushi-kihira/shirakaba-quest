@@ -200,6 +200,7 @@ async function buildCalendarEvents(db: Db, memberId: string, from: number, to: n
         else if (att === "attended") myStatus = "attending";
         else if (att === "absent") myStatus = "absent";
         else if (answer === "yes") myStatus = "attending";
+        else if (answer === "maybe") myStatus = "maybe";
         else if (answer === "no") myStatus = "absent";
 
         events.push({
