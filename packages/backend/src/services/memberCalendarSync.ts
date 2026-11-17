@@ -182,8 +182,17 @@ export async function buildDesired(db: Db, env: Env, memberId: string, googleEma
 /**
  * 1人分のカレンダーを、あるべき状態にそろえる。Google未連携・連携切れの人は何もしない（失敗しても処理は止めない）。
  */
-export async function reconcileMemberCalendar(db: Db, env: Env, memberId: string): Promise<{ created: number; deleted: number }> {
-  const result = { created: 0, deleted: 0 };
+export type ReconcileResult = {
+  created: number;
+  deleted: number;
+  /** 消すべき予定を、すべて消し終えた（またはGoogleに連携していないので、もうできることがない）とき true */
+  ok: boolean;
+  /** 想定外の不具合（データベースやGoogleの一時的な不調・利用制限など）で、途中で止まったとき true */
+  error: boolean;
+};
+
+export async function reconcileMemberCalendar(db: Db, env: Env, memberId: string): Promise<ReconcileResult> {
+  const result: ReconcileResult = { created: 0, deleted: 0, ok: true, error: false };
   try {
     if (!env.GOOGLE_OAUTH_CLIENT_ID || !env.GOOGLE_OAUTH_CLIENT_SECRET) return result;
     const account = await db.select({ id: schema.googleCalendarAccounts.id, email: schema.googleCalendarAccounts.googleAccountEmail })
@@ -191,7 +200,11 @@ export async function reconcileMemberCalendar(db: Db, env: Env, memberId: string
       .where(and(eq(schema.googleCalendarAccounts.memberId, memberId), eq(schema.googleCalendarAccounts.isDefault, 1))).get();
     if (!account) return result;
     const cred = await getValidGoogleAccessToken(db, memberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
-    if (cred.status !== "ok") return result;
+    if (cred.status !== "ok") {
+      // 連携が外れている人は、これ以上できることがない。一時的に連携の情報を取れなかっただけの人は、やり直す
+      result.ok = cred.status === "not_connected";
+      return result;
+    }
 
     const now = Math.floor(Date.now() / 1000);
     const desired = await buildDesired(db, env, memberId, account.email);
@@ -206,15 +219,38 @@ export async function reconcileMemberCalendar(db: Db, env: Env, memberId: string
       existingMap.delete(keyOf(r.kind, r.refId, r.slotId));
     }
 
-    async function removeRow(row: typeof existing[number]): Promise<void> {
+    // Googleからの削除に失敗したときは、記録（memberCalendarEvents）を残して、次の実行でやり直す。
+    // （以前は、失敗しても記録だけ消していたため、Googleカレンダーに予定が残ったまま、アプリから追えなくなっていた）
+    // 続けて3回失敗したら、この実行では、残りの削除をあきらめる（Googleの短時間の利用制限にかかっている可能性があるため）。
+    // 1件だけ消せない予定があっても、ほかの予定の削除は進める
+    let failures = 0;
+    let deleteFailed = false;
+    const tokenCache = new Map<string, Awaited<ReturnType<typeof getValidGoogleAccessTokenForAccount>>>();
+    async function removeRow(row: typeof existing[number]): Promise<boolean> {
+      if (deleteFailed) { result.ok = false; return false; }
       try {
-        const old = await getValidGoogleAccessTokenForAccount(db, row.googleAccountId, memberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
+        let old = tokenCache.get(row.googleAccountId);
+        if (!old) {
+          old = await getValidGoogleAccessTokenForAccount(db, row.googleAccountId, memberId, env.SCHEDULER_TOKEN_KEY, env.GOOGLE_OAUTH_CLIENT_ID, env.GOOGLE_OAUTH_CLIENT_SECRET);
+          tokenCache.set(row.googleAccountId, old); // 予定1件ごとに取り直さない（データベースへの問い合わせを減らす）
+        }
+        if (old.status === "refresh_failed") {
+          deleteFailed = true; // 連携の情報を取れない間は、何度やっても同じなので、すぐあきらめる
+          result.ok = false;
+          return false;
+        }
+        // 連携が外れていて（not_connected）消せないときは、これ以上追えないので、記録だけ消す
         if (old.status === "ok") await deleteCalendarEvent(old.accessToken, row.calendarId, row.eventId);
       } catch (e) {
         console.error("[member calendar] delete failed", memberId, row.eventId, e);
+        if (++failures >= 3) deleteFailed = true;
+        result.ok = false;
+        return false;
       }
+      failures = 0;
       await db.delete(schema.memberCalendarEvents).where(eq(schema.memberCalendarEvents.id, row.id));
       result.deleted++;
+      return true;
     }
 
     // 不要になった予定を削除（これから始まるものだけ。過去の予定は残す）
@@ -222,8 +258,7 @@ export async function reconcileMemberCalendar(db: Db, env: Env, memberId: string
       const key = keyOf(row.kind, row.refId, row.slotId);
       if (!existingMap.has(key)) continue; // すでに整理済み
       if (!desiredMap.has(key) && row.startsAt > now) {
-        await removeRow(row);
-        existingMap.delete(key);
+        if (await removeRow(row)) existingMap.delete(key);
       }
     }
 
@@ -236,7 +271,8 @@ export async function reconcileMemberCalendar(db: Db, env: Env, memberId: string
       const sig = signatureOf(d);
       if (row && row.signature === sig) continue;
       if (row) {
-        await removeRow(row);
+        // 古い予定を消せなかったときは、二重に入らないよう、作り直しは次の実行に回す
+        if (!(await removeRow(row))) continue;
         existingMap.delete(key);
       }
       try {
@@ -264,6 +300,8 @@ export async function reconcileMemberCalendar(db: Db, env: Env, memberId: string
     }
   } catch (e) {
     console.error("[member calendar] reconcile failed", memberId, e);
+    result.ok = false;
+    result.error = true;
   }
   return result;
 }
@@ -359,30 +397,57 @@ export function queueSelfCalendarSync(ctx: Ctx, db: Db, env: Env, memberId: stri
 
 // ---- 1回だけの整理（参加表明していない日まで登録されていた予定を、まとめて直す） ----
 // 毎時の定期実行から呼ぶ。Googleカレンダーを連携しているメンバーを順に、カレンダーをあるべき状態にそろえる（不要な予定は削除される）。
-// 進み具合は KV に記録し、全員が済んだら、以後は何もしない。
-// 登録の条件を変えたときは、キーの版（v2 など）を上げると、もう一度全員分を整理する
-const CLEANUP_KEY = "maint:calendar-cleanup:join-only-v2";
+// 進み具合は KV に記録する。ただし「処理した」ではなく「消すべき予定を消し終えた」人だけを済みとし、
+// 消し切れなかった人・途中で不具合が起きた人は、次の実行（毎時）でやり直す（以前は、何もできなかった人まで済みにしていたため、予定が残った）。
+// 全員が済んだら、以後は何もしない。登録の条件を変えたときは、キーの版（v3 など）を上げると、もう一度全員分を整理する
+const CLEANUP_KEY = "maint:calendar-cleanup:join-only-v3";
 const CLEANUP_TIME_BUDGET_MS = 15_000;
 const CLEANUP_GROUP = 4;
+const CLEANUP_MAX_PASSES = 8; // やり直しの周回の上限（連携が壊れている人などで、いつまでも終わらないのを防ぐ）
+const CLEANUP_MAX_STUCK_RUNS = 3; // 同じ場所で3回続けて不具合が起きたら、その人たちは後回しにして先へ進む
+
+type CleanupState = {
+  offset: number;
+  done: boolean;
+  /** null のときは、連携している全員が対象。やり直しの周回では、前の周で終わらなかった人だけ */
+  queue: string[] | null;
+  /** 今の周回で終わらなかった人（次の周回でやり直す） */
+  retry: string[];
+  pass: number;
+  stuckRuns: number;
+};
 
 export async function runCalendarCleanupBatch(db: Db, env: Env): Promise<{ done: boolean; processed: number }> {
   const raw = await env.KV.get(CLEANUP_KEY);
-  const state: { offset: number; done: boolean } = raw ? JSON.parse(raw) : { offset: 0, done: false };
+  const state: CleanupState = { offset: 0, done: false, queue: null, retry: [], pass: 0, stuckRuns: 0, ...(raw ? JSON.parse(raw) : {}) };
   if (state.done) return { done: true, processed: 0 };
 
-  const ids = (await db.select({ id: schema.googleCalendarAccounts.memberId }).from(schema.googleCalendarAccounts)
+  const ids = state.queue ?? (await db.select({ id: schema.googleCalendarAccounts.memberId }).from(schema.googleCalendarAccounts)
     .where(eq(schema.googleCalendarAccounts.isDefault, 1)).all()).map((r) => r.id).sort();
   const started = Date.now();
-  let offset = state.offset;
   let processed = 0;
-  while (offset < ids.length && Date.now() - started < CLEANUP_TIME_BUDGET_MS) {
-    const group = ids.slice(offset, offset + CLEANUP_GROUP);
-    await reconcileMembersCalendar(db, env, group);
-    offset += group.length;
+  while (state.offset < ids.length && Date.now() - started < CLEANUP_TIME_BUDGET_MS) {
+    const group = ids.slice(state.offset, state.offset + CLEANUP_GROUP);
+    const results = await Promise.all(group.map((id) => reconcileMemberCalendar(db, env, id)));
+    if (results.some((r) => r.error)) {
+      // データベースやGoogleの一時的な不調・利用制限の疑い。この実行はここで止めて、次回、同じ所からやり直す
+      state.stuckRuns++;
+      if (state.stuckRuns < CLEANUP_MAX_STUCK_RUNS) break;
+    }
+    state.stuckRuns = 0;
+    group.forEach((id, i) => { if (!results[i].ok) state.retry.push(id); });
+    state.offset += group.length;
     processed += group.length;
-    await env.KV.put(CLEANUP_KEY, JSON.stringify({ offset, done: false }));
+    await env.KV.put(CLEANUP_KEY, JSON.stringify(state));
   }
-  const done = offset >= ids.length;
-  await env.KV.put(CLEANUP_KEY, JSON.stringify({ offset, done }));
-  return { done, processed };
+  if (state.offset >= ids.length) {
+    const retry = [...new Set(state.retry)];
+    if (retry.length > 0 && state.pass < CLEANUP_MAX_PASSES) {
+      state.queue = retry; state.retry = []; state.offset = 0; state.pass++; state.stuckRuns = 0;
+    } else {
+      state.done = true;
+    }
+  }
+  await env.KV.put(CLEANUP_KEY, JSON.stringify(state));
+  return { done: state.done, processed };
 }

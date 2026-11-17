@@ -9,6 +9,7 @@ import { eq, desc, and, isNotNull } from "drizzle-orm";
 import { createDb, schema } from "../../db/index.ts";
 import { cancelAutoConference, deleteHostCalendarEvent } from "../../services/conferenceService.ts";
 import { deleteResponseCommentsForTargets } from "../../services/response-comments.ts";
+import { queueMeetingCalendarSync } from "../../services/memberCalendarSync.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const adminMeetingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -98,6 +99,8 @@ adminMeetingRoutes.patch("/:id/hold", async (c) => {
     );
   }
 
+  // 招待されたメンバーのGoogleカレンダーに入れていた予定も外す
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });
 
@@ -134,5 +137,7 @@ adminMeetingRoutes.delete("/:id", async (c) => {
   await db.delete(schema.meetingNotifications).where(eq(schema.meetingNotifications.meetingId, id));
   await db.delete(schema.meetings).where(eq(schema.meetings.id, id));
 
+  // 招待されたメンバーのGoogleカレンダーに入れていた予定も外す
+  queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
 });

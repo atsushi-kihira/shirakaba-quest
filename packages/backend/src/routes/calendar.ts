@@ -15,6 +15,7 @@ import { createDb, schema, type Db } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { loadTypeStyles, typeStyleOf } from "../services/meeting-event.ts";
+import { queueSelfCalendarSync } from "../services/memberCalendarSync.ts";
 import type { Env, Variables } from "../types.ts";
 import type { CalendarEvent, CalendarEventMyStatus, CalendarTypeInfo } from "@shared/types";
 
@@ -249,6 +250,8 @@ calendarRoutes.get("/events", async (c) => {
   }
 
   const [events, types] = await Promise.all([buildCalendarEvents(db, memberId, from, to), listMeetingTypes(db)]);
+  // ホームを開いたときにも、自分のGoogleカレンダーの登録状況を補正する（5分に1回まで）
+  queueSelfCalendarSync(c.executionCtx, db, c.env, memberId);
   return c.json({ data: { events, types } });
 });
 
