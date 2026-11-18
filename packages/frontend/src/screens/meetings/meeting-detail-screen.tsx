@@ -12,6 +12,7 @@ import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { NewPostModal, type GraphTeamLite } from "@/screens/collab/_activity-and-records";
 import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { ConfirmDatesModal, type ConfirmBulkPayload } from "./_confirm-dates-modal";
+import { ChangeScheduleModal } from "./_change-schedule-modal";
 import { ScheduleTextModal } from "@/components/schedule-text-modal";
 import { EventReminderSetting } from "@/components/reminder-settings";
 import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
@@ -223,15 +224,12 @@ export function MeetingDetailScreen() {
   const [manualConfUrl, setManualConfUrl] = useState("");
   const [settingUrlForCandidate, setSettingUrlForCandidate] = useState<string | null>(null);
   const [copiedConfUrl, setCopiedConfUrl] = useState<string>("");
-  const [reschedulingCandidateId, setReschedulingCandidateId] = useState<string | null>(null);
-  const [rescheduleDate, setRescheduleDate] = useState("");
-  const [rescheduleTime, setRescheduleTime] = useState("");
-  const [, setRescheduleEndTime] = useState("");
   // 確定モーダル
   type ConfirmModal = { candidateId: string; dateText: string };
   const [confirmModal, setConfirmModal] = useState<ConfirmModal | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [showScheduleText, setShowScheduleText] = useState(false);
+  const [showChangeSchedule, setShowChangeSchedule] = useState(false);
   const [sharedInviteUrl, setSharedInviteUrl] = useState<string | null>(null);
   const [copiedSharedUrl, setCopiedSharedUrl] = useState(false);
   // 出席確認後、活動タイムラインへの投稿を促すプロンプト（パイロット限定・相手が1名の時のみ）
@@ -488,14 +486,6 @@ export function MeetingDetailScreen() {
       setSettingUrlForCandidate(null);
       qc.invalidateQueries({ queryKey: ["meetings", id] });
       qc.invalidateQueries({ queryKey: ["meetings", "notifications"] });
-    },
-  });
-
-  const rescheduleMutation = useMutation({
-    mutationFn: (body: { startsAt: number; endsAt?: number }) => api.patch(`/meetings/${id}/reschedule`, body),
-    onSuccess: () => {
-      setReschedulingCandidateId(null);
-      qc.invalidateQueries({ queryKey: ["meetings", id] });
     },
   });
 
@@ -779,55 +769,6 @@ export function MeetingDetailScreen() {
                   style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>
                   {date} {time}
                 </p>
-                {isHost && confirmedCandidates.length === 1 && meeting.status === "confirmed" && (
-                  <div className="text-center">
-                    {reschedulingCandidateId === cand.id ? (
-                      <div className="rounded-2xl p-3 space-y-2 inline-block text-left"
-                        style={{ background: "white", border: "1px solid rgba(90,140,92,0.3)" }}>
-                        <div className="flex items-center gap-2">
-                          <input type="date" value={rescheduleDate} onChange={(e) => setRescheduleDate(e.target.value)}
-                            className="px-2 py-1.5 rounded-lg text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
-                          <input type="time" value={rescheduleTime} onChange={(e) => { setRescheduleEndTime(addMinutesToTime(e.target.value, meetingDuration)); setRescheduleTime(e.target.value); }}
-                            className="px-2 py-1.5 rounded-lg text-xs border" style={{ borderColor: "var(--color-paper-300)" }} />
-                          <span className="text-xs" style={{ color: "var(--color-ink-500)" }}>
-                            〜{rescheduleTime ? addMinutesToTime(rescheduleTime, meetingDuration) : "--:--"}
-                          </span>
-                        </div>
-                        <div className="flex gap-2">
-                          <button onClick={() => setReschedulingCandidateId(null)}
-                            className="flex-1 py-1.5 rounded-lg text-xs font-medium" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-                            キャンセル
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (!rescheduleDate || !rescheduleTime) return;
-                              const startsAt = Math.floor(new Date(`${rescheduleDate}T${rescheduleTime}:00`).getTime() / 1000);
-                              const endsAt = startsAt + meetingDuration * 60;
-                              rescheduleMutation.mutate({ startsAt, endsAt });
-                            }}
-                            disabled={rescheduleMutation.isPending || !rescheduleDate || !rescheduleTime}
-                            className="flex-1 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
-                            style={{ background: "var(--color-success)" }}>
-                            {rescheduleMutation.isPending ? <Loader2 size={11} className="animate-spin inline" /> : "保存"}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          const d = new Date(cand.startsAt * 1000);
-                          setRescheduleDate(d.toISOString().slice(0, 10));
-                          setRescheduleTime(d.toTimeString().slice(0, 5));
-                          setRescheduleEndTime(cand.endsAt ? new Date(cand.endsAt * 1000).toTimeString().slice(0, 5) : "");
-                          setReschedulingCandidateId(cand.id);
-                        }}
-                        className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-2xl border transition"
-                        style={{ borderColor: "var(--color-paper-300)", color: "var(--color-ink-400)", background: "white" }}>
-                        <Edit2 size={11} />今回だけ日時を変更する
-                      </button>
-                    )}
-                  </div>
-                )}
                 {cand.conferenceUrl ? (
                   /* URL設定済み: 参加ボタン + コピーボタン */
                   <div className="flex items-center gap-2 justify-center flex-wrap">
@@ -930,6 +871,18 @@ export function MeetingDetailScreen() {
               </div>
             );
           })}
+          {/* 確定したあとの日程変更（中止・日時変更・追加）。連絡のメールは、1人に1通にまとめて届く */}
+          {isHost && !meeting.seriesId && (
+            <div className="text-center pt-1">
+              <button
+                onClick={() => setShowChangeSchedule(true)}
+                className="inline-flex items-center gap-1.5 text-sm px-4 py-2 rounded-2xl border font-medium transition"
+                style={{ borderColor: "rgba(90,140,92,0.4)", color: "var(--color-ink-700)", background: "white" }}
+              >
+                <Edit2 size={13} />日程を変更する（中止・日時変更・追加）
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -2109,6 +2062,21 @@ export function MeetingDetailScreen() {
           error={confirmError}
           onClose={() => setConfirmModal(null)}
           onSubmit={(payload) => { setConfirmError(null); confirmBulkMutation.mutate(payload); }}
+        />
+      )}
+
+      {showChangeSchedule && (
+        <ChangeScheduleModal
+          meetingId={id!}
+          dates={confirmedCandidates.map((cd) => ({ id: cd.id, startsAt: cd.startsAt, endsAt: cd.endsAt }))}
+          durationMinutes={meetingDuration}
+          onClose={() => setShowChangeSchedule(false)}
+          onDone={() => {
+            setShowChangeSchedule(false);
+            qc.invalidateQueries({ queryKey: ["meetings", id] });
+            qc.invalidateQueries({ queryKey: ["meetings"] });
+            qc.invalidateQueries({ queryKey: ["calendar"] });
+          }}
         />
       )}
 

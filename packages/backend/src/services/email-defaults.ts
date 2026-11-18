@@ -628,6 +628,68 @@ export const EMAIL_DEFAULTS: EmailDefault[] = [
     ],
   },
   {
+    emailKey: "meeting_schedule_changed_member",
+    label: "日程変更のお知らせ（メンバー向け）",
+    category: "meeting",
+    triggerDescription: "確定済みのミーティングで、主催者が日程の中止・日時変更・追加をしたとき（該当する人に、内容を1通にまとめて送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】📅 「{{meetingTitle}}」の日程が変わりました",
+    bodyText: `{{memberName}} さん
+
+「{{meetingTitle}}」の日程が変わりました。
+主催：{{hostName}}
+
+{{changesText}}
+
+{{actionNote}}
+
+▼ ミーティングのページ
+{{meetingUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "memberName", label: "メンバー名", example: "山田 太郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "changesText", label: "変わった日程の一覧（中止・日時変更・追加・現在の開催日程）", example: "▼ 中止になった日程\n・2024年7月20日(土) 10:00〜11:00" },
+      { key: "actionNote", label: "お願い（参加できる日の選び直しなど）", example: "お手数ですが、下のURLから、あらためて参加できる日を選び直してください。" },
+      { key: "meetingUrl", label: "ミーティングページURL", example: "https://app.example.com/meetings/xxx" },
+    ],
+  },
+  {
+    emailKey: "meeting_schedule_changed_guest",
+    label: "日程変更のお知らせ（外部ゲスト向け）",
+    category: "meeting",
+    triggerDescription: "確定済みのミーティングで、主催者が日程の中止・日時変更・追加をしたとき（該当する外部ゲストに、内容を1通にまとめて送信）",
+    enabled: true,
+    subject: "【{{appTitle}}】📅 「{{meetingTitle}}」の日程が変わりました",
+    bodyText: `{{guestName}} さん
+
+「{{meetingTitle}}」の日程が変わりました。
+主催：{{hostName}}
+
+{{changesText}}
+
+{{actionNote}}
+
+▼ 回答ページ
+{{scheduleUrl}}
+
+---
+{{appTitle}}`,
+    availableVars: [
+      { key: "appTitle", label: "アプリ名", example: "白樺クエスト" },
+      { key: "guestName", label: "ゲスト名", example: "鈴木 一郎" },
+      { key: "hostName", label: "主催者名", example: "紀平 篤志" },
+      { key: "meetingTitle", label: "ミーティング名", example: "月例チームMTG" },
+      { key: "changesText", label: "変わった日程の一覧（中止・日時変更・追加・現在の開催日程）", example: "▼ 中止になった日程\n・2024年7月20日(土) 10:00〜11:00" },
+      { key: "actionNote", label: "お願い（参加できる日の選び直しなど）", example: "お手数ですが、下のURLから、あらためて参加できる日を選び直してください。" },
+      { key: "scheduleUrl", label: "個人ページURL", example: "https://app.example.com/schedule/xxx" },
+    ],
+  },
+  {
     emailKey: "meeting_candidate_removed_member",
     label: "候補日削除通知（メンバー向け）",
     category: "meeting",

@@ -56,6 +56,7 @@ import {
 import { formatScheduleBlock } from "../services/schedule-text.ts";
 import { insertCalendarEvent } from "../services/googleClient.ts";
 import { getFrontendUrl } from "../services/frontendUrl.ts";
+import { runScheduleChange, type ScheduleChangeInput } from "../services/meeting-schedule-change.ts";
 import { parseMeetingOptions, withFeeLine, feeLine, type MeetingOptionsInput } from "../services/meeting-options.ts";
 import { consumeReservation } from "../services/invite-reservations.ts";
 import { deleteOwnerAttachments, listAttachments, pruneInlineAttachments, syncOwnerAttachments } from "../services/meeting-attachments.ts";
@@ -2712,6 +2713,38 @@ meetingRoutes.patch("/:id/reschedule", async (c) => {
 
   queueMeetingCalendarSync(c.executionCtx, db, c.env, id);
   return c.json({ ok: true });
+});
+
+// ----------------------------------------------------------------
+// POST /api/meetings/:id/schedule-changes — 確定後の日程変更（中止・日時変更・追加）をまとめて行う（主催者のみ）
+//  body: { cancel?: string[], reschedule?: [{ candidateId, startsAt, endsAt? }], add?: [{ startsAt, endsAt? }], preview?: boolean }
+//  preview=true のときは、何も変えずに、連絡する人数だけを返す。
+//  連絡メールは、1人に1通にまとめて送る（services/meeting-schedule-change.ts）。
+// ----------------------------------------------------------------
+meetingRoutes.post("/:id/schedule-changes", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+
+  const meeting = await db.select().from(schema.meetings).where(eq(schema.meetings.id, id)).get();
+  if (!meeting) return c.json({ error: { code: "not_found", message: "ミーティングが見つかりません" } }, 404);
+  if (meeting.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ日程を変更できます" } }, 403);
+
+  const body = await c.req.json<ScheduleChangeInput & { preview?: boolean }>().catch(() => ({} as ScheduleChangeInput & { preview?: boolean }));
+  const design = await db.select({ timezone: schema.cardDesigns.timezone, appTitle: schema.cardDesigns.appTitle }).from(schema.cardDesigns).get();
+  const result = await runScheduleChange({
+    db, env: c.env, ctx: c.executionCtx, meeting,
+    input: { cancel: body.cancel, reschedule: body.reschedule, add: body.add },
+    targets: await getTargetMembers(db, meeting),
+    preview: body.preview === true,
+    tz: design?.timezone ?? "Asia/Tokyo",
+    appTitle: design?.appTitle ?? "白樺クエスト",
+    appUrl: getFrontendUrl(c.env),
+    formatRange: formatCandidateDateText,
+  });
+  if (!result.ok) return c.json({ error: { code: result.code, message: result.message } }, result.status);
+  return c.json({ ok: true, preview: body.preview === true, summary: result.summary });
 });
 
 // ----------------------------------------------------------------

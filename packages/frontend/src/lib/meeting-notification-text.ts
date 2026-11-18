@@ -8,6 +8,7 @@ export function meetingNotifIcon(type: string): string {
   if (type === "candidates_added") return "🗓️";
   if (type === "candidate_removed") return "🗑️";
   if (type === "candidate_updated") return "🗓️";
+  if (type === "schedule_changed") return "🗓️";
   if (type === "declined") return "🙇";
   if (type === "reminder") return "⏰";
   if (type === "unavailable_contact") return "💬";
@@ -21,6 +22,7 @@ export function meetingNotifDefaultMessage(type: string): string {
   if (type === "candidates_added") return "新しい候補日が追加されました";
   if (type === "candidate_removed") return "候補日が削除されました";
   if (type === "candidate_updated") return "候補日が変更されました";
+  if (type === "schedule_changed") return "開催日程が変わりました";
   if (type === "declined") return "辞退の連絡がありました";
   if (type === "reminder") return "まだご回答いただいていません";
   if (type === "unavailable_contact") return "都合が悪い旨のご連絡がありました";

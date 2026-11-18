@@ -846,11 +846,11 @@ export function HomeScreen() {
               >
                 <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
                   style={{ background: "rgba(107,125,179,0.12)" }}>
-                  {n.type === "conference_url_set" ? "📹" : n.type === "confirmed" ? "✅" : n.type === "invited" ? "📨" : n.type === "candidates_added" ? "🗓️" : n.type === "candidate_removed" ? "🗑️" : n.type === "candidate_updated" ? "🗓️" : n.type === "declined" ? "🙇" : n.type === "reminder" ? "⏰" : n.type === "unavailable_contact" ? "💬" : "📝"}
+                  {n.type === "conference_url_set" ? "📹" : n.type === "confirmed" ? "✅" : n.type === "invited" ? "📨" : n.type === "candidates_added" ? "🗓️" : n.type === "candidate_removed" ? "🗑️" : n.type === "candidate_updated" || n.type === "schedule_changed" ? "🗓️" : n.type === "declined" ? "🙇" : n.type === "reminder" ? "⏰" : n.type === "unavailable_contact" ? "💬" : "📝"}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>
-                    {n.message ?? (n.type === "conference_url_set" ? "会議URLが届きました" : n.type === "confirmed" ? "ミーティングの日程が確定しました" : n.type === "invited" ? "ミーティングに招待されました" : n.type === "candidates_added" ? "新しい候補日が追加されました" : n.type === "candidate_removed" ? "候補日が削除されました" : n.type === "candidate_updated" ? "候補日が変更されました" : n.type === "declined" ? "辞退の連絡がありました" : n.type === "reminder" ? "まだご回答いただいていません" : n.type === "unavailable_contact" ? "都合が悪い旨のご連絡がありました" : "ミーティングに詳細が追加されました")}
+                    {n.message ?? (n.type === "conference_url_set" ? "会議URLが届きました" : n.type === "confirmed" ? "ミーティングの日程が確定しました" : n.type === "invited" ? "ミーティングに招待されました" : n.type === "candidates_added" ? "新しい候補日が追加されました" : n.type === "candidate_removed" ? "候補日が削除されました" : n.type === "candidate_updated" ? "候補日が変更されました" : n.type === "schedule_changed" ? "開催日程が変わりました" : n.type === "declined" ? "辞退の連絡がありました" : n.type === "reminder" ? "まだご回答いただいていません" : n.type === "unavailable_contact" ? "都合が悪い旨のご連絡がありました" : "ミーティングに詳細が追加されました")}
                   </p>
                 </div>
                 <ChevronRight size={16} style={{ color: "#6B7DB3" }} />
