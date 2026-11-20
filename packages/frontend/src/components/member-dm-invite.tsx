@@ -8,11 +8,16 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useSettings } from "@/hooks/use-settings";
 import { MessageSquareText } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
-import { CopyButton } from "@/components/guest-invite-result";
+import { CopyButton, buildGuestDmText } from "@/components/guest-invite-result";
 
 export type MemberDmTarget = { id: string; name: string; /** 回答済みか。分からないとき（作成直後など）は省略 */ responded?: boolean };
+/** 外部のゲスト（ビジター）。専用URLのトークンを持つ */
+export type GuestDmTarget = MemberDmTarget & { token: string };
+
+type DmTarget = MemberDmTarget & { kind: "member" | "guest"; url: string };
 
 /** メンバーに送る、ミーティングのページのURL */
 function meetingMemberUrl(meetingId: string): string {
@@ -31,20 +36,27 @@ function buildMemberDmText({ memberName, senderName, title, url, confirmed, noAt
   return `${memberName.trim()}さん\nお疲れ様です。${senderName}です。\n${ask}\n\n${url}\n\n（ログインの画面が出たときは、いつものメールアドレスでログインしてください）\n\nよろしくお願いします。`;
 }
 
-function MemberCard({ target, senderName, title, url, confirmed, noAttendanceCheck }: {
-  target: MemberDmTarget; senderName: string; title: string; url: string; confirmed: boolean; noAttendanceCheck: boolean;
+function DmCard({ target, senderName, title, confirmed, noAttendanceCheck }: {
+  target: DmTarget; senderName: string; title: string; confirmed: boolean; noAttendanceCheck: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const { termExternalGuest } = useSettings();
+  const { url } = target;
   // 文面は、開くたびに最新の内容で作り直す。直した内容は、閉じると元に戻る
-  const built = buildMemberDmText({ memberName: target.name, senderName, title, url, confirmed, noAttendanceCheck });
+  const built = target.kind === "guest"
+    ? buildGuestDmText({ guestName: target.name, senderName, title, url, kind: "meeting", confirmed })
+    : buildMemberDmText({ memberName: target.name, senderName, title, url, confirmed, noAttendanceCheck });
   const [edited, setEdited] = useState<string | null>(null);
   const text = edited ?? built;
   return (
     <div className="rounded-2xl p-3 space-y-2" style={{ background: "var(--color-paper-50)", border: "1px solid var(--color-paper-300)" }}>
       <p className="text-sm font-medium" style={{ color: "var(--color-ink-800)" }}>
-        {target.name}さん
+        {target.kind === "guest" ? "👤 " : ""}{target.name || "（名前未入力）"}さん
+        <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-full" style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}>
+          {target.kind === "guest" ? termExternalGuest : "メンバー"}
+        </span>
         {target.responded !== undefined && (
-          <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-full"
+          <span className="ml-1.5 text-[11px] font-normal px-2 py-0.5 rounded-full"
             style={target.responded
               ? { background: "rgba(90,140,92,0.12)", color: "var(--color-success)" }
               : { background: "rgba(212,160,59,0.18)", color: "var(--color-ink-700)" }}>
@@ -81,27 +93,34 @@ type Props = {
   confirmed: boolean;
   noAttendanceCheck?: boolean;
   members: MemberDmTarget[];
+  /** 外部のゲスト（ビジター）。専用URLを個別に出す */
+  guests?: GuestDmTarget[];
   /** 最初から開いておくか */
   defaultOpen?: boolean;
 };
 
-export function MemberDmInvite({ meetingId, title, confirmed, noAttendanceCheck = false, members, defaultOpen = false }: Props) {
+export function MemberDmInvite({ meetingId, title, confirmed, noAttendanceCheck = false, members, guests = [], defaultOpen = false }: Props) {
   const senderName = useAuthStore((s) => s.user?.name) ?? "";
   const [open, setOpen] = useState(defaultOpen);
   const [onlyPending, setOnlyPending] = useState(true);
-  if (members.length === 0) return null;
+  const { termExternalGuest } = useSettings();
+  if (members.length === 0 && guests.length === 0) return null;
   const url = meetingMemberUrl(meetingId);
-  const hasStatus = members.some((m) => m.responded !== undefined);
-  const pendingCount = members.filter((m) => m.responded === false).length;
+  const targets: DmTarget[] = [
+    ...members.map((m): DmTarget => ({ ...m, kind: "member", url })),
+    ...guests.map((g): DmTarget => ({ id: g.id, name: g.name, responded: g.responded, kind: "guest", url: `${window.location.origin}/schedule/${g.token}` })),
+  ];
+  const hasStatus = targets.some((m) => m.responded !== undefined);
+  const pendingCount = targets.filter((m) => m.responded === false).length;
   // 未回答の人がいるときは、その人たちだけを、最初に表示する
   const filtering = hasStatus && onlyPending && pendingCount > 0;
-  const shown = filtering ? members.filter((m) => m.responded === false) : members;
+  const shown = filtering ? targets.filter((m) => m.responded === false) : targets;
   return (
     <div className="space-y-2">
       <button type="button" onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-4 py-2.5 rounded-2xl text-sm font-medium transition hover:opacity-80"
         style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
-        <span>📨 メンバーへのDM連絡用URL・メッセージ</span>
+        <span>📨 連絡用URL・メッセージ（DMなどで声かけ）</span>
         <span className="text-xs" style={{ color: "var(--color-ink-500)" }}>
           {hasStatus && pendingCount > 0 ? `未回答 ${pendingCount}人 ` : ""}{open ? "▲" : "▼"}
         </span>
@@ -109,21 +128,16 @@ export function MemberDmInvite({ meetingId, title, confirmed, noAttendanceCheck 
       {open && (
         <div className="space-y-2.5">
           <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
-            メールが見られていないメンバーに、DMでお声がけするときに使えます。URLを開くと、ログイン後（ログイン中ならそのまま）、このミーティングの画面が開きます。
+            メールが見られていない方に、DMでお声がけするときに使えます。メンバーのURLは、開くとログイン後（ログイン中ならそのまま）このミーティングの画面が開きます（全員共通）。{termExternalGuest}のURLは、その方専用です（他の方には転送しないよう、お伝えください）。
           </p>
-          <div className="rounded-2xl p-3 space-y-2" style={{ background: "var(--color-paper-50)", border: "1px solid var(--color-paper-300)" }}>
-            <p className="text-[11px]" style={{ color: "var(--color-ink-500)" }}>メンバー共通のURL</p>
-            <p className="text-xs break-all px-3 py-2 rounded-xl" style={{ background: "var(--color-paper-100)", color: "var(--color-ink-700)" }}>{url}</p>
-            <div className="flex"><CopyButton text={url} label="URLをコピー" /></div>
-          </div>
           {hasStatus && pendingCount > 0 && (
             <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: "var(--color-ink-600)" }}>
               <input type="checkbox" checked={onlyPending} onChange={(e) => setOnlyPending(e.target.checked)} />
-              未回答のメンバーだけを表示する
+              未回答の方だけを表示する
             </label>
           )}
           {shown.map((m) => (
-            <MemberCard key={m.id} target={m} senderName={senderName} title={title} url={url}
+            <DmCard key={`${m.kind}:${m.id}`} target={m} senderName={senderName} title={title}
               confirmed={confirmed} noAttendanceCheck={noAttendanceCheck} />
           ))}
         </div>

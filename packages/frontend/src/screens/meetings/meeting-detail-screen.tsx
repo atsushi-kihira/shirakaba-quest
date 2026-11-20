@@ -214,7 +214,6 @@ export function MeetingDetailScreen() {
   // 回答に添える一言コメント（commentDirty: まだ送っていない書き換えがあるか）
   const [myComment, setMyComment] = useState("");
   const [commentDirty, setCommentDirty] = useState(false);
-  const [copiedToken, setCopiedToken] = useState("");
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDoc, setDescDoc] = useState<RichDoc>(() => plainToDoc(""));
   // 説明を直したときに、対象者へ通知するか（既定は通知しない。直すたびに通知が届かないようにするため）
@@ -561,13 +560,6 @@ export function MeetingDetailScreen() {
       const next: Availability = cur === "yes" ? "maybe" : cur === "maybe" ? "no" : "yes";
       return { ...prev, [candidateId]: next };
     });
-  }
-
-  async function copyExternalUrl(token: string) {
-    const url = `${window.location.origin}/schedule/${token}`;
-    await navigator.clipboard.writeText(url).catch(() => {});
-    setCopiedToken(token);
-    setTimeout(() => setCopiedToken(""), 2000);
   }
 
   async function copySharedUrl() {
@@ -1812,7 +1804,96 @@ export function MeetingDetailScreen() {
             </p>
           )}
 
-          {/* メンバー追加ボタン（指定メンバー対象ミーティングのみ） */}
+          {meeting.scope === "selected" && (
+            <>
+              {/* 招待済みメンバー一覧（削除ボタン付き） */}
+              {respondents.filter((r) => r.type === "member" && r.id !== meeting.hostMemberId).length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>招待済みメンバー</p>
+                  {respondents.filter((r) => r.type === "member" && r.id !== meeting.hostMemberId).map((r) => (
+                    <div key={r.id} className="flex items-center gap-2 px-3 py-2 rounded-xl"
+                      style={{ background: "var(--color-paper-200)" }}>
+                      <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs shrink-0 ${r.bgColor}`}>
+                        {r.emoji}
+                      </div>
+                      <span className="text-xs flex-1 truncate" style={{ color: "var(--color-ink-700)" }}>{r.name}</span>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`「${r.name}」さんをこのミーティングから削除しますか？`)) {
+                            removeMemberMutation.mutate(r.id);
+                          }
+                        }}
+                        disabled={removeMemberMutation.isPending}
+                        className="shrink-0 p-1 rounded-lg transition hover:opacity-70 disabled:opacity-40"
+                        style={{ color: "var(--color-ink-400)" }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* 招待済みのビジター一覧（削除ボタン付き） */}
+          {externalInvitees.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>招待済みの{termExternalGuest}</p>
+              {externalInvitees.map((ext) => (
+                <div key={ext.id} className="flex items-center gap-2 px-3 py-2 rounded-xl"
+                  style={{ background: "var(--color-paper-200)" }}>
+                  <span className="text-sm shrink-0">👤</span>
+                  <span className="text-xs flex-1 truncate" style={{ color: "var(--color-ink-600)" }}>
+                    {ext.name || "（名前未入力）"}
+                    {ext.company && <span style={{ color: "var(--color-ink-400)" }}> · {ext.company}</span>}
+                    {ext.email && <span style={{ color: "var(--color-ink-400)" }}> · {ext.email}</span>}
+                    {ext.invitedAt && <span style={{ color: "var(--color-success)" }}> · ✉ 招待メール送信済み</span>}
+                  </span>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`「${ext.name || "このゲスト"}」をミーティングから削除しますか？`)) {
+                        removeExternalMutation.mutate(ext.id);
+                      }
+                    }}
+                    disabled={removeExternalMutation.isPending}
+                    className="shrink-0 p-1 rounded-lg transition hover:opacity-70 disabled:opacity-40"
+                    style={{ color: "var(--color-ink-400)" }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 連絡用URL・メッセージ（主催者のみ。メールが見られていない方への、DMなどでの声かけ用） */}
+          {isHost && (
+            <MemberDmInvite
+              meetingId={meeting.id}
+              title={meeting.title}
+              confirmed={meeting.status === "confirmed"}
+              noAttendanceCheck={meeting.noAttendanceCheck}
+              members={respondents
+                .filter((r) => r.type === "member" && r.id !== meeting.hostMemberId)
+                .map((r) => ({
+                  id: r.id,
+                  name: r.name,
+                  // 回答の有無は、日程調整中のミーティングだけ表示する
+                  responded: meeting.status === "open" && !meeting.noAttendanceCheck ? r.hasResponded : undefined,
+                }))}
+              guests={externalInvitees.map((e) => ({
+                id: e.id,
+                name: e.name,
+                token: e.token,
+                responded: meeting.status === "open" && !meeting.noAttendanceCheck
+                  ? (respondents.find((r) => r.type === "external" && r.id === e.id)?.hasResponded ?? false)
+                  : undefined,
+              }))}
+            />
+          )}
+
+          {/* メンバーを追加で招待（指定メンバー対象ミーティングのみ） */}
           {meeting.scope === "selected" && (
             <>
               <button
@@ -1821,7 +1902,7 @@ export function MeetingDetailScreen() {
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
               >
                 <UserPlus size={14} />
-                メンバーを追加する
+                メンバーを追加で招待
               </button>
 
               {/* メンバーピッカー */}
@@ -1887,64 +1968,18 @@ export function MeetingDetailScreen() {
                   </button>
                 </div>
               )}
-
-              {/* 招待済みメンバー一覧（削除ボタン付き） */}
-              {respondents.filter((r) => r.type === "member" && r.id !== meeting.hostMemberId).length > 0 && (
-                <div className="space-y-1">
-                  <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>招待済みメンバー</p>
-                  {respondents.filter((r) => r.type === "member" && r.id !== meeting.hostMemberId).map((r) => (
-                    <div key={r.id} className="flex items-center gap-2 px-3 py-2 rounded-xl"
-                      style={{ background: "var(--color-paper-200)" }}>
-                      <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs shrink-0 ${r.bgColor}`}>
-                        {r.emoji}
-                      </div>
-                      <span className="text-xs flex-1 truncate" style={{ color: "var(--color-ink-700)" }}>{r.name}</span>
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`「${r.name}」さんをこのミーティングから削除しますか？`)) {
-                            removeMemberMutation.mutate(r.id);
-                          }
-                        }}
-                        disabled={removeMemberMutation.isPending}
-                        className="shrink-0 p-1 rounded-lg transition hover:opacity-70 disabled:opacity-40"
-                        style={{ color: "var(--color-ink-400)" }}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
             </>
           )}
 
-          {/* メンバーへのDM連絡用URL・メッセージ（主催者のみ。メールが見られていないメンバーへの声かけ用） */}
-          {isHost && (
-            <MemberDmInvite
-              meetingId={meeting.id}
-              title={meeting.title}
-              confirmed={meeting.status === "confirmed"}
-              noAttendanceCheck={meeting.noAttendanceCheck}
-              members={respondents
-                .filter((r) => r.type === "member" && r.id !== meeting.hostMemberId)
-                .map((r) => ({
-                  id: r.id,
-                  name: r.name,
-                  // 回答の有無は、日程調整中のミーティングだけ表示する
-                  responded: meeting.status === "open" && !meeting.noAttendanceCheck ? r.hasResponded : undefined,
-                }))}
-            />
-          )}
-
-          {/* 外部ゲスト共有招待URL */}
-          {sharedInviteUrl ? (
-            <div className="space-y-2">
-              <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>
-                🔗 {termExternalGuest}共有招待URL
-              </p>
-              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>
-                このURLを複数人に共有できます。回答時に各自のゲストページが作成されます。
-              </p>
+          {/* 他のビジターを追加で招待（全員に同じ共有招待URLでお願いできる） */}
+          <div className="space-y-2 rounded-2xl p-3" style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
+            <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>
+              🔗 他の{termExternalGuest}を追加で招待
+            </p>
+            <p className="text-xs" style={{ color: "var(--color-ink-500)" }}>
+              ミーティングに、さらに{termExternalGuest}を招待したいときは、下の「共有招待URL」を、招待したい方全員に同じURLでお送りください（1人ずつURLを作る必要はありません）。URLを開いた方が、名前とメールアドレスを入力して回答すると、その方専用のページが作られ、上の「招待済みの{termExternalGuest}」に加わります。
+            </p>
+            {sharedInviteUrl ? (
               <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "var(--color-paper-200)" }}>
                 <span className="flex-1 text-xs break-all" style={{ color: "var(--color-ink-600)" }}>{sharedInviteUrl}</span>
                 <button
@@ -1959,60 +1994,18 @@ export function MeetingDetailScreen() {
                   {copiedSharedUrl ? "コピー済" : "コピー"}
                 </button>
               </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => sharedInviteMutation.mutate()}
-              disabled={sharedInviteMutation.isPending}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium transition hover:opacity-80 disabled:opacity-50"
-              style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
-            >
-              {sharedInviteMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <LinkIcon size={14} />}
-              {termExternalGuest}招待URLを取得する
-            </button>
-          )}
-
-          {/* 外部招待者一覧（URLコピー＋削除ボタン付き） */}
-          {externalInvitees.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{termExternalGuest}</p>
-              {externalInvitees.map((ext) => (
-                <div key={ext.id} className="flex items-center gap-2 px-3 py-2 rounded-xl"
-                  style={{ background: "var(--color-paper-200)" }}>
-                  <span className="text-sm shrink-0">👤</span>
-                  <span className="text-xs flex-1 truncate" style={{ color: "var(--color-ink-600)" }}>
-                    {ext.name || "（名前未入力）"}
-                    {ext.company && <span style={{ color: "var(--color-ink-400)" }}> · {ext.company}</span>}
-                    {ext.email && <span style={{ color: "var(--color-ink-400)" }}> · {ext.email}</span>}
-                    {ext.invitedAt && <span style={{ color: "var(--color-success)" }}> · ✉ 招待メール送信済み</span>}
-                  </span>
-                  <button
-                    onClick={() => copyExternalUrl(ext.token)}
-                    className="shrink-0 flex items-center gap-1 text-xs px-2 py-1 rounded-lg transition"
-                    style={{
-                      background: copiedToken === ext.token ? "rgba(90,140,92,0.15)" : "var(--color-paper-50)",
-                      color: copiedToken === ext.token ? "var(--color-success)" : "var(--color-ink-500)",
-                    }}
-                  >
-                    {copiedToken === ext.token ? <Check size={12} /> : <Copy size={12} />}
-                    {copiedToken === ext.token ? "済" : "URL"}
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`「${ext.name || "このゲスト"}」をミーティングから削除しますか？`)) {
-                        removeExternalMutation.mutate(ext.id);
-                      }
-                    }}
-                    disabled={removeExternalMutation.isPending}
-                    className="shrink-0 p-1 rounded-lg transition hover:opacity-70 disabled:opacity-40"
-                    style={{ color: "var(--color-ink-400)" }}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+            ) : (
+              <button
+                onClick={() => sharedInviteMutation.mutate()}
+                disabled={sharedInviteMutation.isPending}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-medium transition hover:opacity-80 disabled:opacity-50"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}
+              >
+                {sharedInviteMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <LinkIcon size={14} />}
+                共有招待URLを取得する
+              </button>
+            )}
+          </div>
         </div>
       )}
 
