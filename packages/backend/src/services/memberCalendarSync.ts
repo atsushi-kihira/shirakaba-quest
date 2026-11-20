@@ -20,6 +20,7 @@ import { newId } from "./auth.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
 import { deleteCalendarEvent, insertCalendarEvent } from "./googleClient.ts";
 import { getValidGoogleAccessToken, getValidGoogleAccessTokenForAccount } from "./conferenceService.ts";
+import { oneOnOneTitle } from "./oneOnOneTitle.ts";
 import type { Env } from "../types.ts";
 
 /** 先の予定をどこまで登録するか（日数）と、1回の処理で作る予定の最大数 */
@@ -169,7 +170,7 @@ export async function buildDesired(db: Db, env: Env, memberId: string, googleEma
       const endsAt = booking ? Math.floor(new Date(booking.endAtUtc).getTime() / 1000) : startsAt + (s.customDurationMinutes ?? 30) * 60;
       desired.push({
         kind: "oneonone", refId: s.id, slotId: "",
-        title: s.customTitle?.trim() || `${nameById.get(partnerId) ?? "メンバー"}さんとの1to1`,
+        title: oneOnOneTitle(s.customTitle, nameById.get(s.requesterId), nameById.get(s.responderId)),
         description: describe(s.customNote, booking?.conferenceUrl ?? s.manualConferenceUrl, `${appUrl}/oneonone`, appTitle),
         startsAt, endsAt,
       });

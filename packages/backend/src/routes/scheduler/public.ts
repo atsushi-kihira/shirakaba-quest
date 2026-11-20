@@ -16,6 +16,7 @@ import { cancelConfirmedBooking } from "../../services/bookingCancellation.ts";
 import { resolvePublicBookingToken } from "../../services/schedulerShareToken.ts";
 import { createBookingForConfirmedSlot, formatBookingDateRange } from "../../services/bookingCreation.ts";
 import { onGuestInviteBooked } from "../../services/otsunagi.ts";
+import { customOneOnOneTitle } from "../../services/oneOnOneTitle.ts";
 import type { Env, Variables } from "../../types.ts";
 
 export const publicBookingRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -90,7 +91,10 @@ publicBookingRoutes.get("/:memberSlug", async (c) => {
         respondentName = responder.name;
         respondentEmail = responder.email;
       }
-      if (session.customTitle) effectiveDisplayTitle = session.customTitle;
+      {
+        const custom = customOneOnOneTitle(session.customTitle);
+        if (custom) effectiveDisplayTitle = custom;
+      }
       if (session.customDurationMinutes) effectiveDurationMinutes = session.customDurationMinutes;
     }
   }
@@ -105,7 +109,10 @@ publicBookingRoutes.get("/:memberSlug", async (c) => {
     if (invite.status === "pending") {
       respondentName = invite.guestName || null;
       respondentEmail = invite.guestEmail || null;
-      if (invite.customTitle) effectiveDisplayTitle = invite.customTitle;
+      {
+        const custom = customOneOnOneTitle(invite.customTitle);
+        if (custom) effectiveDisplayTitle = custom;
+      }
       if (invite.customDurationMinutes) effectiveDurationMinutes = invite.customDurationMinutes;
     } else if (invite.status === "selected") {
       // すでにこの招待から予約済みなら、二重予約を防ぐため確定内容を伝える
@@ -427,7 +434,7 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
       if (responder) {
         linkedOneOnOneId = session.id;
         linkedOneOnOneWasPending = session.status === "pending";
-        linkedOneOnOneCustomTitle = session.customTitle;
+        linkedOneOnOneCustomTitle = customOneOnOneTitle(session.customTitle);
         identifiedGuest = responder;
 
         // すでにこの1to1申込に対して確定済みの予約があれば、二重予約になるため拒否する
@@ -451,7 +458,7 @@ publicBookingRoutes.post("/:memberSlug/book", async (c) => {
       }, 409);
     }
     linkedGuestInviteId = invite.id;
-    linkedOneOnOneCustomTitle = invite.customTitle;
+    linkedOneOnOneCustomTitle = customOneOnOneTitle(invite.customTitle);
     // 招待されたのは未登録者である前提だが、メール一致のメンバーが見つかる可能性もあるため、
     // id は null のままにしておき、下のメール一致検索に委ねる。招待時にメールを案内しなかった
     // 場合は guestEmail が空文字のことがあり、その場合はゲストが自分で入力した値を優先する

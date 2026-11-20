@@ -16,6 +16,7 @@ import { authMiddleware } from "../middleware/auth.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
 import { loadTypeStyles, typeStyleOf } from "../services/meeting-event.ts";
 import { queueSelfCalendarSync } from "../services/memberCalendarSync.ts";
+import { oneOnOneTitle } from "../services/oneOnOneTitle.ts";
 import type { Env, Variables } from "../types.ts";
 import type { CalendarEvent, CalendarEventMyStatus, CalendarTypeInfo } from "@shared/types";
 
@@ -109,7 +110,7 @@ async function buildCalendarEvents(db: Db, memberId: string, from: number, to: n
     const partnerName = nameById.get(partnerId) ?? "メンバー";
     events.push({
       key: `oneonone:${s.id}`, kind: "oneonone", id: s.id,
-      title: s.customTitle?.trim() || `${partnerName}さんとの1to1`,
+      title: oneOnOneTitle(s.customTitle, nameById.get(s.requesterId), nameById.get(s.responderId)),
       startsAt, endsAt,
       isHost: isRequester,
       myStatus: "attending",

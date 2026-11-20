@@ -20,6 +20,7 @@ import { schema } from "../db/index.ts";
 import { newId } from "./auth.ts";
 import { getFrontendUrl } from "./frontendUrl.ts";
 import { MailService } from "./mailer.ts";
+import { oneOnOneTitle } from "./oneOnOneTitle.ts";
 import { sendPushToMember } from "./push.ts";
 import { formatRange } from "./schedule-text.ts";
 import type { Env } from "../types.ts";
@@ -218,7 +219,7 @@ async function loadOccurrences(db: Db, now: number, activeIds: Set<string>, name
       if (!activeIds.has(me)) continue;
       out.push({
         kind: "oneonone", refId: s.id, seriesId: null, startsAt, endsAt,
-        title: s.customTitle?.trim() || `${nameById.get(partner) ?? "メンバー"}さんとの1to1`,
+        title: oneOnOneTitle(s.customTitle, nameById.get(s.requesterId), nameById.get(s.responderId)),
         kindLabel: "1to1", participants: new Set([me]),
         conferenceUrl: booking?.conferenceUrl ?? s.manualConferenceUrl ?? null,
         hostId: null, hostName: null, path: `/oneonone/${s.id}`,

@@ -8,6 +8,7 @@ import type { MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, Handshake, ExternalLink } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { useAuthStore } from "@/stores/auth-store";
 import { useAutoSchedulerShareLink } from "@/components/scheduler-share-link-panel";
 import { SchedulingMethodSelector, type SchedulingMethod } from "../meetings/_scheduling-method-selector";
 import { DurationSelect } from "@/components/duration-select";
@@ -39,7 +40,9 @@ export function NormalRequestModal({
   });
   const googleConnected = googleStatusData?.data.connected ?? false;
 
-  const [title, setTitle] = useState(`${responderName}さんとの1to1`);
+  // 空のままなら、カレンダーなどには、両者の名前が入った「AさんとBさんの1to1」が付く（相手から見ても誰との1to1か分かるように）
+  const myName = useAuthStore((s) => s.user?.name) ?? "あなた";
+  const [title, setTitle] = useState("");
   // 所要時間の初期値は、マイページ（日程調整設定）の「デフォルトの会議時間」。設定の読み込み後に、まだ本人が変えていなければ、一度だけ反映する
   const { duration: defaultDuration, loaded: defaultDurationLoaded } = useDefaultMeetingDuration();
   const [duration, setDuration] = useState(defaultDuration);
@@ -177,12 +180,12 @@ export function NormalRequestModal({
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder={`${responderName}さんとの1to1`}
+              placeholder={`${myName}さんと${responderName}さんの1to1`}
               className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
               style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
             />
             <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
-              カレンダーやZoomの予定名、通知メールの案内文として使われます
+              空のままなら、上のように両者の名前が入った形で、カレンダーやZoomの予定名、通知メールの案内文に使われます
             </p>
           </div>
 

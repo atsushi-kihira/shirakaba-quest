@@ -9,6 +9,7 @@ import { OneOnOneEventSelector } from "@/components/oneonone-event-selector";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, CalendarClock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { useAuthStore } from "@/stores/auth-store";
 import { DEFAULT_START_TIME, addMinutesToTime } from "@/lib/meeting-time";
 
 type ZoomStatus = { data: { connected: boolean } };
@@ -36,7 +37,9 @@ export function PrearrangedRequestModal({
 }) {
   const qc = useQueryClient();
   const [eventCampaignId, setEventCampaignId] = useState("");
-  const [title, setTitle] = useState(`${responderName}さんとの1to1`);
+  // 空のままなら、カレンダーなどには、両者の名前が入った「AさんとBさんの1to1」が付く（相手から見ても誰との1to1か分かるように）
+  const myName = useAuthStore((s) => s.user?.name) ?? "あなた";
+  const [title, setTitle] = useState("");
   const [date, setDate] = useState(todayYMD());
   const [time, setTime] = useState(DEFAULT_START_TIME);
   // 所要時間の初期値は、マイページ（日程調整設定）の「デフォルトの会議時間」（読み込み後に、まだ本人が変えていなければ、一度だけ反映する）
@@ -115,12 +118,12 @@ export function PrearrangedRequestModal({
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder={`${responderName}さんとの1to1`}
+              placeholder={`${myName}さんと${responderName}さんの1to1`}
               className="w-full px-3 py-2.5 rounded-xl text-sm outline-none border"
               style={{ background: "var(--color-paper-50)", borderColor: "var(--color-paper-300)", color: "var(--color-ink-900)" }}
             />
             <p className="text-[11px] mt-1" style={{ color: "var(--color-ink-400)" }}>
-              カレンダーやZoomの予定名として使われます
+              空のままなら、上のように両者の名前が入った形で、カレンダーやZoomの予定名に使われます
             </p>
           </div>
 

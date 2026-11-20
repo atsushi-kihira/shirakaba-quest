@@ -29,6 +29,7 @@ import { createConferenceForOneOnOneSession } from "../services/oneOnOneConferen
 import { reopenOneOnOneSchedule } from "../services/oneOnOneReopen.ts";
 import { cancelConfirmedBooking } from "../services/bookingCancellation.ts";
 import { normalizeComment } from "../services/response-comments.ts";
+import { customOneOnOneTitle, oneOnOneTitle } from "../services/oneOnOneTitle.ts";
 import type { Env, Variables } from "../types.ts";
 
 export const oneOnOneRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
@@ -779,7 +780,8 @@ oneOnOneRoutes.post("/", async (c) => {
     }
     customDurationMinutes = Math.round(body.durationMinutes);
   }
-  const customTitle = body.title?.trim() || null;
+  // 初期値のままの「○○さんとの1to1」は保存しない（表示のたびに、両者の名前が入ったタイトルを作る）
+  const customTitle = customOneOnOneTitle(body.title);
   const customNote = body.note?.trim() || null;
 
   // 相手が存在するか確認
@@ -1001,7 +1003,7 @@ oneOnOneRoutes.post("/prearranged", async (c) => {
         hostMemberId: requesterId,
         bookingId,
         requestedType: body.conferenceType,
-        summary: body.title?.trim() || `${requester.name}さんと${responder.name}さんの1to1`,
+        summary: oneOnOneTitle(body.title, requester.name, responder.name),
         description: body.note ?? "",
         startAtUtc: body.startAtUtc,
         endAtUtc: body.endAtUtc,
