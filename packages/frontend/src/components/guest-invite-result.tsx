@@ -4,7 +4,7 @@
 //   メールで招待した方は、名前だけをまとめて上に出す。
 //   メールで案内しないゲストがいないときは、この画面は出さず、そのまま詳細画面へ進む（呼び出し側で判断する）。
 // =============================================================
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Check, Copy, MessageSquareText } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -20,6 +20,8 @@ type Props = {
   confirmed: boolean;
   guests: CreatedGuest[];
   onOpenDetail: () => void;
+  /** ゲストの案内の下に出す、追加の案内（メンバー向けのDM用URLなど） */
+  extra?: ReactNode;
 };
 
 /** DMで送るメッセージの文面 */
@@ -33,7 +35,7 @@ export function buildGuestDmText({ guestName, senderName, title, url, kind, conf
   return `${guestName.trim() ? `${guestName.trim()}さん\n` : ""}お疲れ様です。${senderName}です。\n${ask}\n\n${url}\n\nよろしくお願いします。`;
 }
 
-function CopyButton({ text, label, primary = false }: { text: string; label: string; primary?: boolean }) {
+export function CopyButton({ text, label, primary = false }: { text: string; label: string; primary?: boolean }) {
   const [copied, setCopied] = useState(false);
   function copy() {
     navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => undefined);
@@ -84,7 +86,7 @@ function GuestCard({ guest, senderName, title, kind, confirmed }: { guest: Creat
   );
 }
 
-export function GuestInviteResult({ kind, title, confirmed, guests, onOpenDetail }: Props) {
+export function GuestInviteResult({ kind, title, confirmed, guests, onOpenDetail, extra }: Props) {
   const senderName = useAuthStore((s) => s.user?.name) ?? "";
   const dm = dmGuestsOf(guests);
   const mailed = guests.filter((g) => g.invited);
@@ -109,6 +111,7 @@ export function GuestInviteResult({ kind, title, confirmed, guests, onOpenDetail
           </div>
           {dm.map((g) => <GuestCard key={g.id} guest={g} senderName={senderName} title={title} kind={kind} confirmed={confirmed} />)}
         </div>
+        {extra}
         <button type="button" onClick={onOpenDetail}
           className="w-full py-3 rounded-2xl text-sm font-medium text-white" style={{ background: "var(--color-brand)" }}>
           {label}の詳細を見る →

@@ -24,6 +24,7 @@ import { MemberSelectList } from "@/components/member-select-list";
 import { GroupScopePicker, groupHasPeople, useMeetingGroups } from "@/components/group-scope-picker";
 import { DurationSelect } from "@/components/duration-select";
 import { MeetingGuestSection, guestsToPayload, guestMissingEmail, type GuestDraft } from "@/components/meeting-guest-section";
+import { CreatedMemberDmInvite } from "@/components/member-dm-invite";
 import { GuestInviteResult, dmGuestsOf, type CreatedGuest } from "@/components/guest-invite-result";
 
 type Team = { id: string; name: string; emblemEmoji: string };
@@ -296,6 +297,7 @@ export function MeetingNewScreen() {
   if (created) {
     return (
       <GuestInviteResult kind="meeting" title={title.trim()} confirmed={meetingMode === "confirmed"} guests={created.guests}
+        extra={<CreatedMemberDmInvite meetingId={created.id} title={title.trim()} confirmed={meetingMode === "confirmed"} />}
         onOpenDetail={() => navigate(`/meetings/${created.id}`)} />
     );
   }

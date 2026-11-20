@@ -12,6 +12,7 @@ import { ActivityPostPrompt } from "@/components/activity-post-prompt";
 import { NewPostModal, type GraphTeamLite } from "@/screens/collab/_activity-and-records";
 import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { ConfirmDatesModal, type ConfirmBulkPayload } from "./_confirm-dates-modal";
+import { MemberDmInvite } from "@/components/member-dm-invite";
 import { ChangeScheduleModal } from "./_change-schedule-modal";
 import { ScheduleTextModal } from "@/components/schedule-text-modal";
 import { EventReminderSetting } from "@/components/reminder-settings";
@@ -1915,6 +1916,24 @@ export function MeetingDetailScreen() {
                 </div>
               )}
             </>
+          )}
+
+          {/* メンバーへのDM連絡用URL・メッセージ（主催者のみ。メールが見られていないメンバーへの声かけ用） */}
+          {isHost && (
+            <MemberDmInvite
+              meetingId={meeting.id}
+              title={meeting.title}
+              confirmed={meeting.status === "confirmed"}
+              noAttendanceCheck={meeting.noAttendanceCheck}
+              members={respondents
+                .filter((r) => r.type === "member" && r.id !== meeting.hostMemberId)
+                .map((r) => ({
+                  id: r.id,
+                  name: r.name,
+                  // 回答の有無は、日程調整中のミーティングだけ表示する
+                  responded: meeting.status === "open" && !meeting.noAttendanceCheck ? r.hasResponded : undefined,
+                }))}
+            />
           )}
 
           {/* 外部ゲスト共有招待URL */}
