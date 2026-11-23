@@ -2079,7 +2079,7 @@ export function MeetingDetailScreen() {
 
       {showChangeSchedule && (
         <ChangeScheduleModal
-          meetingId={id!}
+          endpoint={`/meetings/${id}/schedule-changes`}
           dates={confirmedCandidates.map((cd) => ({ id: cd.id, startsAt: cd.startsAt, endsAt: cd.endsAt }))}
           durationMinutes={meetingDuration}
           onClose={() => setShowChangeSchedule(false)}

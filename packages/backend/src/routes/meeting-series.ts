@@ -7,6 +7,7 @@
 // POST   /api/meeting-series/:id/respond  — 候補パターンへの投票
 // PATCH  /api/meeting-series/:id/confirm  — 1つのパターンを確定し、終了条件までの開催回を一括生成
 // DELETE /api/meeting-series/:id          — 定例会をキャンセル（未来の開催回もあわせてキャンセル）
+// POST   /api/meeting-series/:id/occurrences/change — 確定済みの開催回の日時変更・日程の追加
 // =============================================================
 import { Hono } from "hono";
 import { eq, and, or, ne, inArray, gte, isNotNull } from "drizzle-orm";
@@ -14,7 +15,7 @@ import { createDb, schema } from "../db/index.ts";
 import { authMiddleware } from "../middleware/auth.ts";
 import { newId } from "../services/auth.ts";
 import { candidateEndSeconds } from "../services/candidate-length.ts";
-import { formatScheduleBlock } from "../services/schedule-text.ts";
+import { formatRange, formatScheduleBlock } from "../services/schedule-text.ts";
 import { queueSeriesCalendarSync, membersAffectedBySeries, reconcileMembersCalendar } from "../services/memberCalendarSync.ts";
 import { attendancePointsFor, listPlainMeetingTypes, resolveEventCampaign } from "../services/meeting-event.ts";
 import { resolveEffectiveMemberId, isMemberApproved } from "../services/resolve-member.ts";
@@ -1522,12 +1523,246 @@ meetingSeriesRoutes.patch("/:id/conference-urls", async (c) => {
   return c.json({ ok: true, updated: changed.length });
 });
 
+const DELETE_CHUNK = 50; // D1のバインド変数の上限に収まるよう、IN句は分割して発行する
+
+// ----------------------------------------------------------------
+// POST /api/meeting-series/:id/occurrences/change — 確定済みの定例会の開催回の「日時変更」と「日程の追加」（主催者のみ）
+//   ・日時変更：まだ始まっていない回の日時を変える（「第N回」の番号と、タイトルの日付も直す）
+//   ・追加：新しい開催回を、同じ参加者・同じ設定で作る
+//   ・変更した人は、日付順に「第N回」を振り直す
+//   ・参加者（メンバー・メールのある外部ゲスト）には、内容を1通にまとめたお知らせを送る（1人1通）
+//   ・preview: true のときは、何も変えずに、送り先の人数だけを返す
+// （開催回の削除は、別のルート（occurrences/delete）で行う）
+// ----------------------------------------------------------------
+const MAX_SERIES_OCCURRENCES = 200;
+
+meetingSeriesRoutes.post("/:id/occurrences/change", async (c) => {
+  const db = createDb(c.env.DB);
+  const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));
+  if (!memberId) return c.json({ error: { code: "no_member", message: "メンバーとして登録されていないためご利用いただけません" } }, 403);
+  const { id } = c.req.param();
+  const now = Math.floor(Date.now() / 1000);
+
+  const series = await db.select().from(schema.meetingSeries).where(eq(schema.meetingSeries.id, id)).get();
+  if (!series) return c.json({ error: { code: "not_found", message: "定例会が見つかりません" } }, 404);
+  if (series.hostMemberId !== memberId) return c.json({ error: { code: "forbidden", message: "主催者のみ変更できます" } }, 403);
+  if (series.status !== "confirmed") return c.json({ error: { code: "invalid_status", message: "開催日が確定している定例会でのみ変更できます" } }, 400);
+
+  const body = await c.req.json<{
+    reschedule?: { meetingId: string; startsAt: number; endsAt?: number }[];
+    add?: { startsAt: number; endsAt?: number }[];
+    preview?: boolean;
+  }>().catch(() => ({} as { reschedule?: never[]; add?: never[]; preview?: boolean }));
+  const rescheduleInput = Array.isArray(body.reschedule) ? body.reschedule : [];
+  const addInput = Array.isArray(body.add) ? body.add : [];
+  const bad = (message: string) => c.json({ error: { code: "invalid_input", message } }, 400);
+  if (rescheduleInput.length + addInput.length === 0) return bad("変更する内容がありません");
+  const isTs = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v > 0;
+  for (const r of rescheduleInput) if (!r || typeof r.meetingId !== "string" || !isTs(r.startsAt) || (r.endsAt !== undefined && !isTs(r.endsAt))) return bad("日時の指定が正しくありません");
+  for (const a of addInput) if (!a || !isTs(a.startsAt) || (a.endsAt !== undefined && !isTs(a.endsAt))) return bad("日時の指定が正しくありません");
+  if (new Set(rescheduleInput.map((r) => r.meetingId)).size !== rescheduleInput.length) return bad("同じ開催回が重複しています");
+
+  const allMeetings = await db.select().from(schema.meetings).where(eq(schema.meetings.seriesId, id)).all();
+  const candidateIds = allMeetings.map((m) => m.confirmedCandidateId).filter((x): x is string => !!x);
+  const dateRows = (await Promise.all(chunkOf(candidateIds, DELETE_CHUNK).map((chunk) =>
+    db.select().from(schema.meetingDateCandidates).where(inArray(schema.meetingDateCandidates.id, chunk)).all()
+  ))).flat();
+  const dateById = new Map(dateRows.map((d) => [d.id, d]));
+  const meetingById = new Map(allMeetings.map((m) => [m.id, m]));
+  const dateOf = (m: typeof allMeetings[number]) => (m.confirmedCandidateId ? dateById.get(m.confirmedCandidateId) : undefined);
+
+  // ---- 検証 ----
+  type Resched = { m: typeof allMeetings[number]; cand: NonNullable<ReturnType<typeof dateOf>>; startsAt: number; endsAt: number; oldStart: number; oldEnd: number };
+  const reschedules: Resched[] = [];
+  for (const r of rescheduleInput) {
+    const m = meetingById.get(r.meetingId);
+    const cand = m ? dateOf(m) : undefined;
+    if (!m || !cand) return bad("この定例会の開催回ではないものが含まれています");
+    if (m.status === "cancelled") return bad("キャンセル済みの回は変更できません");
+    if (cand.startsAt < now) return bad("すでに始まっている（開催済みの）回は変更できません");
+    if (r.startsAt <= now) return bad("変更後の日時は、これから先の日時にしてください");
+    const oldEnd = cand.endsAt ?? cand.startsAt + 3600;
+    const endsAt = r.endsAt ?? r.startsAt + (oldEnd - cand.startsAt);
+    if (endsAt <= r.startsAt) return bad("終了時刻は、開始時刻より後にしてください");
+    if (r.startsAt === cand.startsAt && endsAt === oldEnd) return bad("いまと同じ日時の回が含まれています。変えるか、そのままにしてください");
+    reschedules.push({ m, cand, startsAt: r.startsAt, endsAt, oldStart: cand.startsAt, oldEnd });
+  }
+  const adds = addInput.map((a) => {
+    const endsAt = a.endsAt ?? a.startsAt + 3600;
+    return { startsAt: a.startsAt, endsAt };
+  });
+  for (const a of adds) {
+    if (a.startsAt <= now) return bad("追加する日程は、これから先の日時にしてください");
+    if (a.endsAt <= a.startsAt) return bad("終了時刻は、開始時刻より後にしてください");
+  }
+
+  // 変更後の開催回の一覧（キャンセル済みを除く）。同じ開始時刻の回ができないようにする
+  const reschedById = new Map(reschedules.map((r) => [r.m.id, r]));
+  const finalStarts: number[] = [];
+  for (const m of allMeetings) {
+    if (m.status === "cancelled") continue;
+    finalStarts.push(reschedById.get(m.id)?.startsAt ?? dateOf(m)?.startsAt ?? 0);
+  }
+  for (const a of adds) finalStarts.push(a.startsAt);
+  if (new Set(finalStarts).size !== finalStarts.length) return bad("同じ日時の開催回ができてしまいます。日時を見直してください");
+  if (finalStarts.length > MAX_SERIES_OCCURRENCES) return bad(`開催回は、全部で${MAX_SERIES_OCCURRENCES}回までです`);
+
+  // ---- 知らせる相手（メンバー・メールのあるゲスト） ----
+  const memberIds = (await resolveSeriesMemberIds(db, series)).filter((mid) => mid !== series.hostMemberId);
+  const memberRows = memberIds.length > 0
+    ? (await Promise.all(chunkOf(memberIds, DELETE_CHUNK).map((chunk) =>
+        db.select({ id: schema.members.id, name: schema.members.name, email: schema.members.email })
+          .from(schema.members).where(inArray(schema.members.id, chunk)).all()))).flat()
+    : [];
+  const guestRows = (await db.select().from(schema.meetingSeriesExternalInvitees)
+    .where(eq(schema.meetingSeriesExternalInvitees.seriesId, id)).all()).filter((g) => !!g.email);
+  const summary = {
+    rescheduleCount: reschedules.length,
+    addCount: adds.length,
+    memberCount: memberRows.length,
+    guestCount: guestRows.length,
+    mailCount: memberRows.filter((m) => !!m.email).length + guestRows.length,
+  };
+  if (body.preview) return c.json({ ok: true, preview: true, summary });
+
+  // ---- 適用 ----
+  const affectedMemberIds = await membersAffectedBySeries(db, id).catch((e) => {
+    console.error("[member calendar] affected members lookup failed", e);
+    return [] as string[];
+  });
+  const host = await db.select({ name: schema.members.name }).from(schema.members).where(eq(schema.members.id, series.hostMemberId)).get();
+  const design = await db.select({ appTitle: schema.cardDesigns.appTitle, timezone: schema.cardDesigns.timezone }).from(schema.cardDesigns).get();
+  const tz = design?.timezone ?? "Asia/Tokyo";
+  const dateLabelOf = (ts: number) => new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric" }).format(new Date(ts * 1000));
+
+  // 日時を変更する
+  for (const r of reschedules) {
+    await db.update(schema.meetingDateCandidates).set({ startsAt: r.startsAt, endsAt: r.endsAt }).where(eq(schema.meetingDateCandidates.id, r.cand.id));
+  }
+
+  // 追加する回を作る（設定・参加者は、ほかの回と同じ）
+  const sharedUrl = series.conferenceUrl ?? null;
+  const inviteRows: Array<{ id: string; meetingId: string; memberId: string }> = [];
+  const addedMeetings: Array<{ id: string; candId: string; startsAt: number; endsAt: number; calendarEventId: string | null }> = [];
+  for (const a of adds) {
+    const meetingId = newId();
+    const candidateId = newId();
+    const blocked = await blockHostCalendarForDate({
+      db, env: c.env, hostMemberId: series.hostMemberId,
+      summary: occurrenceTitle(series, 0, dateLabelOf(a.startsAt)), // 番号とタイトルは、あとで日付順に振り直す
+      description: [series.description ?? "", sharedUrl ? `会議URL（全回共通）: ${sharedUrl}` : ""].filter(Boolean).join("\n\n"),
+      startAtUtc: new Date(a.startsAt * 1000).toISOString(),
+      endAtUtc: new Date(a.endsAt * 1000).toISOString(),
+      requestId: `series-block-${series.id}-add-${meetingId}`,
+      notify: false,
+    }).catch(() => ({ eventId: null as string | null }));
+    const calendarEventId = blocked.eventId ?? null;
+    await db.insert(schema.meetings).values({
+      id: meetingId, confirmedCandidateId: candidateId,
+      title: occurrenceTitle(series, 0, dateLabelOf(a.startsAt)),
+      description: series.description, descriptionDoc: series.descriptionDoc, customFieldsJson: series.customFieldsJson,
+      hostMemberId: series.hostMemberId, scope: "selected", status: "confirmed",
+      eventTypeDefId: series.eventTypeDefId, eventCampaignId: series.eventCampaignId,
+      noAttendanceCheck: series.noAttendanceCheck, isPaid: series.isPaid, feeAmount: series.feeAmount, feeNote: series.feeNote,
+      seriesId: series.id, seriesOccurrenceIndex: 0,
+      conferenceType: "manual", conferenceUrl: sharedUrl, conferenceMetaJson: null, calendarEventId,
+      createdAt: now, updatedAt: now,
+    });
+    await db.insert(schema.meetingDateCandidates).values({
+      id: candidateId, meetingId, startsAt: a.startsAt, endsAt: a.endsAt,
+      sortOrder: 0, isConfirmed: 1, addedByMemberId: series.hostMemberId,
+      conferenceUrl: sharedUrl, calendarEventId,
+    });
+    for (const mid of memberIds) inviteRows.push({ id: newId(), meetingId, memberId: mid });
+    addedMeetings.push({ id: meetingId, candId: candidateId, startsAt: a.startsAt, endsAt: a.endsAt, calendarEventId });
+  }
+  for (const rows of chunkOf(inviteRows, 33)) await db.insert(schema.meetingInvitees).values(rows);
+
+  // 日付順に「第N回」とタイトルの日付を振り直す（キャンセル済みの回は、そのまま）
+  type Slot = { meetingId: string; title: string; startsAt: number; endsAt: number; calendarEventId: string | null; index: number; isNew: boolean };
+  const slots: Slot[] = [
+    ...allMeetings.filter((m) => m.status !== "cancelled").map((m) => {
+      const cand = dateOf(m);
+      const rs = reschedById.get(m.id);
+      return {
+        meetingId: m.id, title: m.title, isNew: false, index: m.seriesOccurrenceIndex ?? 0,
+        startsAt: rs?.startsAt ?? cand?.startsAt ?? 0, endsAt: rs?.endsAt ?? cand?.endsAt ?? (cand?.startsAt ?? 0) + 3600,
+        calendarEventId: cand?.calendarEventId ?? null,
+      };
+    }),
+    ...addedMeetings.map((a) => ({ meetingId: a.id, title: "", isNew: true, index: 0, startsAt: a.startsAt, endsAt: a.endsAt, calendarEventId: a.calendarEventId })),
+  ].sort((x, y) => x.startsAt - y.startsAt);
+  const titlePrefix = `${series.title}（`;
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    const newIndex = i + 1;
+    const rebuilt = occurrenceTitle(series, i, dateLabelOf(s.startsAt));
+    // 主催者が書き換えたタイトルは、そのまま残す（新しい回と、もとの形式のタイトルだけを作り直す）
+    const newTitle = s.isNew || s.title.startsWith(titlePrefix) ? rebuilt : s.title;
+    const moved = reschedById.has(s.meetingId);
+    if (s.isNew || moved || s.index !== newIndex || newTitle !== s.title) {
+      await db.update(schema.meetings).set({ seriesOccurrenceIndex: newIndex, title: newTitle, updatedAt: now }).where(eq(schema.meetings.id, s.meetingId));
+    }
+    // 主催者のGoogleカレンダーの予定も、日時とタイトルを合わせる
+    if (s.calendarEventId && (s.isNew || moved || newTitle !== s.title)) {
+      c.executionCtx.waitUntil(renameHostCalendarEvent(db, c.env, series.hostMemberId, s.calendarEventId, newTitle, s.startsAt, s.endsAt));
+    }
+  }
+
+  // ---- お知らせ（1人に1通にまとめる） ----
+  const sections: string[] = [];
+  if (reschedules.length > 0) {
+    sections.push(`▼ 日時が変わった回\n${reschedules.map((r) => `・${formatRange(r.oldStart, r.oldEnd, tz)}\n　→ ${formatRange(r.startsAt, r.endsAt, tz)}`).join("\n")}`);
+  }
+  if (adds.length > 0) {
+    sections.push(`▼ 追加された回\n${adds.map((a) => `・${formatRange(a.startsAt, a.endsAt, tz)}`).join("\n")}`);
+  }
+  const upcoming = slots.filter((s) => s.endsAt >= now);
+  sections.push(`▼ 今後の開催日程（全${upcoming.length}回）\n${formatScheduleBlock(upcoming.map((s) => ({ startsAt: s.startsAt, endsAt: s.endsAt, url: null })), tz).dateText}`);
+  const changesText = sections.join("\n\n");
+  const actionNote = "ご都合が合わなくなった回がある場合は、下のURLから定例会のページを開き、各回の出欠をお知らせください。";
+  const appUrl = getFrontendUrl(c.env);
+  const appTitle = design?.appTitle ?? "白樺クエスト";
+  const meetingTitle = `【定例会】${series.title}`;
+  const hostName = host?.name ?? "主催者";
+  const repMeetingId = reschedules[0]?.m.id ?? addedMeetings[0]?.id;
+  const inAppMessage = `「${series.title}」の日程が変わりました（${[
+    reschedules.length > 0 ? `日時変更${reschedules.length}回` : "", adds.length > 0 ? `追加${adds.length}回` : "",
+  ].filter(Boolean).join("・")}）`;
+  if (repMeetingId) {
+    for (const rows of chunkOf(memberRows, 14)) {
+      await db.insert(schema.meetingNotifications).values(rows.map((m) => ({
+        id: newId(), meetingId: repMeetingId, memberId: m.id, type: "schedule_changed", message: inAppMessage, readAt: null, createdAt: now,
+      })));
+    }
+  }
+  const mailer = new MailService(db, c.env);
+  const mails: Promise<void>[] = [];
+  for (const m of memberRows) {
+    if (!m.email) continue;
+    mails.push(mailer.send("meeting_schedule_changed_member", m.email, {
+      appTitle, memberName: m.name, hostName, meetingTitle, changesText, actionNote, meetingUrl: `${appUrl}/meetings/series/${series.id}`,
+    }).catch(console.error));
+  }
+  for (const g of guestRows) {
+    mails.push(mailer.send("meeting_schedule_changed_guest", g.email as string, {
+      appTitle, guestName: g.name || "ゲスト", hostName, meetingTitle, changesText, actionNote, scheduleUrl: `${appUrl}/schedule/series/${g.token}`,
+    }).catch(console.error));
+  }
+  c.executionCtx.waitUntil(Promise.all(mails));
+
+  queueSeriesCalendarSync(c.executionCtx, db, c.env, id);
+  c.executionCtx.waitUntil(
+    reconcileMembersCalendar(db, c.env, affectedMemberIds).catch((e) => console.error("[member calendar] series occurrence change failed", e))
+  );
+  return c.json({ ok: true, preview: false, summary });
+});
+
+
 // ----------------------------------------------------------------
 // POST /api/meeting-series/:id/occurrences/delete — 今後の開催回をまとめて削除（主催者のみ）
 // 開始前の回だけが対象。削除後は、残った回の「第N回」を日付順に詰め直す。
 // ----------------------------------------------------------------
-const DELETE_CHUNK = 50; // D1のバインド変数の上限に収まるよう、IN句は分割して発行する
-
 meetingSeriesRoutes.post("/:id/occurrences/delete", async (c) => {
   const db = createDb(c.env.DB);
   const memberId = await resolveEffectiveMemberId(db, c.get("userId"), c.get("userType"));

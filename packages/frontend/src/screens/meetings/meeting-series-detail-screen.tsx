@@ -13,6 +13,7 @@ import { useTimezone } from "@/hooks/use-timezone";
 import { fmtDateJP, fmtTime } from "@/lib/date";
 import { CandidateCalendarToggle } from "@/components/candidate-calendar-view";
 import { ScheduleTextModal } from "@/components/schedule-text-modal";
+import { ChangeScheduleModal } from "./_change-schedule-modal";
 import { SeriesConferenceUrlsModal, type SeriesUrlPayload } from "./_series-conference-urls-modal";
 import { MeetingEventSelector, selectionToPayload } from "@/components/meeting-event-selector";
 import { EventReminderSetting } from "@/components/reminder-settings";
@@ -124,6 +125,7 @@ export function MeetingSeriesDetailScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showChangeSchedule, setShowChangeSchedule] = useState(false);
   const [showScheduleText, setShowScheduleText] = useState(false);
   const [showUrlsModal, setShowUrlsModal] = useState(false);
   const [urlsError, setUrlsError] = useState<string | null>(null);
@@ -608,11 +610,20 @@ export function MeetingSeriesDetailScreen() {
               <div className="flex items-center gap-2 mb-2">
                 <h2 className="text-sm font-semibold" style={{ color: "var(--color-ink-700)" }}>今後の開催回（{upcoming.length}件）</h2>
                 {series.isHost && series.status === "confirmed" && (
-                  <button onClick={() => { setSelectMode((v) => !v); setSelectedIds(new Set()); setShowDeleteConfirm(false); setError(""); }}
-                    className="ml-auto text-xs font-medium px-3 py-1.5 rounded-full"
-                    style={{ background: selectMode ? "var(--color-paper-300)" : "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
-                    {selectMode ? "選択をやめる" : "選んで削除"}
-                  </button>
+                  <div className="ml-auto flex items-center gap-1.5">
+                    {!selectMode && (
+                      <button onClick={() => setShowChangeSchedule(true)}
+                        className="text-xs font-medium px-3 py-1.5 rounded-full"
+                        style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                        日程の変更・追加
+                      </button>
+                    )}
+                    <button onClick={() => { setSelectMode((v) => !v); setSelectedIds(new Set()); setShowDeleteConfirm(false); setError(""); }}
+                      className="text-xs font-medium px-3 py-1.5 rounded-full"
+                      style={{ background: selectMode ? "var(--color-paper-300)" : "var(--color-paper-200)", color: "var(--color-ink-600)" }}>
+                      {selectMode ? "選択をやめる" : "選んで削除"}
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -693,6 +704,16 @@ export function MeetingSeriesDetailScreen() {
             </section>
           )}
 
+          {upcoming.length === 0 && series.isHost && series.status === "confirmed" && (
+            <section className="mb-5">
+              <button onClick={() => setShowChangeSchedule(true)}
+                className="w-full py-2.5 rounded-2xl text-sm font-medium"
+                style={{ background: "var(--color-paper-200)", color: "var(--color-ink-700)" }}>
+                ＋ 開催日を追加する
+              </button>
+            </section>
+          )}
+
           {past.length > 0 && (
             <section className="mb-5">
               <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-500)" }}>過去の開催回（{past.length}件）</h2>
@@ -758,6 +779,29 @@ export function MeetingSeriesDetailScreen() {
             </div>
           )}
         </>
+      )}
+      {showChangeSchedule && (
+        <ChangeScheduleModal
+          endpoint={`/meeting-series/${id}/occurrences/change`}
+          mode="series"
+          dates={upcoming.map((o, idx) => ({
+            id: o.id, startsAt: o.startsAt, endsAt: o.endsAt,
+            label: series.numberedTitles === false ? "" : `第${o.seriesOccurrenceIndex ?? idx + 1}回・`,
+          }))}
+          durationMinutes={(() => {
+            const o = upcoming[0];
+            const m = o?.endsAt ? Math.round((o.endsAt - o.startsAt) / 60) : 60;
+            return m > 0 && m <= 720 ? m : 60;
+          })()}
+          onClose={() => setShowChangeSchedule(false)}
+          onDone={() => {
+            setShowChangeSchedule(false);
+            qc.invalidateQueries({ queryKey: ["meeting-series", id] });
+            qc.invalidateQueries({ queryKey: ["meeting-series"] });
+            qc.invalidateQueries({ queryKey: ["meetings"] });
+            qc.invalidateQueries({ queryKey: ["calendar"] });
+          }}
+        />
       )}
       {showScheduleText && (
         <ScheduleTextModal

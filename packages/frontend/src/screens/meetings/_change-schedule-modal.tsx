@@ -1,5 +1,6 @@
 // =============================================================
-// 確定したあとの「日程を変更する」ダイアログ（複数人ミーティング・主催者用）
+// 確定したあとの「日程を変更する」ダイアログ（複数人ミーティング・定例会・主催者用）
+//  ・定例会（mode="series"）では、「日時を変更」と「日程を追加」だけ。開催回の中止は、一覧の「選んで削除」で行う
 //  ・確定済みの日ごとに「そのまま／日時を変更／中止にする」を選べる
 //  ・新しい日を追加できる（追加した日は、そのまま開催日になる）
 //  ・まとめて確認 → 変更する、の2段階。確認画面で、お知らせメールの送り先が分かる
@@ -15,19 +16,22 @@ import { useTimezone } from "@/hooks/use-timezone";
 import { formatRangeText } from "@/lib/schedule-text";
 import { DEFAULT_START_TIME } from "@/lib/meeting-time";
 
-export type ChangeScheduleDate = { id: string; startsAt: number; endsAt: number | null };
+export type ChangeScheduleDate = { id: string; startsAt: number; endsAt: number | null; /** 日時の前に出す名前（定例会の「第3回」など） */ label?: string };
 
 type Kind = "keep" | "change" | "cancel";
 type DateState = { kind: Kind; date: string; time: string };
 type AddRow = { key: string; date: string; time: string };
 
 type Summary = {
-  cancelCount: number;
+  cancelCount?: number;
   rescheduleCount: number;
   addCount: number;
-  declaredNames: string[];
-  addRecipientCount: number;
+  declaredNames?: string[];
+  addRecipientCount?: number;
   mailCount: number;
+  /** 定例会のみ：お知らせの送り先（メンバー・メールのあるゲスト） */
+  memberCount?: number;
+  guestCount?: number;
 };
 type ChangeResponse = { ok: boolean; preview: boolean; summary: Summary };
 
@@ -56,8 +60,10 @@ const pill = (active: boolean, tone: "neutral" | "warn" | "danger") => {
 
 const inputStyle = { borderColor: "var(--color-paper-300)", background: "white" };
 
-export function ChangeScheduleModal({ meetingId, dates, durationMinutes, onClose, onDone }: {
-  meetingId: string;
+export function ChangeScheduleModal({ endpoint, mode = "meeting", dates, durationMinutes, onClose, onDone }: {
+  /** 変更を送るAPIのパス（例: /meetings/xxx/schedule-changes） */
+  endpoint: string;
+  mode?: "meeting" | "series";
   dates: ChangeScheduleDate[];
   /** 新しく追加する日の所要時間（分） */
   durationMinutes: number;
@@ -77,7 +83,9 @@ export function ChangeScheduleModal({ meetingId, dates, durationMinutes, onClose
     const m = d.endsAt ? Math.round((d.endsAt - d.startsAt) / 60) : durationMinutes;
     return m > 0 && m <= 720 ? m : durationMinutes;
   };
-  const isPast = (d: ChangeScheduleDate) => (d.endsAt ?? d.startsAt + 3600) < nowSec;
+  const isSeries = mode === "series";
+  // 定例会は、始まった回も変えられない（ミーティングは、終わった日だけ変えられない）
+  const isPast = (d: ChangeScheduleDate) => isSeries ? d.startsAt < nowSec : (d.endsAt ?? d.startsAt + 3600) < nowSec;
   const setKind = (id: string, kind: Kind) => setStates((s) => ({ ...s, [id]: { ...s[id], kind } }));
   const setField = (id: string, field: "date" | "time", value: string) => setStates((s) => ({ ...s, [id]: { ...s[id], [field]: value } }));
 
@@ -89,25 +97,25 @@ export function ChangeScheduleModal({ meetingId, dates, durationMinutes, onClose
 
   const changeValid = changeRows.every((r) => r.startsAt > nowSec && r.startsAt !== r.d.startsAt);
   const addValid = addRows.every((r) => r.startsAt > nowSec);
-  const remainingDates = dates.length - cancelIds.length + adds.length;
+  const remainingDates = isSeries ? 1 : dates.length - cancelIds.length + adds.length;
   const hasChange = cancelIds.length + changeRows.length + adds.length > 0;
   const canReview = hasChange && changeValid && addValid && remainingDates > 0;
 
   const payload = {
-    cancel: cancelIds,
-    reschedule: changeRows.map((r) => ({ candidateId: r.d.id, startsAt: r.startsAt, endsAt: r.startsAt + durationOf(r.d) * 60 })),
+    ...(isSeries ? {} : { cancel: cancelIds }),
+    reschedule: changeRows.map((r) => ({ [isSeries ? "meetingId" : "candidateId"]: r.d.id, startsAt: r.startsAt, endsAt: r.startsAt + durationOf(r.d) * 60 })),
     add: addRows.map((r) => ({ startsAt: r.startsAt, endsAt: r.startsAt + durationMinutes * 60 })),
   };
 
   const errorText = (e: unknown) => e instanceof ApiError ? e.message : "うまく送れませんでした。通信状況をご確認のうえ、もう一度お試しください。";
 
   const previewMutation = useMutation({
-    mutationFn: () => api.post<ChangeResponse>(`/meetings/${meetingId}/schedule-changes`, { ...payload, preview: true }),
+    mutationFn: () => api.post<ChangeResponse>(endpoint, { ...payload, preview: true }),
     onSuccess: (res) => { setPreview(res.summary); setStep("confirm"); setError(null); },
     onError: (e) => setError(errorText(e)),
   });
   const applyMutation = useMutation({
-    mutationFn: () => api.post<ChangeResponse>(`/meetings/${meetingId}/schedule-changes`, payload),
+    mutationFn: () => api.post<ChangeResponse>(endpoint, payload),
     onSuccess: () => onDone(),
     onError: (e) => setError(errorText(e)),
   });
@@ -122,30 +130,30 @@ export function ChangeScheduleModal({ meetingId, dates, durationMinutes, onClose
         <div>
           <p className="text-base font-semibold" style={{ fontFamily: "var(--font-klee)", color: "var(--color-ink-900)" }}>🗓️ 日程を変更する</p>
           <p className="text-xs mt-0.5" style={{ color: "var(--color-ink-500)" }}>
-            中止・日時の変更・日程の追加を、まとめて行えます。お知らせのメールは、<strong>1人に1通にまとめて</strong>お送りします。
+            {isSeries ? "日時の変更・日程の追加を、まとめて行えます。" : "中止・日時の変更・日程の追加を、まとめて行えます。"}お知らせのメールは、<strong>1人に1通にまとめて</strong>お送りします。{isSeries && "（開催回をなくしたいときは、一覧の「選んで削除」をご利用ください）"}
           </p>
         </div>
 
         {step === "edit" ? (
           <>
             <div className="space-y-2">
-              <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>いまの開催日程</p>
+              <p className="text-xs font-medium" style={{ color: "var(--color-ink-600)" }}>{isSeries ? "今後の開催回" : "いまの開催日程"}</p>
               {dates.map((d) => {
                 const st = states[d.id];
                 const past = isPast(d);
                 return (
                   <div key={d.id} className="rounded-2xl p-3 space-y-2" style={{ background: "var(--color-paper-100)", border: "1px solid var(--color-paper-300)" }}>
                     <p className="text-sm font-medium" style={{ color: "var(--color-ink-900)", textDecoration: st.kind === "cancel" ? "line-through" : "none", opacity: st.kind === "cancel" ? 0.6 : 1 }}>
-                      {textOf(d.startsAt, d.endsAt)}
+                      {d.label}{textOf(d.startsAt, d.endsAt)}
                     </p>
                     {past ? (
-                      <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>すでに終わった日程のため、変更できません</p>
+                      <p className="text-xs" style={{ color: "var(--color-ink-400)" }}>{isSeries ? "すでに始まっているため、変更できません" : "すでに終わった日程のため、変更できません"}</p>
                     ) : (
                       <>
                         <div className="flex gap-1.5">
                           <button type="button" onClick={() => setKind(d.id, "keep")} className="flex-1 py-1.5 rounded-xl text-xs font-medium" style={pill(st.kind === "keep", "neutral")}>そのまま</button>
                           <button type="button" onClick={() => setKind(d.id, "change")} className="flex-1 py-1.5 rounded-xl text-xs font-medium" style={pill(st.kind === "change", "warn")}>日時を変更</button>
-                          <button type="button" onClick={() => setKind(d.id, "cancel")} className="flex-1 py-1.5 rounded-xl text-xs font-medium" style={pill(st.kind === "cancel", "danger")}>中止にする</button>
+                          {!isSeries && <button type="button" onClick={() => setKind(d.id, "cancel")} className="flex-1 py-1.5 rounded-xl text-xs font-medium" style={pill(st.kind === "cancel", "danger")}>中止にする</button>}
                         </div>
                         {st.kind === "change" && (
                           <div className="flex items-center gap-2 flex-wrap">
@@ -214,7 +222,7 @@ export function ChangeScheduleModal({ meetingId, dates, durationMinutes, onClose
                 <div>
                   <p className="text-xs font-semibold" style={{ color: "var(--color-accent)" }}>日時を変更する日程（{changeRows.length}日）</p>
                   {changeRows.map((r) => (
-                    <p key={r.d.id}>・{textOf(r.d.startsAt, r.d.endsAt)}<br /><span style={{ marginLeft: "1em" }}>→ {textOf(r.startsAt, r.startsAt + durationOf(r.d) * 60)}</span></p>
+                    <p key={r.d.id}>・{r.d.label}{textOf(r.d.startsAt, r.d.endsAt)}<br /><span style={{ marginLeft: "1em" }}>→ {textOf(r.startsAt, r.startsAt + durationOf(r.d) * 60)}</span></p>
                   ))}
                 </div>
               )}
@@ -229,17 +237,29 @@ export function ChangeScheduleModal({ meetingId, dates, durationMinutes, onClose
             {preview && (
               <div className="rounded-2xl p-3 space-y-1.5 text-xs" style={{ background: "rgba(212,160,59,0.10)", border: "1px solid rgba(212,160,59,0.3)", color: "var(--color-ink-700)" }}>
                 <p className="font-semibold">📧 お知らせのメール（1人に1通）</p>
-                {(preview.cancelCount > 0 || preview.rescheduleCount > 0) && (preview.declaredNames.length > 0 ? (
-                  <p>
-                    ・中止・日時変更：その日に参加表明していた{preview.declaredNames.length}人に、参加できる日を選び直してもらうお願いを送ります
-                    （{preview.declaredNames.slice(0, 8).join("さん、")}さん{preview.declaredNames.length > 8 ? `ほか${preview.declaredNames.length - 8}人` : ""}）
-                  </p>
+                {isSeries ? (
+                  <>
+                    <p>
+                      ・メンバー{preview.memberCount ?? 0}人{(preview.guestCount ?? 0) > 0 ? `と、メールアドレスのある外部ゲスト${preview.guestCount}人` : ""}に、
+                      変更した内容（日時が変わった回・追加した回・今後の開催日程）を、1通にまとめてお送りします（全部で<strong>{preview.mailCount}通</strong>）
+                    </p>
+                    <p>・開催回の「第N回」の番号は、日付順に振り直されます</p>
+                  </>
                 ) : (
-                  <p>・中止・日時変更：その日に参加表明していた人はいないため、この件のメールは送りません</p>
-                ))}
-                {preview.addCount > 0 && <p>・追加：もともとの案内の対象者{preview.addRecipientCount}人に、日程が増えたことを送ります</p>}
-                <p>・両方に当てはまる人には、1通にまとめて送ります。送るメールは<strong>全部で{preview.mailCount}通</strong>です</p>
-                {(preview.cancelCount > 0 || preview.rescheduleCount > 0) && <p>・中止・日時変更になった日の、みなさんの回答は取り消されます</p>}
+                  <>
+                    {((preview.cancelCount ?? 0) > 0 || preview.rescheduleCount > 0) && ((preview.declaredNames ?? []).length > 0 ? (
+                      <p>
+                        ・中止・日時変更：その日に参加表明していた{(preview.declaredNames ?? []).length}人に、参加できる日を選び直してもらうお願いを送ります
+                        （{(preview.declaredNames ?? []).slice(0, 8).join("さん、")}さん{(preview.declaredNames ?? []).length > 8 ? `ほか${(preview.declaredNames ?? []).length - 8}人` : ""}）
+                      </p>
+                    ) : (
+                      <p>・中止・日時変更：その日に参加表明していた人はいないため、この件のメールは送りません</p>
+                    ))}
+                    {preview.addCount > 0 && <p>・追加：もともとの案内の対象者{preview.addRecipientCount ?? 0}人に、日程が増えたことを送ります</p>}
+                    <p>・両方に当てはまる人には、1通にまとめて送ります。送るメールは<strong>全部で{preview.mailCount}通</strong>です</p>
+                    {((preview.cancelCount ?? 0) > 0 || preview.rescheduleCount > 0) && <p>・中止・日時変更になった日の、みなさんの回答は取り消されます</p>}
+                  </>
+                )}
               </div>
             )}
             {error && <p className="text-xs px-3 py-2 rounded-xl" style={{ background: "rgba(181,56,75,0.08)", color: "var(--color-brand)" }}>{error}</p>}
