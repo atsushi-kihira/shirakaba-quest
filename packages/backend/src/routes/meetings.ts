@@ -1244,10 +1244,10 @@ meetingRoutes.get("/:id", async (c) => {
   const respondingMemberIds = [...new Set(allResponses.map((r) => r.memberId).filter(Boolean) as string[])];
 
   // 対象メンバー一覧（scope によって異なる）
-  let targetMembers: Array<{ id: string; name: string; emoji: string; bgColor: string }> = [];
+  let targetMembers: Array<{ id: string; name: string; emoji: string; bgColor: string; furigana: string }> = [];
   if (meeting.scope === "all") {
     targetMembers = await db
-      .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor })
+      .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor, furigana: schema.members.furigana })
       .from(schema.members)
       .where(eq(schema.members.status, "active"))
       .all();
@@ -1260,7 +1260,7 @@ meetingRoutes.get("/:id", async (c) => {
     const tmIds = teamMemberRows.map((r) => r.memberId);
     if (tmIds.length > 0) {
       targetMembers = await db
-        .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor })
+        .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor, furigana: schema.members.furigana })
         .from(schema.members)
         .where(and(inArray(schema.members.id, tmIds), eq(schema.members.status, "active")))
         .all();
@@ -1274,7 +1274,7 @@ meetingRoutes.get("/:id", async (c) => {
     const ctmIds = collabMemberRows.map((r) => r.memberId);
     if (ctmIds.length > 0) {
       targetMembers = await db
-        .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor })
+        .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor, furigana: schema.members.furigana })
         .from(schema.members)
         .where(and(inArray(schema.members.id, ctmIds), eq(schema.members.status, "active")))
         .all();
@@ -1289,7 +1289,7 @@ meetingRoutes.get("/:id", async (c) => {
     // ホストも含める
     const allIds = [...new Set([meeting.hostMemberId, ...inviteeIds])];
     targetMembers = await db
-      .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor })
+      .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor, furigana: schema.members.furigana })
       .from(schema.members)
       .where(inArray(schema.members.id, allIds))
       .all();
@@ -1298,10 +1298,10 @@ meetingRoutes.get("/:id", async (c) => {
   // scope=all/team でも実際に回答したメンバーを追加で補完
   const targetMemberIds = new Set(targetMembers.map((m) => m.id));
   const extraIds = respondingMemberIds.filter((mid) => !targetMemberIds.has(mid));
-  let extraMembers: Array<{ id: string; name: string; emoji: string; bgColor: string }> = [];
+  let extraMembers: Array<{ id: string; name: string; emoji: string; bgColor: string; furigana: string }> = [];
   if (extraIds.length > 0) {
     extraMembers = await db
-      .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor })
+      .select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor, furigana: schema.members.furigana })
       .from(schema.members)
       .where(inArray(schema.members.id, extraIds))
       .all();
@@ -1367,6 +1367,7 @@ meetingRoutes.get("/:id", async (c) => {
       name: m.name,
       emoji: m.emoji,
       bgColor: m.bgColor,
+      furigana: m.furigana,
       answers,
       comment: commentByPerson.get(m.id) ?? null,
       hasResponded: Object.keys(answers).length > 0,
@@ -1414,6 +1415,14 @@ meetingRoutes.get("/:id", async (c) => {
     .where(eq(schema.meetingAttendances.meetingId, id))
     .all();
   const myAttendances = attendanceRows.filter((a) => a.memberId === memberId);
+
+  // 各人が最後に回答した時刻（日程の回答・出欠の回答のうち、いちばん新しいもの）。回答表を「回答した順」に並べるのに使う
+  const lastAnsweredAt = new Map<string, number>();
+  const bumpAnswered = (key: string | null, t: number) => {
+    if (key && t > (lastAnsweredAt.get(key) ?? 0)) lastAnsweredAt.set(key, t);
+  };
+  for (const r of allResponses) bumpAnswered(r.memberId ?? r.externalInviteeId, r.respondedAt);
+  for (const a of attendanceRows) bumpAnswered(a.memberId, a.recordedAt);
 
   // 確定済み候補日（複数対応）— 最も早い日時を confirmedStartsAt として返す
   // 旧形式（isConfirmed が未設定）の確定済みミーティングは confirmedCandidateId を参照してフォールバック
@@ -1517,7 +1526,7 @@ meetingRoutes.get("/:id", async (c) => {
           ? (adderNameById.get(c.addedByMemberId) ?? null)
           : null,
       })),
-      respondents: [...memberRespondents, ...externalRespondents],
+      respondents: [...memberRespondents, ...externalRespondents].map((r) => ({ ...r, respondedAt: lastAnsweredAt.get(r.id) ?? null })),
       // 外部ゲストのメールアドレス・専用URLは、主催者だけに返す（他のメンバーには名前のみ）
       externalInvitees: externalInvitees.map((e) => ({
         id: e.id, name: e.name, email: isHost ? e.email : null, token: isHost ? e.token : "", createdAt: e.createdAt,

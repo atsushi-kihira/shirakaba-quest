@@ -730,7 +730,7 @@ meetingSeriesRoutes.get("/:id", async (c) => {
 
   const targetIds = await resolveSeriesMemberIds(db, series);
   const targets = targetIds.length > 0
-    ? await db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor })
+    ? await db.select({ id: schema.members.id, name: schema.members.name, emoji: schema.members.emoji, bgColor: schema.members.bgColor, furigana: schema.members.furigana })
         .from(schema.members).where(inArray(schema.members.id, targetIds)).all()
     : [];
 
@@ -759,6 +759,12 @@ meetingSeriesRoutes.get("/:id", async (c) => {
     (respondentsByCandidate[r.candidateId] ??= []).push({ memberId: `ext:${e.id}`, name: e.name || "ゲスト", emoji: "🌐", availability: r.availability as Availability });
   }
   const respondedExternalIds = new Set(externalResponseRows.map((r) => r.externalInviteeId));
+
+  // 各人が最後に回答した時刻。回答表を「回答した順」に並べるのに使う（メンバーはID、外部ゲストは "ext:ゲストID"）
+  const lastAnsweredAt = new Map<string, number>();
+  const bumpAnswered = (key: string, t: number) => { if (t > (lastAnsweredAt.get(key) ?? 0)) lastAnsweredAt.set(key, t); };
+  for (const r of responses) bumpAnswered(r.memberId, r.respondedAt);
+  for (const r of externalResponseRows) bumpAnswered(`ext:${r.externalInviteeId}`, r.respondedAt);
 
   // 回答に添えられた一言コメント。{ メンバーID（外部ゲストは "ext:ゲストID"）→ コメント }
   const commentByPerson = await loadResponseComments(db, "series", id);
@@ -846,7 +852,10 @@ meetingSeriesRoutes.get("/:id", async (c) => {
       myResponses,
       myComment: commentByPerson.get(memberId) ?? "",
       comments,
-      targetMembers: [...targets, ...externalTargets],
+      targetMembers: [
+        ...targets.map((t) => ({ ...t, respondedAt: lastAnsweredAt.get(t.id) ?? null })),
+        ...externalTargets.map((t) => ({ ...t, furigana: "", respondedAt: lastAnsweredAt.get(t.id) ?? null })),
+      ],
       externalInvitees: externalRows.map((e) => ({
         id: e.id, name: e.name || "ゲスト",
         email: isHost ? e.email : null, url: isHost ? `${getFrontendUrl(c.env)}/schedule/series/${e.token}` : null,

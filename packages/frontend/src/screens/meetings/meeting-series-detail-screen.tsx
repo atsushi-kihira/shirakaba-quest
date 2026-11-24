@@ -20,6 +20,9 @@ import { EventReminderSetting } from "@/components/reminder-settings";
 import { SeriesGuestPanel, type SeriesExternalInvitee } from "./_series-guest-panel";
 import { SeriesParticipantsPanel } from "./_series-participants-panel";
 import { ResponseCommentField, CommentBubble } from "@/components/response-comment";
+import { RespondentOrderToggle } from "@/components/respondent-order-toggle";
+import { sortRespondents, useRespondentOrder } from "@/lib/respondent-order";
+import { holdScrollPosition } from "@/lib/hold-scroll";
 import { confirmPaidParticipation } from "@/components/meeting-options-picker";
 import { DescriptionEditor } from "@/components/description-editor";
 import { DescriptionBody } from "@/components/description-body";
@@ -36,7 +39,13 @@ type Candidate = {
   label: string; isConfirmed: boolean; respondents: Respondent[];
   upcomingDates?: { startsAt: number; endsAt: number }[];
 };
-type TargetMember = { id: string; name: string; emoji: string; bgColor: string; isExternal?: boolean };
+type TargetMember = {
+  id: string; name: string; emoji: string; bgColor: string; isExternal?: boolean;
+  /** ふりがな（五十音順に並べるときに使う。ゲストは空） */
+  furigana?: string;
+  /** 最後に回答した時刻。まだ回答していなければ null */
+  respondedAt: number | null;
+};
 type Occurrence = { id: string; startsAt: number; endsAt: number | null; status: string; seriesOccurrenceIndex: number | null; conferenceUrl: string | null };
 type SeriesDetail = {
   id: string; title: string; description: string | null;
@@ -116,6 +125,8 @@ export function MeetingSeriesDetailScreen() {
   const [propagateDesc, setPropagateDesc] = useState(true);
   const [myAnswers, setMyAnswers] = useState<Record<string, Availability>>({});
   const [hasEdited, setHasEdited] = useState(false);
+  // 回答表の並び順（回答した順 / 五十音順）
+  const [respondentOrder, setRespondentOrder] = useRespondentOrder();
   // 一言コメントの書きかけ（null: まだ書き換えていない＝サーバーの内容を表示）
   const [commentDraft, setCommentDraft] = useState<string | null>(null);
   const [confirmCandidateId, setConfirmCandidateId] = useState<string | null>(null);
@@ -154,15 +165,48 @@ export function MeetingSeriesDetailScreen() {
     },
   });
 
+  // 回答したらすぐ、回答表に自分の回答を反映する（サーバーの確認を待たない）。失敗したら元に戻す
+  type RespondVars = { responses: Record<string, Availability>; comment: string; hold: () => Promise<void> };
   const respondMutation = useMutation({
-    mutationFn: ({ responses, comment }: { responses: Record<string, Availability>; comment: string }) =>
+    mutationFn: ({ responses, comment }: RespondVars) =>
       api.post(`/meeting-series/${id}/respond`, { responses, comment }),
-    onSuccess: () => {
+    onMutate: ({ responses, comment, hold }: RespondVars) => {
+      const me = user?.id;
+      if (me) {
+        const now = Math.floor(Date.now() / 1000);
+        qc.setQueryData<{ data: SeriesDetail }>(["meeting-series", id], (old) => {
+          if (!old) return old;
+          const d = old.data;
+          const mine = comment.trim();
+          return {
+            ...old,
+            data: {
+              ...d,
+              myResponses: { ...d.myResponses, ...responses },
+              myComment: mine,
+              comments: { ...d.comments, ...(mine ? { [me]: mine } : {}) },
+              candidates: d.candidates.map((cand) => {
+                const av = responses[cand.id];
+                if (!av) return cand;
+                const self = cand.respondents.find((r) => r.memberId === me);
+                const entry: Respondent = { memberId: me, name: self?.name ?? "", emoji: self?.emoji ?? "", availability: av };
+                return { ...cand, respondents: [...cand.respondents.filter((r) => r.memberId !== me), entry] };
+              }),
+              targetMembers: d.targetMembers.map((m) => (m.id === me ? { ...m, respondedAt: now } : m)),
+            },
+          };
+        });
+      }
+      void hold();
+    },
+    onSuccess: async (_res, { hold }) => {
       setHasEdited(false);
       setCommentDraft(null);
-      qc.invalidateQueries({ queryKey: ["meeting-series", id] });
       qc.invalidateQueries({ queryKey: ["meeting-series"] });
+      await qc.invalidateQueries({ queryKey: ["meeting-series", id] });
+      await hold();
     },
+    onError: () => { qc.invalidateQueries({ queryKey: ["meeting-series", id] }); },
   });
 
   const [editingEvent, setEditingEvent] = useState(false);
@@ -435,9 +479,12 @@ export function MeetingSeriesDetailScreen() {
         <>
           {/* ---- 回答グリッド（通常ミーティングと同じ表示） ---- */}
           <div className="mb-5">
-            <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>
-              📊 回答状況
-            </h2>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h2 className="text-sm font-semibold" style={{ color: "var(--color-ink-700)" }}>
+                📊 回答状況
+              </h2>
+              {series.targetMembers.length > 1 && <RespondentOrderToggle order={respondentOrder} onChange={setRespondentOrder} />}
+            </div>
             <div className="overflow-x-auto -mx-4 px-4">
               <table className="border-separate border-spacing-1 min-w-max">
                 <thead>
@@ -468,7 +515,7 @@ export function MeetingSeriesDetailScreen() {
                   </tr>
                 </thead>
                 <tbody>
-                  {series.targetMembers.map((m) => {
+                  {sortRespondents(series.targetMembers, respondentOrder).map((m) => {
                     const isMe = m.id === user?.id;
                     return (
                       <Fragment key={m.id}>
@@ -549,10 +596,10 @@ export function MeetingSeriesDetailScreen() {
               onChange={setCommentDraft}
               className="mb-3"
             />
-            <button onClick={() => {
+            <button onClick={(e) => {
                 const joining = Object.values(myAnswers).some((v) => v === "yes" || v === "maybe");
                 if (joining && series.isPaid && !confirmPaidParticipation(series.feeAmount, series.feeNote)) return;
-                respondMutation.mutate({ responses: myAnswers, comment: commentDraft ?? series.myComment ?? "" });
+                respondMutation.mutate({ responses: myAnswers, comment: commentDraft ?? series.myComment ?? "", hold: holdScrollPosition(e.currentTarget) });
               }}
               disabled={(!hasEdited && commentDraft === null) || respondMutation.isPending}
               className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50 transition"

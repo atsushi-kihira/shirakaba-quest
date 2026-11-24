@@ -26,6 +26,9 @@ import type { CustomField } from "@/lib/custom-fields";
 import { AttachmentGallery } from "@/components/attachment-gallery";
 import { docIsEmpty, effectiveDoc, hasDescription, plainToDoc, type RichDoc } from "@/lib/rich-doc";
 import type { Attachment } from "@/lib/attachments";
+import { RespondentOrderToggle } from "@/components/respondent-order-toggle";
+import { sortRespondents, useRespondentOrder } from "@/lib/respondent-order";
+import { holdScrollPosition } from "@/lib/hold-scroll";
 
 type Availability = "yes" | "maybe" | "no";
 
@@ -36,6 +39,10 @@ type Respondent = {
   name: string;
   emoji: string;
   bgColor: string;
+  /** ふりがな（五十音順に並べるときに使う。ゲストは空） */
+  furigana?: string;
+  /** 最後に回答した時刻（日程・出欠のうち最新）。まだ回答していなければ null */
+  respondedAt: number | null;
   answers: Record<string, Availability>;
   /** 回答に添えた一言コメント（全員に見える） */
   comment: string | null;
@@ -210,6 +217,8 @@ export function MeetingDetailScreen() {
   const { termExternalGuest } = useSettings();
 
   const [myAnswers, setMyAnswers] = useState<Record<string, Availability>>({});
+  // 回答表の並び順（回答した順 / 五十音順）
+  const [respondentOrder, setRespondentOrder] = useRespondentOrder();
   const [hasEdited, setHasEdited] = useState(false);
   // 回答に添える一言コメント（commentDirty: まだ送っていない書き換えがあるか）
   const [myComment, setMyComment] = useState("");
@@ -301,15 +310,34 @@ export function MeetingDetailScreen() {
     }
   }, [data]);
 
+  // 回答したらすぐ、回答表に自分の回答を反映する（サーバーの確認を待たない）。失敗したら元に戻す
+  const patchDetail = (fn: (d: DetailResponse["data"]) => DetailResponse["data"]) =>
+    qc.setQueryData<DetailResponse>(["meetings", id], (old) => (old ? { ...old, data: fn(old.data) } : old));
+
+  type RespondVars = { answers: Record<string, Availability>; comment: string; hold: () => Promise<void> };
   const respondMutation = useMutation({
-    mutationFn: ({ answers, comment }: { answers: Record<string, Availability>; comment: string }) =>
+    mutationFn: ({ answers, comment }: RespondVars) =>
       api.post(`/meetings/${id}/respond`, { answers, comment }),
-    onSuccess: () => {
+    onMutate: ({ answers, comment, hold }: RespondVars) => {
+      const now = Math.floor(Date.now() / 1000);
+      patchDetail((d) => ({
+        ...d,
+        myAnswers: { ...d.myAnswers, ...answers },
+        respondents: d.respondents.map((r) =>
+          r.type === "member" && r.id === user?.id
+            ? { ...r, answers: { ...r.answers, ...answers }, hasResponded: true, respondedAt: now, comment: comment.trim() || null }
+            : r),
+      }));
+      void hold();
+    },
+    onSuccess: async (_res, { hold }) => {
       setHasEdited(false);
       setCommentDirty(false);
-      qc.invalidateQueries({ queryKey: ["meetings", id] });
       qc.invalidateQueries({ queryKey: ["meetings"] });
+      await qc.invalidateQueries({ queryKey: ["meetings", id] });
+      await hold();
     },
+    onError: () => { qc.invalidateQueries({ queryKey: ["meetings", id] }); },
   });
 
   const confirmMutation = useMutation({
@@ -489,15 +517,36 @@ export function MeetingDetailScreen() {
     },
   });
 
+  type AttendanceVars = { status: "attended" | "absent"; candidateId?: string | null; hold?: () => Promise<void> };
   const attendanceMutation = useMutation({
-    mutationFn: ({ status, candidateId }: { status: "attended" | "absent"; candidateId?: string | null }) =>
+    mutationFn: ({ status, candidateId }: AttendanceVars) =>
       // 書き換えた一言コメントがあれば、出欠といっしょに送る
       api.post<{ ok: boolean; pointsAwarded: number }>(`/meetings/${id}/attendance`, { status, candidateId, ...(commentDirty && { comment: myComment }) }),
-    onSuccess: (_res, variables) => {
+    onMutate: ({ status, candidateId, hold }: AttendanceVars) => {
+      // 日程を指定した出欠は、回答表にすぐ反映する（全日程の欠席は、サーバーの結果を待つ）
+      if (candidateId && user?.id) {
+        const me = user.id;
+        const now = Math.floor(Date.now() / 1000);
+        patchDetail((d) => {
+          const prev = d.attendances.find((a) => a.memberId === me && a.candidateId === candidateId);
+          const rec: AttendanceRecord = { memberId: me, status, candidateId, pointsAwarded: prev?.pointsAwarded ?? null };
+          return {
+            ...d,
+            attendances: [...d.attendances.filter((a) => !(a.memberId === me && a.candidateId === candidateId)), rec],
+            myAttendances: [...d.myAttendances.filter((a) => a.candidateId !== candidateId), { status, candidateId, pointsAwarded: rec.pointsAwarded }],
+            respondents: d.respondents.map((r) => (r.type === "member" && r.id === me ? { ...r, respondedAt: now } : r)),
+          };
+        });
+      }
+      void hold?.();
+    },
+    onError: () => { qc.invalidateQueries({ queryKey: ["meetings", id] }); },
+    onSuccess: async (_res, variables) => {
       setCommentDirty(false);
-      qc.invalidateQueries({ queryKey: ["meetings", id] });
       qc.invalidateQueries({ queryKey: ["meetings", "pending-attendance"] });
       qc.invalidateQueries({ queryKey: ["ranking", "me"] });
+      await qc.invalidateQueries({ queryKey: ["meetings", id] });
+      await variables.hold?.();
       // 出席（参加した）を記録した時、活動タイムラインへの投稿を促す。
       // パワーチーム・ゆるいチームのミーティング（定例会含む）なら、チーム固定の投稿モーダルを開く。
       // それ以外（相手が1名だけの1to1的なミーティング）は、従来通りの簡易プロンプトを出す。
@@ -527,14 +576,18 @@ export function MeetingDetailScreen() {
   const candidateSlotsLeft = maxCandidates - candidates.length;
 
   // 有料の会は、参加を登録する前に、有料であることを確認してもらう
-  const requestAttendance = (vars: { status: "attended" | "absent"; candidateId?: string | null }) => {
-    if (vars.status === "attended" && meeting.isPaid && !confirmPaidParticipation(meeting.feeAmount, meeting.feeNote)) return;
-    attendanceMutation.mutate(vars);
+  // 回答ボタン（button）を渡すと、回答したあとも、その場所から画面の位置が動かないようにする
+  const answerAttendance = (vars: { status: "attended" | "absent"; candidateId?: string | null }, button: Element) => {
+    attendanceMutation.mutate({ ...vars, hold: holdScrollPosition(button) });
   };
-  const requestRespond = () => {
+  const requestAttendance = (vars: { status: "attended" | "absent"; candidateId?: string | null }, button: Element) => {
+    if (vars.status === "attended" && meeting.isPaid && !confirmPaidParticipation(meeting.feeAmount, meeting.feeNote)) return;
+    answerAttendance(vars, button);
+  };
+  const requestRespond = (button: Element) => {
     const joining = Object.values(myAnswers).some((v) => v === "yes" || v === "maybe");
     if (joining && meeting.isPaid && !confirmPaidParticipation(meeting.feeAmount, meeting.feeNote)) return;
-    respondMutation.mutate({ answers: myAnswers, comment: myComment });
+    respondMutation.mutate({ answers: myAnswers, comment: myComment, hold: holdScrollPosition(button) });
   };
 
   // 指定した候補日に対する自分の出席予定を探す（旧データはcandidateIdがnullで1件のみ保持しているため後方互換で拾う）
@@ -545,6 +598,7 @@ export function MeetingDetailScreen() {
   const myAttendanceForEarliestDate = confirmedCandidates[0] ? findMyAttendance(confirmedCandidates[0].id) : undefined;
 
   const nowSec = Math.floor(Date.now() / 1000);
+  const sortedRespondents = sortRespondents(respondents, respondentOrder);
   const maxYesCount = Math.max(0, ...candidates.map((c) => countYes(respondents, c.id)));
 
   function formatDeadline(ts: number): string {
@@ -921,9 +975,12 @@ export function MeetingDetailScreen() {
       {/* ---- 回答グリッド（出欠を確認しない会では出さない） ---- */}
       {!meeting.noAttendanceCheck && (
       <div className="mb-5">
-        <h2 className="text-sm font-semibold mb-2" style={{ color: "var(--color-ink-700)" }}>
-          📊 回答状況
-        </h2>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <h2 className="text-sm font-semibold" style={{ color: "var(--color-ink-700)" }}>
+            📊 回答状況
+          </h2>
+          {respondents.length > 1 && <RespondentOrderToggle order={respondentOrder} onChange={setRespondentOrder} />}
+        </div>
         <div className="overflow-x-auto -mx-4 px-4">
           <table className="border-separate border-spacing-1 min-w-max">
             <thead>
@@ -1012,7 +1069,7 @@ export function MeetingDetailScreen() {
               </tr>
             </thead>
             <tbody>
-              {respondents.map((r) => {
+              {sortedRespondents.map((r) => {
                 const isMe = r.type === "member" && r.id === user?.id;
                 return (
                   <Fragment key={`${r.type}-${r.id}`}>
@@ -1133,7 +1190,7 @@ export function MeetingDetailScreen() {
             className="mb-3"
           />
           <button
-            onClick={requestRespond}
+            onClick={(e) => requestRespond(e.currentTarget)}
             disabled={(!hasEdited && !commentDirty) || respondMutation.isPending}
             className="w-full py-3 rounded-2xl text-sm font-medium text-white flex items-center justify-center gap-2 disabled:opacity-50 transition"
             style={{ background: "var(--color-brand)" }}
@@ -1371,52 +1428,38 @@ export function MeetingDetailScreen() {
               {(() => {
                 const onlyCandidate = confirmedCandidates.find((c) => c.startsAt > nowSec)!;
                 const myAtt = findMyAttendance(onlyCandidate.id);
-                return myAtt ? (
+                // 回答の前後でボタンが同じ部品のままになるよう、同じ構造で描く（押したボタンの位置を保つため）
+                const attending = myAtt?.status === "attended";
+                const absent = myAtt?.status === "absent";
+                return (
                   <div>
-                    <div className="flex items-center gap-2 px-3 py-2.5 rounded-2xl mb-2"
-                      style={{ background: myAtt.status === "attended" ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
-                      <span className="text-lg">{myAtt.status === "attended" ? "✅" : "❌"}</span>
-                      <p className="text-sm font-medium" style={{ color: myAtt.status === "attended" ? "var(--color-success)" : "var(--color-ink-500)" }}>
-                        {myAtt.status === "attended" ? "参加予定" : "欠席予定"}
-                      </p>
-                    </div>
+                    {myAtt && (
+                      <div className="flex items-center gap-2 px-3 py-2.5 rounded-2xl mb-2"
+                        style={{ background: attending ? "rgba(90,140,92,0.12)" : "var(--color-paper-200)" }}>
+                        <span className="text-lg">{attending ? "✅" : "❌"}</span>
+                        <p className="text-sm font-medium" style={{ color: attending ? "var(--color-success)" : "var(--color-ink-500)" }}>
+                          {attending ? "参加予定" : "欠席予定"}
+                        </p>
+                      </div>
+                    )}
                     <div className="flex gap-2">
                       <button
-                        onClick={() => requestAttendance({ status: "attended", candidateId: onlyCandidate.id })}
+                        onClick={(e) => requestAttendance({ status: "attended", candidateId: onlyCandidate.id }, e.currentTarget)}
                         disabled={attendanceMutation.isPending}
-                        className="flex-1 py-2 rounded-xl text-xs font-medium transition"
-                        style={{ background: myAtt.status === "attended" ? "var(--color-success)" : "var(--color-paper-200)", color: myAtt.status === "attended" ? "white" : "var(--color-ink-600)" }}
+                        className={`flex-1 font-medium transition ${myAtt ? "py-2 rounded-xl text-xs" : "py-3 rounded-2xl text-sm text-white"}`}
+                        style={{ background: attending || !myAtt ? "var(--color-success)" : "var(--color-paper-200)", color: attending || !myAtt ? "white" : "var(--color-ink-600)" }}
                       >
-                        ✅ 参加する
+                        {!myAtt && attendanceMutation.isPending ? <Loader2 size={14} className="animate-spin mx-auto" /> : "✅ 参加する"}
                       </button>
                       <button
-                        onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: onlyCandidate.id })}
+                        onClick={(e) => answerAttendance({ status: "absent", candidateId: onlyCandidate.id }, e.currentTarget)}
                         disabled={attendanceMutation.isPending}
-                        className="flex-1 py-2 rounded-xl text-xs font-medium transition"
-                        style={{ background: myAtt.status === "absent" ? "var(--color-ink-500)" : "var(--color-paper-200)", color: myAtt.status === "absent" ? "white" : "var(--color-ink-600)" }}
+                        className={`flex-1 font-medium transition ${myAtt ? "py-2 rounded-xl text-xs" : "py-3 rounded-2xl text-sm"}`}
+                        style={{ background: absent ? "var(--color-ink-500)" : "var(--color-paper-200)", color: absent ? "white" : "var(--color-ink-600)" }}
                       >
                         ❌ 欠席する
                       </button>
                     </div>
-                  </div>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => requestAttendance({ status: "attended", candidateId: onlyCandidate.id })}
-                      disabled={attendanceMutation.isPending}
-                      className="flex-1 py-3 rounded-2xl text-sm font-medium text-white transition"
-                      style={{ background: "var(--color-success)" }}
-                    >
-                      {attendanceMutation.isPending ? <Loader2 size={14} className="animate-spin mx-auto" /> : "✅ 参加する"}
-                    </button>
-                    <button
-                      onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: onlyCandidate.id })}
-                      disabled={attendanceMutation.isPending}
-                      className="flex-1 py-3 rounded-2xl text-sm font-medium transition"
-                      style={{ background: "var(--color-paper-200)", color: "var(--color-ink-600)" }}
-                    >
-                      ❌ 欠席する
-                    </button>
                   </div>
                 );
               })()}
@@ -1455,7 +1498,7 @@ export function MeetingDetailScreen() {
                         </div>
                         <div className="flex gap-2">
                           <button
-                            onClick={() => requestAttendance({ status: "attended", candidateId: cand.id })}
+                            onClick={(e) => requestAttendance({ status: "attended", candidateId: cand.id }, e.currentTarget)}
                             disabled={attendanceMutation.isPending}
                             className="flex-1 py-2 rounded-xl text-xs font-medium transition disabled:opacity-50"
                             style={{ background: isAttending ? "var(--color-success)" : "white", color: isAttending ? "white" : "var(--color-ink-600)" }}
@@ -1463,7 +1506,7 @@ export function MeetingDetailScreen() {
                             ✅ この日に参加する
                           </button>
                           <button
-                            onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: cand.id })}
+                            onClick={(e) => answerAttendance({ status: "absent", candidateId: cand.id }, e.currentTarget)}
                             disabled={attendanceMutation.isPending}
                             className="flex-1 py-2 rounded-xl text-xs font-medium transition disabled:opacity-50"
                             style={{ background: isAbsent ? "var(--color-ink-500)" : "white", color: isAbsent ? "white" : "var(--color-ink-600)" }}
@@ -1476,7 +1519,7 @@ export function MeetingDetailScreen() {
                   })}
               </div>
               <button
-                onClick={() => attendanceMutation.mutate({ status: "absent" })}
+                onClick={(e) => answerAttendance({ status: "absent" }, e.currentTarget)}
                 disabled={attendanceMutation.isPending}
                 className="w-full py-2 rounded-xl text-xs font-medium transition disabled:opacity-50"
                 style={{ background: "var(--color-paper-200)", color: "var(--color-ink-400)" }}
@@ -1539,7 +1582,7 @@ export function MeetingDetailScreen() {
             ) : (
               <div className="flex gap-2">
                 <button
-                  onClick={() => requestAttendance({ status: "attended", candidateId: confirmedCandidates[0]?.id })}
+                  onClick={(e) => requestAttendance({ status: "attended", candidateId: confirmedCandidates[0]?.id }, e.currentTarget)}
                   disabled={attendanceMutation.isPending}
                   className="flex-1 py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 transition disabled:opacity-50"
                   style={{ background: "rgba(90,140,92,0.12)", color: "var(--color-success)", border: "1.5px solid rgba(90,140,92,0.3)" }}
@@ -1548,7 +1591,7 @@ export function MeetingDetailScreen() {
                   出席した
                 </button>
                 <button
-                  onClick={() => attendanceMutation.mutate({ status: "absent", candidateId: confirmedCandidates[0]?.id })}
+                  onClick={(e) => answerAttendance({ status: "absent", candidateId: confirmedCandidates[0]?.id }, e.currentTarget)}
                   disabled={attendanceMutation.isPending}
                   className="flex-1 py-3 rounded-2xl text-sm font-medium flex items-center justify-center gap-1.5 transition disabled:opacity-50"
                   style={{ background: "var(--color-paper-200)", color: "var(--color-ink-500)" }}
@@ -1567,9 +1610,12 @@ export function MeetingDetailScreen() {
           {/* ホスト向け：全員の出席状況（確定日が複数ある場合は日程ごとに表示） */}
           {isHost && attendances.length > 0 && (
             <div>
-              <p className="text-xs font-medium mb-2" style={{ color: "var(--color-ink-500)" }}>参加者の出席状況</p>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <p className="text-xs font-medium" style={{ color: "var(--color-ink-500)" }}>参加者の出席状況</p>
+                <RespondentOrderToggle order={respondentOrder} onChange={setRespondentOrder} />
+              </div>
               <div className="space-y-1">
-                {respondents.filter((r) => r.type === "member").map((r) => {
+                {sortedRespondents.filter((r) => r.type === "member").map((r) => {
                   const myAtts = attendances.filter((a) => a.memberId === r.id);
                   return (
                     <div key={r.id} className="flex items-center gap-2 px-3 py-2 rounded-xl"
